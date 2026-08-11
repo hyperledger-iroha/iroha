@@ -6,10 +6,10 @@ final class DemoConnectViewModelTests: XCTestCase {
   private var originalEnv: [String: String?] = [:]
   private let keys = [
     "TORII_NODE_URL",
-    "CONNECT_SESSION_ID",
     "CONNECT_TOKEN_APP",
     "CONNECT_TOKEN_WALLET",
-    "CONNECT_CHAIN_ID",
+    "CONNECT_TOKEN_RELAY",
+    "CONNECT_NETWORK_ID",
     "CONNECT_ROLE",
     "CONNECT_PEER_PUB_B64",
     "CONNECT_SHARED_KEY_B64",
@@ -33,16 +33,16 @@ final class DemoConnectViewModelTests: XCTestCase {
   func testEnvironmentOverridesAppliedOnInit() {
     let overrides: [String: String] = [
       "TORII_NODE_URL": "https://unit.test:8443",
-      "CONNECT_SESSION_ID": "c2Vzc2lvbg==",
       "CONNECT_TOKEN_APP": "app-token",
       "CONNECT_TOKEN_WALLET": "wallet-token",
-      "CONNECT_CHAIN_ID": "nexus",
+      "CONNECT_TOKEN_RELAY": "relay-token",
+      "CONNECT_NETWORK_ID": "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
       "CONNECT_ROLE": "wallet",
       "CONNECT_PEER_PUB_B64": "cGVlci1wdWI=",
       "CONNECT_SHARED_KEY_B64": "c2hhcmVkLWtleQ==",
       "CONNECT_APPROVE_ACCOUNT_ID": "sorauﾛ1QG1ｼﾀ3vN7ﾋzﾄﾍcﾐLKDCAｲ5ｸｴjﾔﾘ2uﾄﾕmｷﾕﾙeJBJW7X2N7",
-      "CONNECT_APPROVE_PRIVATE_KEY_B64": "cHJpdmF0ZS1rZXk=",
-      "CONNECT_APPROVE_SIGNATURE_B64": "c2lnbmF0dXJl"
+      "CONNECT_APPROVE_PRIVATE_KEY_B64": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
+      "CONNECT_APPROVE_SIGNATURE_B64": "JCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJA=="
     ]
 
     for key in keys {
@@ -56,10 +56,11 @@ final class DemoConnectViewModelTests: XCTestCase {
     let viewModel = DemoConnectViewModel()
 
     XCTAssertEqual(viewModel.baseURL, "https://unit.test:8443")
-    XCTAssertEqual(viewModel.sid, "c2Vzc2lvbg==")
+    XCTAssertTrue(viewModel.sid.isEmpty)
     XCTAssertEqual(viewModel.tokenApp, "app-token")
     XCTAssertEqual(viewModel.tokenWallet, "wallet-token")
-    XCTAssertEqual(viewModel.chainId, "nexus")
+    XCTAssertEqual(viewModel.tokenRelay, "relay-token")
+    XCTAssertEqual(viewModel.networkId, "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0")
     XCTAssertEqual(viewModel.role, .wallet)
     XCTAssertEqual(viewModel.peerPubB64, "cGVlci1wdWI=")
     XCTAssertEqual(viewModel.aeadKeyB64, "c2hhcmVkLWtleQ==")
@@ -67,8 +68,9 @@ final class DemoConnectViewModelTests: XCTestCase {
       viewModel.approveAccountId,
       "sorauﾛ1QG1ｼﾀ3vN7ﾋzﾄﾍcﾐLKDCAｲ5ｸｴjﾔﾘ2uﾄﾕmｷﾕﾙeJBJW7X2N7"
     )
-    XCTAssertEqual(viewModel.approvePrivKeyB64, "cHJpdmF0ZS1rZXk=")
-    XCTAssertEqual(viewModel.approveSigB64, "c2lnbmF0dXJl")
+    XCTAssertEqual(viewModel.approvePrivKeyB64, "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=")
+    XCTAssertEqual(viewModel.approveSigB64, "JCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJA==")
+    XCTAssertTrue(viewModel.walletDeepLink.isEmpty, "configuration without a freshly derived app key and nonce must fail closed")
   }
 
   func testAddressPreviewAvailableWhenIrohaSwiftIsPresent() {

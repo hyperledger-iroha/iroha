@@ -1,6 +1,6 @@
 //! User configuration view.
 
-use std::{fmt, path::PathBuf, time::Duration};
+use std::{fmt, fs::File, io::Read as _, path::PathBuf, time::Duration};
 
 use error_stack::{Report, ResultExt};
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
@@ -19,12 +19,14 @@ use crate::{
     crypto::{KeyPair, PrivateKey, PublicKey},
     data_model::{
         name,
-        prelude::{AccountId, ChainId, DomainId},
+        prelude::{AccountId, ChainId, DomainId, NetworkId},
     },
 };
 
 /// Minimal allowed transaction time-to-live.
 const MIN_TRANSACTION_TTL: Duration = Duration::from_secs(1);
+const MAX_PRIVATE_KEY_FILE_BYTES: u64 = 4 * 1024;
+const MAX_PUBLIC_IDENTITY_FILE_BYTES: u64 = 512;
 
 /// Root of the user-facing configuration loaded from TOML + env.
 #[derive(Clone, Debug, ReadConfig)]
@@ -32,6 +34,10 @@ pub struct Root {
     /// Unique chain identifier.
     #[config(env = "CHAIN")]
     pub chain: ChainId,
+    /// Exact genesis-lineage identity used for signed protocol requests.
+    pub network_id: Option<NetworkId>,
+    /// Public file containing the canonical exact genesis-lineage identity.
+    pub network_id_file: Option<WithOrigin<PathBuf>>,
     /// Torii API URL.
     #[config(env = "TORII_URL")]
     pub torii_url: WithOrigin<Url>,
@@ -120,6 +126,9 @@ pub enum ParseError {
     /// Account config omitted both profile and explicit discriminant.
     #[error("Account config must set `profile` or an explicit `chain_discriminant`")]
     MissingAccountNetworkContext,
+    /// Exact network identity was absent, ambiguous, or invalid.
+    #[error("Invalid exact network identity configuration")]
+    InvalidNetworkIdentity,
 }
 
 type ReportResult<T, E> = core::result::Result<T, Report<[E]>>;
@@ -132,6 +141,242 @@ fn valid_account_domain_scope_literal(value: &str) -> bool {
         DomainId::parse_fully_qualified(value).is_ok()
     } else {
         name::canonicalize_domain_label(value).is_ok()
+    }
+}
+
+fn resolve_account_private_key(
+    inline: Option<WithOrigin<PrivateKey>>,
+    file: Option<WithOrigin<PathBuf>>,
+    emitter: &mut Emitter<ParseError>,
+) -> Option<(PrivateKey, ParameterOrigin)> {
+    let file = match (inline, file) {
+        (Some(_), Some(_)) => {
+            emitter.emit(
+                Report::new(ParseError::KeyPair).attach(
+                    "account.private_key and account.private_key_file are mutually exclusive; configure exactly one private-key source",
+                ),
+            );
+            return None;
+        }
+        (Some(inline), None) => return Some(inline.into_tuple()),
+        (None, Some(file)) => file,
+        (None, None) => {
+            emitter.emit(
+                Report::new(ParseError::KeyPair).attach(
+                    "missing account private-key source; configure exactly one of account.private_key or account.private_key_file",
+                ),
+            );
+            return None;
+        }
+    };
+
+    let path = file.resolve_relative_path();
+    let (_, origin) = file.into_tuple();
+    if path.as_os_str().is_empty() {
+        emitter.emit(Report::new(ParseError::KeyPair).attach("account.private_key_file is empty"));
+        return None;
+    }
+    let opened = match File::open(&path) {
+        Ok(opened) => opened,
+        Err(err) => {
+            emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
+                "failed to open account.private_key_file `{}`: {err}",
+                path.display()
+            )));
+            return None;
+        }
+    };
+    let metadata = match opened.metadata() {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
+                "failed to inspect account.private_key_file `{}`: {err}",
+                path.display()
+            )));
+            return None;
+        }
+    };
+    if !metadata.is_file() {
+        emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
+            "account.private_key_file `{}` must reference a regular file",
+            path.display()
+        )));
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let mode = metadata.permissions().mode();
+        if mode & 0o077 != 0 {
+            emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
+                "account.private_key_file `{}` must not be readable or writable by group/other users (mode {:04o})",
+                path.display(),
+                mode & 0o777
+            )));
+            return None;
+        }
+    }
+
+    let mut encoded = String::new();
+    if let Err(err) = opened
+        .take(MAX_PRIVATE_KEY_FILE_BYTES + 1)
+        .read_to_string(&mut encoded)
+    {
+        emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
+            "failed to read account.private_key_file `{}` as UTF-8: {err}",
+            path.display()
+        )));
+        return None;
+    }
+    if encoded.len() as u64 > MAX_PRIVATE_KEY_FILE_BYTES {
+        emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
+            "account.private_key_file `{}` exceeds the {MAX_PRIVATE_KEY_FILE_BYTES}-byte limit",
+            path.display()
+        )));
+        return None;
+    }
+    let encoded = encoded
+        .strip_suffix("\r\n")
+        .or_else(|| encoded.strip_suffix('\n'))
+        .unwrap_or(&encoded);
+    if encoded.is_empty() || encoded.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
+        emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
+            "account.private_key_file `{}` must contain exactly one canonical private key",
+            path.display()
+        )));
+        return None;
+    }
+    match encoded.parse::<PrivateKey>() {
+        Ok(private_key) => Some((private_key, origin)),
+        Err(err) => {
+            emitter.emit(Report::new(ParseError::KeyPair).attach(format!(
+                "account.private_key_file `{}` does not contain a canonical private key: {err}",
+                path.display()
+            )));
+            None
+        }
+    }
+}
+
+fn resolve_network_id_source(
+    inline: Option<NetworkId>,
+    file: Option<WithOrigin<PathBuf>>,
+    emitter: &mut Emitter<ParseError>,
+) -> Option<NetworkId> {
+    let file = match (inline, file) {
+        (Some(_), Some(_)) => {
+            emitter.emit(Report::new(ParseError::InvalidNetworkIdentity).attach(
+                "network_id and network_id_file are mutually exclusive; configure exactly one public identity source",
+            ));
+            return None;
+        }
+        (Some(network_id), None) => return Some(network_id),
+        (None, Some(file)) => file,
+        (None, None) => {
+            emitter.emit(Report::new(ParseError::InvalidNetworkIdentity).attach(
+                "missing exact network identity; configure exactly one of network_id or network_id_file",
+            ));
+            return None;
+        }
+    };
+
+    let path = file.resolve_relative_path();
+    if path.as_os_str().is_empty() {
+        emitter.emit(
+            Report::new(ParseError::InvalidNetworkIdentity).attach("network_id_file is empty"),
+        );
+        return None;
+    }
+    let opened = match File::open(&path) {
+        Ok(opened) => opened,
+        Err(err) => {
+            emitter.emit(
+                Report::new(ParseError::InvalidNetworkIdentity).attach(format!(
+                    "failed to open network_id_file `{}`: {err}",
+                    path.display()
+                )),
+            );
+            return None;
+        }
+    };
+    let metadata = match opened.metadata() {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            emitter.emit(
+                Report::new(ParseError::InvalidNetworkIdentity).attach(format!(
+                    "failed to inspect network_id_file `{}`: {err}",
+                    path.display()
+                )),
+            );
+            return None;
+        }
+    };
+    if !metadata.is_file() {
+        emitter.emit(
+            Report::new(ParseError::InvalidNetworkIdentity).attach(format!(
+                "network_id_file `{}` must reference a regular file",
+                path.display()
+            )),
+        );
+        return None;
+    }
+
+    let mut encoded = String::new();
+    if let Err(err) = opened
+        .take(MAX_PUBLIC_IDENTITY_FILE_BYTES + 1)
+        .read_to_string(&mut encoded)
+    {
+        emitter.emit(
+            Report::new(ParseError::InvalidNetworkIdentity).attach(format!(
+                "failed to read network_id_file `{}` as UTF-8: {err}",
+                path.display()
+            )),
+        );
+        return None;
+    }
+    if encoded.len() as u64 > MAX_PUBLIC_IDENTITY_FILE_BYTES {
+        emitter.emit(
+            Report::new(ParseError::InvalidNetworkIdentity).attach(format!(
+                "network_id_file `{}` exceeds the {MAX_PUBLIC_IDENTITY_FILE_BYTES}-byte limit",
+                path.display()
+            )),
+        );
+        return None;
+    }
+    let encoded = encoded
+        .strip_suffix("\r\n")
+        .or_else(|| encoded.strip_suffix('\n'))
+        .unwrap_or(&encoded);
+    if encoded.is_empty() || encoded.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
+        emitter.emit(
+            Report::new(ParseError::InvalidNetworkIdentity).attach(format!(
+                "network_id_file `{}` must contain exactly one canonical network identity",
+                path.display()
+            )),
+        );
+        return None;
+    }
+    match encoded.parse::<NetworkId>() {
+        Ok(network_id) if network_id.to_string() == encoded => Some(network_id),
+        Ok(_) => {
+            emitter.emit(
+                Report::new(ParseError::InvalidNetworkIdentity).attach(format!(
+                    "network_id_file `{}` does not contain the canonical network identity spelling",
+                    path.display()
+                )),
+            );
+            None
+        }
+        Err(err) => {
+            emitter.emit(
+                Report::new(ParseError::InvalidNetworkIdentity).attach(format!(
+                    "network_id_file `{}` does not contain a valid network identity: {err}",
+                    path.display()
+                )),
+            );
+            None
+        }
     }
 }
 
@@ -159,6 +404,8 @@ impl Root {
     ) -> ReportResult<(super::Config, MusubiPublication, MusubiFetch), ParseError> {
         let Self {
             chain: chain_id,
+            network_id,
+            network_id_file,
             torii_url,
             basic_auth,
             torii_request_timeout_ms,
@@ -168,6 +415,7 @@ impl Root {
                     profile,
                     public_key,
                     private_key,
+                    private_key_file,
                     chain_discriminant,
                 },
             transaction:
@@ -187,6 +435,7 @@ impl Root {
         } = self;
 
         let mut emitter = Emitter::new();
+        let network_id = resolve_network_id_source(network_id, network_id_file, &mut emitter);
 
         if tx_ttl.value().get() < MIN_TRANSACTION_TTL {
             emitter.emit(
@@ -279,17 +528,19 @@ impl Root {
         };
 
         let (public_key, public_key_origin) = public_key.into_tuple();
-        let (private_key, private_key_origin) = private_key.into_tuple();
+        let private_key = resolve_account_private_key(private_key, private_key_file, &mut emitter);
         if !valid_account_domain_scope_literal(&domain_literal) {
             emitter.emit(Report::new(ParseError::InvalidAccountDomain {
                 value: domain_literal.clone(),
             }));
         }
-        let key_pair = KeyPair::new(public_key.clone(), private_key)
-            .attach(ConfigValueAndOrigin::new("[REDACTED]", public_key_origin))
-            .attach(ConfigValueAndOrigin::new("[REDACTED]", private_key_origin))
-            .change_context(ParseError::KeyPair)
-            .ok_or_emit(&mut emitter);
+        let key_pair = private_key.and_then(|(private_key, private_key_origin)| {
+            KeyPair::new(public_key.clone(), private_key)
+                .attach(ConfigValueAndOrigin::new("[REDACTED]", public_key_origin))
+                .attach(ConfigValueAndOrigin::new("[REDACTED]", private_key_origin))
+                .change_context(ParseError::KeyPair)
+                .ok_or_emit(&mut emitter)
+        });
         let account_id = AccountId::of(public_key);
 
         let (queue_root_path, queue_root_origin) = queue_root.into_tuple();
@@ -344,9 +595,13 @@ impl Root {
 
         emitter.into_result()?;
 
+        let network_id =
+            network_id.expect("network identity should be valid when emitter succeeds");
+
         Ok((
             super::Config {
                 chain: chain_id,
+                network_id,
                 account: account_id,
                 account_chain_discriminant: chain_discriminant.into_value(),
                 key_pair: key_pair.unwrap(),
@@ -382,7 +637,10 @@ pub struct Account {
     pub public_key: WithOrigin<PublicKey>,
     /// Private key of the account.
     #[config(env = "ACCOUNT_PRIVATE_KEY")]
-    pub private_key: WithOrigin<PrivateKey>,
+    pub private_key: Option<WithOrigin<PrivateKey>>,
+    /// Owner-held file containing the account's canonical private key.
+    #[config(env = "ACCOUNT_PRIVATE_KEY_FILE")]
+    pub private_key_file: Option<WithOrigin<PathBuf>>,
     /// I105 chain discriminant used when parsing and rendering account literals.
     #[config(
         env = "ACCOUNT_CHAIN_DISCRIMINANT",
@@ -630,7 +888,7 @@ impl AliasCache {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::PathBuf, str::FromStr, time::Duration};
+    use std::{fs, path::PathBuf, str::FromStr, time::Duration};
 
     use iroha_crypto::Algorithm;
 
@@ -642,6 +900,12 @@ mod tests {
                 .expect("derive user-config fixture key");
         Root {
             chain: ChainId::from_str("test-chain").expect("chain id"),
+            network_id: Some(NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                crate::data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([0xA5; iroha_crypto::Hash::LENGTH]),
+            ))),
+            network_id_file: None,
             torii_url: WithOrigin::inline(
                 Url::parse("http://127.0.0.1:8080/torii").expect("valid torii url"),
             ),
@@ -653,7 +917,8 @@ mod tests {
                 domain: "wonderland.universal".to_owned(),
                 profile: Some(iroha_torii_shared::NETWORK_PROFILE_MINAMOTO.to_owned()),
                 public_key: WithOrigin::inline(key_pair.public_key().clone()),
-                private_key: WithOrigin::inline(key_pair.private_key().clone()),
+                private_key: Some(WithOrigin::inline(key_pair.private_key().clone())),
+                private_key_file: None,
                 chain_discriminant: WithOrigin::new(
                     defaults::common::chain_discriminant(),
                     ParameterOrigin::default(iroha_config_base::ParameterId::from([
@@ -682,7 +947,57 @@ mod tests {
                 .expect("derive expected user-config fixture key");
 
         assert_eq!(root.account.public_key.value(), expected.public_key());
-        assert_eq!(root.account.private_key.value(), expected.private_key());
+        assert_eq!(
+            root.account
+                .private_key
+                .as_ref()
+                .expect("inline private key")
+                .value(),
+            expected.private_key()
+        );
+    }
+
+    #[test]
+    fn network_id_file_supplies_the_exact_signing_domain() {
+        let expected = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            crate::data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"client file backed network identity"),
+        ));
+        let identity_file = tempfile::NamedTempFile::new().expect("identity file");
+        fs::write(identity_file.path(), format!("{expected}\n")).expect("write identity");
+        let mut emitter = Emitter::new();
+
+        let resolved = resolve_network_id_source(
+            None,
+            Some(WithOrigin::inline(identity_file.path().to_path_buf())),
+            &mut emitter,
+        );
+
+        assert_eq!(resolved, Some(expected));
+        assert!(emitter.into_result().is_ok());
+    }
+
+    #[test]
+    fn network_id_rejects_ambiguous_inline_and_file_sources() {
+        let expected = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            crate::data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"ambiguous client network identity"),
+        ));
+        let identity_file = tempfile::NamedTempFile::new().expect("identity file");
+        fs::write(identity_file.path(), format!("{expected}\n")).expect("write identity");
+        let mut emitter = Emitter::new();
+
+        assert!(
+            resolve_network_id_source(
+                Some(expected),
+                Some(WithOrigin::inline(identity_file.path().to_path_buf())),
+                &mut emitter,
+            )
+            .is_none()
+        );
+        assert!(emitter.into_result().is_err());
     }
 
     #[test]

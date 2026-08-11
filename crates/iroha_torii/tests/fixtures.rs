@@ -98,7 +98,8 @@ pub fn seed_peer(world: &mut World, peer_id: PeerId) {
 /// Attach operator signature headers to a request targeting operator-only endpoints.
 ///
 /// Operator endpoints are internet-reachable by design but must be authenticated with a
-/// request signature bound to (method, path, query, body, timestamp, nonce).
+/// request signature bound to the exact genesis-derived network plus
+/// (method, path, query, body, timestamp, nonce).
 #[allow(dead_code)]
 pub fn operator_signed_request(
     key_pair: &KeyPair,
@@ -119,8 +120,16 @@ pub fn operator_signed_request(
     nonce_bytes[..8].copy_from_slice(&nonce_counter.to_le_bytes());
     let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
 
-    let mut msg =
+    const DOMAIN: &[u8] = b"iroha.operator.http-request.network.v1\0";
+    let canonical_request =
         iroha_torii::canonical_request_message(request.method(), request.uri(), body_bytes);
+    let network_id = iroha_torii::test_utils::signed_query_network_id();
+    let mut msg = Vec::with_capacity(
+        DOMAIN.len() + network_id.as_bytes().len() + canonical_request.len() + nonce.len() + 32,
+    );
+    msg.extend_from_slice(DOMAIN);
+    msg.extend_from_slice(network_id.as_bytes());
+    msg.extend_from_slice(&canonical_request);
     msg.extend_from_slice(b"\n");
     msg.extend_from_slice(ts_ms.to_string().as_bytes());
     msg.extend_from_slice(b"\n");
@@ -189,7 +198,8 @@ pub fn app_signed_request(
         request.method().as_str(),
         request.uri().path()
     );
-    let msg = iroha_torii::canonical_request_signature_message(
+    let msg = iroha_torii::canonical_network_request_signature_message(
+        &iroha_torii::test_utils::signed_query_network_id(),
         request.method(),
         request.uri(),
         body_bytes,

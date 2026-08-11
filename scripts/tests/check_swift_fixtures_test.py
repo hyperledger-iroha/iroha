@@ -19,6 +19,10 @@ MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+OTHER_CANONICAL_NETWORK_ID = (
+    "hash:1111111111111111111111111111111111111111111111111111111111111111#4667"
+)
+
 
 def write(root: Path, relative: str, contents: str | bytes) -> None:
     path = root / relative
@@ -65,11 +69,11 @@ def payload_body(name: str, *, shared: bool) -> dict:
     )
     return {
         "authority": f"authority-{name}",
-        "chain": "00000001",
         "creation_time_ms": 1,
         "executable": {"Instructions": [instruction]},
         "fee_payment": {"payer": "authority", "value": {"charge_limits": []}},
         "metadata": {},
+        "network_id": MODULE.CANONICAL_DEV_NETWORK_ID,
         "nonce": 1,
         "time_to_live_ms": 1000,
     }
@@ -79,11 +83,11 @@ def manifest_entry(name: str, body: dict, payload: bytes) -> dict:
     signed = signed_envelope(name, payload)
     return {
         "authority": body["authority"],
-        "chain": body["chain"],
         "creation_time_ms": body["creation_time_ms"],
         "encoded_file": f"{name}.norito",
         "encoded_len": len(payload),
         "name": name,
+        "network_id": body["network_id"],
         "nonce": body["nonce"],
         "payload_base64": base64.b64encode(payload).decode("ascii"),
         "payload_hash": MODULE.iroha_hash(payload),
@@ -108,8 +112,8 @@ def populate_valid_corpus(tmp_path: Path) -> tuple[Path, Path, dict, dict]:
             key: shared_body[key]
             for key in (
                 "authority",
-                "chain",
                 "creation_time_ms",
+                "network_id",
                 "nonce",
                 "time_to_live_ms",
             )
@@ -136,7 +140,6 @@ def populate_valid_corpus(tmp_path: Path) -> tuple[Path, Path, dict, dict]:
     swift_entries = []
     for index, name in enumerate(sorted(MODULE.EXPECTED_SWIFT_FIXTURES), start=1):
         body = payload_body(name, shared=False)
-        body["chain"] = f"{index:08d}"
         body["nonce"] = index
         body["creation_time_ms"] = index
         payload = f"swift-payload-{index}".encode()
@@ -320,9 +323,61 @@ def test_manifest_rejects_traversal_and_payload_mismatch(tmp_path: Path) -> None
         MODULE.compare(source, target)
 
     invalid = copy.deepcopy(manifest)
-    invalid["fixtures"][0]["chain"] = "00000002"
+    invalid["fixtures"][0]["creation_time_ms"] = 2
     dump(source, "transaction_fixtures.manifest.json", invalid)
-    with pytest.raises(ValueError, match="manifest/payload mismatch for chain"):
+    with pytest.raises(ValueError, match="manifest/payload mismatch for creation_time_ms"):
+        MODULE.compare(source, target)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda record: record.pop("network_id"),
+        lambda record: record.__setitem__("network_id", None),
+        lambda record: record.__setitem__(
+            "network_id", OTHER_CANONICAL_NETWORK_ID
+        ),
+        lambda record: record.__setitem__(
+            "network_id", MODULE.CANONICAL_DEV_NETWORK_ID.lower()
+        ),
+    ],
+    ids=["missing", "null", "different-valid", "lowercase"],
+)
+def test_shared_payload_requires_exact_canonical_dev_network_id(
+    tmp_path: Path, mutation
+) -> None:
+    source, target, payloads, _ = populate_valid_corpus(tmp_path)
+    invalid = copy.deepcopy(payloads)
+    mutation(invalid[0])
+    mutation(invalid[0]["payload"])
+    dump(source, "transaction_payloads.json", invalid)
+
+    with pytest.raises(ValueError, match="network_id"):
+        MODULE.compare(source, target)
+
+
+def test_shared_payload_and_manifest_reject_legacy_chain(tmp_path: Path) -> None:
+    source, target, payloads, manifest = populate_valid_corpus(tmp_path)
+    invalid_payloads = copy.deepcopy(payloads)
+    invalid_payloads[0]["chain"] = invalid_payloads[0].pop("network_id")
+    dump(source, "transaction_payloads.json", invalid_payloads)
+    with pytest.raises(ValueError, match="chain"):
+        MODULE.compare(source, target)
+
+    populate_valid_corpus(tmp_path)
+    invalid_payloads = copy.deepcopy(payloads)
+    nested = invalid_payloads[0]["payload"]
+    nested["chain"] = nested.pop("network_id")
+    dump(source, "transaction_payloads.json", invalid_payloads)
+    with pytest.raises(ValueError, match="chain"):
+        MODULE.compare(source, target)
+
+    populate_valid_corpus(tmp_path)
+    invalid_manifest = copy.deepcopy(manifest)
+    entry = invalid_manifest["fixtures"][0]
+    entry["chain"] = entry.pop("network_id")
+    dump(source, "transaction_fixtures.manifest.json", invalid_manifest)
+    with pytest.raises(ValueError, match="chain"):
         MODULE.compare(source, target)
 
 
@@ -496,6 +551,45 @@ def test_swift_payload_requires_explicit_bounded_positive_nonce(
     dump(target, path.name, payloads)
 
     with pytest.raises(ValueError, match="nonce"):
+        MODULE.compare(source, target)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload.pop("network_id"),
+        lambda payload: payload.__setitem__("network_id", None),
+        lambda payload: payload.__setitem__(
+            "network_id", OTHER_CANONICAL_NETWORK_ID
+        ),
+        lambda payload: payload.__setitem__(
+            "network_id", MODULE.CANONICAL_DEV_NETWORK_ID.lower()
+        ),
+    ],
+    ids=["missing", "null", "different-valid", "lowercase"],
+)
+def test_swift_payload_requires_exact_canonical_dev_network_id(
+    tmp_path: Path, mutation
+) -> None:
+    source, target, _, _ = populate_valid_corpus(tmp_path)
+    path = target / "swift_parity_payloads.json"
+    payloads = json.loads(path.read_text())
+    mutation(payloads[0]["payload"])
+    dump(target, path.name, payloads)
+
+    with pytest.raises(ValueError, match="network_id"):
+        MODULE.compare(source, target)
+
+
+def test_swift_payload_rejects_legacy_chain(tmp_path: Path) -> None:
+    source, target, _, _ = populate_valid_corpus(tmp_path)
+    path = target / "swift_parity_payloads.json"
+    payloads = json.loads(path.read_text())
+    payload = payloads[0]["payload"]
+    payload["chain"] = payload.pop("network_id")
+    dump(target, path.name, payloads)
+
+    with pytest.raises(ValueError, match="chain"):
         MODULE.compare(source, target)
 
 

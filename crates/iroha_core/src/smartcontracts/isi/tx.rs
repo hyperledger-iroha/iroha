@@ -1151,7 +1151,7 @@ pub(crate) mod tests {
             MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry, MergeQuorumCertificate,
         },
         prelude::{
-            AccountId, ChainId, DataSpaceId, DataTriggerSequence, InstructionBox, LaneId, PeerId,
+            AccountId, DataSpaceId, DataTriggerSequence, InstructionBox, LaneId, NetworkId, PeerId,
             TransactionBuilder, TransactionEntrypoint, TransactionResult,
         },
         transaction::error::TransactionRejectionReason,
@@ -1164,13 +1164,15 @@ pub(crate) mod tests {
     };
 
     fn sample_certified_merge_execution_entry(epoch: u64, result_ok: bool) -> MergeLedgerEntry {
-        let chain_id: ChainId = "merge-query-projection".parse().expect("chain id");
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"merge-query-network")),
+        );
         let entrypoints = (0..2)
             .map(|index| {
                 let key_pair = KeyPair::random();
                 let authority = AccountId::new(key_pair.public_key().clone());
                 let mut builder = TransactionBuilder::new(
-                    chain_id.clone(),
+                    network_id,
                     authority,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -1267,7 +1269,11 @@ pub(crate) mod tests {
             prepare_qc,
             commit_qc,
             signer_proofs: Vec::new(),
-            autonomous_chain_id_hash: Hash::new(b"merge-query-chain"),
+            autonomous_network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                    Hash::new(b"merge-query-genesis"),
+                ),
+            ),
             autonomous_epoch: 0,
             autonomous_payload_hash: Hash::new(b"merge-query-payload"),
             entrypoint_hashes,
@@ -1335,7 +1341,9 @@ pub(crate) mod tests {
                 epoch,
                 2,
                 HashOf::from_untyped_unchecked(Hash::new(b"merge-query-previous-block")),
-                Hash::new(b"merge-query-chain"),
+                NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                    b"merge-query-chain",
+                ))),
                 VALIDATOR_SET_HASH_VERSION_V1,
                 HashOf::new(&merge_validators),
                 merge_validators,

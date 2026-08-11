@@ -10,6 +10,7 @@ import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 
 // Conservative finalized-cursor ceiling with headroom for the 8 KiB canonical account cap,
@@ -1634,20 +1635,12 @@ class MusubiResolverReleaseRowV1 internal constructor(
 
 /** Finalized paired view of one release from its home dataspace and universal index. */
 class MusubiExactReleaseSnapshotV1 internal constructor(
-    @JvmField val chainId: String,
-    genesisHash: ByteArray,
+    @JvmField val networkId: NetworkId,
     @JvmField val snapshot: MusubiRegistrySnapshotV1,
     @JvmField val homeRelease: MusubiReleaseRecordV1,
     @JvmField val universalRelease: MusubiResolverReleaseRowV1,
 ) : MusubiWireValueV1() {
-    private val genesisHashValue = genesisHash.copyOf()
-
     init {
-        MusubiValidationV1.requireChainId(chainId, "exact release chain ID")
-        MusubiValidationV1.requireNonZeroFixed32(
-            genesisHashValue,
-            "exact release genesis hash",
-        )
         require(homeRelease.release == universalRelease.release &&
             homeRelease.publishedAtHeight <= snapshot.finalizedHeight &&
             universalRelease.storageIndexRevision <= universalRelease.indexRevision &&
@@ -1657,12 +1650,10 @@ class MusubiExactReleaseSnapshotV1 internal constructor(
         MusubiJsonV1.validateExactReleaseSnapshot(
             homeRelease.rawValue,
             universalRelease.rawValue,
-            genesisHashValue,
+            networkId,
             snapshot,
         )
     }
-
-    fun genesisHash(): ByteArray = genesisHashValue.copyOf()
 
     /** Rejects an exact-release response for a different immutable release. */
     fun requireMatches(request: MusubiExactReleaseQueryV1) {
@@ -1673,8 +1664,7 @@ class MusubiExactReleaseSnapshotV1 internal constructor(
     }
 
     override fun wireValue(): Any = linkedMapOf(
-        "chain_id" to chainId,
-        "genesis_hash" to genesisHashValue.map { it.toInt() and 0xff },
+        "network_id" to networkId.toString(),
         "snapshot" to snapshot.wireValue(),
         "home_release" to homeRelease.wireValue(),
         "universal_release" to universalRelease.wireValue(),
@@ -1868,8 +1858,7 @@ class MusubiArchiveCommitmentV1(
 
 /** Exact deployment and CAR-body binding signed by seed ingress. */
 class MusubiSeedIngressReceiptBindingV1(
-    @JvmField val chainId: String,
-    genesisBlockHash: ByteArray,
+    @JvmField val networkId: NetworkId,
     @JvmField val publisher: String,
     @JvmField val ingressBroker: String,
     @JvmField val seedProvider: String,
@@ -1879,14 +1868,12 @@ class MusubiSeedIngressReceiptBindingV1(
     @JvmField val carBodyLength: BigInteger,
     nonce: ByteArray,
 ) : MusubiWireValueV1() {
-    private val genesisBlockHashValue = genesisBlockHash.copyOf()
     private val nonceValue = nonce.copyOf()
     internal val publisherPayload: ByteArray
     internal val ingressBrokerPayload: ByteArray
     internal val seedProviderPayload: ByteArray
 
     init {
-        MusubiValidationV1.requireChainId(chainId, "Musubi seed-ingress chain ID")
         publisherPayload = MusubiValidationV1.canonicalAccountPayload(
             publisher,
             "seedIngress.publisher",
@@ -1894,10 +1881,6 @@ class MusubiSeedIngressReceiptBindingV1(
         ingressBrokerPayload = MusubiValidationV1.canonicalAccountPayload(
             ingressBroker,
             "seedIngress.ingressBroker",
-        )
-        MusubiValidationV1.requireNonZeroFixed32(
-            genesisBlockHashValue,
-            "Musubi seed-ingress genesis hash",
         )
         MusubiValidationV1.requireNonZeroFixed32(nonceValue, "Musubi seed-ingress nonce")
         seedProviderPayload = MusubiValidationV1.canonicalFixed32Hex(
@@ -1915,12 +1898,10 @@ class MusubiSeedIngressReceiptBindingV1(
         ) { "Musubi seed-ingress digest bindings must not be inert" }
     }
 
-    fun genesisBlockHash(): ByteArray = genesisBlockHashValue.copyOf()
     fun nonce(): ByteArray = nonceValue.copyOf()
 
     override fun wireValue(): Any = linkedMapOf(
-        "chain_id" to chainId,
-        "genesis_block_hash" to genesisBlockHashValue.map { it.toInt() and 0xff },
+        "network_id" to networkId.toString(),
         "publisher" to publisher,
         "ingress_broker" to ingressBroker,
         "seed_provider" to listOf(seedProvider),
@@ -2083,8 +2064,7 @@ class MusubiProviderIngestFinalizedAnchorV1(
 
 /** Exact parsed-bundle and finalized replication completion bound by one provider. */
 class MusubiProviderBundleVerificationBindingV1(
-    @JvmField val chainId: String,
-    genesisBlockHash: ByteArray,
+    @JvmField val networkId: NetworkId,
     @JvmField val providerId: String,
     @JvmField val completedBy: String,
     @JvmField val completionAuthority: MusubiProviderIngestCompletionAuthorityV1,
@@ -2099,16 +2079,10 @@ class MusubiProviderBundleVerificationBindingV1(
     @JvmField val verificationLockDigest: MusubiDigest32V1,
     @JvmField val sourceTreeDigest: MusubiDigest32V1,
 ) : MusubiWireValueV1() {
-    private val genesisBlockHashValue = genesisBlockHash.copyOf()
     internal val providerIdPayload: ByteArray
     internal val completedByPayload: ByteArray
 
     init {
-        MusubiValidationV1.requireChainId(chainId, "provider attestation chain ID")
-        MusubiValidationV1.requireNonZeroFixed32(
-            genesisBlockHashValue,
-            "provider attestation genesis hash",
-        )
         providerIdPayload = MusubiValidationV1.canonicalFixed32Hex(
             providerId,
             "Musubi provider ID",
@@ -2136,11 +2110,8 @@ class MusubiProviderBundleVerificationBindingV1(
         ).forEach { MusubiValidationV1.requireNonZeroDigest(it, "provider attestation digest") }
     }
 
-    fun genesisBlockHash(): ByteArray = genesisBlockHashValue.copyOf()
-
     override fun wireValue(): Any = linkedMapOf(
-        "chain_id" to chainId,
-        "genesis_block_hash" to genesisBlockHashValue.map { it.toInt() and 0xff },
+        "network_id" to networkId.toString(),
         "provider_id" to listOf(providerId),
         "completed_by" to completedBy,
         "completion_authority" to completionAuthority.wireValue(),
@@ -2610,23 +2581,17 @@ class MusubiPageV1<T : MusubiWireValueV1> internal constructor(
     )
 }
 
-/** Resolver page carrying the exact chain/genesis identity required by lockfiles. */
+/** Resolver page carrying the exact network identity required by lockfiles. */
 class MusubiResolverIndexPageV1 internal constructor(
     @JvmField val query: MusubiResolverIndexQueryV1,
-    @JvmField val chainId: String,
-    genesisHash: ByteArray,
+    @JvmField val networkId: NetworkId,
     items: List<MusubiResolverReleaseRowV1>,
     @JvmField val nextCursor: MusubiFinalizedCursorV1?,
     @JvmField val snapshot: MusubiRegistrySnapshotV1,
 ) : MusubiWireValueV1() {
-    private val genesisHashValue = genesisHash.copyOf()
     @JvmField val items: List<MusubiResolverReleaseRowV1> = items.toList()
 
     init {
-        MusubiValidationV1.requireExactText(chainId, "Musubi resolver chain ID")
-        require(genesisHashValue.size == 32 && genesisHashValue.any { it.toInt() != 0 }) {
-            "Musubi genesis hash must contain a non-inert 32-byte value"
-        }
         require(this.items.size <= 100 &&
             this.items.zipWithNext().all { (left, right) -> left.release < right.release }) {
             "Musubi resolver page exceeds 100 items or is not strictly ordered"
@@ -2635,8 +2600,6 @@ class MusubiResolverIndexPageV1 internal constructor(
             "Musubi resolver cursor must use the page snapshot"
         }
     }
-
-    fun genesisHash(): ByteArray = genesisHashValue.copyOf()
 
     /** Binds every resolver row and any continuation snapshot to the exact request. */
     fun requireMatches(request: MusubiResolverIndexQueryV1) {
@@ -2664,8 +2627,7 @@ class MusubiResolverIndexPageV1 internal constructor(
 
     override fun wireValue(): Any = linkedMapOf(
         "query" to query.wireValue(),
-        "chain_id" to chainId,
-        "genesis_hash" to genesisHashValue.map { it.toInt() and 0xff },
+        "network_id" to networkId.toString(),
         "items" to items.map { it.wireValue() },
         "next_cursor" to nextCursor?.wireValue(),
         "snapshot" to snapshot.wireValue(),
@@ -2674,23 +2636,16 @@ class MusubiResolverIndexPageV1 internal constructor(
 
 /** Archive-location page carrying deployment identity and the immutable commitment. */
 class MusubiArchiveLocationPageV1 internal constructor(
-    @JvmField val chainId: String,
-    genesisHash: ByteArray,
+    @JvmField val networkId: NetworkId,
     @JvmField val archive: MusubiArchiveRecordV1,
     items: List<MusubiArchiveLocationV1>,
     @JvmField val nextCursor: MusubiFinalizedCursorV1?,
     @JvmField val snapshot: MusubiRegistrySnapshotV1,
 ) : MusubiWireValueV1() {
-    private val genesisHashValue = genesisHash.copyOf()
     @JvmField val items: List<MusubiArchiveLocationV1> = items.toList()
 
     init {
-        MusubiValidationV1.requireExactText(chainId, "Musubi archive-location chain ID")
-        require(genesisHashValue.size == 32 && genesisHashValue.any { it.toInt() != 0 }) {
-            "Musubi genesis hash must contain a non-inert 32-byte value"
-        }
-        require(archive.stagingReceipt.payload.binding.chainId == chainId &&
-            archive.stagingReceipt.payload.binding.genesisBlockHash().contentEquals(genesisHashValue)) {
+        require(archive.stagingReceipt.payload.binding.networkId == networkId) {
             "Musubi archive registration must use the page deployment identity"
         }
         require(archive.registeredAtHeight <= snapshot.finalizedHeight) {
@@ -2717,8 +2672,6 @@ class MusubiArchiveLocationPageV1 internal constructor(
         }
     }
 
-    fun genesisHash(): ByteArray = genesisHashValue.copyOf()
-
     /** Binds the archive record and any continuation snapshot to the exact request. */
     fun requireMatches(request: MusubiArchiveLocationQueryV1) {
         require(archive.archiveId == request.archiveId) {
@@ -2728,8 +2681,7 @@ class MusubiArchiveLocationPageV1 internal constructor(
     }
 
     override fun wireValue(): Any = linkedMapOf(
-        "chain_id" to chainId,
-        "genesis_hash" to genesisHashValue.map { it.toInt() and 0xff },
+        "network_id" to networkId.toString(),
         "archive" to archive.wireValue(),
         "items" to items.map { it.wireValue() },
         "next_cursor" to nextCursor?.wireValue(),
@@ -2739,20 +2691,16 @@ class MusubiArchiveLocationPageV1 internal constructor(
 
 /** Exact finalized cache-retention decisions for one bounded request batch. */
 class MusubiArchiveRetentionPageV1 internal constructor(
-    @JvmField val chainId: String,
-    genesisHash: ByteArray,
+    @JvmField val networkId: NetworkId,
     items: List<MusubiArchiveRetentionDecisionV1>,
     @JvmField val finalizedTimeMs: BigInteger,
     @JvmField val snapshot: MusubiRegistrySnapshotV1,
 ) : MusubiWireValueV1() {
-    private val genesisHashValue = genesisHash.copyOf()
     @JvmField val items: List<MusubiArchiveRetentionDecisionV1> = items.toList()
 
     init {
         MusubiValidationV1.requireU64(finalizedTimeMs, "archiveRetention.finalizedTimeMs")
-        MusubiValidationV1.requireExactText(chainId, "Musubi archive-retention chain ID")
-        require(genesisHashValue.size == 32 && genesisHashValue.any { it.toInt() != 0 } &&
-            this.items.isNotEmpty() && this.items.size <= 100 &&
+        require(this.items.isNotEmpty() && this.items.size <= 100 &&
             this.items.zipWithNext().all { (left, right) ->
                 MusubiValidationV1.compareUnsignedBytes(
                     left.archiveId.bytes(),
@@ -2772,8 +2720,6 @@ class MusubiArchiveRetentionPageV1 internal constructor(
         }
     }
 
-    fun genesisHash(): ByteArray = genesisHashValue.copyOf()
-
     /** Enforces the exact request identity order and optional snapshot binding. */
     fun requireMatches(request: MusubiArchiveRetentionQueryV1) {
         require(request.expectedSnapshot == null || request.expectedSnapshot == snapshot) {
@@ -2785,32 +2731,25 @@ class MusubiArchiveRetentionPageV1 internal constructor(
     }
 
     override fun wireValue(): Any = linkedMapOf(
-        "chain_id" to chainId,
-        "genesis_hash" to genesisHashValue.map { it.toInt() and 0xff },
+        "network_id" to networkId.toString(),
         "items" to items.map { it.wireValue() },
         "finalized_time_ms" to finalizedTimeMs,
         "snapshot" to snapshot.wireValue(),
     )
 }
 
-/** Ordered-directory page carrying the exact chain/genesis identity for lock creation. */
+/** Ordered-directory page carrying the exact network identity for lock creation. */
 class MusubiOrderedPrefixPageV1 internal constructor(
     @JvmField val query: MusubiOrderedPrefixQueryV1,
-    @JvmField val chainId: String,
-    genesisHash: ByteArray,
+    @JvmField val networkId: NetworkId,
     @JvmField val namespaceBinding: MusubiNamespaceBindingV1,
     items: List<MusubiOrderedPackageEntryV1>,
     @JvmField val nextCursor: MusubiFinalizedCursorV1?,
     @JvmField val snapshot: MusubiRegistrySnapshotV1,
 ) : MusubiWireValueV1() {
-    private val genesisHashValue = genesisHash.copyOf()
     @JvmField val items: List<MusubiOrderedPackageEntryV1> = items.toList()
 
     init {
-        MusubiValidationV1.requireExactText(chainId, "Musubi directory chain ID")
-        require(genesisHashValue.size == 32 && genesisHashValue.any { it.toInt() != 0 }) {
-            "Musubi genesis hash must contain a non-inert 32-byte value"
-        }
         require(this.items.size <= 100) { "Musubi ordered-prefix page exceeds 100 items" }
         require(this.items.all { item ->
             item.selector.namespace == namespaceBinding.namespace &&
@@ -2832,8 +2771,6 @@ class MusubiOrderedPrefixPageV1 internal constructor(
             "Musubi ordered-prefix cursor must use the page snapshot"
         }
     }
-
-    fun genesisHash(): ByteArray = genesisHashValue.copyOf()
 
     /** Binds directory rows and any continuation snapshot to the requested prefix. */
     fun requireMatches(request: MusubiOrderedPrefixQueryV1) {
@@ -2860,8 +2797,7 @@ class MusubiOrderedPrefixPageV1 internal constructor(
 
     override fun wireValue(): Any = linkedMapOf(
         "query" to query.wireValue(),
-        "chain_id" to chainId,
-        "genesis_hash" to genesisHashValue.map { it.toInt() and 0xff },
+        "network_id" to networkId.toString(),
         "namespace_binding" to namespaceBinding.wireValue(),
         "items" to items.map { it.wireValue() },
         "next_cursor" to nextCursor?.wireValue(),

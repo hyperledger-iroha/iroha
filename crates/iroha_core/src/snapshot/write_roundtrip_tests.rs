@@ -28,7 +28,7 @@ async fn can_read_snapshot_after_writing() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
@@ -49,6 +49,39 @@ async fn generated_snapshot_passes_restart_validation_before_publication() {
 
     validate_generated_snapshot_for_restart(&state, &snapshot_bytes)
         .expect("writer-generated snapshot must survive restart initialization exactly");
+}
+
+#[tokio::test]
+async fn canonicalized_account_metadata_survives_the_snapshot_restart_boundary() {
+    let state = state_factory();
+    let owner = state
+        .world
+        .accounts
+        .view()
+        .iter()
+        .next()
+        .map(|(account_id, _)| account_id.clone())
+        .expect("snapshot fixture account");
+    let key = "snapshot_probe".parse().expect("metadata key");
+    let value = Json::from_raw_json("1 ".to_owned())
+        .expect("valid alternate JSON spelling must canonicalize at construction");
+    assert_eq!(value.get(), "1");
+
+    let mut accounts = state.world.accounts.block();
+    accounts
+        .get_mut(&owner)
+        .expect("snapshot fixture account remains registered")
+        .insert(key, value);
+    accounts.commit();
+
+    let snapshot_bytes = exact_snapshot_payload_bytes(&state);
+    validate_generated_snapshot_for_restart(&state, &snapshot_bytes)
+        .expect("canonical ledger Json must round-trip through restart reconstruction");
+    let snapshot_text = core::str::from_utf8(&snapshot_bytes).expect("snapshot is UTF-8 JSON");
+    assert!(
+        snapshot_text.contains(r#""snapshot_probe":1"#),
+        "snapshot must contain only the canonical metadata spelling"
+    );
 }
 
 #[tokio::test]
@@ -221,7 +254,9 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
     }
 
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &owner,
         17,
         DataSpaceId::UNIVERSAL,
@@ -258,7 +293,7 @@ async fn signed_snapshot_roundtrip_preserves_authoritative_alias_revert_maps() {
         BlockCount(0),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
@@ -322,7 +357,7 @@ async fn historical_finality_bundle_survives_validator_lifecycle_and_snapshot_re
     let historical_validator = checked_random_snapshot_bls_keypair();
     let expected_pop = model_rotated_disabled_removed_validator(&mut state, &historical_validator);
     let commit_qc =
-        signed_commit_qc_for_snapshot(&state.chain_id, block_hash, 2, &historical_validator);
+        signed_commit_qc_for_snapshot(&state.network_id, block_hash, 2, &historical_validator);
     state.insert_commit_qc_for_testing(block_hash, commit_qc.clone());
     store_complete_snapshot_commit_evidence_for_blocks(
         &state,
@@ -340,7 +375,7 @@ async fn historical_finality_bundle_survives_validator_lifecycle_and_snapshot_re
         .evict_block_bodies_for_bench(payload_len)
         .expect("evict historical block into durable DA sidecar");
     assert!(freed >= payload_len);
-    let expected_chain_id = state.chain_id.clone();
+    let expected_network_id = state.network_id.clone();
     drop(state);
     drop(kura);
 
@@ -362,7 +397,7 @@ async fn historical_finality_bundle_survives_validator_lifecycle_and_snapshot_re
         block_count,
         TEST_CHUNK_SIZE,
         snapshot_key.public_key(),
-        &expected_chain_id,
+        &expected_network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
@@ -411,7 +446,7 @@ async fn signed_snapshot_rejects_malformed_historical_commit_qc_archive_entries(
     let kura = Kura::blank_kura_for_testing();
     let mut state = state_factory_with_kura_and_chain(
         Arc::clone(&kura),
-        iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+        iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
     );
     let block = signed_block_with_transaction(accepted_log_transaction(
         "malformed-historical-commit-qc-archive",
@@ -419,7 +454,7 @@ async fn signed_snapshot_rejects_malformed_historical_commit_qc_archive_entries(
     let block_hash = block.hash();
     store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block));
     let validator = checked_random_snapshot_bls_keypair();
-    let valid = signed_commit_qc_for_snapshot(&state.chain_id, block_hash, 1, &validator);
+    let valid = signed_commit_qc_for_snapshot(&state.network_id, block_hash, 1, &validator);
     let other_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE7; Hash::LENGTH]));
     let malformed = [
@@ -454,7 +489,7 @@ async fn signed_snapshot_rejects_malformed_historical_commit_qc_archive_entries(
             BlockCount(1),
             TEST_CHUNK_SIZE,
             snapshot_key.public_key(),
-            &state.chain_id,
+            &state.network_id,
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
@@ -476,7 +511,7 @@ async fn snapshot_roundtrip_preserves_exact_sccp_registry() {
     let kura = Kura::blank_kura_for_testing();
     let mut state = state_factory_with_kura_and_chain(
         Arc::clone(&kura),
-        iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+        iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
     );
     let block =
         signed_block_with_transaction(accepted_log_transaction("exact-sccp-registry-snapshot"));
@@ -509,7 +544,7 @@ async fn snapshot_roundtrip_preserves_exact_sccp_registry() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
@@ -575,7 +610,7 @@ async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
             BlockCount(0),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
-            &state.chain_id,
+            &state.network_id,
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
@@ -616,7 +651,7 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
         BlockCount(1),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &state.zk_snapshot(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
@@ -655,7 +690,7 @@ async fn signed_semantically_valid_wsv_tampering_is_rejected_by_kura_checkpoint(
         BlockCount(1),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &state.zk_snapshot(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
@@ -700,7 +735,7 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
         let kura = Kura::blank_kura_for_testing();
         let state = state_factory_with_kura_and_chain(
             Arc::clone(&kura),
-            iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+            iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_CHAIN_ID_V1),
         );
         let mut serialized = String::new();
         serialize_state_snapshot(&state, &mut serialized, true);
@@ -743,7 +778,7 @@ async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance()
             BlockCount(0),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
-            &state.chain_id,
+            &state.network_id,
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
@@ -1043,7 +1078,7 @@ async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
             BlockCount(1),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
-            &state.chain_id,
+            &state.network_id,
             &state.zk_snapshot(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
@@ -1112,7 +1147,7 @@ async fn snapshot_roundtrip_preserves_sccp_outbound_pending_messages() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
@@ -1206,7 +1241,7 @@ async fn incompatible_sccp_caps_reject_before_snapshot_can_prune_kura() {
         BlockCount(1),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &incompatible,
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
@@ -1350,7 +1385,7 @@ async fn snapshot_read_rejects_wrong_key_signature_for_matching_digest() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
@@ -1381,7 +1416,7 @@ async fn snapshot_read_rejects_noncanonical_uppercase_signature_hex() {
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
@@ -1413,7 +1448,7 @@ async fn snapshot_read_rejects_all_zero_signature_sidecar_before_verification() 
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::default(),
@@ -1458,7 +1493,7 @@ async fn snapshot_read_rejects_malformed_ed25519_signature_r_before_verification
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
-            &state.chain_id,
+            &state.network_id,
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
@@ -1513,7 +1548,7 @@ async fn snapshot_read_rejects_malformed_mldsa_signature_lengths_before_verifica
             BlockCount(state.view().height()),
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
-            &state.chain_id,
+            &state.network_id,
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
@@ -1558,7 +1593,7 @@ async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bin
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
@@ -1607,7 +1642,7 @@ async fn snapshot_missing_space_directory_section_rejects_even_with_kura_history
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
@@ -1641,7 +1676,7 @@ async fn snapshot_missing_space_directory_section_rejects_without_manifest_histo
         BlockCount(state.view().height()),
         TEST_CHUNK_SIZE,
         key_pair.public_key(),
-        &state.chain_id,
+        &state.network_id,
         &crate::state::default_zk_config(),
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),

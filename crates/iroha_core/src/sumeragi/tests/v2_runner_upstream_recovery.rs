@@ -62,8 +62,8 @@ fn initially_absent_configured_validator_claims_one_process_generation() {
     assert_ne!(generation, 0);
     assert_eq!(claim.local_peer_id(), &local_peer);
     assert_eq!(
-        claim.chain_id_hash(),
-        Hash::new(context.chain_id.clone().into_inner().as_bytes())
+        claim.network_id(),
+        context.network_id
     );
 
     let mut later_context = context.clone();
@@ -145,7 +145,7 @@ fn lane_production_duty_survives_successor_global_roster_removal() {
 }
 
 #[test]
-fn pre_submit_lane_binding_rejection_arms_one_empty_heartbeat_retry() {
+fn pre_submit_lane_binding_rejection_arms_one_non_empty_retry() {
     let (context, _) = context();
     let owner = proposal_owner(
         &context,
@@ -166,11 +166,11 @@ fn pre_submit_lane_binding_rejection_arms_one_empty_heartbeat_retry() {
 
     assert_eq!(
         state.handle_candidate_binding_rejection(owner),
-        LocalValidationDisposition::RetryHeartbeat,
+        LocalValidationDisposition::RetryNonEmpty,
         "an unsubmitted lane-binding rejection must not stop the process"
     );
     assert_eq!(state.attempted, None);
-    assert_eq!(state.heartbeat_only, Some(owner));
+    assert_eq!(state.non_empty_retry, Some(owner));
     assert!(state.candidate_work_wait.is_none());
     assert!(state.submitted.is_none());
     assert!(state.pending_events.is_none());
@@ -178,8 +178,8 @@ fn pre_submit_lane_binding_rejection_arms_one_empty_heartbeat_retry() {
 
     assert_eq!(
         state.handle_candidate_binding_rejection(owner),
-        LocalValidationDisposition::FatalHeartbeat,
-        "a rejected empty heartbeat still fails closed"
+        LocalValidationDisposition::FatalNonEmpty,
+        "a rejected non-empty recovery retry still fails closed"
     );
 }
 

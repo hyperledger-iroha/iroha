@@ -72,7 +72,6 @@ async fn gossip_accepts_restricted_route_match() {
 
     let now = Instant::now();
     let gossiper = TransactionGossiper {
-        chain_id: "test-chain".parse().expect("chain id"),
         gossip_period: Duration::from_millis(50),
         gossip_size: NonZeroU32::new(1).expect("nonzero size"),
         gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,

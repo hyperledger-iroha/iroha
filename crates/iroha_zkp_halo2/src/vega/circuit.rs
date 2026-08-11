@@ -159,10 +159,6 @@ impl CircuitBuilder {
             .ok_or(CircuitError::InvalidDimension)
     }
 
-    pub(super) fn constraint_count(&self) -> usize {
-        self.constraints.len()
-    }
-
     pub(super) fn alloc(&mut self, value: Scalar) -> Result<Variable, CircuitError> {
         if self.private_values.len() >= MAX_CIRCUIT_ROWS {
             return Err(CircuitError::InvalidDimension);

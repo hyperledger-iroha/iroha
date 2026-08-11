@@ -693,13 +693,13 @@ object SccpJsonParser {
         val settlement = requiredObject(value, "settlement")
         exactFields(
             settlement,
-            setOf("asset_definition_id", "custody_account_id", "payload_amount_scale"),
+            setOf("asset_definition_id", "custody_owner", "payload_amount_scale"),
             "$label.settlement",
         )
         require(requiredText(settlement, "asset_definition_id") == TAIRA_XOR_ASSET_ID) {
             "$label settlement must use canonical Taira XOR"
         }
-        requiredText(settlement, "custody_account_id")
+        requiredText(settlement, "custody_owner")
         val payloadAmountScale = requiredInt(settlement, "payload_amount_scale", 9, 9)
         val routeConfigurationHash = routeConfigurationHash(
             lane,

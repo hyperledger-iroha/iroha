@@ -42,6 +42,12 @@ fi
 require_external_cargo_target_dir "$REPO_ROOT"
 require_external_release_artifact_root "$REPO_ROOT"
 require_release_artifact_directory "$EVIDENCE_DIR"
+workspace_source_manifest_sha256="${IROHA_RELEASE_SOURCE_MANIFEST_SHA256:-}"
+if [[ ! "$workspace_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "authenticated workspace source manifest is unavailable to the multilane Apalache gate" >&2
+  exit 2
+fi
+readonly workspace_source_manifest_sha256
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -78,10 +84,10 @@ mkdir -p "$LOG_DIR"
 
 python3 -I -S "$CONTRACT_CHECKER"
 python3 -I -S "$RUNNER_CONTRACT_TEST"
-source_manifest_sha256="$(
+multilane_source_manifest_sha256="$(
   python3 -I -S "$CONTRACT_CHECKER" --print-source-manifest-sha256
 )"
-readonly source_manifest_sha256
+readonly multilane_source_manifest_sha256
 
 if [[ ! -f "$APALACHE_BIN" || -L "$APALACHE_BIN" || ! -x "$APALACHE_BIN" ]]; then
   echo "pinned Apalache v${APALACHE_VERSION} is required from the authenticated external tool inventory" >&2
@@ -248,10 +254,10 @@ run_positive \
   18 \
   "FirstReleaseTypeInvariant, MLPayloadSchemaV2CarriesExactAdmissionPreimage, MLValidatorCarrierOwnership, MLSelectedQueuePlanV4ConjunctionBeforeReservationV5, MLReservationV5BeforeKuraActive, MLKuraActiveBeforeExecutionInput, MLExecutionInputBeforeReadyAuthorization, MLReadyAuthorizationBeforeLocalSignature, MLLocalSignaturesBeforeDurableReadyQc, MLCrashDurableFactsRecoverable, MLVolatileSessionLostOnCrash, MLCommitAndReleaseRetainExactScope, MLLaneCommitBeforeAtomicWsvCarrierApplication, MLExactlyOnceCarrierApplication, MLPostCarrierCommitCleanupOrder, MLReleasePrefixesRecoverable, MLReleaseStageOrder, MLQueuePlanV4SelectedConjunctionBound4096"
 
-final_source_manifest_sha256="$(
+final_multilane_source_manifest_sha256="$(
   python3 -I -S "$CONTRACT_CHECKER" --print-source-manifest-sha256
 )"
-if [[ "$final_source_manifest_sha256" != "$source_manifest_sha256" ]]; then
+if [[ "$final_multilane_source_manifest_sha256" != "$multilane_source_manifest_sha256" ]]; then
   echo "multilane formal or production sources changed during the Apalache run" >&2
   exit 1
 fi
@@ -259,12 +265,13 @@ fi
 evidence_tmp="$(mktemp "${EVIDENCE_DIR}/.multilane_apalache_evidence.XXXXXX")"
 release_gate_boundary "apalache:before-evidence-publication" || exit $?
 {
-  printf 'schema_version\t1\n'
+  printf 'schema_version\t2\n'
   printf 'backend\tapalache\n'
   printf 'version\t%s\n' "$APALACHE_VERSION"
   printf 'launcher_sha256\t%s\n' "$APALACHE_LAUNCHER_SHA256"
   printf 'jar_sha256\t%s\n' "$APALACHE_JAR_SHA256"
-  printf 'source_manifest_sha256\t%s\n' "$source_manifest_sha256"
+  printf 'workspace_source_manifest_sha256\t%s\n' "$workspace_source_manifest_sha256"
+  printf 'multilane_source_manifest_sha256\t%s\n' "$multilane_source_manifest_sha256"
   printf 'result_count\t6\n'
   printf 'result\tautoscale-lifecycle\t%s\t%s\t8\tNoError\t%s\t%s\t%s\n' \
     "$AUTOSCALE_MODULE" \

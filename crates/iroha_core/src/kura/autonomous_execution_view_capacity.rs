@@ -89,7 +89,7 @@ impl Kura {
         let verified = self
             .recover_lane_block_execution_input_source(
                 &recovered.proposal,
-                recovered.autonomous_chain_id_hash,
+                recovered.autonomous_network_id,
                 recovered.autonomous_epoch,
                 recovered.autonomous_payload_hash,
                 false,
@@ -108,17 +108,17 @@ impl Kura {
         }
         let artifact = LaneBlockExecutionInputArtifact::new(verified);
         let execution_input_authorization = match (
-            artifact.autonomous_chain_id_hash,
+            artifact.autonomous_network_id,
             artifact.autonomous_epoch,
             artifact.autonomous_payload_hash,
         ) {
-            (Some(chain_id_hash), Some(epoch), Some(payload_hash)) => {
+            (Some(network_id), Some(epoch), Some(payload_hash)) => {
                 let descriptor = &artifact.proposal.descriptor;
                 let autonomous = self
                     .read_autonomous_lane_block_artifact_with_recovery_policy(
                         descriptor.lane_id,
                         descriptor.lane_block_height,
-                        chain_id_hash,
+                        network_id,
                         epoch,
                         false,
                     )
@@ -174,7 +174,7 @@ impl Kura {
         })?;
         let autonomous_input = matches!(
             (
-                artifact.autonomous_chain_id_hash,
+                artifact.autonomous_network_id,
                 artifact.autonomous_epoch,
                 artifact.autonomous_payload_hash,
             ),

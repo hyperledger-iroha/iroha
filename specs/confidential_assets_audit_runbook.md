@@ -14,10 +14,10 @@ when validating confidential-asset flows. It complements the rotation playbook
   request, anchor, drawdown, and receipt records through the protocol-specific
   query surface, covered by the Kagemusha tests in
   `crates/iroha_core/src/smartcontracts/isi/offline.rs`.
-- Torii exposes native escrow lifecycle events through the standard
-  SSE/WebSocket pipeline and `EscrowEventFilter`. Anonymous-escrow movement is
-  audited through its authenticated escrow records and confidential-tree query
-  state rather than a producerless generic confidential event feed.
+- Torii exposes transparent native numeric-escrow lifecycle events through the
+  standard SSE/WebSocket pipeline and `EscrowEventFilter`. The first-release
+  protocol has no native anonymous escrow and no producerless generic
+  confidential event or event-filter wire.
 
 - Policy metadata and pending transitions are available through
   `GET /v1/confidential/assets/{definition_id}/transitions`
@@ -50,8 +50,9 @@ when validating confidential-asset flows. It complements the rotation playbook
 - For production rehearsals or emergency windows, operators attach evidence to
   `status.md` entries (e.g., the multi-lane rehearsal log) and include:
   `curl` proof of policy transitions, Grafana snapshots, and the relevant
-  protocol receipts so auditors can reconstruct Kagemusha top-up→private
-  transfer→redemption or anonymous-escrow open→close timelines.
+  protocol receipts so auditors can reconstruct Kagemusha
+  top-up→redemption timelines. Transparent native numeric escrow is audited
+  separately through its authenticated lifecycle events and records.
 
 ## 4. External Review Cadence
 

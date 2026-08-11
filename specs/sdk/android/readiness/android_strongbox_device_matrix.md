@@ -4,7 +4,7 @@ This matrix is the physical-device release gate for the single Kagemusha
 offline-cash protocol. Measurements are collected from a clean, unsigned V4
 candidate before release finalization, through the opt-in
 `kagemusha-candidate-evidence-lab` build only. Every accepted V2 slot is bound
-to native bridge ABI 21, the exact candidate record and source tree, the
+to native bridge ABI 22, the exact candidate record and source tree, the
 ordered eight recursive artifacts, the lab native library and APK, the real
 recursive-spend lifecycle transcript, the application signing certificate,
 and the wallet policy. The ordinary production capability must remain false
@@ -37,7 +37,7 @@ satisfy the production-evidence gate. V2 binds:
   policy digests;
 - the StrongBox/KeyMint certificate chain and challenge;
 - the clean candidate record, manifest, source commit/tree, generation, native
-  bridge ABI 21, exact Eq/Ep KRV4 framed and payload identities, and the
+  bridge ABI 22, exact Eq/Ep KRV4 framed and payload identities, and the
   native-accepted inventory digest;
 - the marker-bearing lab native library and APK, while proving the production
   capability stayed false;

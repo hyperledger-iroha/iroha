@@ -40,7 +40,7 @@ use std::ffi::{OsStr, OsString};
 use std::io::Write as _;
 
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     query::sorafs::prelude::{
         FindSorafsOrderbookEvents, FindSorafsProofOutcomeEvents, FindSorafsRepairEvents,
         FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEvents,
@@ -226,10 +226,12 @@ impl ReputationFinalizedArchiveBounds {
 }
 
 /// Exact immutable finalized-chain identity used as an archive key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+)]
 pub struct ReputationFinalizedArchiveKeyV1 {
-    /// Exact chain from which the projection was captured.
-    pub chain_id: ChainId,
+    /// Exact network from which the projection was captured.
+    pub network_id: NetworkId,
     /// Finalized block height.
     pub height: u64,
     /// Exact finalized block hash.
@@ -241,14 +243,14 @@ impl ReputationFinalizedArchiveKeyV1 {
     ///
     /// # Errors
     ///
-    /// Rejects an empty chain, zero height, or zero block hash.
+    /// Rejects a malformed network identity, zero height, or zero block hash.
     pub fn try_new(
-        chain_id: ChainId,
+        network_id: NetworkId,
         height: u64,
         block_hash: [u8; 32],
     ) -> Result<Self, ReputationFinalizedArchiveError> {
         let key = Self {
-            chain_id,
+            network_id,
             height,
             block_hash,
         };
@@ -260,11 +262,11 @@ impl ReputationFinalizedArchiveKeyV1 {
     ///
     /// # Errors
     ///
-    /// Rejects an empty chain, zero height, or zero block hash.
+    /// Rejects a malformed network identity, zero height, or zero block hash.
     pub fn validate(&self) -> Result<(), ReputationFinalizedArchiveError> {
-        if self.chain_id.as_str().is_empty() {
+        if self.network_id.as_bytes()[31] & 1 != 1 {
             return Err(ReputationFinalizedArchiveError::InvalidKey {
-                reason: "chain id must be non-empty",
+                reason: "network id must be an exact marked genesis hash",
             });
         }
         if self.height == 0 {
@@ -1032,7 +1034,7 @@ impl ReputationFinalizedAnchorManifestV1 {
             (None, None) => {}
             (Some(predecessor), Some(predecessor_anchor_digest)) => {
                 predecessor.validate()?;
-                if predecessor.chain_id != self.key.chain_id
+                if predecessor.network_id != self.key.network_id
                     || predecessor.height >= self.key.height
                     || predecessor == &self.key
                     || predecessor_anchor_digest == [0; 32]
@@ -1380,7 +1382,7 @@ impl PersistedReputationFinalizedVirtualBaseCheckpointV1 {
                     .height
                     .checked_add(offset)
             });
-        if checkpoint.original_activation_floor.chain_id != checkpoint.retention_floor.chain_id
+        if checkpoint.original_activation_floor.network_id != checkpoint.retention_floor.network_id
             || checkpoint.original_activation_floor.height > checkpoint.retention_floor.height
             || expected_retention_height != Some(checkpoint.retention_floor.height)
             || checkpoint.retention_floor_finalized_at_unix_ms == 0
@@ -1877,11 +1879,11 @@ struct AnchorIndexEntry {
 
 #[derive(Debug, Default)]
 struct ArchiveIndex {
-    by_height: BTreeMap<(ChainId, u64), AnchorIndexEntry>,
-    checkpoints: BTreeMap<ChainId, CheckpointIndexEntry>,
+    by_height: BTreeMap<(NetworkId, u64), AnchorIndexEntry>,
+    checkpoints: BTreeMap<NetworkId, CheckpointIndexEntry>,
     policies: BTreeMap<[u8; 32], ReputationJournalAuthorityPolicyRecordV1>,
-    latest_projection: BTreeMap<ChainId, ReputationFinalizedProjectionV1>,
-    latest_state: BTreeMap<ChainId, ReputationReconstructionStateV1>,
+    latest_projection: BTreeMap<NetworkId, ReputationFinalizedProjectionV1>,
+    latest_state: BTreeMap<NetworkId, ReputationReconstructionStateV1>,
     anchor_count: usize,
     checkpoint_count: usize,
     policy_count: usize,
@@ -1892,7 +1894,7 @@ struct ArchiveIndex {
 
 #[derive(Debug, Clone)]
 struct PreparedReputationFinalizedArchiveCompactionV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     persisted: PersistedReputationFinalizedVirtualBaseCheckpointV1,
     checkpoint_bytes: Vec<u8>,
     anchors: Vec<AnchorIndexEntry>,
@@ -1900,21 +1902,21 @@ struct PreparedReputationFinalizedArchiveCompactionV1 {
     expected_archive_generation: u64,
 }
 
-fn active_checkpoint_digest(index: &ArchiveIndex, chain_id: &ChainId) -> Option<[u8; 32]> {
+fn active_checkpoint_digest(index: &ArchiveIndex, network_id: &NetworkId) -> Option<[u8; 32]> {
     index
         .checkpoints
-        .get(chain_id)
+        .get(network_id)
         .map(|checkpoint| checkpoint.persisted.checkpoint_digest)
 }
 
 fn validate_qualification_archive_boundary(
     index: &ArchiveIndex,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     expected_generation: u64,
     expected_checkpoint_digest: Option<[u8; 32]>,
 ) -> Result<(), ReputationFinalizedArchiveError> {
     if index.generation != expected_generation
-        || active_checkpoint_digest(index, chain_id) != expected_checkpoint_digest
+        || active_checkpoint_digest(index, network_id) != expected_checkpoint_digest
     {
         return Err(
             ReputationFinalizedArchiveError::QualificationBoundaryChanged {
@@ -2430,7 +2432,7 @@ pub enum ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1 {
 
 /// Deployment-owned sealed monotonic CAS authority for archive retention.
 ///
-/// Implementations own all credentials and durable state. Each `chain_id`
+/// Implementations own all credentials and durable state. Each `network_id`
 /// identifies an independent linearizable namespace containing only canonical
 /// [`ReputationFinalizedArchiveRetentionApprovalRecordV1`] values.
 pub trait ReputationFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt::Debug {
@@ -2449,14 +2451,14 @@ pub trait ReputationFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt::Deb
         ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
     >;
 
-    /// Load the exact latest authoritative record for `chain_id`.
+    /// Load the exact latest authoritative record for `network_id`.
     ///
     /// # Errors
     ///
     /// Returns a fixed payload-free provider failure.
     fn load_latest(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
     ) -> Result<
         Option<ReputationFinalizedArchiveRetentionApprovalRecordV1>,
         ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
@@ -2473,7 +2475,7 @@ pub trait ReputationFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt::Deb
     /// Returns a fixed payload-free provider failure.
     fn compare_and_swap_latest(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         expected_revision: Option<[u8; 32]>,
         next: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
     ) -> Result<(), ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1>;
@@ -2724,19 +2726,19 @@ impl ReputationFinalizedArchive {
     pub fn try_open_with_retention_authority(
         root: impl Into<PathBuf>,
         bounds: ReputationFinalizedArchiveBounds,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         kura: &Kura,
         binding: &ReputationFinalizedArchiveRetentionAuthorityBindingV1,
         authority: &dyn ReputationFinalizedArchiveRetentionAuthorityV1,
     ) -> Result<Self, ReputationFinalizedArchiveError> {
-        if chain_id.as_str().is_empty() {
+        if network_id.as_bytes()[31] & 1 != 1 {
             return Err(ReputationFinalizedArchiveError::InvalidKey {
                 reason: "chain id must be non-empty",
             });
         }
         assert_retention_authority_identity(binding, authority)?;
         let archive = Self::open_unreconciled(root, bounds)?;
-        archive.recover_approved_retention(chain_id, kura, binding, authority)?;
+        archive.recover_approved_retention(network_id, kura, binding, authority)?;
         archive.verify_storage_boundaries()?;
         Ok(archive)
     }
@@ -2842,30 +2844,29 @@ impl ReputationFinalizedArchive {
 
     fn recover_approved_retention(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         kura: &Kura,
         binding: &ReputationFinalizedArchiveRetentionAuthorityBindingV1,
         authority: &dyn ReputationFinalizedArchiveRetentionAuthorityV1,
     ) -> Result<(), ReputationFinalizedArchiveError> {
         let checkpoint_candidates = self.load_checkpoint_candidates()?;
-        if checkpoint_candidates
-            .iter()
-            .any(|candidate| &candidate.persisted.checkpoint.retention_floor.chain_id != chain_id)
-        {
+        if checkpoint_candidates.iter().any(|candidate| {
+            &candidate.persisted.checkpoint.retention_floor.network_id != network_id
+        }) {
             return Err(ReputationFinalizedArchiveError::UnapprovedRetentionCheckpoint);
         }
-        let approval = load_retention_approval(binding, authority, chain_id)?;
+        let approval = load_retention_approval(binding, authority, network_id)?;
         let Some(approval) = approval else {
             if !checkpoint_candidates.is_empty() {
                 return Err(ReputationFinalizedArchiveError::UnapprovedRetentionCheckpoint);
             }
             return Ok(());
         };
-        validate_retention_approval_record(&approval, binding, chain_id)?;
+        validate_retention_approval_record(&approval, binding, network_id)?;
         validate_retention_checkpoint_candidate_inventory(
             &checkpoint_candidates,
             &approval,
-            chain_id,
+            network_id,
         )?;
 
         let approved_candidate = checkpoint_candidates.iter().find(|candidate| {
@@ -2885,23 +2886,23 @@ impl ReputationFinalizedArchive {
                 .ok_or(ReputationFinalizedArchiveError::InvalidCheckpoint {
                     reason: "approved archive generation overflowed",
                 })?;
-            if active_checkpoint_digest(&index, chain_id)
+            if active_checkpoint_digest(&index, network_id)
                 != Some(approval.proposal().checkpoint_digest())
                 || index.generation != expected_generation
             {
                 return Err(ReputationFinalizedArchiveError::UnapprovedRetentionCheckpoint);
             }
-            require_exact_retention_readback(binding, authority, chain_id, &approval)?;
+            require_exact_retention_readback(binding, authority, network_id, &approval)?;
             if let Err(error) = self.finish_checkpoint_cleanup(&index) {
                 self.reconcile_checkpoint_index(&mut index)?;
                 return Err(error);
             }
             self.reconcile_checkpoint_index(&mut index)?;
-            require_exact_retention_readback(binding, authority, chain_id, &approval)?;
+            require_exact_retention_readback(binding, authority, network_id, &approval)?;
             return Ok(());
         }
 
-        if active_checkpoint_digest(&index, chain_id) != approval.predecessor_checkpoint_digest()
+        if active_checkpoint_digest(&index, network_id) != approval.predecessor_checkpoint_digest()
             || index.generation != approval.proposal().fence().expected_generation()
         {
             return Err(ReputationFinalizedArchiveError::RetentionAuthorityRollback);
@@ -2917,9 +2918,9 @@ impl ReputationFinalizedArchive {
             approval.proposal(),
             approval.predecessor_checkpoint_digest(),
         )?;
-        require_exact_retention_readback(binding, authority, chain_id, &approval)?;
+        require_exact_retention_readback(binding, authority, network_id, &approval)?;
         let _recovered = self.publish_prepared_compaction(&mut index, prepared, || {
-            require_exact_retention_readback(binding, authority, chain_id, &approval)
+            require_exact_retention_readback(binding, authority, network_id, &approval)
         })?;
         Ok(())
     }
@@ -2967,13 +2968,13 @@ impl ReputationFinalizedArchive {
         }
         candidates.sort_by(|left, right| {
             (
-                &left.persisted.checkpoint.retention_floor.chain_id,
+                &left.persisted.checkpoint.retention_floor.network_id,
                 left.persisted.checkpoint.checkpoint_generation,
                 left.persisted.checkpoint.retention_floor.height,
                 left.persisted.checkpoint_digest,
             )
                 .cmp(&(
-                    &right.persisted.checkpoint.retention_floor.chain_id,
+                    &right.persisted.checkpoint.retention_floor.network_id,
                     right.persisted.checkpoint.checkpoint_generation,
                     right.persisted.checkpoint.retention_floor.height,
                     right.persisted.checkpoint_digest,
@@ -3040,7 +3041,7 @@ impl ReputationFinalizedArchive {
             .height
             .checked_sub(1)
             .map(|maximum_height| {
-                self.latest_reconstruction_state_at_or_before(&key.chain_id, maximum_height)
+                self.latest_reconstruction_state_at_or_before(&key.network_id, maximum_height)
             })
             .transpose()?
             .flatten();
@@ -3338,12 +3339,12 @@ impl ReputationFinalizedArchive {
         kura: &Kura,
         receipt: &KuraV2CommitReceipt,
     ) -> Result<ReputationFinalizedArchiveReconcileOutcomeV1, ReputationFinalizedArchiveError> {
-        let activation_floor_before = self.activation_floor(state_ro.chain_id())?;
+        let activation_floor_before = self.activation_floor(state_ro.network_id())?;
         let insertion = self.capture_kura_authenticated_view(state_ro, kura, receipt)?;
         // Startup/recovery reconciliation is exact. The configured suffix-lag
         // allowance is solely a live health window and must never qualify an
         // incomplete startup image.
-        let qualification = self.qualify_against_kura_tip(state_ro.chain_id(), kura, 0)?;
+        let qualification = self.qualify_against_kura_tip(state_ro.network_id(), kura, 0)?;
         Ok(ReputationFinalizedArchiveReconcileOutcomeV1 {
             insertion,
             qualification,
@@ -3411,11 +3412,11 @@ impl ReputationFinalizedArchive {
     /// concurrent Kura/archive boundary change.
     pub fn qualify_against_kura_tip(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         kura: &Kura,
         maximum_kura_tip_lag_blocks: u64,
     ) -> Result<ReputationFinalizedArchiveQualificationV1, ReputationFinalizedArchiveError> {
-        if chain_id.as_str().is_empty() {
+        if network_id.as_bytes()[31] & 1 != 1 {
             return Err(ReputationFinalizedArchiveError::InvalidKey {
                 reason: "chain id must be non-empty",
             });
@@ -3427,8 +3428,8 @@ impl ReputationFinalizedArchive {
             let mut anchors = index
                 .by_height
                 .range((
-                    std::ops::Bound::Included((chain_id.clone(), 0)),
-                    std::ops::Bound::Included((chain_id.clone(), u64::MAX)),
+                    std::ops::Bound::Included((network_id.clone(), 0)),
+                    std::ops::Bound::Included((network_id.clone(), u64::MAX)),
                 ))
                 .map(|(_, entry)| {
                     (
@@ -3437,7 +3438,7 @@ impl ReputationFinalizedArchive {
                     )
                 })
                 .collect::<Vec<_>>();
-            let activation_floor = if let Some(checkpoint) = index.checkpoints.get(chain_id) {
+            let activation_floor = if let Some(checkpoint) = index.checkpoints.get(network_id) {
                 let material = &checkpoint.persisted.checkpoint;
                 anchors.insert(
                     0,
@@ -3454,7 +3455,7 @@ impl ReputationFinalizedArchive {
                     },
                 )?
             };
-            let checkpoint_finality_digest = index.checkpoints.get(chain_id).map(|checkpoint| {
+            let checkpoint_finality_digest = index.checkpoints.get(network_id).map(|checkpoint| {
                 checkpoint
                     .persisted
                     .checkpoint
@@ -3463,11 +3464,11 @@ impl ReputationFinalizedArchive {
             (
                 anchors,
                 activation_floor,
-                active_checkpoint_digest(&index, chain_id),
+                active_checkpoint_digest(&index, network_id),
                 checkpoint_finality_digest,
             )
         };
-        validate_contiguous_archive_coverage(chain_id, &anchors)?;
+        validate_contiguous_archive_coverage(network_id, &anchors)?;
         let archive_tip = anchors
             .last()
             .map(|(key, _)| key.clone())
@@ -3511,7 +3512,7 @@ impl ReputationFinalizedArchive {
                     },
                 )?
                 .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-                    chain_id: chain_id.clone(),
+                    network_id: network_id.clone(),
                     height: checkpoint_height,
                     reason: "virtual base has no canonical V2 finality artifact",
                 })?;
@@ -3519,7 +3520,7 @@ impl ReputationFinalizedArchive {
                 != expected_digest
             {
                 return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-                    chain_id: chain_id.clone(),
+                    network_id: network_id.clone(),
                     height: checkpoint_height,
                     reason: "virtual-base finality artifact digest changed",
                 });
@@ -3538,7 +3539,7 @@ impl ReputationFinalizedArchive {
         }
         let index = self.read_index()?;
         self.verify_synchronized_index(&index)?;
-        validate_qualification_archive_boundary(&index, chain_id, generation, checkpoint_digest)?;
+        validate_qualification_archive_boundary(&index, network_id, generation, checkpoint_digest)?;
         let qualification = ReputationFinalizedArchiveQualificationV1 {
             activation_floor,
             archive_tip,
@@ -3551,7 +3552,7 @@ impl ReputationFinalizedArchive {
         Ok(qualification)
     }
 
-    /// Return the first immutable anchor captured for `chain_id`.
+    /// Return the first immutable anchor captured for `network_id`.
     ///
     /// This key is the explicit historical activation floor. Exact queries
     /// below it must remain unavailable unless a separate authenticated replay
@@ -3562,16 +3563,16 @@ impl ReputationFinalizedArchive {
     /// Returns a fail-closed archive integrity error.
     pub fn activation_floor(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
     ) -> Result<Option<ReputationFinalizedArchiveKeyV1>, ReputationFinalizedArchiveError> {
-        if chain_id.as_str().is_empty() {
+        if network_id.as_bytes()[31] & 1 != 1 {
             return Err(ReputationFinalizedArchiveError::InvalidKey {
                 reason: "chain id must be non-empty",
             });
         }
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
-        if let Some(checkpoint) = index.checkpoints.get(chain_id) {
+        if let Some(checkpoint) = index.checkpoints.get(network_id) {
             return Ok(Some(
                 checkpoint
                     .persisted
@@ -3583,8 +3584,8 @@ impl ReputationFinalizedArchive {
         Ok(index
             .by_height
             .range((
-                std::ops::Bound::Included((chain_id.clone(), 0)),
-                std::ops::Bound::Included((chain_id.clone(), u64::MAX)),
+                std::ops::Bound::Included((network_id.clone(), 0)),
+                std::ops::Bound::Included((network_id.clone(), u64::MAX)),
             ))
             .next()
             .map(|(_, entry)| entry.manifest.key.clone()))
@@ -3597,9 +3598,9 @@ impl ReputationFinalizedArchive {
     /// Rejects an empty chain identifier or a substituted archive namespace.
     pub fn retention_floor(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
     ) -> Result<Option<ReputationFinalizedArchiveKeyV1>, ReputationFinalizedArchiveError> {
-        if chain_id.as_str().is_empty() {
+        if network_id.as_bytes()[31] & 1 != 1 {
             return Err(ReputationFinalizedArchiveError::InvalidKey {
                 reason: "chain id must be non-empty",
             });
@@ -3608,16 +3609,16 @@ impl ReputationFinalizedArchive {
         self.verify_storage_boundaries()?;
         Ok(index
             .checkpoints
-            .get(chain_id)
+            .get(network_id)
             .map(|checkpoint| checkpoint.persisted.checkpoint.retention_floor.clone()))
     }
 
     fn latest_reconstruction_state_at_or_before(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         maximum_height: u64,
     ) -> Result<Option<ReputationReconstructionStateV1>, ReputationFinalizedArchiveError> {
-        if chain_id.as_str().is_empty() {
+        if network_id.as_bytes()[31] & 1 != 1 {
             return Err(ReputationFinalizedArchiveError::InvalidKey {
                 reason: "chain id must be non-empty",
             });
@@ -3627,15 +3628,15 @@ impl ReputationFinalizedArchive {
         if let Some(entry) = index
             .by_height
             .range((
-                std::ops::Bound::Included((chain_id.clone(), 0)),
-                std::ops::Bound::Included((chain_id.clone(), maximum_height)),
+                std::ops::Bound::Included((network_id.clone(), 0)),
+                std::ops::Bound::Included((network_id.clone(), maximum_height)),
             ))
             .next_back()
             .map(|(_, entry)| entry)
         {
             return self.reconstruct_state(&index, entry).map(Some);
         }
-        if let Some(checkpoint) = index.checkpoints.get(chain_id) {
+        if let Some(checkpoint) = index.checkpoints.get(network_id) {
             let checkpoint = &checkpoint.persisted.checkpoint;
             if checkpoint.retention_floor.height <= maximum_height {
                 return ReputationReconstructionStateV1::from_checkpoint(checkpoint).map(Some);
@@ -3651,10 +3652,10 @@ impl ReputationFinalizedArchive {
     ) -> Result<(), ReputationFinalizedArchiveError> {
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
-        if let Some(existing) = index.by_height.get(&(key.chain_id.clone(), key.height)) {
+        if let Some(existing) = index.by_height.get(&(key.network_id.clone(), key.height)) {
             if existing.manifest.key.block_hash != key.block_hash {
                 return Err(ReputationFinalizedArchiveError::FinalizedFork {
-                    chain_id: key.chain_id.clone(),
+                    network_id: key.network_id.clone(),
                     height: key.height,
                 });
             }
@@ -3662,19 +3663,19 @@ impl ReputationFinalizedArchive {
         }
         let latest = index
             .latest_state
-            .get(&key.chain_id)
+            .get(&key.network_id)
             .map(|state| state.key.height);
         if let Some(latest_height) = latest {
             let expected_height = latest_height.checked_add(1).ok_or(
                 ReputationFinalizedArchiveError::ArchiveCoverageGap {
-                    chain_id: key.chain_id.clone(),
+                    network_id: key.network_id.clone(),
                     missing_height: u64::MAX,
                     observed_height: key.height,
                 },
             )?;
             if key.height != expected_height {
                 return Err(ReputationFinalizedArchiveError::ArchiveCoverageGap {
-                    chain_id: key.chain_id.clone(),
+                    network_id: key.network_id.clone(),
                     missing_height: expected_height,
                     observed_height: key.height,
                 });
@@ -3706,11 +3707,11 @@ impl ReputationFinalizedArchive {
             &projection.authority_policy,
             projection.finalized_at_unix_ms,
         )?;
-        let subject = (projection.key.chain_id.clone(), projection.key.height);
+        let subject = (projection.key.network_id.clone(), projection.key.height);
         if let Some(existing) = index.by_height.get(&subject).cloned() {
             if existing.manifest.key.block_hash != projection.key.block_hash {
                 return Err(ReputationFinalizedArchiveError::FinalizedFork {
-                    chain_id: projection.key.chain_id.clone(),
+                    network_id: projection.key.network_id.clone(),
                     height: projection.key.height,
                 });
             }
@@ -3718,17 +3719,17 @@ impl ReputationFinalizedArchive {
                 return Ok(ReputationFinalizedArchiveInsertOutcome::ExactReplay);
             }
             return Err(ReputationFinalizedArchiveError::ConflictingProjection {
-                chain_id: projection.key.chain_id.clone(),
+                network_id: projection.key.network_id.clone(),
                 height: projection.key.height,
                 block_hash: projection.key.block_hash,
             });
         }
 
-        let predecessor = index.latest_state.get(&projection.key.chain_id).cloned();
+        let predecessor = index.latest_state.get(&projection.key.network_id).cloned();
         if let Some(previous) = &predecessor {
             if projection.key.height <= previous.key.height {
                 return Err(ReputationFinalizedArchiveError::OutOfOrderAnchor {
-                    chain_id: projection.key.chain_id.clone(),
+                    network_id: projection.key.network_id.clone(),
                     height: projection.key.height,
                     latest_height: previous.key.height,
                 });
@@ -3773,11 +3774,11 @@ impl ReputationFinalizedArchive {
         )?;
         let mut index = self.write_index()?;
         self.verify_storage_boundaries()?;
-        let subject = (next_state.key.chain_id.clone(), next_state.key.height);
+        let subject = (next_state.key.network_id.clone(), next_state.key.height);
         if let Some(existing) = index.by_height.get(&subject).cloned() {
             if existing.manifest.key.block_hash != next_state.key.block_hash {
                 return Err(ReputationFinalizedArchiveError::FinalizedFork {
-                    chain_id: next_state.key.chain_id.clone(),
+                    network_id: next_state.key.network_id.clone(),
                     height: next_state.key.height,
                 });
             }
@@ -3791,17 +3792,17 @@ impl ReputationFinalizedArchive {
                 return Ok(ReputationFinalizedArchiveInsertOutcome::ExactReplay);
             }
             return Err(ReputationFinalizedArchiveError::ConflictingProjection {
-                chain_id: next_state.key.chain_id.clone(),
+                network_id: next_state.key.network_id.clone(),
                 height: next_state.key.height,
                 block_hash: next_state.key.block_hash,
             });
         }
 
-        let predecessor = index.latest_state.get(&next_state.key.chain_id).cloned();
+        let predecessor = index.latest_state.get(&next_state.key.network_id).cloned();
         if let Some(previous) = &predecessor {
             if next_state.key.height <= previous.key.height {
                 return Err(ReputationFinalizedArchiveError::OutOfOrderAnchor {
-                    chain_id: next_state.key.chain_id.clone(),
+                    network_id: next_state.key.network_id.clone(),
                     height: next_state.key.height,
                     latest_height: previous.key.height,
                 });
@@ -3852,15 +3853,15 @@ impl ReputationFinalizedArchive {
         let predecessor_anchor_digest = index
             .by_height
             .range((
-                std::ops::Bound::Included((next_state.key.chain_id.clone(), 0)),
-                std::ops::Bound::Included((next_state.key.chain_id.clone(), u64::MAX)),
+                std::ops::Bound::Included((next_state.key.network_id.clone(), 0)),
+                std::ops::Bound::Included((next_state.key.network_id.clone(), u64::MAX)),
             ))
             .next_back()
             .map(|(_, entry)| entry.anchor_digest)
             .or_else(|| {
                 index
                     .checkpoints
-                    .get(&next_state.key.chain_id)
+                    .get(&next_state.key.network_id)
                     .map(|checkpoint| {
                         checkpoint
                             .persisted
@@ -3999,7 +4000,7 @@ impl ReputationFinalizedArchive {
         let loaded = self.load_anchor_at(&anchor_path, Some(&next_state.key))?;
         if loaded != persisted_anchor {
             return Err(ReputationFinalizedArchiveError::ConflictingProjection {
-                chain_id: next_state.key.chain_id.clone(),
+                network_id: next_state.key.network_id.clone(),
                 height: next_state.key.height,
                 block_hash: next_state.key.block_hash,
             });
@@ -4016,7 +4017,7 @@ impl ReputationFinalizedArchive {
             },
         )?;
         index.by_height.insert(
-            (next_state.key.chain_id.clone(), next_state.key.height),
+            (next_state.key.network_id.clone(), next_state.key.height),
             AnchorIndexEntry {
                 manifest: persisted_anchor.manifest,
                 anchor_digest,
@@ -4026,13 +4027,13 @@ impl ReputationFinalizedArchive {
         if let Ok(full_projection) = next_state.full_projection() {
             index
                 .latest_projection
-                .insert(next_state.key.chain_id.clone(), full_projection);
+                .insert(next_state.key.network_id.clone(), full_projection);
         } else {
-            index.latest_projection.remove(&next_state.key.chain_id);
+            index.latest_projection.remove(&next_state.key.network_id);
         }
         index
             .latest_state
-            .insert(next_state.key.chain_id.clone(), next_state);
+            .insert(next_state.key.network_id.clone(), next_state);
         index.generation = next_generation;
         self.verify_storage_boundaries()?;
         Ok(ReputationFinalizedArchiveInsertOutcome::Inserted)
@@ -4058,21 +4059,21 @@ impl ReputationFinalizedArchive {
         self.verify_storage_boundaries()?;
         let entry = index
             .by_height
-            .get(&(key.chain_id.clone(), key.height))
+            .get(&(key.network_id.clone(), key.height))
             .ok_or(ReputationFinalizedArchiveError::MissingAnchor {
-                chain_id: key.chain_id.clone(),
+                network_id: key.network_id.clone(),
                 height: key.height,
             })?;
         if &entry.manifest.key != key {
             return Err(ReputationFinalizedArchiveError::FinalizedFork {
-                chain_id: key.chain_id.clone(),
+                network_id: key.network_id.clone(),
                 height: key.height,
             });
         }
         ReputationFinalizedArchiveRetentionFenceV1::try_new(
             key.clone(),
             entry.anchor_digest,
-            active_checkpoint_digest(&index, &key.chain_id),
+            active_checkpoint_digest(&index, &key.network_id),
             index.generation,
         )
     }
@@ -4130,9 +4131,9 @@ impl ReputationFinalizedArchive {
         }
         assert_retention_authority_identity(binding, authority)?;
 
-        let chain_id = fence.compact_through();
-        let chain_id = &chain_id.chain_id;
-        let current = load_retention_approval(binding, authority, chain_id)?;
+        let network_id = fence.compact_through();
+        let network_id = &network_id.network_id;
+        let current = load_retention_approval(binding, authority, network_id)?;
         let expected_checkpoint = prepared.persisted.checkpoint.prior_checkpoint_digest;
         let next = if let Some(current) = current
             .as_ref()
@@ -4148,7 +4149,7 @@ impl ReputationFinalizedArchive {
             current.clone()
         } else {
             if let Some(current) = &current {
-                validate_retention_approval_record(current, binding, chain_id)?;
+                validate_retention_approval_record(current, binding, network_id)?;
             }
             validate_retention_authority_predecessor(current.as_ref(), expected_checkpoint, fence)?;
             let sequence = current.as_ref().map_or(Ok(1), |record| {
@@ -4170,15 +4171,15 @@ impl ReputationFinalizedArchive {
             compare_and_read_back_retention_approval(
                 binding,
                 authority,
-                chain_id,
+                network_id,
                 current.as_ref(),
                 &next,
             )?;
             next
         };
-        require_exact_retention_readback(binding, authority, chain_id, &next)?;
+        require_exact_retention_readback(binding, authority, network_id, &next)?;
         self.publish_prepared_compaction(&mut index, prepared, || {
-            require_exact_retention_readback(binding, authority, chain_id, &next)
+            require_exact_retention_readback(binding, authority, network_id, &next)
         })
     }
 
@@ -4208,13 +4209,13 @@ impl ReputationFinalizedArchive {
                 observed_generation: index.generation,
             });
         }
-        let chain_id = &fence.compact_through.chain_id;
-        if active_checkpoint_digest(&index, chain_id) != fence.expected_checkpoint_digest {
+        let network_id = &fence.compact_through.network_id;
+        if active_checkpoint_digest(&index, network_id) != fence.expected_checkpoint_digest {
             return Err(ReputationFinalizedArchiveError::InvalidRetentionFence {
                 reason: "retention fence does not bind the active checkpoint head",
             });
         }
-        if let Some(active) = index.checkpoints.get(chain_id)
+        if let Some(active) = index.checkpoints.get(network_id)
             && fence.compact_through.height <= active.persisted.checkpoint.retention_floor.height
         {
             return Err(ReputationFinalizedArchiveError::InvalidRetentionFence {
@@ -4223,10 +4224,10 @@ impl ReputationFinalizedArchive {
         }
         let target = index
             .by_height
-            .get(&(chain_id.clone(), fence.compact_through.height))
+            .get(&(network_id.clone(), fence.compact_through.height))
             .cloned()
             .ok_or(ReputationFinalizedArchiveError::MissingAnchor {
-                chain_id: chain_id.clone(),
+                network_id: network_id.clone(),
                 height: fence.compact_through.height,
             })?;
         if target.manifest.key != fence.compact_through
@@ -4241,8 +4242,8 @@ impl ReputationFinalizedArchive {
         let anchors = index
             .by_height
             .range((
-                std::ops::Bound::Included((chain_id.clone(), 0)),
-                std::ops::Bound::Included((chain_id.clone(), fence.compact_through.height)),
+                std::ops::Bound::Included((network_id.clone(), 0)),
+                std::ops::Bound::Included((network_id.clone(), fence.compact_through.height)),
             ))
             .map(|(_, entry)| entry.clone())
             .collect::<Vec<_>>();
@@ -4252,7 +4253,7 @@ impl ReputationFinalizedArchive {
             });
         }
         validate_contiguous_archive_coverage(
-            chain_id,
+            network_id,
             &anchors
                 .iter()
                 .map(|entry| {
@@ -4277,7 +4278,7 @@ impl ReputationFinalizedArchive {
                     maximum: self.bounds.max_total_bytes,
                 })
         })?;
-        let previous_checkpoint = index.checkpoints.get(chain_id);
+        let previous_checkpoint = index.checkpoints.get(network_id);
         let (
             original_activation_floor,
             prior_checkpoint_digest,
@@ -4434,7 +4435,7 @@ impl ReputationFinalizedArchive {
                 detail: error.to_string(),
             }
         })?;
-        if let Some(active) = index.checkpoints.get(chain_id) {
+        if let Some(active) = index.checkpoints.get(network_id) {
             let material = &active.persisted.checkpoint;
             authenticate_archive_anchor_against_kura(
                 &material.retention_floor,
@@ -4451,7 +4452,7 @@ impl ReputationFinalizedArchive {
                     },
                 )?
                 .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-                    chain_id: chain_id.clone(),
+                    network_id: network_id.clone(),
                     height: material.retention_floor.height,
                     reason: "prior virtual base has no canonical V2 finality artifact",
                 })?;
@@ -4459,7 +4460,7 @@ impl ReputationFinalizedArchive {
                 != material.kura_finality_artifact_digest
             {
                 return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-                    chain_id: chain_id.clone(),
+                    network_id: network_id.clone(),
                     height: material.retention_floor.height,
                     reason: "prior virtual-base finality artifact digest changed",
                 });
@@ -4493,7 +4494,7 @@ impl ReputationFinalizedArchive {
                 },
             )?
             .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-                chain_id: chain_id.clone(),
+                network_id: network_id.clone(),
                 height: fence.compact_through.height,
                 reason: "retention floor has no canonical V2 finality artifact",
             })?;
@@ -4508,7 +4509,7 @@ impl ReputationFinalizedArchive {
             },
         )?;
         Ok(PreparedReputationFinalizedArchiveCompactionV1 {
-            chain_id: chain_id.clone(),
+            network_id: network_id.clone(),
             persisted,
             checkpoint_bytes,
             anchors,
@@ -4531,7 +4532,7 @@ impl ReputationFinalizedArchive {
         let pruned_anchors = bounded_len(prepared.anchors.len())?;
         self.publish_checkpoint_and_reconcile(
             index,
-            &prepared.chain_id,
+            &prepared.network_id,
             &prepared.persisted,
             &prepared.checkpoint_bytes,
             prepared.expected_archive_generation,
@@ -4562,7 +4563,7 @@ impl ReputationFinalizedArchive {
     fn publish_checkpoint_and_reconcile<AfterPublish>(
         &self,
         index: &mut ArchiveIndex,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         persisted: &PersistedReputationFinalizedVirtualBaseCheckpointV1,
         checkpoint_bytes: &[u8],
         expected_generation: u64,
@@ -4600,7 +4601,7 @@ impl ReputationFinalizedArchive {
         }
         self.reconcile_checkpoint_index(index)?;
         if index.generation != expected_generation
-            || active_checkpoint_digest(index, chain_id) != Some(persisted.checkpoint_digest)
+            || active_checkpoint_digest(index, network_id) != Some(persisted.checkpoint_digest)
         {
             return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
                 reason: "published checkpoint did not become the exact next active head",
@@ -4628,7 +4629,7 @@ impl ReputationFinalizedArchive {
         }
     }
 
-    /// Read one exact `(chain_id, height, block_hash)` projection.
+    /// Read one exact `(network_id, height, block_hash)` projection.
     ///
     /// A missing exact key returns `Ok(None)`. This method never substitutes
     /// the current head or another block at the requested height.
@@ -4644,12 +4645,12 @@ impl ReputationFinalizedArchive {
         key.validate()?;
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
-        if let Some(checkpoint) = index.checkpoints.get(&key.chain_id)
+        if let Some(checkpoint) = index.checkpoints.get(&key.network_id)
             && key.height <= checkpoint.persisted.checkpoint.retention_floor.height
         {
             return Err(history_pruned_error(&checkpoint.persisted.checkpoint));
         }
-        let Some(entry) = index.by_height.get(&(key.chain_id.clone(), key.height)) else {
+        let Some(entry) = index.by_height.get(&(key.network_id.clone(), key.height)) else {
             return Ok(None);
         };
         if entry.manifest.key.block_hash != key.block_hash {
@@ -4681,7 +4682,7 @@ impl ReputationFinalizedArchive {
         validate_journal_source_id(source_id)?;
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
-        if let Some(checkpoint) = index.checkpoints.get(&key.chain_id) {
+        if let Some(checkpoint) = index.checkpoints.get(&key.network_id) {
             let checkpoint = &checkpoint.persisted.checkpoint;
             if key.height < checkpoint.retention_floor.height {
                 return Err(history_pruned_error(checkpoint));
@@ -4705,7 +4706,7 @@ impl ReputationFinalizedArchive {
                 )?));
             }
         }
-        let Some(entry) = index.by_height.get(&(key.chain_id.clone(), key.height)) else {
+        let Some(entry) = index.by_height.get(&(key.network_id.clone(), key.height)) else {
             return Ok(None);
         };
         if entry.manifest.key.block_hash != key.block_hash {
@@ -4733,14 +4734,14 @@ impl ReputationFinalizedArchive {
     /// canonicality, digest, or reconstruction failure.
     pub fn latest_journal_event_by_source_at_or_before(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         maximum_height: u64,
         source_id: ReputationJournalSourceIdV1,
     ) -> Result<
         Option<ReputationFinalizedArchiveJournalSourceViewV1>,
         ReputationFinalizedArchiveError,
     > {
-        if chain_id.as_str().is_empty() || maximum_height == 0 {
+        if network_id.as_bytes()[31] & 1 != 1 || maximum_height == 0 {
             return Err(ReputationFinalizedArchiveError::InvalidKey {
                 reason: "chain id must be non-empty and maximum height must be non-zero",
             });
@@ -4750,7 +4751,7 @@ impl ReputationFinalizedArchive {
         self.verify_storage_boundaries()?;
         let checkpoint = index
             .checkpoints
-            .get(chain_id)
+            .get(network_id)
             .map(|entry| &entry.persisted.checkpoint);
         if let Some(checkpoint) = checkpoint
             && maximum_height < checkpoint.retention_floor.height
@@ -4760,8 +4761,8 @@ impl ReputationFinalizedArchive {
         if let Some(entry) = index
             .by_height
             .range((
-                std::ops::Bound::Included((chain_id.clone(), 0)),
-                std::ops::Bound::Included((chain_id.clone(), maximum_height)),
+                std::ops::Bound::Included((network_id.clone(), 0)),
+                std::ops::Bound::Included((network_id.clone(), maximum_height)),
             ))
             .next_back()
             .map(|(_, entry)| entry)
@@ -4802,17 +4803,17 @@ impl ReputationFinalizedArchive {
     /// Returns a typed archive integrity or resource failure.
     pub fn latest_at_or_before(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         maximum_height: u64,
     ) -> Result<Option<ReputationFinalizedProjectionV1>, ReputationFinalizedArchiveError> {
-        if chain_id.as_str().is_empty() {
+        if network_id.as_bytes()[31] & 1 != 1 {
             return Err(ReputationFinalizedArchiveError::InvalidKey {
                 reason: "chain id must be non-empty",
             });
         }
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
-        if let Some(checkpoint) = index.checkpoints.get(chain_id)
+        if let Some(checkpoint) = index.checkpoints.get(network_id)
             && maximum_height <= checkpoint.persisted.checkpoint.retention_floor.height
         {
             return Err(history_pruned_error(&checkpoint.persisted.checkpoint));
@@ -4820,13 +4821,13 @@ impl ReputationFinalizedArchive {
         let entry = index
             .by_height
             .range((
-                std::ops::Bound::Included((chain_id.clone(), 0)),
-                std::ops::Bound::Included((chain_id.clone(), maximum_height)),
+                std::ops::Bound::Included((network_id.clone(), 0)),
+                std::ops::Bound::Included((network_id.clone(), maximum_height)),
             ))
             .next_back()
             .map(|(_, entry)| entry);
         if entry.is_none()
-            && let Some(checkpoint) = index.checkpoints.get(chain_id)
+            && let Some(checkpoint) = index.checkpoints.get(network_id)
         {
             return Err(history_pruned_error(&checkpoint.persisted.checkpoint));
         }
@@ -4848,7 +4849,7 @@ impl ReputationFinalizedArchive {
     /// resource failure.
     pub fn latest_at_or_before_with_policy_history(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         maximum_height: u64,
     ) -> Result<
         Option<(
@@ -4857,14 +4858,14 @@ impl ReputationFinalizedArchive {
         )>,
         ReputationFinalizedArchiveError,
     > {
-        if chain_id.as_str().is_empty() {
+        if network_id.as_bytes()[31] & 1 != 1 {
             return Err(ReputationFinalizedArchiveError::InvalidKey {
                 reason: "chain id must be non-empty",
             });
         }
         let index = self.read_index()?;
         self.verify_storage_boundaries()?;
-        if let Some(checkpoint) = index.checkpoints.get(chain_id)
+        if let Some(checkpoint) = index.checkpoints.get(network_id)
             && maximum_height <= checkpoint.persisted.checkpoint.retention_floor.height
         {
             return Err(history_pruned_error(&checkpoint.persisted.checkpoint));
@@ -4872,13 +4873,13 @@ impl ReputationFinalizedArchive {
         let entry = index
             .by_height
             .range((
-                std::ops::Bound::Included((chain_id.clone(), 0)),
-                std::ops::Bound::Included((chain_id.clone(), maximum_height)),
+                std::ops::Bound::Included((network_id.clone(), 0)),
+                std::ops::Bound::Included((network_id.clone(), maximum_height)),
             ))
             .next_back()
             .map(|(_, entry)| entry);
         let Some(entry) = entry else {
-            if let Some(checkpoint) = index.checkpoints.get(chain_id) {
+            if let Some(checkpoint) = index.checkpoints.get(network_id) {
                 return Err(history_pruned_error(&checkpoint.persisted.checkpoint));
             }
             return Ok(None);
@@ -5139,8 +5140,8 @@ impl ReputationFinalizedArchive {
             && durable.latest_projection == index.latest_projection
             && durable.latest_state == index.latest_state
             && durable.checkpoints.len() == index.checkpoints.len()
-            && durable.checkpoints.iter().all(|(chain_id, checkpoint)| {
-                index.checkpoints.get(chain_id).is_some_and(|indexed| {
+            && durable.checkpoints.iter().all(|(network_id, checkpoint)| {
+                index.checkpoints.get(network_id).is_some_and(|indexed| {
                     indexed.persisted == checkpoint.persisted && indexed.path == checkpoint.path
                 })
             })
@@ -5443,14 +5444,14 @@ impl ReputationFinalizedArchive {
             let persisted = self.load_anchor_at(&path, None)?;
             if index
                 .checkpoints
-                .get(&persisted.manifest.key.chain_id)
+                .get(&persisted.manifest.key.network_id)
                 .is_some_and(|checkpoint| {
                     persisted.manifest.key.height
                         <= checkpoint.persisted.checkpoint.retention_floor.height
                 })
             {
                 covered_anchors.push((
-                    persisted.manifest.key.chain_id,
+                    persisted.manifest.key.network_id,
                     persisted.manifest.key.height,
                     path,
                 ));
@@ -5478,7 +5479,7 @@ impl ReputationFinalizedArchive {
             let persisted = self.load_checkpoint_at(&path, None)?;
             let active_digest = index
                 .checkpoints
-                .get(&persisted.checkpoint.retention_floor.chain_id)
+                .get(&persisted.checkpoint.retention_floor.network_id)
                 .map(|checkpoint| checkpoint.persisted.checkpoint_digest);
             if active_digest != Some(persisted.checkpoint_digest) {
                 stale_checkpoints.push((persisted.checkpoint.checkpoint_generation, path));
@@ -5510,7 +5511,7 @@ impl ReputationFinalizedArchive {
         key: &ReputationFinalizedArchiveKeyV1,
     ) -> Result<ReputationReconstructionStateV1, ReputationFinalizedArchiveError> {
         key.validate()?;
-        if let Some(checkpoint) = index.checkpoints.get(&key.chain_id) {
+        if let Some(checkpoint) = index.checkpoints.get(&key.network_id) {
             let material = &checkpoint.persisted.checkpoint;
             if key.height < material.retention_floor.height {
                 return Err(history_pruned_error(material));
@@ -5518,7 +5519,7 @@ impl ReputationFinalizedArchive {
             if key.height == material.retention_floor.height {
                 if key != &material.retention_floor {
                     return Err(ReputationFinalizedArchiveError::FinalizedFork {
-                        chain_id: key.chain_id.clone(),
+                        network_id: key.network_id.clone(),
                         height: key.height,
                     });
                 }
@@ -5527,14 +5528,14 @@ impl ReputationFinalizedArchive {
         }
         let entry = index
             .by_height
-            .get(&(key.chain_id.clone(), key.height))
+            .get(&(key.network_id.clone(), key.height))
             .ok_or(ReputationFinalizedArchiveError::MissingAnchor {
-                chain_id: key.chain_id.clone(),
+                network_id: key.network_id.clone(),
                 height: key.height,
             })?;
         if &entry.manifest.key != key {
             return Err(ReputationFinalizedArchiveError::FinalizedFork {
-                chain_id: key.chain_id.clone(),
+                network_id: key.network_id.clone(),
                 height: key.height,
             });
         }
@@ -5546,10 +5547,10 @@ impl ReputationFinalizedArchive {
         index: &ArchiveIndex,
         target: &AnchorIndexEntry,
     ) -> Result<ReputationReconstructionStateV1, ReputationFinalizedArchiveError> {
-        let chain_id = target.manifest.key.chain_id.clone();
+        let network_id = target.manifest.key.network_id.clone();
         let target_height = target.manifest.key.height;
         let (mut state, mut predecessor_anchor_digest, first_height) =
-            if let Some(checkpoint) = index.checkpoints.get(&chain_id) {
+            if let Some(checkpoint) = index.checkpoints.get(&network_id) {
                 let checkpoint = &checkpoint.persisted.checkpoint;
                 if target_height <= checkpoint.retention_floor.height {
                     return Err(ReputationFinalizedArchiveError::HistoryPruned {
@@ -5577,13 +5578,13 @@ impl ReputationFinalizedArchive {
                 (None, None, 0)
             };
         for (_, entry) in index.by_height.range((
-            std::ops::Bound::Included((chain_id.clone(), first_height)),
-            std::ops::Bound::Included((chain_id.clone(), target_height)),
+            std::ops::Bound::Included((network_id.clone(), first_height)),
+            std::ops::Bound::Included((network_id.clone(), target_height)),
         )) {
             let persisted = self.load_anchor_at(&entry.path, Some(&entry.manifest.key))?;
             if persisted.manifest != entry.manifest {
                 return Err(ReputationFinalizedArchiveError::ConflictingProjection {
-                    chain_id: entry.manifest.key.chain_id.clone(),
+                    network_id: entry.manifest.key.network_id.clone(),
                     height: entry.manifest.key.height,
                     block_hash: entry.manifest.key.block_hash,
                 });
@@ -5759,7 +5760,8 @@ impl ReputationFinalizedArchive {
             }
         }
 
-        let mut checkpoint_lineages: BTreeMap<ChainId, Vec<CheckpointIndexEntry>> = BTreeMap::new();
+        let mut checkpoint_lineages: BTreeMap<NetworkId, Vec<CheckpointIndexEntry>> =
+            BTreeMap::new();
         for entry in fs::read_dir(&self.checkpoints).map_err(|source| {
             ReputationFinalizedArchiveError::Read {
                 path: self.checkpoints.clone(),
@@ -5796,11 +5798,11 @@ impl ReputationFinalizedArchive {
                 .len();
             charge_archive_bytes(&mut index.total_bytes, size, self.bounds)?;
             checkpoint_lineages
-                .entry(persisted.checkpoint.retention_floor.chain_id.clone())
+                .entry(persisted.checkpoint.retention_floor.network_id.clone())
                 .or_default()
                 .push(CheckpointIndexEntry { persisted, path });
         }
-        for (chain_id, lineage) in &mut checkpoint_lineages {
+        for (network_id, lineage) in &mut checkpoint_lineages {
             lineage.sort_by(|left, right| {
                 (
                     left.persisted.checkpoint.checkpoint_generation,
@@ -5816,7 +5818,7 @@ impl ReputationFinalizedArchive {
             let mut previous: Option<&CheckpointIndexEntry> = None;
             for checkpoint in lineage.iter() {
                 let material = &checkpoint.persisted.checkpoint;
-                if &material.retention_floor.chain_id != chain_id {
+                if &material.retention_floor.network_id != network_id {
                     return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
                         reason: "checkpoint lineage crosses chain identifiers",
                     });
@@ -5887,7 +5889,7 @@ impl ReputationFinalizedArchive {
                     reason: "checkpoint authority-policy history commitment was substituted",
                 });
             }
-            index.checkpoints.insert(chain_id.clone(), active);
+            index.checkpoints.insert(network_id.clone(), active);
         }
 
         let mut persisted_anchors = BTreeMap::new();
@@ -5927,20 +5929,20 @@ impl ReputationFinalizedArchive {
                 .len();
             charge_archive_bytes(&mut index.total_bytes, size, self.bounds)?;
             let subject = (
-                persisted.manifest.key.chain_id.clone(),
+                persisted.manifest.key.network_id.clone(),
                 persisted.manifest.key.height,
             );
             if let Some(previous) = persisted_anchors.insert(subject.clone(), persisted.clone()) {
                 return Err(
                     if previous.manifest.key.block_hash == persisted.manifest.key.block_hash {
                         ReputationFinalizedArchiveError::ConflictingProjection {
-                            chain_id: subject.0,
+                            network_id: subject.0,
                             height: subject.1,
                             block_hash: previous.manifest.key.block_hash,
                         }
                     } else {
                         ReputationFinalizedArchiveError::FinalizedFork {
-                            chain_id: subject.0,
+                            network_id: subject.0,
                             height: subject.1,
                         }
                     },
@@ -5966,17 +5968,17 @@ impl ReputationFinalizedArchive {
         let mut states = BTreeMap::new();
         let mut predecessor_anchor_digests = BTreeMap::new();
         let mut retained_anchor_count = 0_u64;
-        for (chain_id, checkpoint) in &index.checkpoints {
+        for (network_id, checkpoint) in &index.checkpoints {
             let material = &checkpoint.persisted.checkpoint;
             states.insert(
-                chain_id.clone(),
+                network_id.clone(),
                 ReputationReconstructionStateV1::from_checkpoint(material)?,
             );
             predecessor_anchor_digests
-                .insert(chain_id.clone(), material.retention_floor_anchor_digest);
+                .insert(network_id.clone(), material.retention_floor_anchor_digest);
         }
-        for ((chain_id, _), persisted) in &persisted_anchors {
-            if let Some(checkpoint) = index.checkpoints.get(chain_id)
+        for ((network_id, _), persisted) in &persisted_anchors {
+            if let Some(checkpoint) = index.checkpoints.get(network_id)
                 && persisted.manifest.key.height
                     <= checkpoint.persisted.checkpoint.retention_floor.height
             {
@@ -6006,8 +6008,8 @@ impl ReputationFinalizedArchive {
                     maximum_entries: self.bounds.max_entries.get(),
                 },
             )?;
-            let previous = states.remove(chain_id);
-            let predecessor_anchor_digest = predecessor_anchor_digests.remove(chain_id);
+            let previous = states.remove(network_id);
+            let predecessor_anchor_digest = predecessor_anchor_digests.remove(network_id);
             let policy = index
                 .policies
                 .get(&persisted.manifest.policy_record_digest)
@@ -6033,19 +6035,19 @@ impl ReputationFinalizedArchive {
                 policy,
                 &policy_history,
             )?;
-            predecessor_anchor_digests.insert(chain_id.clone(), persisted.anchor_digest()?);
-            states.insert(chain_id.clone(), state);
+            predecessor_anchor_digests.insert(network_id.clone(), persisted.anchor_digest()?);
+            states.insert(network_id.clone(), state);
         }
         for state in states.values() {
             state.validate()?;
         }
         index.latest_projection = states
             .iter()
-            .filter_map(|(chain_id, state)| {
+            .filter_map(|(network_id, state)| {
                 state
                     .full_projection()
                     .ok()
-                    .map(|projection| (chain_id.clone(), projection))
+                    .map(|projection| (network_id.clone(), projection))
             })
             .collect();
         for projection in index.latest_projection.values() {
@@ -6185,7 +6187,7 @@ fn validate_approval_checkpoint(
 fn validate_retention_checkpoint_candidate_inventory(
     candidates: &[CheckpointIndexEntry],
     approval: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
 ) -> Result<(), ReputationFinalizedArchiveError> {
     let approved = approval.proposal().checkpoint_digest();
     let predecessor = approval.predecessor_checkpoint_digest();
@@ -6195,7 +6197,7 @@ fn validate_retention_checkpoint_candidate_inventory(
 
     let mut observed = BTreeSet::new();
     for candidate in candidates {
-        if &candidate.persisted.checkpoint.retention_floor.chain_id != chain_id
+        if &candidate.persisted.checkpoint.retention_floor.network_id != network_id
             || !observed.insert(candidate.persisted.checkpoint_digest)
         {
             return Err(ReputationFinalizedArchiveError::UnapprovedRetentionCheckpoint);
@@ -6233,7 +6235,7 @@ fn validate_approval_for_prepared(
     validate_retention_approval_record(
         approval,
         binding,
-        &proposal.fence().compact_through().chain_id,
+        &proposal.fence().compact_through().network_id,
     )?;
     if approval.proposal() != proposal
         || approval.predecessor_checkpoint_digest() != predecessor_checkpoint_digest
@@ -6264,11 +6266,11 @@ fn validate_approval_for_prepared(
 fn validate_retention_approval_record(
     approval: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
     binding: &ReputationFinalizedArchiveRetentionAuthorityBindingV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
 ) -> Result<(), ReputationFinalizedArchiveError> {
     approval.validate()?;
     if approval.authority_qualification() != binding.qualification()
-        || &approval.proposal().fence().compact_through().chain_id != chain_id
+        || &approval.proposal().fence().compact_through().network_id != network_id
     {
         return Err(ReputationFinalizedArchiveError::RetentionAuthoritySubstitution);
     }
@@ -6343,18 +6345,18 @@ fn assert_retention_authority_identity(
 fn load_retention_approval(
     binding: &ReputationFinalizedArchiveRetentionAuthorityBindingV1,
     authority: &dyn ReputationFinalizedArchiveRetentionAuthorityV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
 ) -> Result<
     Option<ReputationFinalizedArchiveRetentionApprovalRecordV1>,
     ReputationFinalizedArchiveError,
 > {
     assert_retention_authority_identity(binding, authority)?;
     let record = authority
-        .load_latest(chain_id)
+        .load_latest(network_id)
         .map_err(retention_authority_external_error)?;
     assert_retention_authority_identity(binding, authority)?;
     if let Some(record) = &record {
-        validate_retention_approval_record(record, binding, chain_id)?;
+        validate_retention_approval_record(record, binding, network_id)?;
     }
     Ok(record)
 }
@@ -6362,10 +6364,10 @@ fn load_retention_approval(
 fn require_exact_retention_readback(
     binding: &ReputationFinalizedArchiveRetentionAuthorityBindingV1,
     authority: &dyn ReputationFinalizedArchiveRetentionAuthorityV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     expected: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
 ) -> Result<(), ReputationFinalizedArchiveError> {
-    match load_retention_approval(binding, authority, chain_id) {
+    match load_retention_approval(binding, authority, network_id) {
         Ok(Some(observed)) if observed == *expected => Ok(()),
         Ok(_) => Err(ReputationFinalizedArchiveError::RetentionAuthorityEquivocation),
         Err(_) => Err(ReputationFinalizedArchiveError::RetentionAuthorityCasAmbiguous),
@@ -6375,12 +6377,12 @@ fn require_exact_retention_readback(
 fn compare_and_read_back_retention_approval(
     binding: &ReputationFinalizedArchiveRetentionAuthorityBindingV1,
     authority: &dyn ReputationFinalizedArchiveRetentionAuthorityV1,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     expected: Option<&ReputationFinalizedArchiveRetentionApprovalRecordV1>,
     next: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
 ) -> Result<(), ReputationFinalizedArchiveError> {
-    validate_retention_approval_record(next, binding, chain_id)?;
-    let observed_before_compare = load_retention_approval(binding, authority, chain_id)?;
+    validate_retention_approval_record(next, binding, network_id)?;
+    let observed_before_compare = load_retention_approval(binding, authority, network_id)?;
     if observed_before_compare.as_ref() == Some(next) {
         return Ok(());
     }
@@ -6388,14 +6390,14 @@ fn compare_and_read_back_retention_approval(
         return Err(ReputationFinalizedArchiveError::RetentionAuthorityEquivocation);
     }
     let compare_result = authority.compare_and_swap_latest(
-        chain_id,
+        network_id,
         expected.map(ReputationFinalizedArchiveRetentionApprovalRecordV1::revision),
         next,
     );
     if assert_retention_authority_identity(binding, authority).is_err() {
         return Err(ReputationFinalizedArchiveError::RetentionAuthorityCasAmbiguous);
     }
-    let readback = match load_retention_approval(binding, authority, chain_id) {
+    let readback = match load_retention_approval(binding, authority, network_id) {
         Ok(readback) => readback,
         Err(_) => {
             return Err(ReputationFinalizedArchiveError::RetentionAuthorityCasAmbiguous);
@@ -6445,7 +6447,7 @@ fn authenticate_approval_checkpoint_against_kura(
             },
         )?
         .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            chain_id: material.retention_floor.chain_id.clone(),
+            network_id: material.retention_floor.network_id.clone(),
             height: material.retention_floor.height,
             reason: "approved retention floor has no canonical V2 finality artifact",
         })?;
@@ -6453,7 +6455,7 @@ fn authenticate_approval_checkpoint_against_kura(
         != material.kura_finality_artifact_digest
     {
         return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            chain_id: material.retention_floor.chain_id.clone(),
+            network_id: material.retention_floor.network_id.clone(),
             height: material.retention_floor.height,
             reason: "approved retention-floor finality artifact digest changed",
         });
@@ -6559,20 +6561,20 @@ where
 }
 
 fn validate_contiguous_archive_coverage(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     anchors: &[(ReputationFinalizedArchiveKeyV1, u64)],
 ) -> Result<(), ReputationFinalizedArchiveError> {
     let Some((first, _)) = anchors.first() else {
         return Ok(());
     };
-    if &first.chain_id != chain_id {
+    if &first.network_id != network_id {
         return Err(ReputationFinalizedArchiveError::InvalidKey {
             reason: "archive coverage begins on another chain",
         });
     }
     let mut previous_height: Option<u64> = None;
     for (key, _) in anchors {
-        if &key.chain_id != chain_id {
+        if &key.network_id != network_id {
             return Err(ReputationFinalizedArchiveError::InvalidKey {
                 reason: "archive coverage crosses chain identifiers",
             });
@@ -6580,14 +6582,14 @@ fn validate_contiguous_archive_coverage(
         if let Some(previous_height) = previous_height {
             let expected_height = previous_height.checked_add(1).ok_or(
                 ReputationFinalizedArchiveError::ArchiveCoverageGap {
-                    chain_id: chain_id.clone(),
+                    network_id: network_id.clone(),
                     missing_height: u64::MAX,
                     observed_height: key.height,
                 },
             )?;
             if key.height != expected_height {
                 return Err(ReputationFinalizedArchiveError::ArchiveCoverageGap {
-                    chain_id: chain_id.clone(),
+                    network_id: network_id.clone(),
                     missing_height: expected_height,
                     observed_height: key.height,
                 });
@@ -6608,7 +6610,7 @@ fn authenticate_archive_anchor_against_kura(
         .ok()
         .and_then(NonZeroUsize::new)
         .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            chain_id: key.chain_id.clone(),
+            network_id: key.network_id.clone(),
             height: key.height,
             reason: "archive height is not representable by Kura",
         })?;
@@ -6617,13 +6619,13 @@ fn authenticate_archive_anchor_against_kura(
         .get(height_index.get() - 1)
         .map(|hash| *hash.as_ref())
         .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            chain_id: key.chain_id.clone(),
+            network_id: key.network_id.clone(),
             height: key.height,
             reason: "archive height is absent from the exact Kura boundary",
         })?;
     if boundary_hash != key.block_hash {
         return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            chain_id: key.chain_id.clone(),
+            network_id: key.network_id.clone(),
             height: key.height,
             reason: "archive hash differs from the exact Kura hash journal",
         });
@@ -6637,25 +6639,24 @@ fn authenticate_archive_anchor_against_kura(
             },
         )?
         .ok_or(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            chain_id: key.chain_id.clone(),
+            network_id: key.network_id.clone(),
             height: key.height,
             reason: "archive height has no authenticated V2 finality artifact",
         })?;
-    if &artifact.height_context.chain_id != &key.chain_id
-        || artifact.height != key.height
+    if artifact.height != key.height
         || *artifact.block_hash.as_ref() != key.block_hash
         || receipt.height() != key.height
         || *receipt.block_hash().as_ref() != key.block_hash
     {
         return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            chain_id: key.chain_id.clone(),
+            network_id: key.network_id.clone(),
             height: key.height,
             reason: "archive key differs from its authenticated V2 finality artifact",
         });
     }
     let block = kura.get_block(height_index).ok_or(
         ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            chain_id: key.chain_id.clone(),
+            network_id: key.network_id.clone(),
             height: key.height,
             reason: "result-bearing canonical block is unavailable for archive qualification",
         },
@@ -6665,7 +6666,7 @@ fn authenticate_archive_anchor_against_kura(
         || block.header().creation_time_ms != finalized_at_unix_ms
     {
         return Err(ReputationFinalizedArchiveError::ArchiveKuraAnchorMismatch {
-            chain_id: key.chain_id.clone(),
+            network_id: key.network_id.clone(),
             height: key.height,
             reason: "archive timestamp or identity differs from the canonical block",
         });
@@ -6733,7 +6734,7 @@ fn authenticate_capture_view(
             reason: "Kura has no v2 finality artifact for the capture height",
         })?;
     if !same_kura_receipt(receipt, &recovered_receipt)
-        || &artifact.height_context.chain_id != state_ro.chain_id()
+        || &artifact.height_context.network_id != state_ro.network_id()
         || artifact.height != height
         || *artifact.block_hash.as_ref() != block_hash
     {
@@ -6757,8 +6758,11 @@ fn authenticate_capture_view(
             reason: "result-bearing Kura block has a mismatched identity or timestamp",
         });
     }
-    let key =
-        ReputationFinalizedArchiveKeyV1::try_new(state_ro.chain_id().clone(), height, block_hash)?;
+    let key = ReputationFinalizedArchiveKeyV1::try_new(
+        state_ro.network_id().clone(),
+        height,
+        block_hash,
+    )?;
     Ok((key, finalized_at_unix_ms))
 }
 
@@ -7482,7 +7486,7 @@ fn validate_projection_transition_from_state(
     current: &ReputationFinalizedProjectionV1,
     authority_policy_history: &[ReputationJournalAuthorityPolicyRecordV1],
 ) -> Result<(), ReputationFinalizedArchiveError> {
-    if current.key.chain_id != previous.key.chain_id
+    if current.key.network_id != previous.key.network_id
         || current.key.height <= previous.key.height
         || current.finalized_at_unix_ms < previous.finalized_at_unix_ms
     {
@@ -7578,7 +7582,7 @@ fn validate_reconstruction_state_transition(
     current: &ReputationReconstructionStateV1,
     authority_policy_history: &[ReputationJournalAuthorityPolicyRecordV1],
 ) -> Result<(), ReputationFinalizedArchiveError> {
-    if current.key.chain_id != previous.key.chain_id
+    if current.key.network_id != previous.key.network_id
         || current.key.height <= previous.key.height
         || current.finalized_at_unix_ms < previous.finalized_at_unix_ms
     {
@@ -8148,7 +8152,7 @@ fn validate_feed_against_index<T>(
         let (height, block_hash) = identity(event);
         if let Some(anchor) = index
             .by_height
-            .get(&(projection.key.chain_id.clone(), height))
+            .get(&(projection.key.network_id.clone(), height))
             && anchor.manifest.key.block_hash != block_hash
         {
             return Err(ReputationFinalizedArchiveError::InvalidProjection {
@@ -8167,7 +8171,7 @@ fn validate_state_feed_against_index<T>(
 ) -> Result<(), ReputationFinalizedArchiveError> {
     for event in events {
         let (height, block_hash) = identity(event);
-        if let Some(anchor) = index.by_height.get(&(key.chain_id.clone(), height))
+        if let Some(anchor) = index.by_height.get(&(key.network_id.clone(), height))
             && anchor.manifest.key.block_hash != block_hash
         {
             return Err(ReputationFinalizedArchiveError::InvalidProjection {
@@ -9355,11 +9359,11 @@ pub enum ReputationFinalizedArchiveError {
     },
     /// Exact archive coverage skipped a height after its activation floor.
     #[error(
-        "finalized reputation archive for `{chain_id}` is missing height {missing_height} before observed height {observed_height}"
+        "finalized reputation archive for `{network_id}` is missing height {missing_height} before observed height {observed_height}"
     )]
     ArchiveCoverageGap {
         /// Chain whose exact-height coverage is incomplete.
-        chain_id: ChainId,
+        network_id: NetworkId,
         /// First missing exact archive height.
         missing_height: u64,
         /// Height observed instead of the required successor.
@@ -9391,11 +9395,11 @@ pub enum ReputationFinalizedArchiveError {
     },
     /// An immutable archive anchor differs from authenticated Kura material.
     #[error(
-        "finalized reputation archive anchor `{chain_id}` height {height} failed Kura qualification: {reason}"
+        "finalized reputation archive anchor `{network_id}` height {height} failed Kura qualification: {reason}"
     )]
     ArchiveKuraAnchorMismatch {
         /// Chain identifier in the immutable archive key.
-        chain_id: ChainId,
+        network_id: NetworkId,
         /// Exact archive height that failed authentication.
         height: u64,
         /// Stable payload-free mismatch category.
@@ -9492,10 +9496,10 @@ pub enum ReputationFinalizedArchiveError {
         available_after: Option<ReputationFinalizedEventPositionV1>,
     },
     /// One exact retained anchor is absent.
-    #[error("finalized reputation anchor for `{chain_id}` height {height} is unavailable")]
+    #[error("finalized reputation anchor for `{network_id}` height {height} is unavailable")]
     MissingAnchor {
         /// Requested chain.
-        chain_id: ChainId,
+        network_id: NetworkId,
         /// Requested exact height.
         height: u64,
     },
@@ -9665,31 +9669,31 @@ pub enum ReputationFinalizedArchiveError {
     },
     /// A new anchor was inserted behind the synchronized chain tip.
     #[error(
-        "out-of-order finalized reputation anchor for chain {chain_id}: height {height}, latest {latest_height}"
+        "out-of-order finalized reputation anchor for chain {network_id}: height {height}, latest {latest_height}"
     )]
     OutOfOrderAnchor {
         /// Affected chain.
-        chain_id: ChainId,
+        network_id: NetworkId,
         /// Proposed height.
         height: u64,
         /// Current archived tip.
         latest_height: u64,
     },
     /// Two hashes claim finality for one chain height.
-    #[error("finalized reputation archive fork for chain {chain_id} at height {height}")]
+    #[error("finalized reputation archive fork for chain {network_id} at height {height}")]
     FinalizedFork {
         /// Conflicted chain.
-        chain_id: ChainId,
+        network_id: NetworkId,
         /// Conflicted finalized height.
         height: u64,
     },
     /// Different projection content claims the same exact finalized key.
     #[error(
-        "conflicting finalized reputation projection for chain {chain_id} at height {height} and block {block_hash:?}"
+        "conflicting finalized reputation projection for chain {network_id} at height {height} and block {block_hash:?}"
     )]
     ConflictingProjection {
         /// Conflicted chain.
-        chain_id: ChainId,
+        network_id: NetworkId,
         /// Conflicted finalized height.
         height: u64,
         /// Conflicted finalized hash.
@@ -9706,7 +9710,7 @@ mod tests {
         thread,
     };
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::AccountId,
         events::data::sorafs::{
@@ -9739,6 +9743,14 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
+                vec![seed; 32],
+            )),
+        )
+    }
 
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
@@ -9852,7 +9864,7 @@ mod tests {
 
         fn load_latest(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
         ) -> Result<
             Option<ReputationFinalizedArchiveRetentionApprovalRecordV1>,
             ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1,
@@ -9863,7 +9875,7 @@ mod tests {
 
         fn compare_and_swap_latest(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             expected_revision: Option<[u8; 32]>,
             next: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
         ) -> Result<(), ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1> {
@@ -9902,12 +9914,8 @@ mod tests {
         height: u64,
         marker: u8,
     ) -> ReputationFinalizedArchiveCompactionProposalV1 {
-        let key = ReputationFinalizedArchiveKeyV1::try_new(
-            ChainId::from("reputation-retention-test"),
-            height,
-            [marker; 32],
-        )
-        .expect("valid retention test key");
+        let key = ReputationFinalizedArchiveKeyV1::try_new(network_id(0x52), height, [marker; 32])
+            .expect("valid retention test key");
         let fence = ReputationFinalizedArchiveRetentionFenceV1::try_new(
             key,
             [marker.wrapping_add(1); 32],
@@ -9999,7 +10007,7 @@ mod tests {
         compare_and_read_back_retention_approval(
             &binding,
             &authority,
-            &proposal_chain_id(&approval),
+            &proposal_network_id(&approval),
             None,
             &approval,
         )
@@ -10007,7 +10015,7 @@ mod tests {
         compare_and_read_back_retention_approval(
             &binding,
             &authority,
-            &proposal_chain_id(&approval),
+            &proposal_network_id(&approval),
             None,
             &approval,
         )
@@ -10019,7 +10027,7 @@ mod tests {
             compare_and_read_back_retention_approval(
                 &unchanged.binding(),
                 &unchanged,
-                &proposal_chain_id(&approval),
+                &proposal_network_id(&approval),
                 None,
                 &approval,
             ),
@@ -10042,7 +10050,7 @@ mod tests {
             compare_and_read_back_retention_approval(
                 &equivocation.binding(),
                 &equivocation,
-                &proposal_chain_id(&approval),
+                &proposal_network_id(&approval),
                 None,
                 &approval,
             ),
@@ -10050,14 +10058,14 @@ mod tests {
         ));
     }
 
-    fn proposal_chain_id(
+    fn proposal_network_id(
         approval: &ReputationFinalizedArchiveRetentionApprovalRecordV1,
-    ) -> ChainId {
+    ) -> NetworkId {
         approval
             .proposal()
             .fence()
             .compact_through()
-            .chain_id
+            .network_id
             .clone()
     }
 
@@ -10083,12 +10091,8 @@ mod tests {
             max_source_age_ms: REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1,
         };
         ReputationFinalizedProjectionV1 {
-            key: ReputationFinalizedArchiveKeyV1::try_new(
-                ChainId::from("reputation-test-chain"),
-                height,
-                block_hash,
-            )
-            .expect("valid exact key"),
+            key: ReputationFinalizedArchiveKeyV1::try_new(network_id(0x61), height, block_hash)
+                .expect("valid exact key"),
             finalized_at_unix_ms: 1_750_000_000_000 + height,
             authority_policy: ReputationJournalAuthorityPolicyRecordV1::try_new(
                 policy,
@@ -10399,7 +10403,7 @@ mod tests {
         reserve.sequence = 2;
         CapturedReputationSuccessorV1 {
             key: ReputationFinalizedArchiveKeyV1::try_new(
-                previous.key.chain_id.clone(),
+                previous.key.network_id.clone(),
                 height,
                 block_hash,
             )
@@ -10452,7 +10456,7 @@ mod tests {
         let index = archive.read_index().expect("read archive index");
         let target = index
             .by_height
-            .get(&(target_key.chain_id.clone(), target_key.height))
+            .get(&(target_key.network_id.clone(), target_key.height))
             .expect("target anchor is indexed")
             .clone();
         assert_eq!(&target.manifest.key, target_key);
@@ -10462,8 +10466,8 @@ mod tests {
         let anchors = index
             .by_height
             .range((
-                std::ops::Bound::Included((target_key.chain_id.clone(), 0)),
-                std::ops::Bound::Included((target_key.chain_id.clone(), target_key.height)),
+                std::ops::Bound::Included((target_key.network_id.clone(), 0)),
+                std::ops::Bound::Included((target_key.network_id.clone(), target_key.height)),
             ))
             .map(|(_, entry)| entry.clone())
             .collect::<Vec<_>>();
@@ -10938,7 +10942,7 @@ mod tests {
             ReputationFinalizedArchive::try_open_with_retention_authority(
                 archive_root(&omitted_directory),
                 bounds(),
-                &ChainId::from("reputation-test-chain"),
+                &network_id(0x61),
                 omitted_kura.as_ref(),
                 &omitted_binding,
                 &omitted_authority,
@@ -10969,7 +10973,7 @@ mod tests {
             ReputationFinalizedArchive::try_open_with_retention_authority(
                 archive_root(&stale_directory),
                 bounds(),
-                &ChainId::from("reputation-test-chain"),
+                &network_id(0x61),
                 stale_kura.as_ref(),
                 &stale_binding,
                 &stale_authority,
@@ -11039,7 +11043,7 @@ mod tests {
     ) -> ReputationFinalizedVirtualBaseCheckpointV1 {
         let mut current = previous.checkpoint.clone();
         current.retention_floor = ReputationFinalizedArchiveKeyV1::try_new(
-            current.retention_floor.chain_id.clone(),
+            current.retention_floor.network_id.clone(),
             current.retention_floor.height + 1,
             retention_floor_block_hash,
         )
@@ -11097,12 +11101,8 @@ mod tests {
                 .expect("insert empty-journal predecessor");
             publish_test_checkpoint(
                 &archive,
-                &ReputationFinalizedArchiveKeyV1::try_new(
-                    ChainId::from("reputation-test-chain"),
-                    7,
-                    [0x71; 32],
-                )
-                .expect("construct predecessor key"),
+                &ReputationFinalizedArchiveKeyV1::try_new(network_id(0x61), 7, [0x71; 32])
+                    .expect("construct predecessor key"),
             )
         };
         let opened = opened_dispute_journal_event(
@@ -11167,7 +11167,7 @@ mod tests {
             let resolved_source_id = resolved.entry.source_id;
             let mut second = first;
             second.key = ReputationFinalizedArchiveKeyV1::try_new(
-                second.key.chain_id.clone(),
+                second.key.network_id.clone(),
                 8,
                 [0x81; 32],
             )
@@ -11181,7 +11181,7 @@ mod tests {
                 let index = archive.read_index().expect("read successor anchor index");
                 let entry = index
                     .by_height
-                    .get(&(second.key.chain_id.clone(), second.key.height))
+                    .get(&(second.key.network_id.clone(), second.key.height))
                     .expect("source-lineage successor anchor");
                 (
                     entry.anchor_digest,
@@ -11226,7 +11226,7 @@ mod tests {
 
         let reopened = open_archive(&directory, bounds());
         let floor = reopened
-            .retention_floor(&previous.checkpoint.retention_floor.chain_id)
+            .retention_floor(&previous.checkpoint.retention_floor.network_id)
             .expect("read successor retention floor")
             .expect("successor checkpoint is active");
         assert_eq!(floor.height, 8);
@@ -11288,7 +11288,7 @@ mod tests {
         resolved.event_index = 0;
         let mut forged = previous.checkpoint.clone();
         forged.retention_floor = ReputationFinalizedArchiveKeyV1::try_new(
-            forged.retention_floor.chain_id.clone(),
+            forged.retention_floor.network_id.clone(),
             8,
             [0x81; 32],
         )
@@ -11370,7 +11370,7 @@ mod tests {
         first.journal_events.push(historical);
         let mut second = first.clone();
         second.key = ReputationFinalizedArchiveKeyV1::try_new(
-            first.key.chain_id.clone(),
+            first.key.network_id.clone(),
             first.key.height + 1,
             [0x81; 32],
         )
@@ -11592,7 +11592,7 @@ mod tests {
         );
         assert_eq!(
             archive
-                .retention_floor(&projection.key.chain_id)
+                .retention_floor(&projection.key.network_id)
                 .expect("record ceiling failure publishes no checkpoint"),
             None
         );
@@ -11676,7 +11676,7 @@ mod tests {
         let first = sample_projection(7, [0x71; 32]);
         let mut second = first.clone();
         second.key = ReputationFinalizedArchiveKeyV1::try_new(
-            second.key.chain_id.clone(),
+            second.key.network_id.clone(),
             first.key.height + 1,
             [0x81; 32],
         )
@@ -11703,7 +11703,7 @@ mod tests {
             archive
                 .publish_checkpoint_and_reconcile(
                     &mut index,
-                    &first.key.chain_id,
+                    &first.key.network_id,
                     &persisted,
                     &checkpoint_bytes,
                     stale_fence.expected_generation() + 1,
@@ -11730,7 +11730,7 @@ mod tests {
         );
         assert_eq!(
             archive
-                .retention_floor(&first.key.chain_id)
+                .retention_floor(&first.key.network_id)
                 .expect("read reconciled retention floor"),
             Some(first.key.clone())
         );
@@ -11780,13 +11780,13 @@ mod tests {
             let index = archive.read_index().expect("read reconciled index");
             validate_qualification_archive_boundary(
                 &index,
-                &first.key.chain_id,
+                &first.key.network_id,
                 3,
                 Some(checkpoint_digest),
             )
             .expect("qualification boundary binds the active checkpoint");
             assert!(matches!(
-                validate_qualification_archive_boundary(&index, &first.key.chain_id, 3, None,),
+                validate_qualification_archive_boundary(&index, &first.key.network_id, 3, None,),
                 Err(
                     ReputationFinalizedArchiveError::QualificationBoundaryChanged {
                         boundary: "archive",
@@ -11844,7 +11844,7 @@ mod tests {
             archive
                 .publish_checkpoint_and_reconcile(
                     &mut index,
-                    &first.key.chain_id,
+                    &first.key.network_id,
                     &persisted,
                     &checkpoint_bytes,
                     2,
@@ -11872,7 +11872,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            archive.retention_floor(&first.key.chain_id),
+            archive.retention_floor(&first.key.network_id),
             Err(ReputationFinalizedArchiveError::ArchiveUnavailable {
                 reason: CHECKPOINT_PUBLICATION_REOPEN_REQUIRED_REASON,
             })
@@ -11899,7 +11899,7 @@ mod tests {
 
         fs::remove_file(&obstruction).expect("remove inventory obstruction");
         assert!(matches!(
-            archive.retention_floor(&first.key.chain_id),
+            archive.retention_floor(&first.key.network_id),
             Err(ReputationFinalizedArchiveError::ArchiveUnavailable {
                 reason: CHECKPOINT_PUBLICATION_REOPEN_REQUIRED_REASON,
             })
@@ -11941,7 +11941,7 @@ mod tests {
         first.journal_events.push(second_prefix_event);
         let mut second = first.clone();
         second.key =
-            ReputationFinalizedArchiveKeyV1::try_new(second.key.chain_id.clone(), 8, [0x81; 32])
+            ReputationFinalizedArchiveKeyV1::try_new(second.key.network_id.clone(), 8, [0x81; 32])
                 .expect("construct successor key");
         second.finalized_at_unix_ms += 1;
         second.journal_events.push(journal_event(
@@ -11970,13 +11970,13 @@ mod tests {
         let reopened = open_archive(&directory, bounds());
         assert_eq!(
             reopened
-                .retention_floor(&first.key.chain_id)
+                .retention_floor(&first.key.network_id)
                 .expect("read retention floor"),
             Some(first.key.clone())
         );
         assert_eq!(
             reopened
-                .activation_floor(&first.key.chain_id)
+                .activation_floor(&first.key.network_id)
                 .expect("read original floor"),
             Some(first.key.clone())
         );
@@ -12081,7 +12081,7 @@ mod tests {
 
         let latest = reopened
             .latest_journal_event_by_source_at_or_before(
-                &floor.key.chain_id,
+                &floor.key.network_id,
                 floor.key.height,
                 source_id,
             )
@@ -12098,7 +12098,7 @@ mod tests {
         assert_eq!(absent.event, None);
 
         let wrong_hash = ReputationFinalizedArchiveKeyV1::try_new(
-            floor.key.chain_id.clone(),
+            floor.key.network_id.clone(),
             floor.key.height,
             [0x72; 32],
         )
@@ -12110,7 +12110,7 @@ mod tests {
             None
         );
         let missing_successor = ReputationFinalizedArchiveKeyV1::try_new(
-            floor.key.chain_id.clone(),
+            floor.key.network_id.clone(),
             floor.key.height + 1,
             [0x81; 32],
         )
@@ -12122,7 +12122,7 @@ mod tests {
             None
         );
         let below_floor = ReputationFinalizedArchiveKeyV1::try_new(
-            floor.key.chain_id.clone(),
+            floor.key.network_id.clone(),
             floor.key.height - 1,
             [0x61; 32],
         )
@@ -12133,7 +12133,7 @@ mod tests {
         ));
         assert!(matches!(
             reopened.latest_journal_event_by_source_at_or_before(
-                &floor.key.chain_id,
+                &floor.key.network_id,
                 floor.key.height - 1,
                 source_id,
             ),
@@ -12145,11 +12145,14 @@ mod tests {
             Err(ReputationFinalizedArchiveError::InvalidKey { .. })
         ));
         assert!(matches!(
-            reopened
-                .latest_journal_event_by_source_at_or_before(&floor.key.chain_id, 0, source_id,),
+            reopened.latest_journal_event_by_source_at_or_before(
+                &floor.key.network_id,
+                0,
+                source_id,
+            ),
             Err(ReputationFinalizedArchiveError::InvalidKey { .. })
         ));
-        assert!("".parse::<ChainId>().is_err());
+        assert!("".parse::<NetworkId>().is_err());
     }
 
     #[test]
@@ -12169,7 +12172,7 @@ mod tests {
 
         let mut successor = floor.clone();
         successor.key = ReputationFinalizedArchiveKeyV1::try_new(
-            floor.key.chain_id.clone(),
+            floor.key.network_id.clone(),
             floor.key.height + 1,
             [0x81; 32],
         )
@@ -12225,7 +12228,7 @@ mod tests {
         assert_eq!(
             reopened
                 .latest_journal_event_by_source_at_or_before(
-                    &successor.key.chain_id,
+                    &successor.key.network_id,
                     successor.key.height,
                     dispute_source_id,
                 )
@@ -12237,7 +12240,7 @@ mod tests {
         assert_eq!(
             reopened
                 .latest_journal_event_by_source_at_or_before(
-                    &successor.key.chain_id,
+                    &successor.key.network_id,
                     successor.key.height,
                     new_source_id,
                 )
@@ -12261,7 +12264,7 @@ mod tests {
         }
         let archive = open_archive(&directory, bounds());
         let previous = archive
-            .latest_reconstruction_state_at_or_before(&first.key.chain_id, first.key.height)
+            .latest_reconstruction_state_at_or_before(&first.key.network_id, first.key.height)
             .expect("reconstruct compacted capture predecessor")
             .expect("checkpoint state exists");
         assert_eq!(
@@ -12359,7 +12362,7 @@ mod tests {
             Some(&previous),
             CapturedReputationSuccessorV1 {
                 key: ReputationFinalizedArchiveKeyV1::try_new(
-                    first.key.chain_id.clone(),
+                    first.key.network_id.clone(),
                     8,
                     [0x81; 32],
                 )
@@ -12409,7 +12412,7 @@ mod tests {
         let next = {
             let archive = open_archive(&directory, bounds());
             let previous = archive
-                .latest_reconstruction_state_at_or_before(&first.key.chain_id, first.key.height)
+                .latest_reconstruction_state_at_or_before(&first.key.network_id, first.key.height)
                 .expect("reconstruct compacted predecessor")
                 .expect("checkpoint state exists");
             let next = build_captured_successor_state(
@@ -12438,11 +12441,11 @@ mod tests {
             let index = archive.read_index().expect("read capture index");
             let checkpoint = index
                 .checkpoints
-                .get(&first.key.chain_id)
+                .get(&first.key.network_id)
                 .expect("active checkpoint");
             let anchor = index
                 .by_height
-                .get(&(next.key.chain_id.clone(), next.key.height))
+                .get(&(next.key.network_id.clone(), next.key.height))
                 .expect("captured successor anchor");
             assert_eq!(anchor.manifest.predecessor, Some(first.key.clone()));
             assert_eq!(
@@ -12459,12 +12462,12 @@ mod tests {
 
         let reopened = open_archive(&directory, bounds());
         let restored = reopened
-            .latest_reconstruction_state_at_or_before(&next.key.chain_id, next.key.height)
+            .latest_reconstruction_state_at_or_before(&next.key.network_id, next.key.height)
             .expect("reconstruct retained successor after reopen")
             .expect("retained successor exists");
         assert_eq!(restored, next);
         let previous = reopened
-            .latest_reconstruction_state_at_or_before(&first.key.chain_id, first.key.height)
+            .latest_reconstruction_state_at_or_before(&first.key.network_id, first.key.height)
             .expect("reconstruct replay predecessor")
             .expect("checkpoint predecessor exists");
         let replay = build_captured_successor_state(
@@ -12499,7 +12502,7 @@ mod tests {
         }
         let archive = open_archive(&directory, bounds());
         let previous = archive
-            .latest_reconstruction_state_at_or_before(&first.key.chain_id, first.key.height)
+            .latest_reconstruction_state_at_or_before(&first.key.network_id, first.key.height)
             .expect("reconstruct compacted predecessor")
             .expect("checkpoint state exists");
 
@@ -12537,7 +12540,7 @@ mod tests {
             .sequence = 2;
         let empty = CapturedReputationSuccessorV1 {
             key: ReputationFinalizedArchiveKeyV1::try_new(
-                first.key.chain_id.clone(),
+                first.key.network_id.clone(),
                 8,
                 [0x81; 32],
             )
@@ -12623,7 +12626,7 @@ mod tests {
         let first = projection_with_all_feeds(7, [0x71; 32]);
         let mut second = first.clone();
         second.key = ReputationFinalizedArchiveKeyV1::try_new(
-            second.key.chain_id.clone(),
+            second.key.network_id.clone(),
             first.key.height + 1,
             [0x81; 32],
         )
@@ -12691,7 +12694,7 @@ mod tests {
         let first = sample_projection(7, [0x71; 32]);
         let mut second = first.clone();
         second.key =
-            ReputationFinalizedArchiveKeyV1::try_new(second.key.chain_id.clone(), 8, [0x81; 32])
+            ReputationFinalizedArchiveKeyV1::try_new(second.key.network_id.clone(), 8, [0x81; 32])
                 .expect("construct policy successor key");
         second.finalized_at_unix_ms += 1;
         let mut rotated = second.authority_policy.policy.clone();
@@ -12755,7 +12758,7 @@ mod tests {
         );
 
         let missing = ReputationFinalizedArchiveKeyV1::try_new(
-            projection.key.chain_id.clone(),
+            projection.key.network_id.clone(),
             projection.key.height,
             [0x72; 32],
         )
@@ -12778,13 +12781,13 @@ mod tests {
         assert_eq!(reopened.health_generation().expect("indexed generation"), 2);
         assert_eq!(
             reopened
-                .latest_at_or_before(&first.key.chain_id, 8)
+                .latest_at_or_before(&first.key.network_id, 8)
                 .expect("select bounded anchor"),
             Some(first)
         );
         assert_eq!(
             reopened
-                .latest_at_or_before(&second.key.chain_id, 9)
+                .latest_at_or_before(&second.key.network_id, 9)
                 .expect("select latest anchor"),
             Some(second)
         );
@@ -12804,7 +12807,7 @@ mod tests {
                 .expect("insert second policy");
             archive.insert(third.clone()).expect("insert third policy");
             let (_, history) = archive
-                .latest_at_or_before_with_policy_history(&third.key.chain_id, third.key.height)
+                .latest_at_or_before_with_policy_history(&third.key.network_id, third.key.height)
                 .expect("read latest policy history")
                 .expect("latest projection exists");
             assert_eq!(
@@ -12833,7 +12836,10 @@ mod tests {
             .insert(successor.clone())
             .expect("insert post-compaction successor");
         let (selected, history) = archive
-            .latest_at_or_before_with_policy_history(&successor.key.chain_id, successor.key.height)
+            .latest_at_or_before_with_policy_history(
+                &successor.key.network_id,
+                successor.key.height,
+            )
             .expect("read restarted policy history")
             .expect("successor exists");
         assert_eq!(selected, successor);
@@ -12864,7 +12870,7 @@ mod tests {
             Some(&first),
             CapturedReputationSuccessorV1 {
                 key: ReputationFinalizedArchiveKeyV1::try_new(
-                    first.key.chain_id.clone(),
+                    first.key.network_id.clone(),
                     8,
                     [0x81; 32],
                 )
@@ -12894,7 +12900,7 @@ mod tests {
         let reopened = open_archive(&directory, bounds());
         assert_eq!(
             reopened
-                .latest_reconstruction_state_at_or_before(&next.key.chain_id, next.key.height)
+                .latest_reconstruction_state_at_or_before(&next.key.network_id, next.key.height)
                 .expect("reconstruct revision-jump capture")
                 .expect("revision-jump capture exists"),
             next
@@ -12939,7 +12945,7 @@ mod tests {
             Some(&previous),
             CapturedReputationSuccessorV1 {
                 key: ReputationFinalizedArchiveKeyV1::try_new(
-                    previous.key.chain_id.clone(),
+                    previous.key.network_id.clone(),
                     8,
                     [0x81; 32],
                 )
@@ -13050,7 +13056,7 @@ mod tests {
             let archive = open_archive(&directory, bounds());
             assert_eq!(
                 archive
-                    .activation_floor(&first.key.chain_id)
+                    .activation_floor(&first.key.network_id)
                     .expect("read empty activation floor"),
                 None
             );
@@ -13058,7 +13064,7 @@ mod tests {
             archive.insert(second).expect("insert second");
             assert_eq!(
                 archive
-                    .activation_floor(&first.key.chain_id)
+                    .activation_floor(&first.key.network_id)
                     .expect("read activation floor"),
                 Some(first.key.clone())
             );
@@ -13067,7 +13073,7 @@ mod tests {
         let reopened = open_archive(&directory, bounds());
         assert_eq!(
             reopened
-                .activation_floor(&first.key.chain_id)
+                .activation_floor(&first.key.network_id)
                 .expect("read restarted activation floor"),
             Some(first.key)
         );
@@ -13104,9 +13110,9 @@ mod tests {
 
     #[test]
     fn qualification_coverage_rejects_every_gap_above_activation_floor() {
-        let chain_id = ChainId::from("reputation-test-chain");
+        let network_id = network_id(0x61);
         let key = |height, marker| {
-            ReputationFinalizedArchiveKeyV1::try_new(chain_id.clone(), height, [marker; 32])
+            ReputationFinalizedArchiveKeyV1::try_new(network_id.clone(), height, [marker; 32])
                 .expect("construct coverage key")
         };
         let contiguous = vec![
@@ -13114,12 +13120,12 @@ mod tests {
             (key(8, 0x81), 1_700_000_000_008),
             (key(9, 0x91), 1_700_000_000_009),
         ];
-        validate_contiguous_archive_coverage(&chain_id, &contiguous)
+        validate_contiguous_archive_coverage(&network_id, &contiguous)
             .expect("contiguous activation coverage");
 
         let gapped = vec![contiguous[0].clone(), contiguous[2].clone()];
         assert!(matches!(
-            validate_contiguous_archive_coverage(&chain_id, &gapped),
+            validate_contiguous_archive_coverage(&network_id, &gapped),
             Err(ReputationFinalizedArchiveError::ArchiveCoverageGap {
                 missing_height: 8,
                 observed_height: 9,
@@ -13395,9 +13401,12 @@ mod tests {
         );
 
         let mut successor = projection;
-        successor.key =
-            ReputationFinalizedArchiveKeyV1::try_new(successor.key.chain_id.clone(), 8, [0x81; 32])
-                .expect("construct successor key");
+        successor.key = ReputationFinalizedArchiveKeyV1::try_new(
+            successor.key.network_id.clone(),
+            8,
+            [0x81; 32],
+        )
+        .expect("construct successor key");
         successor.finalized_at_unix_ms += 1;
         assert!(matches!(
             archive.insert(successor),
@@ -13438,7 +13447,7 @@ mod tests {
             let height = 7 + u64::from(offset);
             let block_hash = [0x70 + offset; 32];
             latest.key = ReputationFinalizedArchiveKeyV1::try_new(
-                latest.key.chain_id.clone(),
+                latest.key.network_id.clone(),
                 height,
                 block_hash,
             )
@@ -13503,7 +13512,7 @@ mod tests {
 
         let mut second = first.clone();
         second.key =
-            ReputationFinalizedArchiveKeyV1::try_new(second.key.chain_id.clone(), 8, [0x81; 32])
+            ReputationFinalizedArchiveKeyV1::try_new(second.key.network_id.clone(), 8, [0x81; 32])
                 .expect("valid second key");
         second.finalized_at_unix_ms += 1;
         second.reserve_providers = vec![reserve_account(0x31, 2), reserve_account(0x41, 1)];
@@ -13639,7 +13648,7 @@ mod tests {
                 barrier.wait();
                 for _ in 0..64 {
                     let projection = archive
-                        .latest_at_or_before(&ChainId::from("reputation-test-chain"), u64::MAX)
+                        .latest_at_or_before(&network_id(0x61), u64::MAX)
                         .expect("read synchronized index")
                         .expect("archive remains non-empty");
                     projection.validate().expect("read one complete generation");

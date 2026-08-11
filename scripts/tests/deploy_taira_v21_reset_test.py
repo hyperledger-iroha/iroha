@@ -392,7 +392,7 @@ def test_bundle_preflight_rejects_dpn_only_identity_mismatch(tmp_path: Path) -> 
 def test_binary_config_gate_checks_every_peer_with_bounded_redacted_command(
     tmp_path: Path,
 ) -> None:
-    binary = tmp_path / "irohad"
+    binary = tmp_path / "iroha3d"
     peers = tuple(
         SimpleNamespace(
             slug=slug,
@@ -452,7 +452,7 @@ def test_binary_config_gate_stops_on_first_rejected_peer(tmp_path: Path) -> None
         match=f"peer={MODULE.SLUGS[1]}, status=78",
     ):
         MODULE.validate_installed_peer_configs(
-            tmp_path / "irohad",
+            tmp_path / "iroha3d",
             SimpleNamespace(peers=peers, owner_uid=501, owner_gid=502),
             runner=runner,
         )
@@ -527,7 +527,7 @@ def _fake_plan(
     source_commit = "2" * 40
     root = _build_bundle(tmp_path, binary_sha, source_commit)
     bundle = _validate(root, binary_sha, source_commit)
-    binary = tmp_path / "irohad"
+    binary = tmp_path / "iroha3d"
     supervisor = tmp_path / "supervisor.py"
     _write(binary, b"binary")
     binary.chmod(0o555)
@@ -549,7 +549,7 @@ def test_fresh_plist_has_all_five_binary_stat_seals_and_known_paths(
     bundle, sources, binary_info = _fake_plan(tmp_path)
     runtime = tmp_path / "runtime"
     installed_binary = Path(
-        f"/Library/SORA/Taira/binaries/{sources.binary_sha256}/irohad"
+        f"/Library/SORA/Taira/binaries/{sources.binary_sha256}/iroha3d"
     )
     installed_supervisor = Path(
         f"/Library/SORA/Taira/supervisors/{sources.supervisor_sha256}/taira_peer_supervisor.py"
@@ -603,7 +603,7 @@ def test_fresh_plist_has_all_five_binary_stat_seals_and_known_paths(
 def test_validate_sources_uses_validated_runtime_not_controller_python(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    binary = tmp_path / "irohad"
+    binary = tmp_path / "iroha3d"
     supervisor = tmp_path / "supervisor.py"
     _write(binary, b"binary")
     binary.chmod(0o555)
@@ -1289,7 +1289,7 @@ def test_restart_proof_reverifies_same_child_and_reports_ceil_duration(
         DPN_VALIDATOR_RELEASE_COMMIT,
         tmp_path,
         {peer.label: b"plist"},
-        Path("/irohad"),
+        Path("/iroha3d"),
         object(),
         ops,
     )
@@ -1334,7 +1334,7 @@ def test_restart_proof_rejects_child_or_supervisor_drift_after_advancement(
             DPN_VALIDATOR_RELEASE_COMMIT,
             tmp_path,
             {peer.label: b"plist"},
-            Path("/irohad"),
+            Path("/iroha3d"),
             object(),
             ops,
         )
@@ -1374,7 +1374,7 @@ def test_restart_proof_rejects_measured_duration_beyond_bound(
             DPN_VALIDATOR_RELEASE_COMMIT,
             tmp_path,
             {peer.label: b"plist"},
-            Path("/irohad"),
+            Path("/iroha3d"),
             object(),
             ops,
         )
@@ -1394,7 +1394,7 @@ def test_controller_fails_before_restart_proof_when_terminal_latched() -> None:
             DPN_VALIDATOR_RELEASE_COMMIT,
             Path("/runtime"),
             {},
-            Path("/irohad"),
+            Path("/iroha3d"),
             SimpleNamespace(),
             SimpleNamespace(),
             terminal_checker=terminal_checker,
@@ -1550,7 +1550,7 @@ def _old_capture_payload(pid_file: Path) -> tuple[dict[str, object], tuple[str, 
         "/usr/bin/python3",
         "/old/taira_peer_supervisor.py",
         "--binary",
-        "/old/irohad",
+        "/old/iroha3d",
         "--config",
         "/old/config.toml",
         "--pid-file",
@@ -1589,7 +1589,7 @@ def _framework_python_capture_payload(
     tail = (
         "/old/taira_peer_supervisor.py",
         "--binary",
-        "/old/irohad",
+        "/old/iroha3d",
         "--config",
         "/old/config.toml",
         "--pid-file",
@@ -1801,6 +1801,9 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
     events: list[str] = []
     admission = SimpleNamespace(
         archive_sha256="0" * 64,
+        boi_artifact_inventory_sha256="2" * 64,
+        boi_qualified_inventory_sha256="3" * 64,
+        boi_qualification_receipt_id="4" * 64,
         receipt_id="f" * 64,
         reset_manifest_sha256="1" * 64,
         binary_sha256="a" * 64,
@@ -1874,6 +1877,7 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
         expected_artifact_handoff_sha256="9" * 64,
         expected_production_reset_manifest_sha256="a" * 64,
         trusted_signing_fingerprint="1" * 64,
+        trusted_boi_qualification_signing_fingerprint="3" * 64,
         release_manifest_verifier=Path("/sorafs-validate"),
         trusted_release_manifest_verifier_sha256="2" * 64,
         health_timeout_seconds=240,
@@ -1883,11 +1887,120 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
         apply=False,
     )
 
-    report = MODULE.execute(args, ops=MODULE.SystemOps())
+    report = MODULE._execute_after_provisioned_authority_contracts(
+        args, ops=MODULE.SystemOps()
+    )
     assert report["mode"] == "verified-read-only-dry-run"
     assert report["applied"] is False
     assert report["admission_receipt_consumed"] is False
+    assert report["boi_artifact_inventory_sha256"] == "2" * 64
+    assert report["boi_qualified_inventory_sha256"] == "3" * 64
+    assert report["boi_qualification_receipt_id"] == "4" * 64
     assert events == ["admission-verify", "capture", "archive-recheck"]
+
+
+def test_deployment_admission_requires_and_binds_qualified_boi_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive_state = SimpleNamespace(sha256="a" * 64)
+    source = {
+        "cargo_lock_sha256": "d" * 64,
+        "commit": "c" * 40,
+        "dpn_validator_release_commit": DPN_VALIDATOR_RELEASE_COMMIT,
+        "workspace_source_manifest_sha256": "e" * 64,
+    }
+    result = {
+        "artifact_handoff_sha256": "9" * 64,
+        "archive_sha256": "a" * 64,
+        "boi_artifact_inventory_sha256": "b" * 64,
+        "deployment_performed": False,
+        "linux_authority_manifest_sha256": "3" * 64,
+        "macos_end_block_hash": "4" * 64,
+        "macos_end_height": 42,
+        "peer_count": MODULE.PEER_COUNT,
+        "privacy_protocol_receipt_id": "5" * 64,
+        "receipt_id": "f" * 64,
+        "release_manifest_sha256": "6" * 64,
+        "release_manifest_verifier_sha256": "2" * 64,
+        "reset_manifest_sha256": "7" * 64,
+        "restart_generation": "8" * 64,
+        "schema": MODULE.rollout_admission.VERIFICATION_SCHEMA,
+        "schema_version": MODULE.rollout_admission.VERIFICATION_SCHEMA_VERSION,
+        "signer_fingerprint_sha256": "1" * 64,
+        "source": source,
+        "supervisor_sha256": "0" * 64,
+        "validator_binary_sha256": "a" * 64,
+        "validator_config_sha256": {
+            slug: f"{index}" * 64
+            for index, slug in enumerate(MODULE.SLUGS, start=1)
+        },
+        "verified": True,
+    }
+    snapshot = SimpleNamespace(
+        boi_inventory_sha256="b" * 64,
+        candidate_archive_sha256="a" * 64,
+        candidate_boi_artifact_inventory_sha256="b" * 64,
+        candidate_release_manifest_sha256="6" * 64,
+        qualification_receipt_id="7" * 64,
+        source=source,
+    )
+    seen: list[Path] = []
+    monkeypatch.setattr(MODULE, "canonical_path", lambda path, _label: path)
+    monkeypatch.setattr(MODULE, "require_protected_replay_ledger", lambda _path: None)
+    monkeypatch.setattr(MODULE, "_stable_admission_file", lambda *_args: archive_state)
+    monkeypatch.setattr(
+        MODULE.rollout_admission, "verify_admission", lambda **_kwargs: result
+    )
+    monkeypatch.setattr(
+        MODULE.rollout_admission,
+        "scan_inventory_paths",
+        lambda _root: list(MODULE.rollout_admission.FINAL_AUTHORITY_FILES),
+    )
+    monkeypatch.setattr(
+        MODULE.rollout_admission,
+        "stable_hash_relative",
+        lambda _root, relative: SimpleNamespace(sha256=relative, size=1),
+    )
+
+    def verify_boi(root: Path, **_kwargs):
+        seen.append(root)
+        return snapshot
+
+    monkeypatch.setattr(MODULE.boi_handoff, "verify_qualified_boi_handoff", verify_boi)
+    args = argparse.Namespace(
+        admission_archive=Path("/candidate.tar.gz"),
+        admission_authority_dir=Path("/authority"),
+        boi_qualified_handoff_root=Path("/qualified-boi"),
+        expected_source_commit="c" * 40,
+        expected_dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
+        expected_cargo_lock_sha256="d" * 64,
+        expected_workspace_source_manifest_sha256="e" * 64,
+        expected_receipt_id="f" * 64,
+        expected_artifact_handoff_sha256="9" * 64,
+        trusted_signing_fingerprint="1" * 64,
+        trusted_boi_qualification_public_key=Path("/qualification.pub"),
+        trusted_boi_qualification_signing_fingerprint="3" * 64,
+        expected_boi_qualification_host_id="boi-host-v1",
+        expected_boi_qualification_installation_id="boi-installation-v1",
+        expected_boi_qualification_controller_digest="4" * 64,
+        expected_workflow_run_id=101,
+        expected_workflow_run_attempt=2,
+        release_manifest_verifier=Path("/verifier"),
+        trusted_release_manifest_verifier_sha256="2" * 64,
+    )
+
+    plan = MODULE.verify_deployment_admission(args)
+
+    assert seen == [Path("/qualified-boi")]
+    assert plan.boi_artifact_inventory_sha256 == "b" * 64
+    assert plan.boi_qualified_inventory_sha256 == "b" * 64
+    assert plan.boi_qualification_receipt_id == "7" * 64
+    assert plan.privacy_protocol_receipt_id == "5" * 64
+    assert plan.release_manifest_sha256 == "6" * 64
+
+    snapshot.candidate_archive_sha256 = "0" * 64
+    with pytest.raises(MODULE.DeploymentError, match="differs from the exact signed"):
+        MODULE.verify_deployment_admission(args)
 
 
 @pytest.mark.parametrize("apply", [False, True], ids=("dry-run", "apply"))
@@ -1925,6 +2038,7 @@ def test_admission_failure_precedes_every_deployment_preflight(
         expected_artifact_handoff_sha256="9" * 64,
         expected_production_reset_manifest_sha256="a" * 64,
         trusted_signing_fingerprint="1" * 64,
+        trusted_boi_qualification_signing_fingerprint="3" * 64,
         release_manifest_verifier=Path("/sorafs-validate"),
         trusted_release_manifest_verifier_sha256="2" * 64,
         health_timeout_seconds=240,
@@ -1935,7 +2049,9 @@ def test_admission_failure_precedes_every_deployment_preflight(
     )
 
     with pytest.raises(MODULE.DeploymentError, match="admission refusal"):
-        MODULE.execute(args, ops=MODULE.SystemOps())
+        MODULE._execute_after_provisioned_authority_contracts(
+            args, ops=MODULE.SystemOps()
+        )
 
     assert events == ["admission-verify"]
 
@@ -1946,6 +2062,9 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
     events: list[str] = []
     admission = SimpleNamespace(
         archive_sha256="0" * 64,
+        boi_artifact_inventory_sha256="2" * 64,
+        boi_qualified_inventory_sha256="3" * 64,
+        boi_qualification_receipt_id="4" * 64,
         receipt_id="f" * 64,
         reset_manifest_sha256="1" * 64,
         binary_sha256="a" * 64,
@@ -1976,6 +2095,11 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
         MODULE,
         "require_admission_bound_inputs_unchanged",
         lambda *args: events.append("recheck-inputs"),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "require_admission_archive_unchanged",
+        lambda *_args: events.append("recheck-admission-evidence"),
     )
     monkeypatch.setattr(
         MODULE,
@@ -2028,6 +2152,7 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
         expected_artifact_handoff_sha256="9" * 64,
         expected_production_reset_manifest_sha256="a" * 64,
         trusted_signing_fingerprint="1" * 64,
+        trusted_boi_qualification_signing_fingerprint="3" * 64,
         release_manifest_verifier=Path("/sorafs-validate"),
         trusted_release_manifest_verifier_sha256="2" * 64,
         health_timeout_seconds=240,
@@ -2037,20 +2162,27 @@ def test_apply_lock_spans_old_cohort_capture_and_rollout(
         apply=True,
     )
 
-    assert MODULE.execute(args, ops=MODULE.SystemOps()) == {
+    assert MODULE._execute_after_provisioned_authority_contracts(
+        args, ops=MODULE.SystemOps()
+    ) == {
         "admission_archive_sha256": "0" * 64,
         "admission_receipt_consumed": True,
         "admission_receipt_id": "f" * 64,
         "applied": True,
+        "boi_artifact_inventory_sha256": "2" * 64,
+        "boi_qualified_inventory_sha256": "3" * 64,
+        "boi_qualification_receipt_id": "4" * 64,
     }
     assert events == [
         "admission-verify",
         "bind-inputs",
         "lock-enter",
         "admission-verify",
+        "recheck-admission-evidence",
         "recheck-inputs",
         "capture:True",
         "recheck-inputs",
+        "recheck-admission-evidence",
         "consume-enter",
         "apply",
         "rollout-start",
@@ -2068,10 +2200,17 @@ def _receipt_transaction_plan(tmp_path: Path) -> MODULE.AdmissionPlan:
         archive=archive,
         archive_state=MODULE._stable_admission_file(archive, "test archive"),
         authority_dir=tmp_path,
+        authority_state=(),
+        boi_qualified_handoff=SimpleNamespace(),
         replay_ledger=ledger,
         receipt_id="a" * 64,
         artifact_handoff_sha256="9" * 64,
+        boi_artifact_inventory_sha256="0" * 64,
+        boi_qualified_inventory_sha256="1" * 64,
+        boi_qualification_receipt_id="4" * 64,
         archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        privacy_protocol_receipt_id="2" * 64,
+        release_manifest_sha256="3" * 64,
         source_commit="b" * 40,
         dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
         cargo_lock_sha256="c" * 64,
@@ -2101,6 +2240,17 @@ def _use_unprivileged_transaction_ledger(
         "atomic_replace_owned",
         lambda path, body, **_kwargs: path.write_bytes(body),
     )
+    monkeypatch.setattr(
+        MODULE,
+        "require_admission_archive_unchanged",
+        lambda _admission: None,
+    )
+
+
+def _transaction_receipt_ids(admission: MODULE.AdmissionPlan) -> tuple[str, str]:
+    return tuple(
+        sorted((admission.receipt_id, admission.boi_qualification_receipt_id))
+    )
 
 
 def test_receipt_consumption_restores_exact_ledger_when_rollout_does_not_begin(
@@ -2114,6 +2264,12 @@ def test_receipt_consumption_restores_exact_ledger_when_rollout_does_not_begin(
         with MODULE.consume_admission_receipt(admission):
             assert (
                 admission.receipt_id
+                in MODULE.rollout_admission.load_replay_ledger(
+                    admission.replay_ledger
+                ).consumed_receipt_ids
+            )
+            assert (
+                admission.boi_qualification_receipt_id
                 in MODULE.rollout_admission.load_replay_ledger(
                     admission.replay_ledger
                 ).consumed_receipt_ids
@@ -2137,7 +2293,7 @@ def test_receipt_consumption_remains_committed_after_rollout_begins(
     consumed = MODULE.rollout_admission.load_replay_ledger(
         admission.replay_ledger
     ).consumed_receipt_ids
-    assert consumed == (admission.receipt_id,)
+    assert consumed == _transaction_receipt_ids(admission)
 
 
 def test_successful_receipt_transaction_rechecks_committed_ledger(
@@ -2151,7 +2307,7 @@ def test_successful_receipt_transaction_rechecks_committed_ledger(
 
     assert MODULE.rollout_admission.load_replay_ledger(
         admission.replay_ledger
-    ).consumed_receipt_ids == (admission.receipt_id,)
+    ).consumed_receipt_ids == _transaction_receipt_ids(admission)
 
 
 def test_receipt_consumption_cannot_succeed_without_rollout_start(
@@ -2194,22 +2350,29 @@ def test_unstarted_receipt_rollback_refuses_foreign_ledger_change(
         with MODULE.consume_admission_receipt(admission):
             admission.replay_ledger.write_bytes(
                 MODULE.rollout_admission.canonical_replay_ledger_bytes(
-                    [admission.receipt_id, foreign_receipt]
+                    [*_transaction_receipt_ids(admission), foreign_receipt]
                 )
             )
             raise MODULE.DeploymentError("injected failure after foreign mutation")
 
     assert MODULE.rollout_admission.load_replay_ledger(
         admission.replay_ledger
-    ).consumed_receipt_ids == (admission.receipt_id, foreign_receipt)
+    ).consumed_receipt_ids == tuple(
+        sorted((*_transaction_receipt_ids(admission), foreign_receipt))
+    )
 
 
+@pytest.mark.parametrize(
+    "replayed_field", ["receipt_id", "boi_qualification_receipt_id"]
+)
 def test_receipt_consumption_rejects_replay_under_lock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replayed_field: str
 ) -> None:
     admission = _receipt_transaction_plan(tmp_path)
     admission.replay_ledger.write_bytes(
-        MODULE.rollout_admission.canonical_replay_ledger_bytes([admission.receipt_id])
+        MODULE.rollout_admission.canonical_replay_ledger_bytes(
+            [getattr(admission, replayed_field)]
+        )
     )
     _use_unprivileged_transaction_ledger(monkeypatch)
 
@@ -2225,7 +2388,7 @@ def test_receipt_consumption_rejects_ledger_capacity_before_publication(
     _use_unprivileged_transaction_ledger(monkeypatch)
     prior = admission.replay_ledger.read_bytes()
     consumed = MODULE.rollout_admission.canonical_replay_ledger_bytes(
-        [admission.receipt_id]
+        list(_transaction_receipt_ids(admission))
     )
     assert len(prior) < len(consumed)
     monkeypatch.setattr(
@@ -2286,7 +2449,7 @@ def test_production_config_may_differ_from_secret_free_qualification(tmp_path: P
 def test_under_lock_recheck_rejects_python_runtime_identity_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    binary = Path("/candidate/irohad")
+    binary = Path("/candidate/iroha3d")
     supervisor = Path("/candidate/supervisor.py")
     runtime = Path("/Library/Developer/CommandLineTools/Python.app/Python")
     stable = SimpleNamespace(
@@ -2453,7 +2616,7 @@ def _rollback_snapshots(tmp_path: Path) -> tuple[MODULE.PlistSnapshot, ...]:
     for index, label in enumerate(MODULE.LABELS):
         pid_file = tmp_path / f"{label}.pid"
         _write(pid_file, f"{140 + index}\n".encode())
-        binary = f"/old/bin/irohad-{index}"
+        binary = f"/old/bin/iroha3d-{index}"
         config = f"/old/config-{index}.toml"
         supervisor_argv = (
             "/usr/bin/python3",
@@ -2533,8 +2696,7 @@ def test_rollback_attempts_full_restore_after_injected_bootout_failure(
 
 
 def test_cli_defaults_match_the_audited_operator_contract() -> None:
-    args = MODULE.build_parser().parse_args(
-        [
+    argv = [
             "--bundle",
             "/bundle",
             "--binary",
@@ -2545,6 +2707,8 @@ def test_cli_defaults_match_the_audited_operator_contract() -> None:
             "/candidate.tar.gz",
             "--admission-authority-dir",
             "/authority",
+            "--boi-qualified-handoff-root",
+            "/qualified-boi",
             "--expected-source-commit",
             "c" * 40,
             "--expected-dpn-validator-release-commit",
@@ -2561,47 +2725,92 @@ def test_cli_defaults_match_the_audited_operator_contract() -> None:
                 "a" * 64,
             "--trusted-signing-fingerprint",
             "1" * 64,
+            "--trusted-boi-qualification-public-key",
+            "/qualification.pub",
+            "--trusted-boi-qualification-signing-fingerprint",
+            "3" * 64,
+            "--expected-boi-qualification-host-id",
+            "boi-host-v1",
+            "--expected-boi-qualification-installation-id",
+            "boi-installation-v1",
+            "--expected-boi-qualification-controller-digest",
+            "4" * 64,
+            "--expected-workflow-run-id",
+            "101",
+            "--expected-workflow-run-attempt",
+            "2",
             "--release-manifest-verifier",
             "/sorafs-validate",
             "--trusted-release-manifest-verifier-sha256",
             "2" * 64,
         ]
-    )
+    args = MODULE.build_parser().parse_args(argv)
     assert args.health_timeout_seconds == 240
     assert args.minimum_free_bytes == 17_179_869_184
     assert args.maximum_fsync_latency_ms == 250
     assert args.supervisor_python == MODULE.DEFAULT_SUPERVISOR_PYTHON
+    assert args.boi_qualified_handoff_root == Path("/qualified-boi")
     assert not hasattr(args, "restart_generation")
     assert not hasattr(args, "expected_binary_sha256")
     assert not hasattr(args, "expected_supervisor_sha256")
     assert args.allow_absent_old_child is False
     assert args.allow_framework_python_argv0_rewrite is False
     assert args.apply is False
+    missing_boi = list(argv)
+    index = missing_boi.index("--boi-qualified-handoff-root")
+    del missing_boi[index : index + 2]
+    with pytest.raises(SystemExit):
+        MODULE.build_parser().parse_args(missing_boi)
 
 
-def test_root_without_sealed_external_tool_identity_fails_before_preflight(
+def test_release_and_boi_qualification_signers_must_be_distinct() -> None:
+    assert MODULE.require_distinct_signing_fingerprints("1" * 64, "2" * 64) == (
+        "1" * 64,
+        "2" * 64,
+    )
+    with pytest.raises(MODULE.DeploymentError, match="must be distinct"):
+        MODULE.require_distinct_signing_fingerprints("1" * 64, "1" * 64)
+
+
+@pytest.mark.parametrize("apply", [False, True], ids=("dry-run", "apply"))
+def test_deploy_issuance_barrier_precedes_identity_paths_admission_and_state(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    apply: bool,
 ) -> None:
-    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(MODULE.os, "getegid", lambda: 0)
-    monkeypatch.delenv(MODULE.EXTERNAL_TOOL_UID_ENV, raising=False)
-    monkeypatch.delenv(MODULE.EXTERNAL_TOOL_GID_ENV, raising=False)
-    monkeypatch.setattr(
-        MODULE,
-        "validate_arguments",
-        lambda _args: pytest.fail("argument preflight ran before identity refusal"),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "verify_deployment_admission",
-        lambda _args: pytest.fail("admission verifier ran before identity refusal"),
-    )
+    calls: list[str] = []
 
-    with pytest.raises(
-        MODULE.DeploymentError,
-        match="root deployment lacks the sealed external-tool identity",
+    def forbidden(name: str):
+        def call(*_args, **_kwargs):
+            calls.append(name)
+            raise AssertionError(f"deploy barrier reached forbidden operation: {name}")
+
+        return call
+
+    for name in (
+        "require_sealed_external_tool_identity",
+        "validate_arguments",
+        "verify_deployment_admission",
+        "validate_bundle",
+        "validate_sources",
+        "exclusive_deployment_lock",
+        "consume_admission_receipt",
+        "apply_reset",
     ):
-        MODULE.execute(argparse.Namespace(apply=False), ops=MODULE.SystemOps())
+        monkeypatch.setattr(MODULE, name, forbidden(name))
+    monkeypatch.setattr(MODULE.os, "geteuid", forbidden("geteuid"))
+    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_UID_ENV, "41")
+    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_GID_ENV, "42")
+    state = tmp_path / "deployment-state"
+    state.write_bytes(b"unchanged\n")
+
+    with pytest.raises(MODULE.DeploymentError) as error:
+        MODULE.execute(argparse.Namespace(apply=apply), ops=object())
+
+    assert MODULE.DEPLOY_AUTHENTICATED_RUN_NONCE_CONTRACT in str(error.value)
+    assert MODULE.COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT in str(error.value)
+    assert calls == []
+    assert state.read_bytes() == b"unchanged\n"
 
 
 @pytest.mark.parametrize(

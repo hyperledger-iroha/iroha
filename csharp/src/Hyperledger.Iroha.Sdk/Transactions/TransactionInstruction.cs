@@ -15,7 +15,10 @@ public abstract record class TransactionInstruction
 
     internal virtual byte[] EncodeFramedPayload(TransactionEncodingContext context)
     {
-        return NoritoCodec.Encode(TypeName, EncodePayload(context));
+        return NoritoCodec.Encode(
+            TypeName,
+            EncodePayload(context),
+            NoritoCodec.CanonicalLayoutFlags);
     }
 
     public byte[] EncodeInstructionBox(string authorityAccountId)
@@ -25,7 +28,8 @@ public abstract record class TransactionInstruction
         var context = new TransactionEncodingContext(authorityAccountId);
         return Hyperledger.Iroha.Norito.NoritoCodec.EncodeWithSchemaHash(
             InstructionBoxSchemaHash,
-            context.EncodeInstruction(this));
+            context.EncodeInstruction(this),
+            NoritoCodec.CanonicalLayoutFlags);
     }
 
     public string EncodeInstructionBoxBase64(string authorityAccountId)
@@ -202,26 +206,30 @@ public abstract record class TransactionInstruction
         string orderId,
         ReadOnlySpan<byte> orderPayload,
         ulong issuedEpoch,
-        ulong deadlineEpoch)
+        ulong deadlineEpoch,
+        string? musubiArchiveId = null)
     {
         return new IssueReplicationOrderInstruction(
             orderId,
             orderPayload,
             issuedEpoch,
-            deadlineEpoch);
+            deadlineEpoch,
+            musubiArchiveId);
     }
 
     public static IssueReplicationOrderInstruction IssueReplicationOrder(
         string orderId,
         string orderPayloadBase64,
         ulong issuedEpoch,
-        ulong deadlineEpoch)
+        ulong deadlineEpoch,
+        string? musubiArchiveId = null)
     {
         return new IssueReplicationOrderInstruction(
             orderId,
             orderPayloadBase64,
             issuedEpoch,
-            deadlineEpoch);
+            deadlineEpoch,
+            musubiArchiveId);
     }
 
     public static CompleteReplicationOrderInstruction CompleteReplicationOrder(

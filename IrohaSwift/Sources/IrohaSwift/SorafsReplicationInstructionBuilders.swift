@@ -296,12 +296,14 @@ public struct SorafsIssueReplicationOrderInstruction: Equatable, Sendable {
     public let orderPayload: Data
     public let issuedEpoch: UInt64
     public let deadlineEpoch: UInt64
+    public let musubiArchiveId: String?
 
     public init(
         orderId: String,
         orderPayload: Data,
         issuedEpoch: UInt64,
-        deadlineEpoch: UInt64
+        deadlineEpoch: UInt64,
+        musubiArchiveId: String? = nil
     ) throws {
         self.orderId = try SorafsReplicationOrderV1.canonicalIdentifier(
             orderId,
@@ -317,13 +319,20 @@ public struct SorafsIssueReplicationOrderInstruction: Equatable, Sendable {
         self.orderPayload = orderPayload
         self.issuedEpoch = issuedEpoch
         self.deadlineEpoch = deadlineEpoch
+        self.musubiArchiveId = try musubiArchiveId.map {
+            try SorafsReplicationOrderV1.canonicalIdentifier(
+                $0,
+                field: "musubi_archive"
+            )
+        }
     }
 
     public init(
         orderId: String,
         orderPayloadBase64: String,
         issuedEpoch: UInt64,
-        deadlineEpoch: UInt64
+        deadlineEpoch: UInt64,
+        musubiArchiveId: String? = nil
     ) throws {
         let canonicalOrderId = try SorafsReplicationOrderV1.canonicalIdentifier(
             orderId,
@@ -337,7 +346,8 @@ public struct SorafsIssueReplicationOrderInstruction: Equatable, Sendable {
             orderId: canonicalOrderId,
             orderPayload: payload,
             issuedEpoch: issuedEpoch,
-            deadlineEpoch: deadlineEpoch
+            deadlineEpoch: deadlineEpoch,
+            musubiArchiveId: musubiArchiveId
         )
     }
 
@@ -352,6 +362,7 @@ public struct SorafsIssueReplicationOrderInstruction: Equatable, Sendable {
                 "order_payload": orderPayloadBase64,
                 "issued_epoch": NSNumber(value: issuedEpoch),
                 "deadline_epoch": NSNumber(value: deadlineEpoch),
+                "musubi_archive": musubiArchiveId.map { $0 as Any } ?? NSNull(),
             ],
         ])
     }
@@ -589,13 +600,15 @@ public enum SorafsReplicationInstructionBuilders {
         orderId: String,
         orderPayload: Data,
         issuedEpoch: UInt64,
-        deadlineEpoch: UInt64
+        deadlineEpoch: UInt64,
+        musubiArchiveId: String? = nil
     ) throws -> NoritoJSON {
         try SorafsIssueReplicationOrderInstruction(
             orderId: orderId,
             orderPayload: orderPayload,
             issuedEpoch: issuedEpoch,
-            deadlineEpoch: deadlineEpoch
+            deadlineEpoch: deadlineEpoch,
+            musubiArchiveId: musubiArchiveId
         ).noritoJSON()
     }
 
@@ -603,13 +616,15 @@ public enum SorafsReplicationInstructionBuilders {
         orderId: String,
         orderPayloadBase64: String,
         issuedEpoch: UInt64,
-        deadlineEpoch: UInt64
+        deadlineEpoch: UInt64,
+        musubiArchiveId: String? = nil
     ) throws -> NoritoJSON {
         try SorafsIssueReplicationOrderInstruction(
             orderId: orderId,
             orderPayloadBase64: orderPayloadBase64,
             issuedEpoch: issuedEpoch,
-            deadlineEpoch: deadlineEpoch
+            deadlineEpoch: deadlineEpoch,
+            musubiArchiveId: musubiArchiveId
         ).noritoJSON()
     }
 
@@ -656,14 +671,24 @@ public enum SorafsReplicationInstructionBuilders {
         case "IssueReplicationOrder":
             let body = try exactBody(
                 outer[variant],
-                fields: ["order_id", "order_payload", "issued_epoch", "deadline_epoch"],
+                fields: [
+                    "order_id",
+                    "order_payload",
+                    "issued_epoch",
+                    "deadline_epoch",
+                    "musubi_archive",
+                ],
                 variant: variant
             )
             return .issue(try SorafsIssueReplicationOrderInstruction(
                 orderId: try string(body["order_id"], field: "order_id"),
                 orderPayloadBase64: try string(body["order_payload"], field: "order_payload"),
                 issuedEpoch: try epoch(body["issued_epoch"], field: "issued_epoch"),
-                deadlineEpoch: try epoch(body["deadline_epoch"], field: "deadline_epoch")
+                deadlineEpoch: try epoch(body["deadline_epoch"], field: "deadline_epoch"),
+                musubiArchiveId: try optionalString(
+                    body["musubi_archive"],
+                    field: "musubi_archive"
+                )
             ))
         case "CompleteReplicationOrder":
             let body = try exactBody(
@@ -806,13 +831,15 @@ public extension IrohaSDK {
         orderId: String,
         orderPayload: Data,
         issuedEpoch: UInt64,
-        deadlineEpoch: UInt64
+        deadlineEpoch: UInt64,
+        musubiArchiveId: String? = nil
     ) throws -> NoritoJSON {
         try SorafsReplicationInstructionBuilders.issueReplicationOrder(
             orderId: orderId,
             orderPayload: orderPayload,
             issuedEpoch: issuedEpoch,
-            deadlineEpoch: deadlineEpoch
+            deadlineEpoch: deadlineEpoch,
+            musubiArchiveId: musubiArchiveId
         )
     }
 
@@ -820,13 +847,15 @@ public extension IrohaSDK {
         orderId: String,
         orderPayloadBase64: String,
         issuedEpoch: UInt64,
-        deadlineEpoch: UInt64
+        deadlineEpoch: UInt64,
+        musubiArchiveId: String? = nil
     ) throws -> NoritoJSON {
         try SorafsReplicationInstructionBuilders.issueReplicationOrder(
             orderId: orderId,
             orderPayloadBase64: orderPayloadBase64,
             issuedEpoch: issuedEpoch,
-            deadlineEpoch: deadlineEpoch
+            deadlineEpoch: deadlineEpoch,
+            musubiArchiveId: musubiArchiveId
         )
     }
 

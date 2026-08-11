@@ -3,6 +3,7 @@ import CryptoKit
 
 private let ToriiDaEd25519FunctionCode: UInt8 = 0xED
 private let ToriiDaIngestSigningDomainV1 = Data("iroha:da-ingest-request:v1\0".utf8)
+private let ToriiDaIngestContentDomainV1 = Data("iroha:da-ingest-request:content:v1\0".utf8)
 
 public enum ToriiDaBlobClass: Sendable, Equatable {
     case taikaiSegment
@@ -103,6 +104,8 @@ public struct ToriiDaMetadataEntry: Sendable, Equatable {
 }
 
 public struct ToriiDaBlobSubmission: Sendable {
+    public var networkId: NetworkId
+    public var owner: String
     public var payload: Data
     public var chunkSize: Int
     public var laneId: UInt64
@@ -116,12 +119,14 @@ public struct ToriiDaBlobSubmission: Sendable {
     public var metadata: [ToriiDaMetadataEntry]
     public var noritoManifest: Data?
     public var clientBlobId: Data?
-    public var submitterPublicKeyHex: String?
+    public var signerPublicKeyHex: String?
     public var signatureHex: String?
     public var privateKey: Data?
     public var privateKeyHex: String?
 
-    public init(payload: Data,
+    public init(networkId: NetworkId,
+                owner: String,
+                payload: Data,
                 chunkSize: Int = 262_144,
                 laneId: UInt64 = 0,
                 epoch: UInt64 = 0,
@@ -134,10 +139,12 @@ public struct ToriiDaBlobSubmission: Sendable {
                 metadata: [ToriiDaMetadataEntry] = [],
                 noritoManifest: Data? = nil,
                 clientBlobId: Data? = nil,
-                submitterPublicKeyHex: String? = nil,
+                signerPublicKeyHex: String? = nil,
                 signatureHex: String? = nil,
                 privateKey: Data? = nil,
                 privateKeyHex: String? = nil) {
+        self.networkId = networkId
+        self.owner = owner
         self.payload = payload
         self.chunkSize = chunkSize
         self.laneId = laneId
@@ -151,7 +158,7 @@ public struct ToriiDaBlobSubmission: Sendable {
         self.metadata = metadata
         self.noritoManifest = noritoManifest
         self.clientBlobId = clientBlobId
-        self.submitterPublicKeyHex = submitterPublicKeyHex
+        self.signerPublicKeyHex = signerPublicKeyHex
         self.signatureHex = signatureHex
         self.privateKey = privateKey
         self.privateKeyHex = privateKeyHex
@@ -160,7 +167,8 @@ public struct ToriiDaBlobSubmission: Sendable {
 
 public struct ToriiDaIngestArtifacts: Sendable, Equatable {
     public let clientBlobIdHex: String
-    public let submitterPublicKeyHex: String
+    public let payloadHashHex: String
+    public let signerPublicKeyHex: String
     public let signatureHex: String
     public let signingDigestHex: String
     public let payloadLength: Int
@@ -385,11 +393,9 @@ struct ToriiDaIngestSubmitPayload: Decodable {
 
 struct ToriiDaIngestRequestBuilder {
     let submission: ToriiDaBlobSubmission
-    let allowUnsigned: Bool
 
-    init(submission: ToriiDaBlobSubmission, allowUnsigned: Bool = false) {
+    init(submission: ToriiDaBlobSubmission) {
         self.submission = submission
-        self.allowUnsigned = allowUnsigned
     }
 
     func makeRequestBody() throws -> (body: Data, artifacts: ToriiDaIngestArtifacts) {
@@ -403,14 +409,28 @@ struct ToriiDaIngestRequestBuilder {
         guard UInt32(exactly: submission.laneId) != nil else {
             throw ToriiClientError.invalidPayload("laneId exceeds UInt32 range")
         }
+        let ownerAddress: AccountAddress
+        do {
+            guard submission.owner == submission.owner.trimmingCharacters(in: .whitespacesAndNewlines) else {
+                throw AccountAddressError.unsupportedAddressFormat
+            }
+            ownerAddress = try AccountAddress.parseEncoded(submission.owner)
+        } catch {
+            throw ToriiClientError.invalidPayload("owner must be an exact canonical I105 account id")
+        }
         let digestResult = try resolveClientBlobId()
+        let payloadHash = try resolvePayloadHash()
         let signingDigest = try makeSigningDigest(
             clientBlobId: digestResult.digest,
+            payloadHash: payloadHash,
+            ownerAddress: ownerAddress,
             chunkSize: UInt32(chunkSize)
         )
         let signatureResult = try resolveSignatureDigest(signingDigest: signingDigest)
 
         var payload: [String: Any] = [:]
+        payload["network_id"] = submission.networkId.literal
+        payload["owner"] = submission.owner
         payload["client_blob_id"] = digestResult.encodedTuple
         payload["lane_id"] = NSNumber(value: submission.laneId)
         payload["epoch"] = NSNumber(value: submission.epoch)
@@ -421,6 +441,7 @@ struct ToriiDaIngestRequestBuilder {
         payload["retention_policy"] = encodeRetentionPolicy(submission.retentionPolicy)
         payload["chunk_size"] = NSNumber(value: chunkSize)
         payload["total_size"] = NSNumber(value: submission.payload.count)
+        payload["payload_hash"] = [payloadHash.map { NSNumber(value: $0) }]
         payload["compression"] = encodeCompression(submission.compression)
         if let manifest = submission.noritoManifest {
             payload["norito_manifest"] = manifest.base64EncodedString()
@@ -429,13 +450,16 @@ struct ToriiDaIngestRequestBuilder {
         }
         payload["payload"] = submission.payload.base64EncodedString()
         payload["metadata"] = encodeMetadata(submission.metadata)
-        payload["submitter"] = signatureResult.submitter
-        payload["signature"] = signatureResult.signatureHex
+        payload["signatures"] = [[
+            "signer": signatureResult.signer,
+            "signature": signatureResult.signatureHex,
+        ]]
 
         let body = try JSONSerialization.data(withJSONObject: payload, options: [])
         let artifacts = ToriiDaIngestArtifacts(
             clientBlobIdHex: digestResult.digest.upperHexString(),
-            submitterPublicKeyHex: signatureResult.submitter,
+            payloadHashHex: payloadHash.upperHexString(),
+            signerPublicKeyHex: signatureResult.signer,
             signatureHex: signatureResult.signatureHex,
             signingDigestHex: signingDigest.upperHexString(),
             payloadLength: submission.payload.count
@@ -466,9 +490,27 @@ struct ToriiDaIngestRequestBuilder {
         return (digest, encoded)
     }
 
-    private func makeSigningDigest(clientBlobId: Data, chunkSize: UInt32) throws -> Data {
+    private func resolvePayloadHash() throws -> Data {
+        guard let digest = NoritoNativeBridge.shared.blake3Hash(data: submission.payload),
+              digest.count == 32 else {
+            throw ToriiClientError.invalidPayload(
+                NoritoNativeBridge.bridgeUnavailableMessage(
+                    "NoritoBridge must be linked to derive the canonical DA payload commitment."
+                )
+            )
+        }
+        return digest
+    }
+
+    private func makeSigningDigest(clientBlobId: Data,
+                                   payloadHash: Data,
+                                   ownerAddress: AccountAddress,
+                                   chunkSize: UInt32) throws -> Data {
         guard clientBlobId.count == 32 else {
             throw ToriiClientError.invalidPayload("clientBlobId must contain exactly 32 bytes")
+        }
+        guard payloadHash.count == 32 else {
+            throw ToriiClientError.invalidPayload("payload hash must contain exactly 32 bytes")
         }
         guard let laneId = UInt32(exactly: submission.laneId),
               let totalSize = UInt64(exactly: submission.payload.count),
@@ -476,11 +518,8 @@ struct ToriiDaIngestRequestBuilder {
             throw ToriiClientError.invalidPayload("DA signing intent exceeds supported integer range")
         }
 
-        var preimage = ToriiDaIngestSigningDomainV1
+        var preimage = ToriiDaIngestContentDomainV1
         preimage.append(clientBlobId)
-        appendLittleEndian(laneId, to: &preimage)
-        appendLittleEndian(submission.epoch, to: &preimage)
-        appendLittleEndian(submission.sequence, to: &preimage)
 
         let blobClass: (UInt8, UInt16)
         switch submission.blobClass {
@@ -530,7 +569,6 @@ struct ToriiDaIngestRequestBuilder {
         try appendLengthPrefixed(retention.governanceTag, to: &preimage)
 
         appendLittleEndian(chunkSize, to: &preimage)
-        appendLittleEndian(totalSize, to: &preimage)
         switch submission.compression {
         case .identity:
             preimage.append(0)
@@ -569,11 +607,28 @@ struct ToriiDaIngestRequestBuilder {
             }
         }
 
-        guard let digest = NoritoNativeBridge.shared.blake3Hash(data: preimage),
-              digest.count == 32 else {
+        guard let contentHash = NoritoNativeBridge.shared.blake3Hash(data: preimage),
+              contentHash.count == 32 else {
             throw ToriiClientError.invalidPayload(
                 NoritoNativeBridge.bridgeUnavailableMessage(
                     "NoritoBridge must be linked to hash the canonical DA signing intent."
+                )
+            )
+        }
+        var authorization = ToriiDaIngestSigningDomainV1
+        authorization.append(submission.networkId.bytes)
+        try appendLengthPrefixed(ownerAddress.canonicalBytes(), to: &authorization)
+        appendLittleEndian(laneId, to: &authorization)
+        appendLittleEndian(submission.epoch, to: &authorization)
+        appendLittleEndian(submission.sequence, to: &authorization)
+        authorization.append(payloadHash)
+        appendLittleEndian(totalSize, to: &authorization)
+        authorization.append(contentHash)
+        guard let digest = NoritoNativeBridge.shared.blake3Hash(data: authorization),
+              digest.count == 32 else {
+            throw ToriiClientError.invalidPayload(
+                NoritoNativeBridge.bridgeUnavailableMessage(
+                    "NoritoBridge must be linked to hash the canonical DA authorization."
                 )
             )
         }
@@ -601,37 +656,30 @@ struct ToriiDaIngestRequestBuilder {
     }
 
     private func resolveSignatureDigest(signingDigest: Data) throws
-        -> (submitter: String, signatureHex: String) {
+        -> (signer: String, signatureHex: String) {
         if let signatureHex = submission.signatureHex {
             let canonicalSignature = try canonicalizeHex(signatureHex, field: "signatureHex")
-            if let explicitSubmitter = submission.submitterPublicKeyHex {
-                let submitter = try canonicalizePublicKey(explicitSubmitter)
-                return (submitter, canonicalSignature)
+            if let explicitSigner = submission.signerPublicKeyHex {
+                let signer = try canonicalizePublicKey(explicitSigner)
+                return (signer, canonicalSignature)
             }
-            guard let derived = try deriveSubmitterMultihash() else {
+            guard let derived = try deriveSignerMultihash() else {
                 throw ToriiClientError.invalidPayload(
-                    "submitterPublicKeyHex or privateKey is required when signatureHex is provided"
+                    "signerPublicKeyHex or privateKey is required when signatureHex is provided"
                 )
             }
             return (derived, canonicalSignature)
         }
         guard let privateKey = try loadSigningKey() else {
-            if allowUnsigned {
-                let digest = SHA256.hash(data: signingDigest)
-                let signature = Data(digest).upperHexString()
-                let submitter = submission.submitterPublicKeyHex
-                    ?? String(repeating: "00", count: 64)
-                return (submitter, signature)
-            }
             throw ToriiClientError.invalidPayload(
                 "privateKey or privateKeyHex is required to sign the payload"
             )
         }
         let signature = try privateKey.signature(for: signingDigest)
         let signatureHex = signature.upperHexString()
-        let submitter = try submission.submitterPublicKeyHex.map { try canonicalizePublicKey($0) }
+        let signer = try submission.signerPublicKeyHex.map { try canonicalizePublicKey($0) }
             ?? encodeEd25519Multihash(privateKey.publicKey.rawRepresentation)
-        return (submitter, signatureHex)
+        return (signer, signatureHex)
     }
 
     private func loadSigningKey() throws -> Curve25519.Signing.PrivateKey? {
@@ -647,7 +695,7 @@ struct ToriiDaIngestRequestBuilder {
         return nil
     }
 
-    private func deriveSubmitterMultihash() throws -> String? {
+    private func deriveSignerMultihash() throws -> String? {
         guard let key = try loadSigningKey() else {
             return nil
         }
@@ -791,7 +839,7 @@ struct ToriiDaIngestRequestBuilder {
     private func canonicalizePublicKey(_ value: String) throws -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            throw ToriiClientError.invalidPayload("submitterPublicKeyHex must be a non-empty string")
+            throw ToriiClientError.invalidPayload("signerPublicKeyHex must be a non-empty string")
         }
         if let separator = trimmed.firstIndex(of: ":") {
             let body = String(trimmed[trimmed.index(after: separator)...])
@@ -801,19 +849,19 @@ struct ToriiDaIngestRequestBuilder {
     }
 
     private func canonicalizeMultihashHex(_ value: String) throws -> String {
-        let cleaned = try canonicalizeHex(value, field: "submitterPublicKeyHex")
+        let cleaned = try canonicalizeHex(value, field: "signerPublicKeyHex")
         guard let bytes = Data(hexString: cleaned) else {
-            throw ToriiClientError.invalidPayload("submitterPublicKeyHex must decode to bytes")
+            throw ToriiClientError.invalidPayload("signerPublicKeyHex must decode to bytes")
         }
         guard !bytes.isEmpty else {
-            throw ToriiClientError.invalidPayload("submitterPublicKeyHex must contain multihash bytes")
+            throw ToriiClientError.invalidPayload("signerPublicKeyHex must contain multihash bytes")
         }
         // Basic validation: ensure we can walk the varints.
         var index = 0
-        try skipVarint(bytes: bytes, index: &index, field: "submitterPublicKeyHex.fn")
-        try skipVarint(bytes: bytes, index: &index, field: "submitterPublicKeyHex.len")
+        try skipVarint(bytes: bytes, index: &index, field: "signerPublicKeyHex.fn")
+        try skipVarint(bytes: bytes, index: &index, field: "signerPublicKeyHex.len")
         guard index < bytes.count else {
-            throw ToriiClientError.invalidPayload("submitterPublicKeyHex missing payload bytes")
+            throw ToriiClientError.invalidPayload("signerPublicKeyHex missing payload bytes")
         }
         return cleaned
     }

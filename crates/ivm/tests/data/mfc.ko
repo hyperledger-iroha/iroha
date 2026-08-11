@@ -16,16 +16,16 @@ seiyaku MakotoFreeCash {
 
     fn loop_mfc(AccountId from_account, AccountId to_account) {
         let mfc = mfc_asset();
-        var quantity qty = 369;
+        var quantity current_quantity = 369;
         for _offset in range(64) {
             ledger::asset::transfer(
                 source: from_account,
                 destination: to_account,
                 asset_definition: mfc,
-                amount: qty,
+                amount: current_quantity,
                 dataspace: DataSpaceId::parse("0"),
             );
-            qty = qty + 1;
+            current_quantity = current_quantity + 1;
         }
     }
 

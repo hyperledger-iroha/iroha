@@ -13,7 +13,7 @@ use std::{
 };
 
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::AccountId,
     isi::{
         InstructionBox,
@@ -101,12 +101,14 @@ impl RepairTransactionForwarderPolicyV1 {
 
 /// Finalized chain context used to admit one native repair operation.
 ///
-/// Callers must obtain `finalized_cursor` from the same active chain named by
-/// `chain_id`. The chain identifier is retained in the durable checkpoint and
-/// must match every externally signed transaction exactly.
+/// Callers must obtain `finalized_cursor` from the exact network named by
+/// `network_id`. The business `chain_id` remains durable semantic context,
+/// while every externally signed transaction must bind `network_id` exactly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepairTransactionContextV1 {
-    /// Exact active chain identity.
+    /// Exact genesis-hash-derived transaction domain.
+    pub network_id: NetworkId,
+    /// Active business chain identifier retained as semantic context.
     pub chain_id: ChainId,
     /// Finalized block anchor used for semantic reconciliation.
     pub finalized_cursor: RepairFinalizedCursorV1,
@@ -200,7 +202,9 @@ impl From<RepairOperationV1> for InstructionBox {
 pub struct RepairTransactionSigningRequestV1 {
     /// Stable semantic operation identity.
     pub operation_id: [u8; 32],
-    /// Exact active chain that the signed envelope must retain.
+    /// Exact genesis-hash-derived domain that the signed envelope must retain.
+    pub network_id: NetworkId,
+    /// Active business chain identifier retained as semantic context.
     pub chain_id: ChainId,
     /// Transaction authority that the signed envelope must retain.
     pub authority: AccountId,
@@ -269,7 +273,9 @@ pub struct RepairTransactionPendingV1 {
     pub operation_id: [u8; 32],
     /// Native repair instruction kind.
     pub kind: RepairTransactionKindV1,
-    /// Exact active chain bound to this operation.
+    /// Exact genesis-hash-derived transaction domain.
+    pub network_id: NetworkId,
+    /// Active business chain identifier bound to this operation.
     pub chain_id: ChainId,
     /// Transaction authority bound by the verified signature.
     pub authority: AccountId,
@@ -360,6 +366,7 @@ struct StoredPendingRepairTransactionV1 {
     identity_scope: StoredRepairIdentityScopeV1,
     identity_digest: [u8; 32],
     semantic_digest: [u8; 32],
+    network_id: NetworkId,
     chain_id: ChainId,
     authority: AccountId,
     operation: RepairOperationV1,
@@ -376,6 +383,7 @@ impl StoredPendingRepairTransactionV1 {
             sequence: self.sequence,
             operation_id: self.operation_id,
             kind: self.operation.kind(),
+            network_id: self.network_id,
             chain_id: self.chain_id.clone(),
             authority: self.authority.clone(),
             semantic_digest: self.semantic_digest,
@@ -452,6 +460,7 @@ struct StoredDeadRepairTransactionV1 {
     identity_scope: StoredRepairIdentityScopeV1,
     identity_digest: [u8; 32],
     semantic_digest: [u8; 32],
+    network_id: NetworkId,
     chain_id: ChainId,
     authority: AccountId,
     operation: RepairOperationV1,
@@ -566,6 +575,7 @@ impl RepairTransactionForwarder {
     ) -> Result<RepairTransactionEnqueueResultV1, RepairTransactionForwarderError> {
         context.validate()?;
         let prepared = PreparedRepairOperation::new_bounded(
+            context.network_id,
             context.chain_id.clone(),
             authority,
             operation,
@@ -586,6 +596,7 @@ impl RepairTransactionForwarder {
         context.validate()?;
         let prepared = PreparedRepairOperation::decode_signed_transaction(
             signed_transaction_bytes,
+            &context.network_id,
             &context.chain_id,
             self.policy.max_transaction_bytes,
         )?;
@@ -647,6 +658,7 @@ impl RepairTransactionForwarder {
             identity_scope: prepared.identity_scope,
             identity_digest: prepared.identity_digest,
             semantic_digest: prepared.semantic_digest,
+            network_id: prepared.network_id,
             chain_id: prepared.chain_id,
             authority: prepared.authority,
             operation: prepared.operation,
@@ -721,6 +733,7 @@ impl RepairTransactionForwarder {
             .ok_or(RepairTransactionForwarderError::UnknownOperation)?;
         Ok(RepairTransactionSigningRequestV1 {
             operation_id: entry.operation_id,
+            network_id: entry.network_id,
             chain_id: entry.chain_id.clone(),
             authority: entry.authority.clone(),
             operation: entry.operation.clone(),
@@ -771,6 +784,7 @@ impl RepairTransactionForwarder {
         claim_for_signing(entry, self.policy.max_attempts)?;
         let request = RepairTransactionSigningRequestV1 {
             operation_id: entry.operation_id,
+            network_id: entry.network_id,
             chain_id: entry.chain_id.clone(),
             authority: entry.authority.clone(),
             operation: entry.operation.clone(),
@@ -790,12 +804,14 @@ impl RepairTransactionForwarder {
         let entry = find_pending_mut(&mut candidate, expected_operation_id)?;
         let prepared = PreparedRepairOperation::decode_signed_transaction(
             signed_transaction_bytes,
+            &entry.network_id,
             &entry.chain_id,
             self.policy.max_transaction_bytes,
         )?;
         if prepared.identity_scope != entry.identity_scope
             || prepared.identity_digest != entry.identity_digest
             || prepared.semantic_digest != entry.semantic_digest
+            || prepared.network_id != entry.network_id
             || prepared.chain_id != entry.chain_id
             || prepared.authority != entry.authority
             || prepared.operation != entry.operation
@@ -1045,6 +1061,7 @@ impl RepairTransactionForwarder {
             identity_scope: entry.identity_scope,
             identity_digest: entry.identity_digest,
             semantic_digest: entry.semantic_digest,
+            network_id: entry.network_id,
             chain_id: entry.chain_id,
             authority: entry.authority,
             operation: entry.operation,
@@ -1101,6 +1118,7 @@ struct PreparedRepairOperation {
     identity_scope: StoredRepairIdentityScopeV1,
     identity_digest: [u8; 32],
     semantic_digest: [u8; 32],
+    network_id: NetworkId,
     chain_id: ChainId,
     authority: AccountId,
     operation: RepairOperationV1,
@@ -1108,6 +1126,7 @@ struct PreparedRepairOperation {
 
 impl PreparedRepairOperation {
     fn new(
+        network_id: NetworkId,
         chain_id: ChainId,
         authority: AccountId,
         operation: RepairOperationV1,
@@ -1122,11 +1141,12 @@ impl PreparedRepairOperation {
         if identity_digest == [0; 32] {
             return Err(RepairTransactionForwarderError::InvalidRepairOperation);
         }
-        let semantic_digest = semantic_digest(&chain_id, &authority, &operation)?;
+        let semantic_digest = semantic_digest(&network_id, &chain_id, &authority, &operation)?;
         Ok(Self {
             identity_scope,
             identity_digest,
             semantic_digest,
+            network_id,
             chain_id,
             authority,
             operation,
@@ -1134,21 +1154,25 @@ impl PreparedRepairOperation {
     }
 
     fn new_bounded(
+        network_id: NetworkId,
         chain_id: ChainId,
         authority: AccountId,
         operation: RepairOperationV1,
         max_transaction_bytes: usize,
     ) -> Result<Self, RepairTransactionForwarderError> {
-        let prepared = Self::new(chain_id, authority, operation)?;
+        let prepared = Self::new(network_id, chain_id, authority, operation)?;
+        let network_id_bytes = norito::to_bytes(&prepared.network_id)
+            .map_err(RepairTransactionForwarderError::CanonicalEncoding)?;
         let chain_id_bytes = norito::to_bytes(&prepared.chain_id)
             .map_err(RepairTransactionForwarderError::CanonicalEncoding)?;
         let authority_bytes = norito::to_bytes(&prepared.authority)
             .map_err(RepairTransactionForwarderError::CanonicalEncoding)?;
         let operation_bytes = norito::to_bytes(&prepared.operation)
             .map_err(RepairTransactionForwarderError::CanonicalEncoding)?;
-        if chain_id_bytes
+        if network_id_bytes
             .len()
-            .checked_add(authority_bytes.len())
+            .checked_add(chain_id_bytes.len())
+            .and_then(|length| length.checked_add(authority_bytes.len()))
             .and_then(|length| length.checked_add(operation_bytes.len()))
             .is_none_or(|length| length > max_transaction_bytes)
         {
@@ -1159,6 +1183,7 @@ impl PreparedRepairOperation {
 
     fn decode_signed_transaction(
         bytes: &[u8],
+        expected_network_id: &NetworkId,
         expected_chain_id: &ChainId,
         max_transaction_bytes: usize,
     ) -> Result<Self, RepairTransactionForwarderError> {
@@ -1182,8 +1207,8 @@ impl PreparedRepairOperation {
         {
             return Err(RepairTransactionForwarderError::InvalidSignedTransaction);
         }
-        if transaction.chain() != expected_chain_id {
-            return Err(RepairTransactionForwarderError::ChainIdMismatch);
+        if transaction.network_id() != Some(expected_network_id) {
+            return Err(RepairTransactionForwarderError::NetworkIdMismatch);
         }
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return Err(RepairTransactionForwarderError::InvalidSignedTransaction);
@@ -1212,6 +1237,7 @@ impl PreparedRepairOperation {
         };
         let authority = transaction.authority().clone();
         Self::new_bounded(
+            *expected_network_id,
             expected_chain_id.clone(),
             authority,
             operation,
@@ -1357,6 +1383,7 @@ pub(crate) fn decode_slash_proposal(
 }
 
 fn semantic_digest(
+    network_id: &NetworkId,
     chain_id: &ChainId,
     authority: &AccountId,
     operation: &RepairOperationV1,
@@ -1373,6 +1400,7 @@ fn semantic_digest(
         .map_err(|_| RepairTransactionForwarderError::InvalidRepairOperation)?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(SEMANTIC_DIGEST_DOMAIN_V1);
+    hasher.update(network_id.as_bytes());
     hasher.update(&chain_id_len.to_le_bytes());
     hasher.update(chain_id.as_bytes());
     hasher.update(&authority_len.to_le_bytes());
@@ -1522,12 +1550,14 @@ fn validate_checkpoint(
     for entry in &checkpoint.pending {
         let prepare = if entry.signed_transaction_bytes.is_some() {
             PreparedRepairOperation::new(
+                entry.network_id,
                 entry.chain_id.clone(),
                 entry.authority.clone(),
                 entry.operation.clone(),
             )
         } else {
             PreparedRepairOperation::new_bounded(
+                entry.network_id,
                 entry.chain_id.clone(),
                 entry.authority.clone(),
                 entry.operation.clone(),
@@ -1544,6 +1574,7 @@ fn validate_checkpoint(
             || prepared.identity_scope != entry.identity_scope
             || prepared.identity_digest != entry.identity_digest
             || prepared.semantic_digest != entry.semantic_digest
+            || prepared.network_id != entry.network_id
             || prepared.chain_id != entry.chain_id
             || operation_id(&prepared) != entry.operation_id
             || !validate_repair_delivery(entry, policy.max_attempts)
@@ -1555,6 +1586,7 @@ fn validate_checkpoint(
         if let Some(bytes) = entry.signed_transaction_bytes.as_deref() {
             let prepared = PreparedRepairOperation::decode_signed_transaction(
                 bytes,
+                &entry.network_id,
                 &entry.chain_id,
                 policy.max_transaction_bytes,
             )
@@ -1562,6 +1594,7 @@ fn validate_checkpoint(
             if prepared.identity_scope != entry.identity_scope
                 || prepared.identity_digest != entry.identity_digest
                 || prepared.semantic_digest != entry.semantic_digest
+                || prepared.network_id != entry.network_id
                 || prepared.chain_id != entry.chain_id
                 || prepared.authority != entry.authority
                 || prepared.operation != entry.operation
@@ -1591,12 +1624,14 @@ fn validate_checkpoint(
     for entry in &checkpoint.dead_letters {
         let prepare = if entry.signed_transaction_bytes.is_some() {
             PreparedRepairOperation::new(
+                entry.network_id,
                 entry.chain_id.clone(),
                 entry.authority.clone(),
                 entry.operation.clone(),
             )
         } else {
             PreparedRepairOperation::new_bounded(
+                entry.network_id,
                 entry.chain_id.clone(),
                 entry.authority.clone(),
                 entry.operation.clone(),
@@ -1612,6 +1647,7 @@ fn validate_checkpoint(
             || prepared.identity_scope != entry.identity_scope
             || prepared.identity_digest != entry.identity_digest
             || prepared.semantic_digest != entry.semantic_digest
+            || prepared.network_id != entry.network_id
             || prepared.chain_id != entry.chain_id
             || operation_id(&prepared) != entry.operation_id
             || !identities.insert((entry.identity_scope, entry.identity_digest))
@@ -1622,6 +1658,7 @@ fn validate_checkpoint(
         if let Some(bytes) = entry.signed_transaction_bytes.as_deref() {
             let prepared = PreparedRepairOperation::decode_signed_transaction(
                 bytes,
+                &entry.network_id,
                 &entry.chain_id,
                 policy.max_transaction_bytes,
             )
@@ -1629,6 +1666,7 @@ fn validate_checkpoint(
             if prepared.identity_scope != entry.identity_scope
                 || prepared.identity_digest != entry.identity_digest
                 || prepared.semantic_digest != entry.semantic_digest
+                || prepared.network_id != entry.network_id
                 || prepared.chain_id != entry.chain_id
                 || prepared.authority != entry.authority
                 || prepared.operation != entry.operation
@@ -1752,9 +1790,9 @@ pub enum RepairTransactionForwarderError {
     /// Signed bytes are malformed, noncanonical, unsigned, or contain the wrong executable.
     #[error("signed repair transaction is invalid")]
     InvalidSignedTransaction,
-    /// Signed transaction belongs to a different chain.
-    #[error("signed repair transaction chain id does not match the active chain")]
-    ChainIdMismatch,
+    /// Signed transaction belongs to a different exact network.
+    #[error("signed repair transaction network id does not match the active network")]
+    NetworkIdMismatch,
     /// The native repair instruction or an embedded canonical payload is invalid.
     #[error("native repair operation is invalid")]
     InvalidRepairOperation,
@@ -1859,10 +1897,11 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt as _;
 
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
-        ChainId, Level,
+        ChainId, Level, NetworkId,
         account::AccountId,
+        block::BlockHeader,
         isi::{
             InstructionBox, Log,
             sorafs::{SorafsRepairClaimV1, SorafsRepairCompleteV1},
@@ -1907,8 +1946,19 @@ mod tests {
         }
     }
 
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; 32]),
+        ))
+    }
+
+    fn test_network_id() -> NetworkId {
+        network_id(0xA1)
+    }
+
     fn context(height: u64, hash_byte: u8) -> RepairTransactionContextV1 {
         RepairTransactionContextV1 {
+            network_id: test_network_id(),
             chain_id: ChainId::from("repair-transaction-forwarder-test"),
             finalized_cursor: cursor(height, hash_byte),
         }
@@ -2016,7 +2066,7 @@ mod tests {
         creation_time_ms: u64,
     ) -> Vec<u8> {
         let mut builder = TransactionBuilder::new(
-            ChainId::from("repair-transaction-forwarder-test"),
+            test_network_id(),
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2099,11 +2149,11 @@ mod tests {
     }
 
     #[test]
-    fn signed_ingress_rejects_a_foreign_chain_before_persistence() {
+    fn signed_ingress_rejects_a_foreign_network_before_persistence() {
         let signer = key(22);
         let authority = AccountId::new(signer.public_key().clone());
         let mut builder = TransactionBuilder::new(
-            ChainId::from("foreign-repair-chain"),
+            network_id(0xF1),
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2118,7 +2168,7 @@ mod tests {
         let forwarder = RepairTransactionForwarder::in_memory(policy()).unwrap();
         assert!(matches!(
             forwarder.enqueue_signed_transaction(&bytes, &context(1, 1)),
-            Err(RepairTransactionForwarderError::ChainIdMismatch)
+            Err(RepairTransactionForwarderError::NetworkIdMismatch)
         ));
         assert!(forwarder.pending(8).unwrap().is_empty());
     }
@@ -2157,6 +2207,7 @@ mod tests {
                     authority.clone(),
                     operation.clone(),
                     &RepairTransactionContextV1 {
+                        network_id: test_network_id(),
                         chain_id: ChainId::from("repair-transaction-forwarder-test"),
                         finalized_cursor: baseline,
                     },
@@ -2673,7 +2724,7 @@ mod tests {
 
         let wrong_signer = key(3);
         let mut invalid_builder = TransactionBuilder::new(
-            ChainId::from("repair-transaction-forwarder-test"),
+            test_network_id(),
             authority,
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3001,7 +3052,7 @@ mod tests {
             let instruction = submit_instruction(&signer, [0x71; 32], "REP-COMPRESSED-TX");
             let authority = AccountId::new(signer.public_key().clone());
             let mut builder = TransactionBuilder::new(
-                ChainId::from("repair-transaction-forwarder-test"),
+                test_network_id(),
                 authority,
                 FeePaymentIntent::authority(Vec::new(), None),
             )

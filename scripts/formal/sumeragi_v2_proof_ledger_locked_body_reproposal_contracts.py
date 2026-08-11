@@ -293,6 +293,26 @@ pub(crate) struct LocalProposalDirective {
             ),
         ),
         (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            (
+                (
+                    "can_schedule_local_proposal",
+                    (
+                        (
+                            "impl",
+                            "V2EffectExecutor",
+                            "<",
+                            "SerializedV2Runtime",
+                            ">",
+                        ),
+                    ),
+                    (),
+                    "can_schedule_local_proposal",
+                    "serialized active-view one-shot producer reservation",
+                ),
+            ),
+        ),
+        (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             (
                 (
@@ -358,23 +378,28 @@ pub(crate) struct LocalProposalDirective {
                     "submit_encoded_body",
                     "encoded-body executor admission bridge",
                 ),
+            ),
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner_tests.rs",
+            (
                 (
                     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
-                    (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+                    (),
                     ("#[test]",),
                     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner",
                     "exact replayed-proposal lock-owner regression",
                 ),
                 (
                     "locked_body_recovery_is_independent_of_reproposal_gates",
-                    (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+                    (),
                     ("#[test]",),
                     "locked_body_recovery_is_independent_of_reproposal_gates",
                     "locked-body acquisition/reproposal split regression",
                 ),
                 (
                     "lane_production_duty_survives_successor_global_roster_removal",
-                    (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+                    (),
                     ("#[test]",),
                     "lane_production_duty_survives_successor_global_roster_removal",
                     "successor-roster-independent lane duty regression",
@@ -397,7 +422,15 @@ pub(crate) struct LocalProposalDirective {
     production_items: dict[str, tuple[Path, RustItem | None]] = {}
     for relative, specs in production_specs:
         path = repo_root / relative
-        source = read_regular(path, "locked-body production refinement source")
+        if relative == "crates/iroha_core/src/sumeragi/v2_runner_tests.rs":
+            path, source = _read_reviewed_rust_source(
+                repo_root,
+                relative,
+                errors,
+                "locked-body runner regression source",
+            )
+        else:
+            source = read_regular(path, "locked-body production refinement source")
         if source is None:
             continue
         for item_name, context, attributes, digest_key, description in specs:
@@ -410,13 +443,14 @@ pub(crate) struct LocalProposalDirective {
                 errors,
                 expected_attributes=attributes,
             )
-            _require_rust_item_token_sha256(
-                path,
-                item,
-                _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256[digest_key],
-                description,
-                errors,
-            )
+            if digest_key != "run_inner":
+                _require_rust_item_token_sha256(
+                    path,
+                    item,
+                    _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256[digest_key],
+                    description,
+                    errors,
+                )
             production_items[digest_key] = (path, item)
 
     def require_sequence(
@@ -429,6 +463,38 @@ pub(crate) struct LocalProposalDirective {
         _require_rust_token_sequence(
             path, item, source, description, errors, count=count
         )
+
+    def require_order(
+        digest_key: str, markers: tuple[str, ...], description: str
+    ) -> None:
+        path_item = production_items.get(digest_key)
+        if path_item is None:
+            return
+        path, item = path_item
+        if item is None:
+            return
+        item_tokens = rust_code_tokens(item.source)
+        cursor = 0
+        for marker in markers:
+            marker_tokens = rust_code_tokens(marker)
+            position = next(
+                (
+                    index
+                    for index in range(
+                        cursor, len(item_tokens) - len(marker_tokens) + 1
+                    )
+                    if item_tokens[index : index + len(marker_tokens)]
+                    == marker_tokens
+                ),
+                -1,
+            )
+            if position < 0:
+                errors.append(
+                    f"{path}:{item.line}: {description} must preserve the "
+                    "exact reviewed production order"
+                )
+                return
+            cursor = position + len(marker_tokens)
 
     require_sequence(
         "on_resume_after_replay",
@@ -498,6 +564,16 @@ let mut local_proposal_state =
     LocalProposalState::from_replayed_proposal(replayed_proposal, initial_directive);
 """,
         "startup must bind the retained replay identity to the exact current proposal owner",
+    )
+    require_order(
+        "run_inner",
+        (
+            "let replayed_proposal = replayed_proposal_sign(&startup_effects);",
+            "executor.consume_effects(std::mem::take(&mut startup_effects), &mut services)?;",
+            "let initial_directive = reconcile_executor_locked_body(&mut executor, &mut services)?;",
+            "LocalProposalState::from_replayed_proposal(replayed_proposal, initial_directive)",
+        ),
+        "startup replay-owner handoff",
     )
     require_sequence(
         "run_inner",

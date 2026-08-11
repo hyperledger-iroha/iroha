@@ -20,7 +20,7 @@ fn delayed_block_sync_reply_route_is_superseded_without_poisoning_output() {
     let request = BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::CommitCertificateRequest(wire::CommitCertificateRequest {
             protocol_version: wire::PROTOCOL_VERSION,
-            chain_id: history.artifact.height_context.chain_id.clone(),
+            network_id: history.artifact.height_context.network_id,
             context_id: history.artifact.context_id(),
             height: history.artifact.height,
             requester: history.requester.clone(),

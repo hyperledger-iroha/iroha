@@ -2562,7 +2562,7 @@
 
     #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
     #[tokio::test]
-    async fn incoming_proxy_reads_execute_locally_even_when_local_authority_is_stale() {
+    async fn incoming_proxy_reads_and_fanout_are_terminal_when_route_ownership_is_stale() {
         let local_validator_keypair = checked_torii_test_ed25519_keypair(
             0x5a,
             "derive authoritative-lane local validator fixture key",
@@ -2688,6 +2688,17 @@
             None,
             Vec::new(),
         ));
+        let read_fanout = ToriiProxyRequestKindV4::ReadFanout(
+            super::torii_read_fanout_request(
+                ToriiReadEndpointV1::AccountGet,
+                ToriiFanoutRouteScopeV1::AllDataspaces,
+                ToriiReadFanoutMergeV1::Account,
+                vec![ALICE_ID.to_string()],
+                None,
+                Vec::new(),
+                ToriiProxyResponseFormatV1::Json,
+            ),
+        );
         let signed_query = ToriiProxyRequestKindV4::SignedQuery {
             query_bytes: Vec::new(),
             expected_route: ToriiRouteHintV1::from(route),
@@ -2709,6 +2720,14 @@
                 route,
             ),
             "proxied app-api reads should execute on the ingress-selected receiver"
+        );
+        assert!(
+            super::should_execute_incoming_torii_proxy_request_locally(
+                app.as_ref(),
+                &read_fanout,
+                route,
+            ),
+            "a stale/cyclic ownership view cannot re-forward an ingress-selected read fanout back to its sender"
         );
         assert!(
             !super::should_execute_incoming_torii_proxy_request_locally(
@@ -2766,10 +2785,11 @@
             checked_torii_test_ed25519_keypair(0x69, "derive stale-route verified query key");
         let ingress_peer_id = PeerId::from(key_pair.public_key().clone());
         let authority = AccountId::new(key_pair.public_key().clone());
-        let signed_query =
-            iroha_data_model::query::QueryRequest::Start(build_find_triggers_query_for_test())
-                .with_authority(authority)
-                .sign(&key_pair);
+        let signed_query = authorize_query_for_test(
+            iroha_data_model::query::QueryRequest::Start(build_find_triggers_query_for_test()),
+            authority,
+        )
+        .sign(&key_pair);
         let request = ToriiProxyRequestV5 {
             schema_version: TORII_PROXY_REQUEST_VERSION_V5,
             request_id: Hash::new(b"incoming-verified-query-proxy-stale-route"),

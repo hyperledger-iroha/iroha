@@ -176,6 +176,7 @@ public final class SorafsReputationClient: @unchecked Sendable {
 
     private let baseURL: URL
     private let session: URLSession
+    private let networkId: NetworkId
     private let accountId: String
     private let privateKey: Data
     private let maximumResponseBytes: Int
@@ -187,6 +188,7 @@ public final class SorafsReputationClient: @unchecked Sendable {
     public init(
         baseURL: URL,
         session: URLSession = .shared,
+        networkId: NetworkId,
         accountId: String,
         privateKey: Data,
         maximumResponseBytes: Int = SorafsReputationClient.defaultMaximumResponseBytes,
@@ -277,6 +279,7 @@ public final class SorafsReputationClient: @unchecked Sendable {
 
         self.baseURL = normalizedBaseURL
         self.session = session
+        self.networkId = networkId
         self.accountId = accountId
         self.privateKey = privateKey
         self.maximumResponseBytes = maximumResponseBytes
@@ -560,6 +563,7 @@ public final class SorafsReputationClient: @unchecked Sendable {
         let headers: [String: String]
         do {
             headers = try ToriiCanonicalRequest.buildHeaders(
+                networkId: networkId,
                 method: "GET",
                 url: url,
                 body: Data(),

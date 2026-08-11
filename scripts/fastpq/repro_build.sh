@@ -18,7 +18,7 @@ Options:
   --mode <cpu|gpu>        Select the build container (default: cpu).
   --profile <name>        Cargo profile to build (default: release).
   --bins <list>           Comma-separated binary list to build
-                          (default: irohad,iroha_cli).
+                          (default: iroha3d,iroha).
   --features <list>       Additional cargo features (comma-separated) to append.
   --output <dir>          Output directory for artefacts & manifest
                           (default: artifacts/fastpq-repro).
@@ -44,7 +44,7 @@ EOF
 
 mode="cpu"
 profile="release"
-bins_csv="irohad,iroha_cli"
+bins_csv="iroha3d,iroha"
 extra_features=""
 output_dir="artifacts/fastpq-repro"
 image_tag=""

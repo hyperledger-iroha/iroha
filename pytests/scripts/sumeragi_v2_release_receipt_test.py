@@ -137,7 +137,9 @@ if "--release" in args:
         if json.loads(trace_path.read_text(encoding="utf-8")) != {
             "backend_verification": True,
             "canonical": True,
+            "multilane_source_manifest_sha256": "c" * 64,
             "theorem": "sumeragi-v2-production-trace-extraction",
+            "workspace_source_manifest_sha256": "b" * 64,
         }:
             raise SystemExit(85)
 raise SystemExit(0)
@@ -194,7 +196,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "c9c49999950dfd6e7c74869bec49f42222fee2a9d3ad4f24d913cedc5012fa9d"
+        "1ea8ffd9e9659c7ba1dc09349e269db9a13dc14af9b8d6a0802e754e7b542de1"
     )
     synthetic_sources: dict[str, Path] = {}
     for label, data, mode in (
@@ -977,8 +979,8 @@ def make_prebuilt_binary_bundle(
     release.mkdir(parents=True)
     message_control_release.mkdir(parents=True)
     binary_specs = (
-        ("irohad", "release/irohad"),
-        ("irohad_message_control", "message-control/release/irohad"),
+        ("irohad", "release/iroha3d"),
+        ("irohad_message_control", "message-control/release/iroha3d"),
         ("iroha", "release/iroha"),
         ("kagami", "release/kagami"),
     )
@@ -1224,6 +1226,7 @@ def make_g12_evidence(
 def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     candidate_manifest = "a" * 64
     sealed_manifest = "b" * 64
+    multilane_manifest = "c" * 64
     tree = "2" * 40
     lock_bytes = b"fixture Cargo.lock\n"
     lock = hashlib.sha256(lock_bytes).hexdigest()
@@ -1896,14 +1899,15 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     formal_multilane_apalache_evidence.write_text(
         "\n".join(
             (
-                "schema_version\t1",
+                "schema_version\t2",
                 "backend\tapalache",
                 "version\t0.52.2",
                 "launcher_sha256\t"
                 "bda52d2dbdbc7f6e95289a69dfe7ddeb162493ddd3501898d33ea7d1da3a8cd7",
                 "jar_sha256\t"
                 "1ac65e9c16595c19241519b209c8055d1aa79bf718f23df7cde5cf9b3dd88f2a",
-                f"source_manifest_sha256\t{sealed_manifest}",
+                f"workspace_source_manifest_sha256\t{sealed_manifest}",
+                f"multilane_source_manifest_sha256\t{multilane_manifest}",
                 "result_count\t6",
                 "result\tautoscale-lifecycle\tSumeragiV2AutoscaleLifecycle\t"
                 "multilane_autoscale_lifecycle_fixed.cfg\t8\tNoError\t"
@@ -1942,10 +1946,16 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     formal_production_trace_extraction_evidence = (
         formal_dir / "production_trace_extraction_evidence.json"
     )
-    formal_production_trace_extraction_evidence.write_text(
-        '{"backend_verification":true,"canonical":true,'
-        '"theorem":"sumeragi-v2-production-trace-extraction"}\n',
-        encoding="utf-8",
+    formal_production_trace_extraction_evidence.write_bytes(
+        canonical_json(
+            {
+                "backend_verification": True,
+                "canonical": True,
+                "multilane_source_manifest_sha256": multilane_manifest,
+                "theorem": "sumeragi-v2-production-trace-extraction",
+                "workspace_source_manifest_sha256": sealed_manifest,
+            }
+        )
     )
     formal_harness_lock = formal_dir / "harness-Cargo.lock"
     shutil.copy2(
@@ -2141,9 +2151,9 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                     "IROHA_RELEASE_PREBUILT_MANIFEST_SHA256="
                     f"{prebuilt_manifest_sha256} "
                     "TEST_NETWORK_BIN_IROHAD="
-                    f"{seed_program_target / 'release' / 'irohad'} "
+                    f"{seed_program_target / 'release' / 'iroha3d'} "
                     "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="
-                    f"{seed_program_target / 'message-control' / 'release' / 'irohad'} "
+                    f"{seed_program_target / 'message-control' / 'release' / 'iroha3d'} "
                     f"TEST_NETWORK_BIN_IROHA={seed_program_target / 'release' / 'iroha'} "
                     f"KAGAMI_BIN={seed_program_target / 'release' / 'kagami'} "
                     "CARGO_NET_OFFLINE=true "
@@ -2354,6 +2364,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "taira_log": taira_log,
         "candidate_manifest": candidate_manifest,
         "sealed_manifest": sealed_manifest,
+        "multilane_manifest": multilane_manifest,
         "head": head,
         "tree": tree,
         "lock": lock,
@@ -2789,7 +2800,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "c9c49999950dfd6e7c74869bec49f42222fee2a9d3ad4f24d913cedc5012fa9d"
+        "1ea8ffd9e9659c7ba1dc09349e269db9a13dc14af9b8d6a0802e754e7b542de1"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
     assert receipt["evidence"]["bootstrap"]["completion"]["path"] == str(
@@ -2948,10 +2959,10 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         }
         for (role, relative), path in zip(
             (
-                ("irohad", "release/irohad"),
+                ("irohad", "release/iroha3d"),
                 (
                     "irohad_message_control",
-                    "message-control/release/irohad",
+                    "message-control/release/iroha3d",
                 ),
                 ("iroha", "release/iroha"),
                 ("kagami", "release/kagami"),
@@ -3999,41 +4010,29 @@ def test_receipt_rejects_rehashed_noncanonical_apalache_evidence(
 ) -> None:
     evidence = make_evidence(tmp_path)
     apalache = evidence["formal_multilane_apalache_evidence"]
-    completion = evidence["formal_completion"]
+    workspace_manifest = evidence["sealed_manifest"]
+    multilane_manifest = evidence["multilane_manifest"]
     assert isinstance(apalache, Path)
-    assert isinstance(completion, Path)
+    assert isinstance(workspace_manifest, str) and isinstance(multilane_manifest, str)
     canonical = apalache.read_text(encoding="utf-8")
-    apalache.write_text(
-        canonical.replace("result_count\t6", "result_count\t5", 1),
-        encoding="utf-8",
+    mutations = (
+        (f"workspace_source_manifest_sha256\t{workspace_manifest}\n", "", "wrong result inventory"),
+        (f"multilane_source_manifest_sha256\t{multilane_manifest}\n", "", "wrong result inventory"),
+        (workspace_manifest, multilane_manifest, "header is not the exact pinned profile"),
+        (multilane_manifest, workspace_manifest, "header is not the exact pinned profile"),
+        ("result_count\t6", "result_count\t5", "header is not the exact pinned profile"),
+        ("result\tinflight-first-release-layout\t", "result\tinflight-first-release-refinement\t", "is not exact source-bound NoError evidence"),
     )
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields["multilane_apalache_evidence_sha256"] = sha256(apalache)
-    write_tsv(completion, fields)
-    writer = fixture_writer(tmp_path)
-
-    result = run_writer(evidence, terminal_output_path(evidence), writer)
-
-    assert result.returncode == 1
-    assert "Apalache evidence header is not the exact pinned profile" in result.stderr
-
-    apalache.write_text(
-        canonical.replace(
-            "result\tinflight-first-release-layout\t",
-            "result\tinflight-first-release-refinement\t",
-            1,
-        ),
-        encoding="utf-8",
-    )
-    fields["multilane_apalache_evidence_sha256"] = sha256(apalache)
-    write_tsv(completion, fields)
-    result = run_writer(evidence, terminal_output_path(evidence), writer)
-
-    assert result.returncode == 1
-    assert "is not exact source-bound NoError evidence" in result.stderr
+    module = load_writer_module()
+    for old, new, expected in mutations:
+        apalache.write_text(canonical.replace(old, new, 1), encoding="utf-8")
+        snapshot = module._bounded_evidence_snapshot(
+            apalache, "formal multilane Apalache evidence", maximum_bytes=module._MAX_SCALING_JSON_BYTES
+        )
+        with pytest.raises(module.ReceiptError, match=expected):
+            module._validate_multilane_apalache_evidence(
+                snapshot, workspace_manifest, multilane_manifest
+            )
 
 
 def test_receipt_rejects_legacy_formal_completion_without_trace_extraction(
@@ -4065,31 +4064,31 @@ def test_receipt_rejects_trace_extraction_not_authenticated_by_checker(
 ) -> None:
     evidence = make_evidence(tmp_path)
     trace_evidence = evidence["formal_production_trace_extraction_evidence"]
+    apalache = evidence["formal_multilane_apalache_evidence"]
     completion = evidence["formal_completion"]
-    assert isinstance(trace_evidence, Path)
-    assert isinstance(completion, Path)
-    trace_evidence.write_text(
-        '{"backend_verification":false,"canonical":true,'
-        '"theorem":"sumeragi-v2-production-trace-extraction"}\n',
+    sealed_manifest = evidence["sealed_manifest"]
+    multilane_manifest = evidence["multilane_manifest"]
+    assert isinstance(trace_evidence, Path) and isinstance(apalache, Path)
+    assert isinstance(completion, Path) and isinstance(sealed_manifest, str)
+    assert isinstance(multilane_manifest, str)
+    substituted_manifest = "d" * 64
+    trace_evidence.write_bytes(canonical_json({
+        "backend_verification": True, "canonical": True,
+        "multilane_source_manifest_sha256": substituted_manifest,
+        "theorem": "sumeragi-v2-production-trace-extraction",
+        "workspace_source_manifest_sha256": sealed_manifest,
+    }))
+    apalache.write_text(
+        apalache.read_text(encoding="utf-8").replace(multilane_manifest, substituted_manifest, 1),
         encoding="utf-8",
     )
-    fields = dict(
-        line.split("\t", 1)
-        for line in completion.read_text(encoding="utf-8").splitlines()
-    )
-    fields["production_trace_extraction_evidence_sha256"] = sha256(
-        trace_evidence
-    )
+    fields = dict(line.split("\t", 1) for line in completion.read_text(encoding="utf-8").splitlines())
+    fields["production_trace_extraction_evidence_sha256"] = sha256(trace_evidence)
+    fields["multilane_apalache_evidence_sha256"] = sha256(apalache)
     write_tsv(completion, fields)
-    writer = fixture_writer(tmp_path)
-
-    result = run_writer(evidence, terminal_output_path(evidence), writer)
-
+    result = run_writer(evidence, terminal_output_path(evidence), fixture_writer(tmp_path))
     assert result.returncode == 1
-    assert (
-        "archived formal evidence does not authenticate production "
-        "trace extraction"
-    ) in result.stderr
+    assert "archived formal evidence does not authenticate production trace extraction" in result.stderr
 
 
 def test_receipt_links_required_cross_tool_evidence(tmp_path: Path) -> None:
@@ -5588,10 +5587,7 @@ def test_receipt_rejects_sumeragi_diagnostics_suite_source_drift(
     writer = fixture_writer(tmp_path)
     release_root = evidence["release_root"]
     assert isinstance(release_root, Path)
-    source = (
-        release_root
-        / "python/iroha_python/tests/client_sumeragi_v2_status_test.py"
-    )
+    source = release_root / "ci/run_sumeragi_v2_sdk_diagnostics.sh"
     source.write_bytes(source.read_bytes() + b"\n# forged post-harness source drift\n")
 
     result = run_writer(evidence, tmp_path / "receipt.json", writer)
@@ -5735,7 +5731,7 @@ def test_receipt_requires_exact_nocapture_seed_diagnostic(tmp_path: Path) -> Non
         ),
         (
             r"TEST_NETWORK_BIN_IROHAD=[^ ]+",
-            "TEST_NETWORK_BIN_IROHAD=/tmp/escaped-irohad",
+            "TEST_NETWORK_BIN_IROHAD=/tmp/escaped-iroha3d",
         ),
     ),
 )

@@ -495,7 +495,7 @@ mod tests {
 
     use super::*;
 
-    const TEST_PROVIDER_HANDLE: &str = "kms://gateway/acme/primary";
+    const TEST_PROVIDER_HANDLE: &str = "runtime://sorafs/gateway-acme/primary";
     const TEST_PROVIDER_REVISION: u64 = 7;
     const TEST_PROVIDER_POLICY_DIGEST: [u8; 32] = [0xA7; 32];
 
@@ -654,7 +654,7 @@ mod tests {
         let cases = [
             (
                 AcmeClientIdentityV1 {
-                    provider_handle: "kms://gateway/acme/secondary".to_owned(),
+                    provider_handle: "runtime://sorafs/gateway-acme/secondary".to_owned(),
                     ..expected_identity()
                 },
                 AcmeAutomationError::ClientSubstituted,
@@ -682,7 +682,7 @@ mod tests {
             ),
             (
                 AcmeClientIdentityV1 {
-                    provider_handle: "kms://gateway/acme/dummy".to_owned(),
+                    provider_handle: "runtime://sorafs/gateway-acme/dummy".to_owned(),
                     ..expected_identity()
                 },
                 AcmeAutomationError::ClientTestMarked,

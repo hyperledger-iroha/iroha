@@ -16,9 +16,10 @@ local testing and CI.
   bytecode artefacts.
 - `car pack` — produce a CAR archive, chunk-fetch plan, and JSON summary for CI.
 - `manifest build` — translate the CAR summary into a Norito manifest.
-- `manifest submit` — POST the canonical `ManifestV1` payload (and an optional
-  alias proof) to Torii's dedicated `/v1/sorafs/pin/register` route and wait for
-  the registration response.
+- `manifest submit` — build and locally sign one exact-network transaction whose
+  sole `RegisterPinManifest` carries the canonical `ManifestV1` (and optional
+  alias proof), POST it to Torii's dedicated `/v1/sorafs/pin/register` route,
+  and wait for the registration response.
 - `proof verify` — validate CAR responses against a manifest and emit the
   PoR-ready digests required for registry admission.
 
@@ -143,31 +144,39 @@ digest so downstream tooling can pin compiler outputs in CI.
 ```bash
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest submit \
-  --manifest artifacts/manifest.to \
-  --chunk-plan artifacts/chunk_plan.json \
-  --torii-url https://localhost:8080 \
-  --resolve-submitted-epoch=true \
+  --manifest=artifacts/manifest.to \
+  --chunk-plan=artifacts/chunk_plan.json \
+  --torii-url=https://localhost:8080 \
+  --network-id=<genesis-header-hash> \
   --authority=<i105-account-id> \
   --private-key=ed25519:0123...cafe \
-  --summary-out artifacts/manifest.submit.json \
-  --response-out artifacts/manifest.submit.body
+  --summary-out=artifacts/manifest.submit.json \
+  --response-out=artifacts/manifest.submit.body
 ```
 
 - The manifest carries its canonical chunk-plan SHA3-256 commitment. Supplying
   `--chunk-plan` or `--chunk-digest-sha3` is optional verification evidence; if
   present, it must match the embedded commitment exactly.
-- Use `--submitted-epoch=<N>` to pin an explicit epoch, or
-  `--resolve-submitted-epoch=true` to query `<torii-url>/status` and resolve it
-  automatically.
+- `--network-id` is the exact runtime identity derived from the expected
+  genesis-header hash. The CLI signs one transaction for that identity. The
+  retired `--submitted-epoch` and `--resolve-submitted-epoch` flags are rejected:
+  Core records submission, approval, and retirement epochs from block consensus
+  time, while the manifest's retention epoch remains its prepaid deadline.
 - Use `--private-key-file` when the credential is stored on disk. The CLI trims
   whitespace automatically.
 - Alias bindings require `--alias-namespace`, `--alias-name`, and
   `--alias-proof` together. The command fails fast if any component is missing.
-- The pin-registration request includes the required `manifest_payload`, a
-  canonical base64 copy of the exact Norito `ManifestV1`. Torii derives the
-  digest, chunk-plan commitment, chunker, content length, and pin policy only
-  from those bytes before queueing the transaction; retired parallel summary
-  fields are rejected.
+- The CLI puts the exact canonical Norito `ManifestV1` bytes in
+  `RegisterPinManifest.manifest_payload`, builds and signs a transaction
+  containing exactly that one instruction, and POSTs the versioned transaction
+  as `application/x-norito`. Torii verifies the exact network and authority
+  signature and derives the digest, chunk-plan commitment, chunker, content
+  length, and pin policy only from the manifest bytes; retired JSON DTO fields
+  and lifecycle epochs are not accepted.
+- Pinning is a paid public operation for an authenticated account. Core collects
+  the configured pin fee and enforces deterministic global/per-account count
+  and byte quotas plus lineage ceilings; an alias still requires its dedicated
+  permission and proof.
 - Non-success HTTP responses bubble up as errors with the original body so CI
   can halt on policy violations.
 

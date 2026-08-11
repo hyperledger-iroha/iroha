@@ -421,7 +421,7 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     ): (
         "IndexedNewGstRequiresResponsiveActiveRoster",
         "IndexedPostGstResponsiveActiveRosterSurvivesAction",
-        "IndexedAsync!GstAsyncStepIsMonotone",
+        "IndexedGstAsyncStepIsMonotone",
         "IndexedPostGstResponsiveActiveRosterCoherence",
     ),
     (
@@ -3308,9 +3308,48 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "IndexedHistoricalFixedClockPrerequisiteSurface",
     ),
     (
+        "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs",
+        "HistoricalDiscoveryPacketCorridorResidualClosesPacketLeaves",
+    ): (
+        "HistoricalDiscoveryPhysicalKernelsDischargeLifecycleService",
+        "HistoricalDiscoveryLifecycleServiceDischargesPacketService",
+        "HistoricalDiscoveryCandidateServeOwnerServiceClosesIdentityBudget",
+        "HistoricalDiscoveryFixedClockPacketCorridorTemporalResidual",
+    ),
+    (
+        "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+        "IndexedChainSpecProvidesHistoricalPacketConcreteActionSelection",
+    ): (
+        "IndexedChainSpecAlwaysHistoricalTemporalSupport",
+        "HistoricalDiscoveryPacketTailHasFrozenConcreteAction",
+        "IndexedHistoricalTemporalSupportAt",
+        "HistoricalDiscoveryPacketConcreteActionSelectionProperty",
+        "IndexedHistoricalFixedClockPacketActionSelectionProperties",
+    ),
+    (
+        "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+        "IndexedPacketServiceResidualProvidesPhysicalKernels",
+    ): (
+        "IndexedChainSpecProvidesHistoricalPacketConcreteActionSelection",
+        "IndexedHistoricalFixedClockPacketActionSelectionProperties",
+        "IndexedHistoricalFixedClockPacketCorridorTemporalResidual",
+        "IndexedHistoricalCandidateCausalDagTemporalResidual",
+        "IndexedHistoricalTransport!"
+        "HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties",
+        "IndexedHistoricalTransport!"
+        "HistoricalDiscoveryCandidateExactRunnerServiceProperty",
+        "IndexedHistoricalTransport!"
+        "HistoricalDiscoveryServeExactWorkerServiceProperty",
+    ),
+    (
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedHistoricalFixedClockPacketResidualClosesPacketLeaves",
     ): (
+        "IndexedPacketServiceResidualProvidesPhysicalKernels",
+        "IndexedChainSpecAlwaysHistoricalTemporalSupport",
+        "IndexedHistoricalTemporalSupportAt",
+        "AsyncCandidateProducerContinuationExternalCoverageInvariant",
+        "AsyncCandidateProducerContinuationLocalReplayCapacityInvariant",
         "IndexedHistoricalFixedClockPacketCorridorTemporalResidual",
         "HistoricalDiscoveryPacketCorridorResidualClosesPacketLeaves",
         "IndexedHistoricalFixedClockPacketLeafProperties",
@@ -3996,6 +4035,10 @@ PROOF_STATUS_DEPENDENCIES = {
         "async-fair-action-refinement",
         "progress-witness-preservation",
         "post-gst-starvation-freedom",
+    ),
+    "successor-activation-starvation-freedom": (
+        "epoch-boundary",
+        "async-type-invariant",
     ),
     "successor-activation-exact-recovery-production-refinement": (
         "epoch-boundary",

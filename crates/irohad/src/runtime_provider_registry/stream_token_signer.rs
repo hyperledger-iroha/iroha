@@ -93,7 +93,7 @@ mod tests {
 
     use super::*;
 
-    const HANDLE: &str = "pkcs11:prod/sorafs/stream-token/eu-1";
+    const HANDLE: &str = "software://sorafs/stream-token/eu-1";
     const REVISION: u64 = 7;
     const POLICY_DIGEST: [u8; 32] = [0x42; 32];
 
@@ -116,6 +116,7 @@ mod tests {
     fn bindings() -> IrohaRuntimeProviderBindingsV1 {
         IrohaRuntimeProviderBindingsV1 {
             chain_id: "iroha3-taira".to_owned(),
+            network_id: crate::runtime_provider_registry::runtime_provider_test_network_id(),
             bindings: vec![
                 IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(
                     HANDLE,
@@ -235,7 +236,7 @@ mod tests {
         assert_eq!(
             qualify_dependency(
                 &bindings(),
-                &dependencies("pkcs11:test/stream-token", public_key(), vec![]),
+                &dependencies("software://sorafs/stream-token/test", public_key(), vec![]),
             ),
             Err(IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected)
         );

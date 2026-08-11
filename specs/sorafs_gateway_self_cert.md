@@ -30,7 +30,7 @@ flag or through a runtime `key=value` config:
 - `trusted_release_manifest_verifier_sha256`: reviewed SHA256 of that exact
   executable.
 
-Private keys, HSM credentials, gateway bearer tokens, and other runtime secrets
+Private keys, external-signer credentials, gateway bearer tokens, and other runtime secrets
 must not be committed. Start from
 `fixtures/documentation/sorafs_gateway_self_cert.conf`, copy it into protected runtime
 storage, and replace every placeholder.
@@ -64,7 +64,7 @@ The output directory contains:
 
 Archive those files together with the aggregate release manifest, raw public
 key, and raw signature. Do not archive the gateway attestation private key or
-signer/HSM session material.
+external-signer session material.
 
 ## Verify the gateway attestation
 

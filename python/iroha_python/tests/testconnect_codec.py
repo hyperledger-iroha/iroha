@@ -23,14 +23,38 @@ class FakeToriiConnectClient:
         if self.response is not None:
             return self.response
         sid = str(payload["sid"])
+        network_id = connect.NetworkId.parse(str(payload["network_id"]))
+        app_pk = str(payload["app_pk"])
+        nonce = str(payload["nonce"])
+        node = f"&node={payload['node']}" if payload.get("node") else ""
+        app_uri = (
+            f"iroha://connect?sid={sid}&network_id={network_id.literal}"
+            f"&app_pk={app_pk}&nonce={nonce}{node}&v=1&role=app"
+            "&token=app-token&relay=relay-token"
+        )
         return connect.ConnectSessionInfo(
             sid=sid,
-            app_uri=f"iroha://connect/app?sid={sid}",
+            network_id=network_id,
+            app_public_key=connect._decode_canonical_base64url(app_pk, 32, "app_pk"),
+            nonce=connect._decode_canonical_base64url(nonce, 16, "nonce"),
+            app_uri=app_uri,
             app_token="app-token",
             wallet_token="wallet-token",
             management_token="management-token",
             relay_token="relay-token",
         )
+
+
+def _network(fill: int = 0xA5) -> connect.NetworkId:
+    return connect.NetworkId.from_bytes(bytes([fill]) * 32)
+
+
+def _key_pair() -> connect.ConnectKeyPair:
+    private_key = bytes([0x44]) * 32
+    return connect.ConnectKeyPair(
+        private_key=private_key,
+        public_key=connect.connect_public_key_from_private(private_key),
+    )
 
 
 def test_connect_codec_fails_closed_when_native_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -58,77 +82,112 @@ def test_connect_codec_caches_native_module(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_generate_connect_sid_matches_deterministic_vector() -> None:
     result = connect.generate_connect_sid(
-        chain_id="chain-A",
+        network_id=_network(),
         app_public_key=bytes(range(32)),
         nonce=bytes(range(0xA0, 0xB0)),
     )
 
     assert result.sid_bytes.hex() == (
-        "e247cb440f25c9a1dbfd7a6272a59b0d0a9f30a9b2a7faad5ad32b4268068b81"
+        "cd453da82e37ace00172fba4f2b8869bbb57c7c2ec30062e6267014223a6cc37"
     )
-    assert result.sid_base64url == "4kfLRA8lyaHb_XpicqWbDQqfMKmyp_qtWtMrQmgGi4E"
+    assert result.sid_base64url == "zUU9qC43rOABcvuk8riGm7tXx8LsMAYuYmcBQiOmzDc"
     assert result.nonce == bytes(range(0xA0, 0xB0))
 
 
+def test_generate_connect_sid_binds_network_app_key_and_nonce() -> None:
+    app_pk = bytes(range(32))
+    nonce = bytes(range(0xA0, 0xB0))
+    expected = connect.generate_connect_sid(
+        network_id=_network(), app_public_key=app_pk, nonce=nonce
+    ).sid_bytes
+
+    changed_app = bytearray(app_pk)
+    changed_app[0] ^= 1
+    changed_nonce = bytearray(nonce)
+    changed_nonce[0] ^= 1
+    assert connect.generate_connect_sid(
+        network_id=_network(0xB5), app_public_key=app_pk, nonce=nonce
+    ).sid_bytes != expected
+    assert connect.generate_connect_sid(
+        network_id=_network(), app_public_key=changed_app, nonce=nonce
+    ).sid_bytes != expected
+    assert connect.generate_connect_sid(
+        network_id=_network(), app_public_key=app_pk, nonce=changed_nonce
+    ).sid_bytes != expected
+
+
 @pytest.mark.parametrize(
-    ("field", "kwargs", "match"),
+    ("kwargs", "match"),
     [
         (
-            "app_public_key",
             {"app_public_key": bytes(31), "nonce": bytes(16)},
             "app_public_key must be 32 bytes",
         ),
         (
-            "nonce",
             {"app_public_key": bytes(32), "nonce": bytes(15)},
             "nonce must be 16 bytes",
         ),
         (
-            "chain_id",
-            {"chain_id": "", "app_public_key": bytes(32), "nonce": bytes(16)},
-            "chain_id must not be empty",
+            {"app_public_key": bytes(32), "nonce": bytes([1]) * 16},
+            "app_public_key must not be all zero",
+        ),
+        (
+            {"app_public_key": bytes([1]) * 32, "nonce": bytes(16)},
+            "nonce must not be all zero",
         ),
     ],
 )
 def test_generate_connect_sid_rejects_malformed_inputs(
-    field: str,
     kwargs: dict[str, object],
     match: str,
 ) -> None:
-    payload = {"chain_id": "chain-A", "app_public_key": bytes(32), "nonce": bytes(16)}
-    payload.update(kwargs)
-
     with pytest.raises((TypeError, ValueError), match=match):
-        connect.generate_connect_sid(**payload)  # type: ignore[arg-type]
+        connect.generate_connect_sid(network_id=_network(), **kwargs)  # type: ignore[arg-type]
 
-    assert field in payload
+
+def test_generate_connect_sid_has_no_chain_id_compatibility_shim() -> None:
+    with pytest.raises(TypeError, match="chain_id"):
+        connect.generate_connect_sid(  # type: ignore[call-arg]
+            chain_id="legacy",
+            app_public_key=bytes([1]) * 32,
+            nonce=bytes([2]) * 16,
+        )
 
 
 def test_create_connect_session_preview_builds_canonical_uris() -> None:
-    key_pair = connect.ConnectKeyPair(
-        private_key=bytes([0x44]) * 32,
-        public_key=bytes(range(32)),
-    )
+    key_pair = _key_pair()
 
     preview = connect.create_connect_session_preview(
-        chain_id=" chain-A ",
+        network_id=_network(),
         node=" torii.devnet.example ",
         nonce=bytes(range(0xA0, 0xB0)),
         app_key_pair=key_pair,
     )
 
-    assert preview.chain_id == "chain-A"
+    assert preview.network_id == _network()
     assert preview.node == "torii.devnet.example"
-    assert preview.sid_base64url == "4kfLRA8lyaHb_XpicqWbDQqfMKmyp_qtWtMrQmgGi4E"
     assert preview.app_key_pair is key_pair
-    assert preview.wallet_uri == (
-        "iroha://connect?sid=4kfLRA8lyaHb_XpicqWbDQqfMKmyp_qtWtMrQmgGi4E"
-        "&chain_id=chain-A&v=1&node=torii.devnet.example"
+    parsed = connect.parse_connect_uri(preview.wallet_uri)
+    assert parsed.sid == preview.sid_base64url
+    assert parsed.network_id == preview.network_id
+    assert parsed.app_public_key == key_pair.public_key
+    assert parsed.nonce == preview.nonce
+
+
+def test_connect_uri_rejects_duplicate_and_substituted_identity() -> None:
+    preview = connect.create_connect_session_preview(
+        network_id=_network(),
+        nonce=bytes(range(0xA0, 0xB0)),
+        app_key_pair=_key_pair(),
     )
-    assert preview.app_uri == (
-        "iroha://connect/app?sid=4kfLRA8lyaHb_XpicqWbDQqfMKmyp_qtWtMrQmgGi4E"
-        "&chain_id=chain-A&v=1&node=torii.devnet.example"
-    )
+    with pytest.raises(ValueError, match="exactly once"):
+        connect.parse_connect_uri(f"{preview.wallet_uri}&sid={preview.sid_base64url}")
+    with pytest.raises(ValueError, match="sid does not match"):
+        connect.parse_connect_uri(
+            preview.wallet_uri.replace(_network().literal, _network(0xB5).literal)
+        )
+    with pytest.raises(ValueError, match="retired"):
+        connect.parse_connect_uri(f"{preview.wallet_uri}&chain_id=legacy")
 
 
 def test_bootstrap_connect_preview_session_registers_and_extracts_tokens() -> None:
@@ -136,18 +195,18 @@ def test_bootstrap_connect_preview_session_registers_and_extracts_tokens() -> No
 
     result = connect.bootstrap_connect_preview_session(
         client,
-        chain_id="chain-A",
+        network_id=_network(),
         node="torii.devnet.example",
         nonce=bytes(range(0xA0, 0xB0)),
-        app_key_pair=connect.ConnectKeyPair(
-            private_key=bytes([0x44]) * 32,
-            public_key=bytes(range(32)),
-        ),
+        app_key_pair=_key_pair(),
     )
 
     assert client.calls == [
         {
-            "sid": "4kfLRA8lyaHb_XpicqWbDQqfMKmyp_qtWtMrQmgGi4E",
+            "sid": result.preview.sid_base64url,
+            "network_id": _network().literal,
+            "app_pk": connect._to_base64url(result.preview.app_key_pair.public_key),
+            "nonce": connect._to_base64url(result.preview.nonce),
             "node": "torii.devnet.example",
         }
     ]
@@ -166,19 +225,16 @@ def test_bootstrap_connect_preview_session_can_skip_registration() -> None:
 
     result = connect.bootstrap_connect_preview_session(
         client,
-        chain_id="chain-A",
+        network_id=_network(),
         register=False,
         nonce=bytes(range(0xA0, 0xB0)),
-        app_key_pair=connect.ConnectKeyPair(
-            private_key=bytes([0x44]) * 32,
-            public_key=bytes(range(32)),
-        ),
+        app_key_pair=_key_pair(),
     )
 
     assert client.calls == []
     assert result.session is None
     assert result.tokens is None
-    assert result.preview.sid_base64url == "4kfLRA8lyaHb_XpicqWbDQqfMKmyp_qtWtMrQmgGi4E"
+    assert result.preview.sid_base64url
 
 
 def test_bootstrap_connect_preview_session_rejects_bad_options_before_registration() -> None:
@@ -187,39 +243,102 @@ def test_bootstrap_connect_preview_session_rejects_bad_options_before_registrati
     with pytest.raises(ValueError, match="unsupported session option"):
         connect.bootstrap_connect_preview_session(
             client,
-            chain_id="chain-A",
+            network_id=_network(),
             session_options={"ttl_ms": 1000},
             nonce=bytes(range(0xA0, 0xB0)),
-            app_key_pair=connect.ConnectKeyPair(
-                private_key=bytes([0x44]) * 32,
-                public_key=bytes(range(32)),
-            ),
+            app_key_pair=_key_pair(),
         )
 
     assert client.calls == []
 
 
-def test_bootstrap_connect_preview_session_rejects_missing_tokens() -> None:
-    client = FakeToriiConnectClient(
-        response={
-            "app_token": "app-token",
-            "management_token": "management-token",
-            "relay_token": "relay-token",
-        }
+def test_bootstrap_connect_preview_session_rejects_identity_substitution() -> None:
+    alternate = connect.create_connect_session_preview(
+        network_id=_network(0xB5),
+        nonce=bytes(range(0xA0, 0xB0)),
+        app_key_pair=_key_pair(),
     )
+    client = FakeToriiConnectClient()
+    alternate_payload = {
+        "sid": alternate.sid_base64url,
+        "network_id": alternate.network_id.literal,
+        "app_pk": connect._to_base64url(alternate.app_key_pair.public_key),
+        "nonce": connect._to_base64url(alternate.nonce),
+    }
+    client.response = FakeToriiConnectClient().create_connect_session(alternate_payload)
 
-    with pytest.raises(ValueError, match="wallet_token"):
+    with pytest.raises(ValueError, match="substituted"):
         connect.bootstrap_connect_preview_session(
             client,
-            chain_id="chain-A",
+            network_id=_network(),
             nonce=bytes(range(0xA0, 0xB0)),
-            app_key_pair=connect.ConnectKeyPair(
-                private_key=bytes([0x44]) * 32,
-                public_key=bytes(range(32)),
+            app_key_pair=_key_pair(),
+        )
+
+    assert len(client.calls) == 1
+
+
+def test_connect_session_rejects_sid_substitution_gaps_and_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sid = bytes([0x71]) * 32
+    session = connect.ConnectSession(
+        sid=sid,
+        keys=connect.ConnectSessionKeys(
+            app_to_wallet=bytes([0x81]) * 32,
+            wallet_to_app=bytes([0x91]) * 32,
+        ),
+    )
+    opened: list[int] = []
+
+    def _open(_key: bytes, frame: connect.ConnectFrame) -> connect.ConnectEnvelope:
+        opened.append(frame.sequence)
+        return connect.ConnectEnvelope(
+            sequence=frame.sequence,
+            payload=connect.ConnectSignResultErrPayload(code="denied", message="denied"),
+        )
+
+    monkeypatch.setattr(connect, "open_connect_payload", _open)
+
+    def _frame(frame_sid: bytes, sequence: int) -> connect.ConnectFrame:
+        return connect.ConnectFrame(
+            sid=frame_sid,
+            direction=connect.ConnectDirection.WALLET_TO_APP,
+            sequence=sequence,
+            ciphertext=connect.ConnectCiphertext(
+                direction=connect.ConnectDirection.WALLET_TO_APP,
+                aead=b"ciphertext",
             ),
         )
 
-    assert client.calls == [{"sid": "4kfLRA8lyaHb_XpicqWbDQqfMKmyp_qtWtMrQmgGi4E"}]
+    with pytest.raises(ValueError, match="sid"):
+        session.decrypt(_frame(bytes([0x72]) * 32, 1))
+    with pytest.raises(ValueError, match="exactly 1"):
+        session.decrypt(_frame(sid, 2))
+    assert session.decrypt(_frame(sid, 1)).sequence == 1
+    with pytest.raises(ValueError, match="exactly 2"):
+        session.decrypt(_frame(sid, 1))
+    assert opened == [1]
+
+
+def test_connect_frame_rejects_direction_substitution_and_zero_sequence() -> None:
+    with pytest.raises(ValueError, match="direction must match"):
+        connect.ConnectFrame(
+            sid=bytes([1]) * 32,
+            direction=connect.ConnectDirection.APP_TO_WALLET,
+            sequence=1,
+            ciphertext=connect.ConnectCiphertext(
+                direction=connect.ConnectDirection.WALLET_TO_APP,
+                aead=b"ciphertext",
+            ),
+        )
+    with pytest.raises(ValueError, match="at least 1"):
+        connect.ConnectFrame(
+            sid=bytes([1]) * 32,
+            direction=connect.ConnectDirection.APP_TO_WALLET,
+            sequence=0,
+            control=connect.ConnectControlPing(nonce=1),
+        )
 
 
 def test_connect_sign_result_ok_normalizes_exact_ed25519_algorithm() -> None:

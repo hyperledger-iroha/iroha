@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { NexusAppClient } from "../src/nexusApp.js";
+import { NetworkId } from "../src/networkId.js";
 
 const HASH_HEX = "ab".repeat(32);
 const fixture = JSON.parse(
@@ -14,6 +15,7 @@ const fixture = JSON.parse(
     "utf8",
   ),
 );
+const fixtureNetworkId = NetworkId.parse(fixture.transfer_input.network_id);
 
 function hexBytes(value) {
   return Uint8Array.from(
@@ -66,8 +68,6 @@ function pipelineStatus(
       kind,
       ...(blockHeight === undefined ? {} : { block_height: blockHeight }),
     },
-    summary: kind,
-    diagnostics: [],
     scope,
     resolved_from: resolvedFrom,
   };
@@ -142,7 +142,7 @@ test("browser Nexus default Torii transport submits exact signed bytes", async (
 test("browser Nexus defaults build, finalize, and submit the shared canonical transfer", async () => {
   let submittedBody;
   const client = new NexusAppClient({
-    chainId: fixture.transfer_input.chain_id,
+    networkId: fixtureNetworkId,
     authority: fixture.transfer_input.authority,
     signingPublicKey: hexBytes(
       fixture.connect.approval_frame.signing_public_key_hex,
@@ -183,7 +183,7 @@ test("browser Nexus classifies rejected and timed-out post-submit status waits",
     ["Queued", "status_wait_timeout"],
   ]) {
     const client = new NexusAppClient({
-      chainId: fixture.transfer_input.chain_id,
+      networkId: fixtureNetworkId,
       authority: fixture.transfer_input.authority,
       signingPublicKey: hexBytes(
         fixture.connect.approval_frame.signing_public_key_hex,
@@ -290,9 +290,9 @@ test("browser Nexus snapshots config descriptors without invoking getters", () =
   assert.equal(accessorGets, 0);
 });
 
-test("browser Nexus snapshots transfer descriptors before alias resolution", () => {
+test("browser Nexus snapshots transfers and rejects retired chain aliases", () => {
   const client = new NexusAppClient({
-    chainId: "snapshot-chain",
+    networkId: fixtureNetworkId,
     authority: "snapshot-authority",
     signingPublicKey: new Uint8Array(32),
     transactionCodec: {
@@ -332,6 +332,9 @@ test("browser Nexus snapshots transfer descriptors before alias resolution", () 
     Object.assign(Object.create({ polluted: true }), valid),
     accessor,
     { ...valid, unsupported: true },
+    { ...valid, chain: "legacy-chain" },
+    { ...valid, chainId: "legacy-chain" },
+    { ...valid, chain_id: "legacy-chain" },
     { ...valid, [Symbol("hidden")]: true },
   ]) {
     assert.throws(() => client.buildTransferDraft(malformed));

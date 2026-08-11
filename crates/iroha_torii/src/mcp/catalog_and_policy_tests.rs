@@ -6,10 +6,6 @@ use crate::tests_runtime_handlers::{
     mk_app_state_for_tests_with_world, signed_app_headers, world_with_account,
 };
 use iroha_config::parameters::actual::ToriiMcpProfile;
-use rand::rand_core::{TryCryptoRng, TryRngCore};
-
-static MCP_ASYNC_JOBS_TEST_LOCK: LazyLock<std::sync::Mutex<()>> =
-    LazyLock::new(|| std::sync::Mutex::new(()));
 
 const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 const TEST_ASSET_ID: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
@@ -29,38 +25,6 @@ fn submission_receipt_signer_fixture_uses_checked_ed25519_key_generation() {
 
     assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
 }
-
-#[derive(Debug)]
-struct FailingMcpRng;
-
-#[derive(Debug)]
-struct FailingMcpRngError;
-
-impl std::fmt::Display for FailingMcpRngError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("failing MCP RNG")
-    }
-}
-
-impl std::error::Error for FailingMcpRngError {}
-
-impl TryRngCore for FailingMcpRng {
-    type Error = FailingMcpRngError;
-
-    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-        Err(FailingMcpRngError)
-    }
-
-    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-        Err(FailingMcpRngError)
-    }
-
-    fn try_fill_bytes(&mut self, _dst: &mut [u8]) -> Result<(), Self::Error> {
-        Err(FailingMcpRngError)
-    }
-}
-
-impl TryCryptoRng for FailingMcpRng {}
 
 fn sample_tool(name: &str, method: Method, effect: ToolEffect) -> ToolSpec {
     ToolSpec {
@@ -1370,100 +1334,28 @@ async fn tools_call_batch_returns_per_call_errors_for_unknown_tools() {
 }
 
 #[tokio::test]
-async fn tools_call_async_job_can_be_fetched_after_completion() {
-    let _guard = MCP_ASYNC_JOBS_TEST_LOCK.lock().expect("async job lock");
-    MCP_ASYNC_JOBS.clear();
-
+async fn retired_async_job_methods_fail_as_unknown_without_retained_state() {
     let app = mk_app_state_for_tests();
-    let params = norito::json!({
-        "name": "torii.missing.async"
-    });
-    let response = handle_tools_call_async(
-        Some(Value::from(2_u64)),
-        app.clone(),
-        &HeaderMap::new(),
-        params.as_object().expect("params object"),
-    )
-    .await;
-    let job_id = response
-        .get("result")
-        .and_then(|value| value.get("job_id"))
-        .and_then(Value::as_str)
-        .expect("job id")
-        .to_owned();
-
-    let mut final_state = None;
-    for _ in 0..40 {
-        let mut get_params = norito::json::Map::new();
-        get_params.insert("job_id".into(), Value::String(job_id.clone()));
-        let jobs = handle_tools_jobs_get(None, &app.mcp, &get_params);
-        let state = jobs
-            .get("result")
-            .and_then(|value| value.get("state"))
-            .and_then(|value| value.get("status"))
-            .and_then(Value::as_str)
-            .unwrap_or("pending");
-        if state != "pending" {
-            final_state = Some(state.to_owned());
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+    for method in ["tools/call_async", "tools/jobs/get"] {
+        let response = handle_jsonrpc_request(
+            app.clone(),
+            &HeaderMap::new(),
+            norito::json!({
+                "jsonrpc": JSONRPC_VERSION,
+                "id": 7,
+                "method": method,
+                "params": {}
+            }),
+        )
+        .await;
+        assert_eq!(
+            response
+                .get("error")
+                .and_then(|error| error.get("code"))
+                .and_then(Value::as_i64),
+            Some(JSONRPC_METHOD_NOT_FOUND)
+        );
     }
-    assert_eq!(final_state.as_deref(), Some("failed"));
-
-    let mut get_params = norito::json::Map::new();
-    get_params.insert("job_id".into(), Value::String(job_id));
-    let jobs = handle_tools_jobs_get(None, &app.mcp, &get_params);
-    let error_code = jobs
-        .get("result")
-        .and_then(|value| value.get("state"))
-        .and_then(|value| value.get("error"))
-        .and_then(|value| value.get("data"))
-        .and_then(|value| value.get("code"))
-        .and_then(Value::as_str)
-        .expect("error code");
-    assert_eq!(error_code, MCP_TOOL_NOT_FOUND);
-}
-
-#[tokio::test]
-async fn tools_call_async_reports_job_id_rng_failure() {
-    let _guard = MCP_ASYNC_JOBS_TEST_LOCK.lock().expect("async job lock");
-    MCP_ASYNC_JOBS.clear();
-
-    let app = mk_app_state_for_tests();
-    let params = norito::json!({
-        "name": "torii.missing.async"
-    });
-    let response = handle_tools_call_async_with_rng(
-        Some(Value::from(7_u64)),
-        app,
-        &HeaderMap::new(),
-        params.as_object().expect("params object"),
-        &mut FailingMcpRng,
-    )
-    .await;
-
-    assert_eq!(
-        response
-            .get("error")
-            .and_then(|value| value.get("code"))
-            .and_then(Value::as_i64),
-        Some(JSONRPC_INTERNAL_ERROR)
-    );
-    let data = response
-        .get("error")
-        .and_then(|value| value.get("data"))
-        .expect("error data");
-    assert_eq!(
-        data.get("error_code").and_then(Value::as_str),
-        Some("random_bytes")
-    );
-    assert!(
-        data.get("source")
-            .and_then(Value::as_str)
-            .is_some_and(|source| source.contains("failing MCP RNG"))
-    );
-    assert!(MCP_ASYNC_JOBS.is_empty());
 }
 
 #[tokio::test]
@@ -1495,53 +1387,6 @@ async fn tools_list_list_changed_tracks_toolset_version() {
 }
 
 #[test]
-fn prune_async_jobs_applies_ttl_and_capacity_limits() {
-    let _guard = MCP_ASYNC_JOBS_TEST_LOCK.lock().expect("async job lock");
-    MCP_ASYNC_JOBS.clear();
-
-    let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
-    cfg.async_job_ttl_secs = 1;
-    cfg.async_job_max_entries = 2;
-
-    let now = Instant::now();
-    MCP_ASYNC_JOBS.insert(
-        "old".to_owned(),
-        AsyncJobRecord {
-            state: norito::json!({ "status": "completed" }),
-            updated_at: now - Duration::from_secs(3),
-        },
-    );
-    MCP_ASYNC_JOBS.insert(
-        "recent-1".to_owned(),
-        AsyncJobRecord {
-            state: norito::json!({ "status": "completed" }),
-            updated_at: now - Duration::from_millis(30),
-        },
-    );
-    MCP_ASYNC_JOBS.insert(
-        "recent-2".to_owned(),
-        AsyncJobRecord {
-            state: norito::json!({ "status": "completed" }),
-            updated_at: now - Duration::from_millis(20),
-        },
-    );
-    MCP_ASYNC_JOBS.insert(
-        "recent-3".to_owned(),
-        AsyncJobRecord {
-            state: norito::json!({ "status": "completed" }),
-            updated_at: now - Duration::from_millis(10),
-        },
-    );
-
-    prune_async_jobs(&cfg, now);
-
-    assert!(!MCP_ASYNC_JOBS.contains_key("old"));
-    assert!(!MCP_ASYNC_JOBS.contains_key("recent-1"));
-    assert!(MCP_ASYNC_JOBS.contains_key("recent-2"));
-    assert!(MCP_ASYNC_JOBS.contains_key("recent-3"));
-}
-
-#[test]
 fn catalog_projection_decision_is_fail_closed_and_feature_aware() {
     use iroha_torii_shared::route_catalog::{ApiSurface, FeatureGate, Listener, RouteProjections};
 
@@ -1552,6 +1397,8 @@ fn catalog_projection_decision_is_fail_closed_and_feature_aware() {
             "/v1/tests/mcp-included",
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_projections(RouteProjections::MCP),
         RouteDescriptor::new(
@@ -1560,6 +1407,8 @@ fn catalog_projection_decision_is_fail_closed_and_feature_aware() {
             "/v1/tests/mcp-excluded",
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_projections(RouteProjections::OPENAPI_AND_SDK),
         RouteDescriptor::new(
@@ -1568,6 +1417,8 @@ fn catalog_projection_decision_is_fail_closed_and_feature_aware() {
             "/v1/tests/mcp-featured",
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_feature_gate(FeatureGate::Feature("test_feature"))
         .with_projections(RouteProjections::MCP),
@@ -1761,8 +1612,9 @@ fn musubi_v1_mcp_bodies_are_self_contained_closed_schemas() {
         .get("paths")
         .and_then(Value::as_object)
         .expect("OpenAPI paths");
-    let query_fixture: Value = json::from_str(include_str!("../../../../fixtures/musubi/sdk_v1.json"))
-        .expect("Musubi SDK fixture");
+    let query_fixture: Value =
+        json::from_str(include_str!("../../../../fixtures/musubi/sdk_v1.json"))
+            .expect("Musubi SDK fixture");
     let query_routes = query_fixture
         .get("routes")
         .and_then(Value::as_array)
@@ -2118,6 +1970,8 @@ fn tool_registry_validation_rejects_duplicates_aliases_and_implicit_routes() {
             "/v1/tests/allowed",
             ApiSurface::Public,
             Listener::Torii,
+            RouteEffect::ReadOnly,
+            AdmissionPolicy::Public,
         )
         .with_projections(RouteProjections::MCP),
         RouteDescriptor::new(
@@ -2126,6 +1980,8 @@ fn tool_registry_validation_rejects_duplicates_aliases_and_implicit_routes() {
             "/v1/tests/operator",
             ApiSurface::Operator,
             Listener::Torii,
+            RouteEffect::Mutation,
+            AdmissionPolicy::Operator,
         )
         .with_authentication(AuthenticationPolicy::OperatorSignature)
         .with_projections(RouteProjections::MCP),

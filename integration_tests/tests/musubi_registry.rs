@@ -1,9 +1,10 @@
 //! Musubi V1 registry public-contract integration coverage.
 
-use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
 use iroha_data_model::{
+    NetworkId,
     account::AccountId,
-    id::ChainId,
+    block::BlockHeader,
     isi::musubi::{
         PublishMusubiReleaseV1, RegisterMusubiArchiveV1, RegisterMusubiNamespaceBindingV1,
         RemoveMusubiPackageMaintainerV1, SetMusubiReleaseYankV1,
@@ -105,8 +106,9 @@ fn staging_receipt(
 ) -> MusubiSeedIngressReceiptV1 {
     let broker_keypair = keypair(70);
     let binding = MusubiSeedIngressReceiptBindingV1 {
-        chain_id: ChainId::from("musubi-integration"),
-        genesis_block_hash: [0x71; 32],
+        network_id: NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x71; 32])),
+        ),
         publisher: account(71),
         ingress_broker: AccountId::new(broker_keypair.public_key().clone()),
         seed_provider: ProviderId::new([0x72; 32]),

@@ -18,8 +18,8 @@ pub(crate) struct PopCredentialRuntimeBindingV1 {
     pub issuer_policy_digest: [u8; 32],
     /// Exact governed issuer identity.
     pub issuer_id: String,
-    /// Exact non-secret issuer HSM key handle.
-    pub issuer_hsm_key_id: String,
+    /// Exact non-secret external issuer-signer handle.
+    pub issuer_signer_handle: String,
     /// Exact governed issuer verification key.
     pub issuer_public_key: [u8; 32],
     /// Exact non-secret encrypted-enrollment recipient handle.

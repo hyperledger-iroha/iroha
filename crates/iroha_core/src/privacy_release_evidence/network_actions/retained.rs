@@ -183,7 +183,7 @@ fn validate_context_and_signer_v1(
     private_key: &PrivateKey,
 ) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
     if context.genesis_hash == [0; 32]
-        || context.chain_id.as_str().is_empty()
+        || context.network_id.as_bytes() != &context.genesis_hash
         || context
             .authority
             .try_signatory()
@@ -357,7 +357,7 @@ pub fn build_privacy_release_zk_ace_network_action_v1(
     let authorization_digest = derive_zk_ace_privacy_authorization_digest(&authorization_inputs)
         .map_err(|_| evidence_error())?;
     statement.replay_nullifier =
-        witness.replay_nullifier_v1(&authorization_digest, &transaction_context.chain_id);
+        witness.replay_nullifier_v1(&authorization_digest, &transaction_context.network_id);
     let public_inputs =
         ZkAcePrivacyPublicInputsV1::new(statement.clone(), transaction_context.genesis_hash);
     let mut rng = EvidenceRng09::new(network_seed_v1(proof_seed, b"zk-ace-proof", 0));
@@ -446,7 +446,7 @@ pub fn build_privacy_release_verange_network_action_v1(
     let parameters =
         VeRangeParametersV1::for_profile(native_profile).map_err(|_| evidence_error())?;
     let transcript = TranscriptBindingV1 {
-        chain_id: transaction_context.chain_id.as_str().as_bytes(),
+        network_id: transaction_context.network_id.as_bytes(),
         genesis_hash: transaction_context.genesis_hash,
         action_index: 0,
         statement_digest: *statement_digest.as_bytes(),
@@ -824,7 +824,7 @@ pub fn build_privacy_release_anonymous_pgc_network_action_v1(
     let bootstrap_digest = bootstrap.digest().map_err(|_| evidence_error())?;
     let namespace_encoding = norito::to_bytes(&namespace).map_err(|_| evidence_error())?;
     let bootstrap_binding = TranscriptBindingV1 {
-        chain_id: transaction_context.chain_id.as_str().as_bytes(),
+        network_id: transaction_context.network_id.as_bytes(),
         genesis_hash: transaction_context.genesis_hash,
         action_index: bootstrap_action_index,
         statement_digest: *bootstrap_digest.as_bytes(),
@@ -945,7 +945,7 @@ pub fn build_privacy_release_anonymous_pgc_network_action_v1(
         .digest()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let payment_binding = TranscriptBindingV1 {
-        chain_id: transaction_context.chain_id.as_str().as_bytes(),
+        network_id: transaction_context.network_id.as_bytes(),
         genesis_hash: transaction_context.genesis_hash,
         action_index: 0,
         statement_digest: *statement_digest.as_bytes(),
@@ -1129,8 +1129,7 @@ pub fn build_privacy_release_fcmp_network_action_v1(
         .digest()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let runtime_context = derive_fcmp_runtime_context_hash_v1(&FcmpRuntimeContextBindingV1 {
-        chain_id: &transaction_context.chain_id,
-        genesis_hash: transaction_context.genesis_hash,
+        network_id: &transaction_context.network_id,
         action_index: 0,
         statement_digest,
         parameter_id: profile.parameter_id,
@@ -1274,7 +1273,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         metadata::Metadata,
-        prelude::{ChainId, DomainId, Name},
+        prelude::{DomainId, Name},
         transaction::FeePaymentIntent,
     };
 
@@ -1282,7 +1281,9 @@ mod tests {
 
     fn context(key_pair: &KeyPair) -> PrivacyReleaseTransactionContextV1 {
         PrivacyReleaseTransactionContextV1 {
-            chain_id: ChainId::from("privacy-release-builder-test"),
+            network_id: crate::privacy_release_evidence::release_network_id_from_genesis_hash(
+                [0xA7; 32],
+            ),
             authority: AccountId::new(key_pair.public_key().clone()),
             creation_time: Duration::from_secs(1_800_000_000),
             time_to_live: Some(Duration::from_secs(3_600)),

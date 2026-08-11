@@ -11,6 +11,7 @@ use eyre::{Report, eyre};
 use http::StatusCode;
 use iroha_config::client_api::ConfigGetDTO;
 use iroha_crypto::{KeyPair, PublicKey};
+use iroha_data_model::NetworkId;
 use iroha_logger::prelude::*;
 use iroha_telemetry::metrics::Status;
 use norito::json::{self, Value};
@@ -68,6 +69,7 @@ pub enum Update {
 pub fn run(
     torii_url: ToriiUrl,
     geo_config: GeoLookupConfig,
+    network_id: NetworkId,
     operator_signer: Option<KeyPair>,
 ) -> (mpsc::Receiver<Update>, impl Future<Output = ()> + Sized) {
     let (tx, rx) = mpsc::channel(128);
@@ -144,7 +146,9 @@ pub fn run(
                     let url = Arc::clone(&monitor_span_url);
                     async move {
                         loop {
-                            let cfg = get_config_with_retry(&url, operator_signer.as_ref()).await;
+                            let cfg =
+                                get_config_with_retry(&url, &network_id, operator_signer.as_ref())
+                                    .await;
                             iroha_logger::debug!(?cfg, "peer connected");
                             let _ = tx.send(Update::Connected(Box::new(cfg))).await;
 
@@ -495,6 +499,7 @@ fn decode_operator_access_error(bytes: &[u8]) -> Option<String> {
 
 async fn get_config_with_retry(
     torii_url: &ToriiUrl,
+    network_id: &NetworkId,
     operator_signer: Option<&KeyPair>,
 ) -> PeerConfigSnapshot {
     let client = Client::new();
@@ -511,6 +516,7 @@ async fn get_config_with_retry(
         if let Some(key_pair) = operator_signer {
             let headers = operator_signatures::signed_request_headers(
                 key_pair,
+                network_id,
                 &crate::Method::GET,
                 &config_uri,
                 &[],

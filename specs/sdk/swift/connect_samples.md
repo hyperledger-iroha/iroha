@@ -13,7 +13,7 @@ Use these starter paths to validate your environment and mirror production wirin
 - Target platforms: iOS 15+ / macOS 12+.
 - Create a new SwiftUI app and add the `IrohaSwift` package dependency.
 - Embed `NoritoBridge.xcframework` under the app’s `Frameworks` folder (or `dist/` when checking out the SDK).
-- In `App` init, generate a `ConnectSid`, derive direction keys, and start `ConnectSession.eventStream()`; log control/ciphertext events and render queue depth from `ConnectSessionDiagnostics.snapshot()`.
+- In `App` init, create a fresh app key and nonce, derive the SID with `ConnectCrypto.deriveSessionID(networkID:appPublicKey:nonce:)`, then construct the launch-bound `ConnectSession`; log control/ciphertext events and render queue depth from `ConnectSessionDiagnostics.snapshot()`.
 - Configure `ConnectQueueJournal.Configuration` bounds and export evidence via a “Share Bundle” button calling `ConnectSessionDiagnostics.exportJournalBundle(to:)`.
 
 ## CLI harness (replay & diagnostics)

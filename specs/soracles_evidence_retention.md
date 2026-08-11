@@ -20,8 +20,9 @@ generated.
   attestations can still be validated. The GC helper keeps bundles containing
   dispute artefacts under the longer **`--dispute-retention-days`** window by
   default.
-- **On-chain hashes stay immutable.** `FeedEventRecord` keeps only
-  `evidence_hashes`; pruning artifacts never touches ledger state. Attach GC
+- **On-chain evidence stays immutable.** `FeedEventRecord` retains the
+  canonical event, its consensus `recorded_at_ms`, and only hashes for external
+  artifacts; pruning artifacts never touches ledger state. Attach GC
   reports to governance bundles when artifacts are removed so the audit trail
   stays intact.
 - **Bundle timestamp:** `bundle.json` now carries

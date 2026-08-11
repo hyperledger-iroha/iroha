@@ -32,7 +32,17 @@ use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
 
 use crate::utils;
 
+mod connect_openapi;
+mod iso20022;
+mod mcp_openapi;
 mod sorafs_evidence;
+
+use connect_openapi::{connect_paths, insert_connect_schemas};
+use iso20022::{
+    operator_parameters as iso_operator_parameters,
+    profile_selection_parameters as iso_profile_selection_parameters,
+};
+use mcp_openapi::mcp_paths;
 
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
 const SORACLOUD_HF_DEPLOY_CONTRACT_EXTENSION: &str = "x-iroha-soracloud-hf-deploy-contract";
@@ -716,7 +726,7 @@ const OFFLINE_COMMAND_COMMON_BAD_REQUEST_REJECT_CODES: &[&str] = &[
     "offline_asset_scale_invalid",
     "offline_asset_scale_mismatch",
     "offline_authorization_invalid",
-    "offline_wrong_chain",
+    "offline_wrong_network",
 ];
 const OFFLINE_TOP_UP_BAD_REQUEST_REJECT_CODES: &[&str] = &[
     "offline_top_up_invalid",
@@ -1256,11 +1266,11 @@ fn offline_recipient_lineage_operation() -> Map {
     responses.insert(
         "400".to_owned(),
         dual_format_error_response_with_reject_codes(
-            "The signed receiver request is malformed, expired, or targets another chain.",
+            "The signed receiver request is malformed, expired, or targets another network.",
             "Exact receiver-lineage request validation code.",
             &[
                 "offline_receiver_lineage_request_invalid",
-                "offline_receiver_lineage_chain_mismatch",
+                "offline_receiver_lineage_network_mismatch",
             ],
         ),
     );
@@ -1319,7 +1329,7 @@ fn offline_readiness_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Report the offline-wallet protocol interface implemented by every Iroha app-api deployment. cash_handoff_v1 and native bridge ABI 21 are universally available to applications and do not require settlement flags, escrow catalogs, asset metadata, or dataspace enrollment. This capability response is deliberately asset-neutral: mandatory is false, ready is true, and assets and blockers are empty. Wallets must not gate offline UI or peer handoff on this discovery call; those flows continue without network connectivity. It does not claim that any particular asset has server-managed top-up, redemption, proof, or escrow material."
+            "Report the offline-wallet protocol interface implemented by every Iroha app-api deployment. cash_handoff_v1 and native bridge ABI 22 are universally available to applications and do not require settlement flags, escrow catalogs, asset metadata, or dataspace enrollment. This capability response is deliberately asset-neutral: mandatory is false, ready is true, and assets and blockers are empty. Wallets must not gate offline UI or peer handoff on this discovery call; those flows continue without network connectivity. It does not claim that any particular asset has server-managed top-up, redemption, proof, or escrow material."
                 .to_owned(),
         ),
     );
@@ -2221,20 +2231,6 @@ fn bool_query_param(name: &str, description: &str) -> Value {
     Value::Object(param)
 }
 
-fn iso_profile_selection_parameters() -> Vec<Value> {
-    vec![
-        string_header_param(
-            "X-Iroha-Iso-Profile",
-            "Optional ISO bridge rail profile. Overrides the `profile` query parameter.",
-            false,
-        ),
-        string_query_param(
-            "profile",
-            "Optional ISO bridge rail profile used when `X-Iroha-Iso-Profile` is absent.",
-        ),
-    ]
-}
-
 fn path_param(name: &str, description: &str) -> Value {
     let mut param = Map::new();
     param.insert("name".into(), Value::String(name.to_owned()));
@@ -2579,7 +2575,7 @@ fn transaction_paths() -> Map {
     let mut pipeline_status = json_get_operation(
         "Transactions",
         "Fetch pipeline transaction status.",
-        "Return the latest typed pipeline status for a signed transaction hash. Defaults to application/x-norito when Accept is omitted or */*; application/json returns the same typed payload encoded as JSON.",
+        "Return only non-sensitive status metadata for a signed transaction hash. Rejection diagnostics, trigger completions, transaction identities, instructions, amounts, and batch outcomes are deliberately excluded. Defaults to application/x-norito when Accept is omitted or */*; application/json returns the same typed payload encoded as JSON.",
         "#/components/schemas/PipelineTransactionStatusResponse",
         vec![
             required_string_query_param("hash", "Transaction hash (hex)."),
@@ -2610,8 +2606,19 @@ fn transaction_paths() -> Map {
         }
     }
     paths.insert(
-        "/v1/pipeline/transactions/status".to_owned(),
+        uri::TRANSACTION_STATUS.to_owned(),
         Value::Object(pipeline_status),
+    );
+    paths.insert(
+        uri::TRANSACTION_DETAILS.to_owned(),
+        Value::Object(versioned_dual_format_post_operation(
+            "Transactions",
+            "Fetch authorized transaction details.",
+            "Submit a canonical one-shot SignedQuery containing FindTransactions with exactly one entrypoint_hash equality predicate and default selector/parameters. Torii verifies the exact NetworkId, freshness, signature, and nonce before ledger access, then permits only the transaction authority, a batch source/destination account, or an operator carrying CanReadAllLedgerData.",
+            "#/components/schemas/VersionedSignedQueryJson",
+            "#/components/schemas/PipelineTransactionDetailsResponse",
+            200,
+        )),
     );
     paths.insert(
         "/v1/transactions/history".to_owned(),
@@ -2793,7 +2800,10 @@ fn transaction_paths() -> Map {
             "Fetch ISO 20022 message record.",
             "Return the rich ISO 20022 message record by message id, including profile metadata and status history.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("msg_id", "ISO 20022 message id.")],
+            iso_operator_parameters(vec![string_path_param(
+                "msg_id",
+                "ISO 20022 message id.",
+            )]),
         )),
     );
     paths.insert(
@@ -2803,7 +2813,7 @@ fn transaction_paths() -> Map {
             "Fetch ISO 20022 durable audit index.",
             "Return the deterministic tamper-evident audit manifest for durable ISO 20022 bridge records.",
             "#/components/schemas/JsonValue",
-            vec![],
+            operator_signature_header_parameters(),
         )),
     );
     paths.insert(
@@ -2813,7 +2823,7 @@ fn transaction_paths() -> Map {
             "Fetch ISO 20022 pacs.002 status XML.",
             "Return the current ISO 20022 payment status report for a bridged message.",
             "#/components/schemas/XmlText",
-            vec![string_path_param("msg_id", "ISO 20022 message id.")],
+            iso_operator_parameters(vec![string_path_param("msg_id", "ISO 20022 message id.")]),
         )),
     );
     for (path, message_type, summary, description) in [
@@ -2849,7 +2859,7 @@ fn transaction_paths() -> Map {
                 summary,
                 &format!("{description} The response body is {message_type} XML."),
                 "#/components/schemas/XmlText",
-                vec![string_path_param("msg_id", "ISO 20022 message id.")],
+                iso_operator_parameters(vec![string_path_param("msg_id", "ISO 20022 message id.")]),
             )),
         );
     }
@@ -2915,65 +2925,6 @@ fn stream_paths() -> Map {
             "Connect to the P2P relay WebSocket.",
             "Upgrade to the P2P relay WebSocket.",
             None,
-        )),
-    );
-    paths
-}
-
-fn connect_paths() -> Map {
-    let mut paths = Map::new();
-    paths.insert(
-        "/v1/connect/session".to_owned(),
-        Value::Object(json_post_operation(
-            "Connect",
-            "Open a Connect session.",
-            "Create a Connect session for wallet pairing.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/connect/session/{sid}".to_owned(),
-        Value::Object(json_delete_operation(
-            "Connect",
-            "Close a Connect session.",
-            "Terminate a Connect session by session id. Requires `Authorization: Bearer <token_management>` from session creation.",
-            "#/components/schemas/JsonValue",
-            vec![
-                string_path_param("sid", "Connect session id."),
-                string_header_param(
-                    "Authorization",
-                    "Bearer management token returned by `/v1/connect/session`.",
-                    true,
-                ),
-            ],
-        )),
-    );
-    paths.insert(
-        "/v1/connect/ws".to_owned(),
-        Value::Object(text_get_operation(
-            "Connect",
-            "Connect to the Connect WebSocket.",
-            "Upgrade to the Connect WebSocket stream.",
-            None,
-        )),
-    );
-    paths.insert(
-        "/v1/connect/status".to_owned(),
-        Value::Object(json_get_operation(
-            "Connect",
-            "Fetch Connect status.",
-            "Return redacted aggregate Connect relay status. Add `sid` with `Authorization: Bearer <token_management>` for per-session status.",
-            "#/components/schemas/JsonValue",
-            vec![
-                string_query_param("sid", "Optional Connect session id for token-gated per-session status."),
-                string_header_param(
-                    "Authorization",
-                    "Bearer management token required when `sid` is supplied.",
-                    false,
-                ),
-            ],
         )),
     );
     paths
@@ -3084,61 +3035,6 @@ fn vpn_paths() -> Map {
             methods
         }),
     );
-    paths
-}
-
-fn mcp_paths() -> Map {
-    let mut get_operation = Map::new();
-    get_operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("MCP".to_owned())]),
-    );
-    get_operation.insert(
-        "summary".into(),
-        Value::String("Fetch MCP capabilities.".to_owned()),
-    );
-    get_operation.insert(
-        "description".into(),
-        Value::String(
-            "Returns server capabilities and tool count for the native MCP bridge.".to_owned(),
-        ),
-    );
-    get_operation.insert(
-        "operationId".into(),
-        Value::String("mcpCapabilities".to_owned()),
-    );
-    get_operation.insert(
-        "responses".into(),
-        Value::Object(single_json_response("#/components/schemas/JsonValue")),
-    );
-
-    let mut post_operation = Map::new();
-    post_operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("MCP".to_owned())]),
-    );
-    post_operation.insert(
-        "summary".into(),
-        Value::String("Execute MCP JSON-RPC request.".to_owned()),
-    );
-    post_operation.insert(
-        "description".into(),
-        Value::String(
-            "Accepts JSON-RPC payloads for MCP tool discovery and invocation.".to_owned(),
-        ),
-    );
-    post_operation.insert("operationId".into(), Value::String("mcpJsonRpc".to_owned()));
-    post_operation.insert(
-        "responses".into(),
-        Value::Object(single_json_response("#/components/schemas/JsonValue")),
-    );
-
-    let mut methods = Map::new();
-    methods.insert("get".to_owned(), Value::Object(get_operation));
-    methods.insert("post".to_owned(), Value::Object(post_operation));
-
-    let mut paths = Map::new();
-    paths.insert("/v1/mcp".to_owned(), Value::Object(methods));
     paths
 }
 
@@ -3657,7 +3553,7 @@ fn zk_paths() -> Map {
         Value::Object(json_post_operation(
             "ZK",
             "Derive an IVM proved payload.",
-            "Execute ZK-mode IVM bytecode under bounded host output, blocking-worker concurrency, and timeout limits; plaintext gas usage is not returned.",
+            "Authenticate the exact-network request authority before decoding, then execute ZK-mode IVM bytecode under bounded host output, blocking-worker concurrency, and timeout limits; plaintext gas usage is not returned.",
             "#/components/schemas/ZkIvmDeriveRequest",
             "#/components/schemas/ZkIvmDeriveResponse",
             Vec::new(),
@@ -3665,14 +3561,21 @@ fn zk_paths() -> Map {
     );
     paths.insert(
         "/v1/zk/ivm/prove".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
-            "Prove IVM execution (job).",
-            "Execute and prove ZK-mode IVM bytecode asynchronously. POST returns only a job identifier; canonical proved and compact proof attachment material are available from the terminal GET state.",
-            "#/components/schemas/ZkIvmProveRequest",
-            "#/components/schemas/ZkIvmProveJobCreated",
-            Vec::new(),
-        )),
+        Value::Object({
+            let mut methods = json_post_operation(
+                "ZK",
+                "Prove IVM execution (job).",
+                "Authenticate the request authority, then execute and prove ZK-mode IVM bytecode asynchronously under owner-scoped count and byte quotas. POST returns only an owner-bound job identifier; canonical proved and compact proof attachment material are available only to that owner from the terminal GET state.",
+                "#/components/schemas/ZkIvmProveRequest",
+                "#/components/schemas/ZkIvmProveJobCreated",
+                canonical_request_auth_header_parameters(),
+            );
+            if let Some(Value::Object(operation)) = methods.get_mut("post") {
+                insert_canonical_request_auth_contract(operation);
+                insert_private_no_store_response_contract(operation);
+            }
+            methods
+        }),
     );
     paths.insert(
         "/v1/zk/ivm/prove/{job_id}".to_owned(),
@@ -3680,24 +3583,32 @@ fn zk_paths() -> Map {
             let get_op = json_get_operation(
                 "ZK",
                 "Fetch an IVM prove job.",
-                "Fetch one state-dependent cached response: pending/running contain only job_id+status, error adds error, and done adds proved+compact attachment with proof.bytes_b64.",
+                "Fetch one owner-isolated state-dependent cached response: pending/running contain only job_id+status, error adds error, and done adds proved+compact attachment with proof.bytes_b64. Missing and foreign jobs share the same response.",
                 "#/components/schemas/ZkIvmProveJob",
-                vec![patterned_string_path_param(
-                    "job_id",
-                    "Proof generation job identifier.",
-                    "^[0-9a-f]{32}$",
-                )],
+                {
+                    let mut parameters = vec![patterned_string_path_param(
+                        "job_id",
+                        "Proof generation job identifier.",
+                        "^[0-9a-f]{32}$",
+                    )];
+                    parameters.extend(canonical_request_auth_header_parameters());
+                    parameters
+                },
             );
             let delete_op = json_delete_operation(
                 "ZK",
                 "Delete an IVM prove job.",
-                "Cancel and delete an IVM proof generation job entry. Already-started blocking work is discard-only and retains compute capacity until physical completion.",
+                "Cancel and delete an IVM proof generation job owned by the authenticated account. Missing and foreign jobs share the same response. Already-started blocking work is discard-only and retains compute capacity until physical completion.",
                 "#/components/schemas/ZkIvmProveJobCreated",
-                vec![patterned_string_path_param(
-                    "job_id",
-                    "Proof generation job identifier.",
-                    "^[0-9a-f]{32}$",
-                )],
+                {
+                    let mut parameters = vec![patterned_string_path_param(
+                        "job_id",
+                        "Proof generation job identifier.",
+                        "^[0-9a-f]{32}$",
+                    )];
+                    parameters.extend(canonical_request_auth_header_parameters());
+                    parameters
+                },
             );
             let mut methods = Map::new();
             if let Some(get_value) = get_op.get("get") {
@@ -3705,6 +3616,12 @@ fn zk_paths() -> Map {
             }
             if let Some(delete_value) = delete_op.get("delete") {
                 methods.insert("delete".to_owned(), delete_value.clone());
+            }
+            for method in ["get", "delete"] {
+                if let Some(Value::Object(operation)) = methods.get_mut(method) {
+                    insert_canonical_request_auth_contract(operation);
+                    insert_private_no_store_response_contract(operation);
+                }
             }
             methods
         }),
@@ -3712,55 +3629,41 @@ fn zk_paths() -> Map {
     paths.insert(
         "/v1/zk/attachments".to_owned(),
         Value::Object({
-            let get_op = json_get_operation(
+            let mut methods = json_get_operation(
                 "ZK",
                 "List ZK attachments.",
-                "List stored ZK attachments.",
+                "List attachments owned by the canonically authenticated account.",
                 "#/components/schemas/JsonValue",
                 Vec::new(),
             );
-            let post_op = json_post_operation(
+            methods.extend(json_post_operation(
                 "ZK",
                 "Create a ZK attachment.",
-                "Upload a ZK attachment.",
+                "Store a ZK attachment under the canonically authenticated account tenant.",
                 "#/components/schemas/JsonValue",
                 "#/components/schemas/JsonValue",
                 Vec::new(),
-            );
-            let mut methods = Map::new();
-            if let Some(get_value) = get_op.get("get") {
-                methods.insert("get".to_owned(), get_value.clone());
-            }
-            if let Some(post_value) = post_op.get("post") {
-                methods.insert("post".to_owned(), post_value.clone());
-            }
+            ));
             methods
         }),
     );
     paths.insert(
         "/v1/zk/attachments/{id}".to_owned(),
         Value::Object({
-            let get_op = json_get_operation(
+            let mut methods = json_get_operation(
                 "ZK",
                 "Fetch a ZK attachment.",
-                "Fetch a stored ZK attachment by id.",
+                "Fetch an attachment owned by the canonically authenticated account.",
                 "#/components/schemas/JsonValue",
                 vec![string_path_param("id", "Attachment identifier.")],
             );
-            let delete_op = json_delete_operation(
+            methods.extend(json_delete_operation(
                 "ZK",
                 "Delete a ZK attachment.",
-                "Delete a ZK attachment by id.",
+                "Delete an attachment owned by the canonically authenticated account.",
                 "#/components/schemas/JsonValue",
                 vec![string_path_param("id", "Attachment identifier.")],
-            );
-            let mut methods = Map::new();
-            if let Some(get_value) = get_op.get("get") {
-                methods.insert("get".to_owned(), get_value.clone());
-            }
-            if let Some(delete_value) = delete_op.get("delete") {
-                methods.insert("delete".to_owned(), delete_value.clone());
-            }
+            ));
             methods
         }),
     );
@@ -3769,7 +3672,7 @@ fn zk_paths() -> Map {
         Value::Object(json_get_operation(
             "ZK",
             "Count ZK attachments.",
-            "Return attachment counts.",
+            "Count attachments owned by the canonically authenticated account.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -3850,6 +3753,8 @@ fn zk_paths() -> Map {
     paths
 }
 
+include!("openapi/zk_attachment_auth.rs");
+
 fn zk_verify_batch_operation() -> Map {
     let mut operation = Map::new();
     operation.insert(
@@ -3863,7 +3768,7 @@ fn zk_verify_batch_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Verify a bounded batch of zero-knowledge proof envelopes supplied with one exact JSON or canonical-Norito Content-Type. The route is available only when Halo2 verification is enabled and moves admitted decode/verification work to a cancellation-safe blocking worker. Each item is classified as verified, cryptographically invalid, or a bounded diagnostic error; policy and decode errors are never conflated with an invalid proof. Responses are JSON for both request encodings."
+            "Authenticate the exact-network account before decoding or verification, then verify a bounded batch of zero-knowledge proof envelopes supplied with one exact JSON or canonical-Norito Content-Type. The route is available only when Halo2 verification is enabled and moves admitted decode/verification work to a cancellation-safe blocking worker. Each item is classified as verified, cryptographically invalid, or a bounded diagnostic error; policy and decode errors are never conflated with an invalid proof. Responses are JSON for both request encodings."
                 .to_owned(),
         ),
     );
@@ -4026,8 +3931,8 @@ fn governance_paths() -> Map {
         Value::Object(json_get_operation(
             "Governance",
             "Fetch governance capabilities.",
-            "Return the strict public governance schema, exact configured voting parameters, supported proposal kinds, and supported routes.",
-            "#/components/schemas/JsonValue",
+            "After exact-network account authentication, return the governance schema, exact genesis-derived NetworkId, configured voting parameters, supported proposal kinds, and supported routes.",
+            "#/components/schemas/GovernanceCapabilitiesV1",
             Vec::new(),
         )),
     );
@@ -4159,47 +4064,71 @@ fn governance_paths() -> Map {
     );
     paths.insert(
         "/v1/gov/ballots/zk-v1".to_owned(),
-        Value::Object(json_post_operation(
-            "Governance",
-            "Submit a ZK ballot (v1).",
-            "Submit a ZK ballot using the v1 envelope and receive draft instructions unless the request is invalid.",
-            "#/components/schemas/GovernanceZkBallotEnvelopeRequestV1",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object({
+            let mut methods = json_post_operation(
+                "Governance",
+                "Draft a ZK ballot (v1).",
+                "Authenticate the exact-network request authority, then build deterministic ZK ballot draft instructions for local transaction signing. The route does not submit or mutate ledger state.",
+                "#/components/schemas/GovernanceZkBallotEnvelopeRequestV1",
+                "#/components/schemas/JsonValue",
+                canonical_request_auth_header_parameters(),
+            );
+            if let Some(Value::Object(operation)) = methods.get_mut("post") {
+                insert_canonical_request_auth_contract(operation);
+            }
+            methods
+        }),
     );
     paths.insert(
         "/v1/gov/ballots/zk-v1/ballot-proof".to_owned(),
-        Value::Object(json_post_operation(
-            "Governance",
-            "Submit a ballot proof.",
-            "Submit a ZK ballot proof bundle and receive draft instructions unless the request is invalid.",
-            "#/components/schemas/GovernanceZkBallotProofRequestV1",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object({
+            let mut methods = json_post_operation(
+                "Governance",
+                "Draft a ballot proof instruction.",
+                "Authenticate the exact-network request authority, then build deterministic draft instructions from a canonical ZK ballot proof bundle. The route does not submit or mutate ledger state.",
+                "#/components/schemas/GovernanceZkBallotProofRequestV1",
+                "#/components/schemas/JsonValue",
+                canonical_request_auth_header_parameters(),
+            );
+            if let Some(Value::Object(operation)) = methods.get_mut("post") {
+                insert_canonical_request_auth_contract(operation);
+            }
+            methods
+        }),
     );
     paths.insert(
         "/v1/gov/ballots/plain".to_owned(),
-        Value::Object(json_post_operation(
-            "Governance",
-            "Submit a plain ballot.",
-            "Submit a non-ZK ballot and receive draft instructions unless the request is invalid.",
-            "#/components/schemas/GovernancePlainBallotRequestV1",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object({
+            let mut methods = json_post_operation(
+                "Governance",
+                "Draft a plain ballot.",
+                "Authenticate the exact-network request authority, then build deterministic non-ZK ballot draft instructions for local transaction signing. The route does not submit or mutate ledger state.",
+                "#/components/schemas/GovernancePlainBallotRequestV1",
+                "#/components/schemas/JsonValue",
+                canonical_request_auth_header_parameters(),
+            );
+            if let Some(Value::Object(operation)) = methods.get_mut("post") {
+                insert_canonical_request_auth_contract(operation);
+            }
+            methods
+        }),
     );
     paths.insert(
         "/v1/gov/parliament/ballots".to_owned(),
-        Value::Object(json_post_operation(
-            "Governance",
-            "Submit a parliament ballot.",
-            "Submit a parliament ballot and receive deterministic draft instructions for local signing.",
-            "#/components/schemas/GovernanceParliamentBallotRequestV1",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object({
+            let mut methods = json_post_operation(
+                "Governance",
+                "Draft a parliament ballot.",
+                "Authenticate the exact-network request authority, then build deterministic Parliament ballot draft instructions for local transaction signing. The route does not submit or mutate ledger state.",
+                "#/components/schemas/GovernanceParliamentBallotRequestV1",
+                "#/components/schemas/JsonValue",
+                canonical_request_auth_header_parameters(),
+            );
+            if let Some(Value::Object(operation)) = methods.get_mut("post") {
+                insert_canonical_request_auth_contract(operation);
+            }
+            methods
+        }),
     );
     paths.insert(
         "/v1/gov/finalize".to_owned(),
@@ -4469,8 +4398,8 @@ fn runtime_paths() -> Map {
         Value::Object(json_get_operation(
             "Runtime",
             "Fetch committed privacy capabilities.",
-            "Return the exact closed privacy protocol registry, locally compiled profiles, governed activations, and singleton consensus policy from one authoritative committed state view.",
-            "#/components/schemas/PrivacyCapabilitySnapshotV1",
+            "Return the canonical self-digesting Exact12 operation mapping, locally compiled profile evidence, governed activation state, explicit readiness and limitations, and singleton consensus policy from one authoritative committed state view.",
+            "#/components/schemas/PrivacyExact12CapabilityManifestV1",
             Vec::new(),
         )),
     );
@@ -7175,7 +7104,7 @@ fn sorafs_paths() -> Map {
         "202",
     );
     if let Some(Value::Object(post_operation)) = appeal_finance_report_post.get_mut("post") {
-        insert_reputation_auth_contract(post_operation);
+        insert_canonical_request_auth_contract(post_operation);
     }
     if let Some(Value::Object(post_operation)) = appeal_finance_report_post.remove("post") {
         appeal_finance_reports.insert("post".to_owned(), Value::Object(post_operation));
@@ -7205,7 +7134,7 @@ fn sorafs_paths() -> Map {
         "202",
     );
     if let Some(Value::Object(post_operation)) = appeal_finance_weekly_rollup_post.get_mut("post") {
-        insert_reputation_auth_contract(post_operation);
+        insert_canonical_request_auth_contract(post_operation);
     }
     if let Some(Value::Object(post_operation)) = appeal_finance_weekly_rollup_post.remove("post") {
         weekly_rollups.insert("post".to_owned(), Value::Object(post_operation));
@@ -7367,7 +7296,7 @@ fn sorafs_paths() -> Map {
             iroha_torii_shared::route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_PREPARE_POST
                 .stable_route_id(),
             "Prepare an externally attested moderation dead-letter resolution.",
-            "Authenticate the exact request with a canonical account signature, require the finalized sorafs_moderation_operator role, and prepare one checkpoint-bound canonical Norito resolution frame. The response exposes only that bounded frame and its signing digest. An independently administered checkpoint-attestor Ed25519 key must sign the digest outside Torii before apply; the authenticated operator key cannot substitute for the attestor.",
+            "Authenticate the exact request with a canonical account signature, require the finalized sorafs_moderation_operator role, and prepare one exact-NetworkId/checkpoint-bound canonical Norito resolution frame. The response exposes only that bounded frame and its signing digest. An independently administered checkpoint-attestor Ed25519 key must sign the digest outside Torii before apply; the authenticated operator key cannot substitute for the attestor.",
             "#/components/schemas/SorafsModerationDeadLetterPrepareRequestV1",
             "#/components/schemas/SorafsModerationDeadLetterPrepareResponseV1",
             SORAFS_MODERATION_DEAD_LETTER_PREPARE_REQUEST_MAX_BYTES_V1,
@@ -7379,7 +7308,7 @@ fn sorafs_paths() -> Map {
             iroha_torii_shared::route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_APPLY_POST
                 .stable_route_id(),
             "Apply an externally attested moderation dead-letter resolution.",
-            "Authenticate the exact request with a canonical account signature, require the finalized sorafs_moderation_operator role, bounded-decode and byte-canonically re-encode the opaque V1 resolution frame, verify its detached Ed25519 signature with the configured checkpoint attestor, and apply the checkpoint-bound redrive or acknowledgement atomically. The authenticated operator and external attestor must be independently administered.",
+            "Authenticate the exact request with a canonical account signature, require the finalized sorafs_moderation_operator role, bounded-decode and byte-canonically re-encode the opaque V1 resolution frame, verify its exact genesis-derived NetworkId and detached Ed25519 signature with the configured checkpoint attestor, and apply the checkpoint-bound redrive or acknowledgement atomically. The authenticated operator and external attestor must be independently administered.",
             "#/components/schemas/SorafsModerationDeadLetterApplyRequestV1",
             "#/components/schemas/SorafsModerationDeadLetterApplyResponseV1",
             SORAFS_MODERATION_DEAD_LETTER_APPLY_REQUEST_MAX_BYTES_V1,
@@ -7398,7 +7327,7 @@ fn sorafs_paths() -> Map {
     );
     if let Some(Value::Object(post_operation)) = sorafs_moderation_signed_transaction_operation(
         "Submit an authoritative moderation appeal intake.",
-        "Submit a caller-signed transaction containing exactly one `SubmitSorafsModerationAppeal` instruction. The transaction chain and signature must be exact, the authority must equal the appellant, and the native ledger validates the bounded intake and escrow digest before commitment. Torii never rebuilds or signs this caller action.",
+        "Submit a caller-signed transaction containing exactly one `SubmitSorafsModerationAppeal` instruction. The transaction's genesis-derived network identity and signature must be exact, the authority must equal the appellant, and the native ledger validates the bounded intake and escrow digest before commitment. Torii never rebuilds or signs this caller action.",
     )
     .remove("post")
     {
@@ -8088,16 +8017,58 @@ fn sorafs_paths() -> Map {
         "/v1/sorafs/reputation/events/ws".to_owned(),
         Value::Object(reputation_websocket_operation()),
     );
-    paths.insert(
-        "/v1/sorafs/pin".to_owned(),
-        Value::Object(json_get_operation(
-            "SoraFS",
-            "Fetch pin registry.",
-            "Fetch the SoraFS pin registry.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+    let mut sorafs_pin_list = json_get_operation(
+        "SoraFS",
+        "Fetch a finalized pin-manifest page.",
+        "Return `PinManifestPageV1`: bounded summaries in canonical digest order, an exclusive keyset cursor, O(1) consensus-maintained retained-record/live-content totals, and the finalized height/hash shared by every page. `limit` and `max_bytes` are hard ceilings; `after_digest_hex` is exclusive. A supplied finalized anchor must contain both fields and returns 409 when stale. Offset pagination, full-record materialization, alias proofs, and lineage expansion are retired; use the bounded detail route for one exact manifest.",
+        "#/components/schemas/PinManifestPageV1",
+        vec![
+            bounded_integer_query_param(
+                "expected_finalized_height",
+                "Optional non-zero finalized block height. Must be supplied together with expected_finalized_block_hash_hex.",
+                Some("uint64"),
+                1,
+                None,
+            ),
+            canonical_nonzero_digest_query_param(
+                "expected_finalized_block_hash_hex",
+                "Optional canonical lowercase finalized block hash. Must be supplied together with expected_finalized_height.",
+            ),
+            bounded_integer_query_param(
+                "limit",
+                "Optional summary count (default 50, hard maximum 256).",
+                Some("uint32"),
+                1,
+                Some(256),
+            ),
+            bounded_integer_query_param(
+                "max_bytes",
+                "Optional canonical encoded page-byte ceiling (default 262144).",
+                Some("uint32"),
+                1024,
+                Some(262_144),
+            ),
+            canonical_nonzero_digest_query_param(
+                "after_digest_hex",
+                "Optional exclusive canonical lowercase manifest-digest cursor.",
+            ),
+            enum_string_query_param(
+                "status",
+                "Optional exact lowercase lifecycle filter backed by the authenticated status index.",
+                &["pending", "approved", "retired"],
+            ),
+        ],
+    );
+    let Some(Value::Object(operation)) = sorafs_pin_list.get_mut("get") else {
+        unreachable!("JSON GET helper always returns one GET operation");
+    };
+    operation.insert(
+        "responses".into(),
+        Value::Object(single_dual_format_response(
+            "#/components/schemas/PinManifestPageV1",
         )),
     );
+    paths.insert("/v1/sorafs/pin".to_owned(), Value::Object(sorafs_pin_list));
     paths.insert(
         "/v1/sorafs/pin/register".to_owned(),
         Value::Object(sorafs_pin_register_operation()),
@@ -8716,7 +8687,7 @@ fn soranet_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraNet",
             "Submit a privacy event.",
-            "Submit a SoraNet privacy event payload.",
+            "Submit one bounded SoraNet privacy event. Torii authenticates the configured collector source namespace and optional dedicated token before decoding the request body; disabled or empty-allowlist deployments fail closed.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -8727,7 +8698,7 @@ fn soranet_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraNet",
             "Submit a privacy share payload.",
-            "Submit a SoraNet privacy share payload.",
+            "Submit one bounded SoraNet privacy collector share. Torii authenticates the configured collector source namespace and optional dedicated token before decoding the request body; disabled or empty-allowlist deployments fail closed.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -10429,7 +10400,7 @@ fn reputation_get_operation(
         json_get_operation("SoraFS", summary, description, response_schema_ref, params);
     if let Some(Value::Object(operation)) = methods.get_mut("get") {
         operation.insert("operationId".into(), Value::String(operation_id.to_owned()));
-        insert_reputation_auth_contract(operation);
+        insert_canonical_request_auth_contract(operation);
         insert_reputation_query_contract(operation, allowed_query_parameters);
         if let Some(Value::Object(responses)) = operation.get_mut("responses") {
             if let Some(Value::Object(ok)) = responses.get_mut("200") {
@@ -10451,7 +10422,7 @@ fn reputation_get_operation(
     methods
 }
 
-fn insert_reputation_auth_contract(operation: &mut Map) {
+fn insert_canonical_request_auth_contract(operation: &mut Map) {
     operation.insert(
         "security".into(),
         norito::json!([
@@ -10497,6 +10468,20 @@ fn insert_reputation_auth_contract(operation: &mut Map) {
     );
 }
 
+fn insert_private_no_store_response_contract(operation: &mut Map) {
+    let Some(Value::Object(responses)) = operation.get_mut("responses") else {
+        return;
+    };
+    for response in responses.values_mut() {
+        if let Value::Object(response) = response {
+            response.insert(
+                "headers".into(),
+                Value::Object(private_no_store_response_headers()),
+            );
+        }
+    }
+}
+
 fn reputation_cache_response_headers() -> Map {
     let mut headers = Map::new();
     headers.insert(
@@ -10537,12 +10522,12 @@ fn reputation_cache_response_headers() -> Map {
     headers
 }
 
-fn reputation_private_no_store_response_headers() -> Map {
+fn private_no_store_response_headers() -> Map {
     let mut headers = Map::new();
     headers.insert(
         "Cache-Control".into(),
         norito::json!({
-            "description": "Authenticated reputation responses which must never be retained.",
+            "description": "Authenticated responses which must never be retained.",
             "required": true,
             "schema": {
                 "type": "string",
@@ -10637,7 +10622,7 @@ fn reputation_error_response(description: &str) -> Value {
     json_response_with_headers(
         description,
         schema_ref("SorafsReputationApiErrorV1"),
-        reputation_private_no_store_response_headers(),
+        private_no_store_response_headers(),
     )
 }
 
@@ -10652,7 +10637,7 @@ fn reputation_auth_required_response() -> Value {
     );
     response.insert(
         "headers".into(),
-        Value::Object(reputation_private_no_store_response_headers()),
+        Value::Object(private_no_store_response_headers()),
     );
     Value::Object(response)
 }
@@ -10762,7 +10747,7 @@ fn reputation_sse_operation() -> Map {
         "parameters".into(),
         Value::Array(reputation_stream_parameters()),
     );
-    insert_reputation_auth_contract(&mut operation);
+    insert_canonical_request_auth_contract(&mut operation);
     insert_reputation_query_contract(&mut operation, &["since", "limit"]);
     operation.insert(
         "x-iroha-forbidden-request-headers-v1".into(),
@@ -10773,7 +10758,7 @@ fn reputation_sse_operation() -> Map {
         "200".into(),
         norito::json!({
             "description": "Authenticated server-sent committed reputation event stream.",
-            "headers": (reputation_private_no_store_response_headers()),
+            "headers": (private_no_store_response_headers()),
             "content": {
                 "text/event-stream": {
                     "schema": {
@@ -10823,7 +10808,7 @@ fn reputation_websocket_operation() -> Map {
         "parameters".into(),
         Value::Array(reputation_stream_parameters()),
     );
-    insert_reputation_auth_contract(&mut operation);
+    insert_canonical_request_auth_contract(&mut operation);
     insert_reputation_query_contract(&mut operation, &["since", "limit"]);
     operation.insert(
         "x-iroha-websocket-text-frame-schema".into(),
@@ -10834,7 +10819,7 @@ fn reputation_websocket_operation() -> Map {
         "101".into(),
         norito::json!({
             "description": "Authenticated WebSocket upgrade accepted.",
-            "headers": (reputation_private_no_store_response_headers())
+            "headers": (private_no_store_response_headers())
         }),
     );
     insert_reputation_error_responses(&mut responses);
@@ -10892,7 +10877,7 @@ fn sorafs_moderation_dead_letter_post_operation(
                 .expect("moderation dead-letter request bound fits uint64"),
         ),
     );
-    insert_reputation_auth_contract(operation);
+    insert_canonical_request_auth_contract(operation);
     let responses = operation
         .get_mut("responses")
         .and_then(Value::as_object_mut)
@@ -11402,7 +11387,7 @@ fn sorafs_pin_register_operation() -> Map {
     let mut methods = versioned_dual_format_post_operation(
         "SoraFS",
         "Register paid pin manifest.",
-        "Submit a caller-signed, versioned `SignedTransaction` containing exactly one native `RegisterPinManifest` instruction. The transaction signature binds the authority, canonical manifest bytes, submitted epoch, alias, predecessor digest, and fee intent. Torii validates the signature and instruction shape, queues the original transaction unchanged, and returns HTTP 202 with `status = submitted`, its admission hash, and the submitted manifest digest. Submitted never means committed or finalized. The response is not a finality, fee, custody, or pin-status receipt; Torii never accepts or handles a private key.",
+        "Submit a caller-signed, versioned `SignedTransaction` containing exactly one native `RegisterPinManifest` instruction. The transaction signature binds the authority, canonical manifest bytes, alias, predecessor digest, and fee intent; Core derives the recorded submission epoch exclusively from consensus block time. Torii validates the signature and instruction shape, queues the original transaction unchanged, and returns HTTP 202 with `status = submitted`, its admission hash, and the submitted manifest digest. Submitted never means committed or finalized. The response is not a finality, fee, custody, or pin-status receipt; Torii never accepts or handles a private key.",
         "#/components/schemas/VersionedSignedTransactionJson",
         "#/components/schemas/SorafsPinRegisterResponseV1",
         202,
@@ -12043,6 +12028,7 @@ fn paths_section(enabled_features: EnabledFeatures<'_>) -> Map {
     paths.extend(nexus_paths());
     paths.extend(sumeragi_paths());
     paths.extend(repo_paths());
+    secure_runtime_governance_account_paths(&mut paths);
     retain_catalog_openapi_operations(&mut paths, enabled_features);
     annotate_tool_effects(&mut paths);
     paths
@@ -14690,9 +14676,9 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             "OfflineTransitionProofBundle",
             norito::json!({
                 "type": "object",
-                "required": ["chain_id", "asset", "steps"],
+                "required": ["network_id", "asset", "steps"],
                 "properties": {
-                    "chain_id": { "type": "string" },
+                    "network_id": { "$ref": "#/components/schemas/NetworkId" },
                     "asset": { "type": "string" },
                     "steps": {
                         "type": "array",
@@ -14768,9 +14754,9 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             "OfflineSpendableNoteDescriptor",
             norito::json!({
                 "type": "object",
-                "required": ["chain_id", "asset", "note_commitment", "spend_nullifier", "amount"],
+                "required": ["network_id", "asset", "note_commitment", "spend_nullifier", "amount"],
                 "properties": {
-                    "chain_id": { "type": "string" },
+                    "network_id": { "$ref": "#/components/schemas/NetworkId" },
                     "asset": { "type": "string" },
                     "note_commitment": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "spend_nullifier": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
@@ -14814,7 +14800,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                 "type": "object",
                 "required": [
                     "version",
-                    "chain_id",
+                    "network_id",
                     "payer",
                     "asset",
                     "asset_scale",
@@ -14833,7 +14819,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                 ],
                 "properties": {
                     "version": { "type": "integer", "format": "uint16", "minimum": 4, "maximum": 4 },
-                    "chain_id": { "type": "string" },
+                    "network_id": { "$ref": "#/components/schemas/NetworkId" },
                     "payer": { "type": "string" },
                     "asset": { "type": "string" },
                     "asset_scale": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 28 },
@@ -14868,14 +14854,14 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             norito::json!({
                 "type": "object",
                 "required": [
-                    "context_id", "chain_id", "protocol_version", "height", "epoch",
+                    "context_id", "network_id", "protocol_version", "height", "epoch",
                     "epoch_end_height", "mode", "nexus_amx_context_hash",
                     "execution_policy_hash", "da_layout", "leader_seed"
                 ],
                 "additionalProperties": false,
                 "properties": {
                     "context_id": { "$ref": "#/components/schemas/SumeragiV2HeightContextId" },
-                    "chain_id": { "type": "string", "minLength": 1 },
+                    "network_id": { "$ref": "#/components/schemas/Hash" },
                     "protocol_version": { "type": "integer", "format": "uint16", "enum": [4] },
                     "height": { "type": "integer", "format": "uint64", "minimum": 1 },
                     "epoch": { "type": "integer", "format": "uint64", "minimum": 0 },
@@ -15060,7 +15046,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             norito::json!({
                 "type": "object",
                 "required": [
-                    "chain_id",
+                    "network_id",
                     "asset",
                     "asset_scale",
                     "final_root",
@@ -15074,7 +15060,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "verifier_key_id"
                 ],
                 "properties": {
-                    "chain_id": { "type": "string" },
+                    "network_id": { "$ref": "#/components/schemas/NetworkId" },
                     "asset": { "type": "string" },
                     "asset_scale": { "type": "integer", "format": "uint32", "minimum": 0 },
                     "final_root": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
@@ -15145,7 +15131,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "root",
                     "public_amount",
                     "asset_tag",
-                    "chain_tag"
+                    "network_tag"
                 ],
                 "properties": {
                     "input_commitment_0": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
@@ -15156,7 +15142,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "root": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "public_amount": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "asset_tag": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
-                    "chain_tag": { "$ref": "#/components/schemas/OfflineFixed32Bytes" }
+                    "network_tag": { "$ref": "#/components/schemas/OfflineFixed32Bytes" }
                 }
             }),
         ),
@@ -15165,7 +15151,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             norito::json!({
                 "type": "object",
                 "required": [
-                    "chain_id",
+                    "network_id",
                     "asset",
                     "input_note",
                     "parent_branch_claims",
@@ -15181,7 +15167,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "operation_id"
                 ],
                 "properties": {
-                    "chain_id": { "type": "string" },
+                    "network_id": { "$ref": "#/components/schemas/NetworkId" },
                     "asset": { "type": "string" },
                     "input_note": { "$ref": "#/components/schemas/OfflineSpendableNoteDescriptor" },
                     "parent_branch_claims": {
@@ -16269,11 +16255,11 @@ fn sccp_crypto_and_registry_schemas(schemas: &mut Map) {
         "SccpSoraSettlementV1".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["asset_definition_id", "custody_account_id", "payload_amount_scale"],
+            "required": ["asset_definition_id", "custody_owner", "payload_amount_scale"],
             "additionalProperties": false,
             "properties": {
                 "asset_definition_id": { "const": "6TEAJqbb8oEPmLncoNiMRbLEK6tw" },
-                "custody_account_id": { "$ref": "#/components/schemas/SccpTairaI105Account" },
+                "custody_owner": { "$ref": "#/components/schemas/SccpTairaI105Account" },
                 "payload_amount_scale": { "type": "integer", "enum": [9] }
             }
         }),
@@ -17940,13 +17926,13 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "required": [
-                "chain_id", "protocol_version", "height", "epoch", "epoch_end_height",
+                "network_id", "protocol_version", "height", "epoch", "epoch_end_height",
                 "mode", "roster", "quorum", "nexus_amx_context_hash",
                 "execution_policy_hash", "da_layout", "leader_seed"
             ],
             "additionalProperties": false,
             "properties": {
-                "chain_id": { "type": "string", "minLength": 1 },
+                "network_id": { "$ref": "#/components/schemas/Hash" },
                 "protocol_version": { "type": "integer", "format": "uint16", "enum": [4] },
                 "height": {
                     "type": "integer", "format": "uint64", "minimum": 1,
@@ -18109,14 +18095,14 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "required": [
-                "version", "challenge", "chain_id", "node_id", "node_fingerprint",
+                "version", "challenge", "network_id", "node_id", "node_fingerprint",
                 "genesis_block_hash", "genesis_finality_proof", "status", "finality_proof"
             ],
             "additionalProperties": false,
             "properties": {
                 "version": { "type": "integer", "format": "uint8", "enum": [1] },
                 "challenge": { "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray" },
-                "chain_id": { "type": "string", "minLength": 1 },
+                "network_id": { "$ref": "#/components/schemas/Hash" },
                 "node_id": {
                     "type": "string",
                     "description": "Canonical PeerId of the BLS node key which signed this attestation."
@@ -18153,10 +18139,10 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         "BridgeCommitment".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["chain_id", "height_context_id", "block_height", "block_hash"],
+            "required": ["network_id", "height_context_id", "block_height", "block_hash"],
             "additionalProperties": false,
             "properties": {
-                "chain_id": { "type": "string", "minLength": 1 },
+                "network_id": { "$ref": "#/components/schemas/Hash" },
                 "height_context_id": {
                     "$ref": "#/components/schemas/SumeragiV2HeightContextId"
                 },
@@ -19211,6 +19197,85 @@ fn governance_mutation_schemas(schemas: &mut Map) {
         }),
     );
     schemas.insert(
+        "GovernanceTargetBodySizesV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "rules_committee", "agenda_council", "interest_panel", "review_panel",
+                "policy_jury", "oversight_committee", "fma_committee"
+            ],
+            "properties": {
+                "rules_committee": { "type": "string", "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN) },
+                "agenda_council": { "type": "string", "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN) },
+                "interest_panel": { "type": "string", "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN) },
+                "review_panel": { "type": "string", "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN) },
+                "policy_jury": { "type": "string", "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN) },
+                "oversight_committee": { "type": "string", "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN) },
+                "fma_committee": { "type": "string", "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN) }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernanceCapabilitiesV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "schema", "version", "network_id", "current_height", "network_prefix",
+                "abi_version", "data_model_version", "approval_mode", "plain_voting_enabled",
+                "auto_finalize_plain", "auto_finalize_plain_scope",
+                "validation_fee_plain_requires_explicit_finalization", "citizenship_asset_id",
+                "citizenship_bond_amount", "citizenship_escrow_account", "voting_asset_id",
+                "min_bond_amount", "bond_escrow_account", "validation_fee_plain_electorate_rules",
+                "conviction_step_blocks", "max_conviction", "min_enactment_delay", "window_span",
+                "min_turnout", "approval_threshold_numerator", "approval_threshold_denominator",
+                "parliament_quorum_bps", "target_body_sizes", "supported_proposal_kinds",
+                "supported_routes"
+            ],
+            "properties": {
+                "schema": { "type": "string", "const": "iroha.governance.capabilities.v1" },
+                "version": { "type": "integer", "format": "uint16", "const": 1 },
+                "network_id": { "$ref": "#/components/schemas/NetworkId" },
+                "current_height": { "type": "string", "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN) },
+                "network_prefix": { "type": "string", "minLength": 1 },
+                "abi_version": { "type": "string", "minLength": 1 },
+                "data_model_version": { "type": "string", "minLength": 1 },
+                "approval_mode": { "type": "string", "enum": ["PARLIAMENT_SORTITION_JIT", "LEGACY_COUNCIL_EPOCH"] },
+                "plain_voting_enabled": { "type": "boolean" },
+                "auto_finalize_plain": { "type": "boolean" },
+                "auto_finalize_plain_scope": { "type": "string", "const": "GENERIC_NON_VALIDATION_FEE_ONLY" },
+                "validation_fee_plain_requires_explicit_finalization": { "type": "boolean" },
+                "citizenship_asset_id": { "type": "string", "minLength": 1 },
+                "citizenship_bond_amount": { "type": "string", "minLength": 1 },
+                "citizenship_escrow_account": { "type": "string", "minLength": 1 },
+                "voting_asset_id": { "type": "string", "minLength": 1 },
+                "min_bond_amount": { "type": "string", "minLength": 1 },
+                "bond_escrow_account": { "type": "string", "minLength": 1 },
+                "validation_fee_plain_electorate_rules": { "$ref": "#/components/schemas/ValidationFeePlainElectorateRulesV1" },
+                "conviction_step_blocks": { "type": "string", "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN) },
+                "max_conviction": { "type": "string", "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN) },
+                "min_enactment_delay": { "type": "string", "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN) },
+                "window_span": { "type": "string", "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN) },
+                "min_turnout": { "type": "string", "minLength": 1 },
+                "approval_threshold_numerator": { "type": "string", "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN) },
+                "approval_threshold_denominator": { "type": "string", "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN) },
+                "parliament_quorum_bps": { "type": "string", "pattern": (GOVERNANCE_U64_DECIMAL_PATTERN) },
+                "target_body_sizes": { "$ref": "#/components/schemas/GovernanceTargetBodySizesV1" },
+                "supported_proposal_kinds": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 },
+                    "uniqueItems": true
+                },
+                "supported_routes": {
+                    "type": "array",
+                    "items": { "type": "string", "pattern": "^/v1/" },
+                    "uniqueItems": true
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "GovernanceAtWindowV1".to_owned(),
         norito::json!({
             "type": "object",
@@ -19356,15 +19421,12 @@ fn governance_mutation_schemas(schemas: &mut Map) {
             "type": "object",
             "additionalProperties": false,
             "required": [
-                "authority", "chain_id", "referendum_id", "owner", "amount",
+                "authority", "network_id", "referendum_id", "owner", "amount",
                 "duration_blocks", "direction"
             ],
             "properties": {
                 "authority": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
-                "chain_id": {
-                    "type": "string", "minLength": 1,
-                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
-                },
+                "network_id": { "$ref": "#/components/schemas/NetworkId" },
                 "referendum_id": {
                     "type": "string", "minLength": 1,
                     "maxLength": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES),
@@ -19387,13 +19449,10 @@ fn governance_mutation_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["authority", "chain_id", "proposal_id", "body", "decision"],
+            "required": ["authority", "network_id", "proposal_id", "body", "decision"],
             "properties": {
                 "authority": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
-                "chain_id": {
-                    "type": "string", "minLength": 1,
-                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
-                },
+                "network_id": { "$ref": "#/components/schemas/NetworkId" },
                 "proposal_id": { "type": "string", "pattern": (GOVERNANCE_HASH_LITERAL_PATTERN) },
                 "body": {
                     "type": "string",
@@ -19414,13 +19473,10 @@ fn governance_mutation_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["authority", "chain_id", "election_id", "backend", "envelope_b64"],
+            "required": ["authority", "network_id", "election_id", "backend", "envelope_b64"],
             "properties": {
                 "authority": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
-                "chain_id": {
-                    "type": "string", "minLength": 1,
-                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
-                },
+                "network_id": { "$ref": "#/components/schemas/NetworkId" },
                 "election_id": {
                     "type": "string", "minLength": 1,
                     "maxLength": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES),
@@ -19467,13 +19523,10 @@ fn governance_mutation_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["authority", "chain_id", "election_id", "ballot"],
+            "required": ["authority", "network_id", "election_id", "ballot"],
             "properties": {
                 "authority": { "$ref": "#/components/schemas/GovernanceCanonicalAccountIdV1" },
-                "chain_id": {
-                    "type": "string", "minLength": 1,
-                    "pattern": (GOVERNANCE_EXACT_TOKEN_PATTERN)
-                },
+                "network_id": { "$ref": "#/components/schemas/NetworkId" },
                 "election_id": {
                     "type": "string", "minLength": 1,
                     "maxLength": (iroha_data_model::governance::GOVERNANCE_SELECTOR_V1_MAX_BYTES),
@@ -20422,6 +20475,100 @@ fn insert_sorafs_pin_manifest_readback_schemas(schemas: &mut Map) {
                 "manifest": { "$ref": "#/components/schemas/PinManifestRecord" }
             },
             "description": "Exact native Norito JSON response for one chain-authoritative pin manifest at one finalized block."
+        }),
+    );
+    schemas.insert(
+        "PinResourceUsage".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["manifest_count", "content_bytes"],
+            "additionalProperties": false,
+            "properties": {
+                "manifest_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "content_bytes": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                }
+            },
+            "description": "Consensus-maintained O(1) count and content-byte totals for currently charged pin manifests."
+        }),
+    );
+    schemas.insert(
+        "PinManifestSummaryV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "digest",
+                "submitted_by",
+                "submitted_epoch",
+                "content_length",
+                "retention_epoch",
+                "status"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "digest": { "$ref": "#/components/schemas/ManifestDigest" },
+                "submitted_by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical domainless I105 account identifier charged for this manifest."
+                },
+                "submitted_epoch": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "content_length": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "retention_epoch": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "status": { "$ref": "#/components/schemas/PinStatus" },
+                "successor_of": { "$ref": "#/components/schemas/ManifestDigest" }
+            },
+            "description": "Bounded list projection excluding metadata, alias proofs, council envelopes, fee details, and lineage expansion."
+        }),
+    );
+    schemas.insert(
+        "PinManifestPageV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "finalized_cursor",
+                "charged_usage",
+                "manifests",
+                "has_more"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "finalized_cursor": {
+                    "$ref": "#/components/schemas/PinManifestFinalizedCursorV1"
+                },
+                "charged_usage": { "$ref": "#/components/schemas/PinResourceUsage" },
+                "manifests": {
+                    "type": "array",
+                    "maxItems": 256,
+                    "items": { "$ref": "#/components/schemas/PinManifestSummaryV1" }
+                },
+                "has_more": { "type": "boolean" },
+                "next_after_digest": { "$ref": "#/components/schemas/ManifestDigest" }
+            },
+            "description": "Finalized exclusive-keyset page whose canonical Norito encoding is additionally bounded to 262144 bytes."
         }),
     );
 }
@@ -21824,7 +21971,7 @@ fn insert_sorafs_hedging_billing_schemas(schemas: &mut Map) {
             "required": [
                 "version",
                 "intent_id",
-                "chain_id",
+                "network_id",
                 "service_policy_digest",
                 "period_close_digest",
                 "period_end_unix",
@@ -21842,7 +21989,7 @@ fn insert_sorafs_hedging_billing_schemas(schemas: &mut Map) {
             "properties": {
                 "version": { "type": "integer", "format": "uint8", "enum": [1] },
                 "intent_id": { "$ref": "#/components/schemas/HedgingBillingBytes32V1" },
-                "chain_id": { "type": "string", "minLength": 1 },
+                "network_id": { "$ref": "#/components/schemas/NetworkId" },
                 "service_policy_digest": { "$ref": "#/components/schemas/HedgingBillingBytes32V1" },
                 "period_close_digest": { "$ref": "#/components/schemas/HedgingBillingBytes32V1" },
                 "period_end_unix": { "type": "integer", "format": "uint64", "minimum": 1 },
@@ -23401,7 +23548,7 @@ fn insert_openapi_schemas_part_1(schemas: &mut Map) {
         "NativeAmxAttestationBody".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["round", "epoch", "chain_id_hash", "source_id", "tx_entrypoint_hash", "plan_digest", "phase", "coordinator_lane_id", "coordinator_dataspace_id", "coordinator_lane_incarnation", "participant_lane_id", "participant_dataspace_id", "participant_lane_incarnation", "participant_previous_block_height", "participant_previous_block_descriptor_hash", "participant_lane_block_height", "participant_lane_block_view", "participant_proposal_hash", "participant_settlement_commitment", "participant_validator_set_hash", "participant_validator_count", "participant_min_quorum", "authority_context_height", "coordinator_lane_block_view", "coordinator_proposal_hash", "planned_coordinator_block_height"],
+            "required": ["round", "epoch", "network_id", "source_id", "tx_entrypoint_hash", "plan_digest", "phase", "coordinator_lane_id", "coordinator_dataspace_id", "coordinator_lane_incarnation", "participant_lane_id", "participant_dataspace_id", "participant_lane_incarnation", "participant_previous_block_height", "participant_previous_block_descriptor_hash", "participant_lane_block_height", "participant_lane_block_view", "participant_proposal_hash", "participant_settlement_commitment", "participant_validator_set_hash", "participant_validator_count", "participant_min_quorum", "authority_context_height", "coordinator_lane_block_view", "coordinator_proposal_hash", "planned_coordinator_block_height"],
             "additionalProperties": false,
             "properties": {
                 "round": {
@@ -23415,7 +23562,7 @@ fn insert_openapi_schemas_part_1(schemas: &mut Map) {
                     }
                 },
                 "epoch": { "type": "integer", "format": "uint64", "minimum": 0 },
-                "chain_id_hash": { "$ref": "#/components/schemas/Hash" },
+                "network_id": { "$ref": "#/components/schemas/NetworkId" },
                 "source_id": {
                     "type": "string",
                     "pattern": "^[0-9A-F]{64}$",
@@ -23566,7 +23713,7 @@ fn insert_openapi_schemas_part_1(schemas: &mut Map) {
         "NativeAmxReceipt".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["version", "source_id", "chain_id_hash", "plan_digest", "lane_id", "dataspace_id", "lane_incarnation", "authority_context_height", "lane_block_height", "lane_block_view", "coordinator_proposal_hash", "legs"],
+            "required": ["version", "source_id", "network_id", "plan_digest", "lane_id", "dataspace_id", "lane_incarnation", "authority_context_height", "lane_block_height", "lane_block_view", "coordinator_proposal_hash", "legs"],
             "additionalProperties": false,
             "properties": {
                 "version": { "type": "integer", "format": "uint16", "enum": [2] },
@@ -23575,7 +23722,7 @@ fn insert_openapi_schemas_part_1(schemas: &mut Map) {
                     "pattern": "^[0-9A-F]{64}$",
                     "description": "Source transaction hash/id as canonical uppercase 32-byte Norito JSON hex."
                 },
-                "chain_id_hash": { "$ref": "#/components/schemas/Hash" },
+                "network_id": { "$ref": "#/components/schemas/NetworkId" },
                 "plan_digest": { "$ref": "#/components/schemas/Hash" },
                 "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
@@ -25858,10 +26005,6 @@ fn insert_openapi_schemas_part_2(schemas: &mut Map) {
                     "format": "uint64",
                     "description": "Block height reported for the status when available."
                 },
-                "rejection_reason": {
-                    "$ref": "#/components/schemas/JsonValue",
-                    "description": "Structured rejection reason when `kind` is `Rejected`."
-                }
             }
         }),
     );
@@ -25888,6 +26031,28 @@ fn insert_openapi_schemas_part_2(schemas: &mut Map) {
                     "type": "string",
                     "enum": ["cache", "queue", "state"],
                     "description": "Source used by Torii to resolve the status."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "PipelineTransactionDetailsResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["hash", "transaction", "trigger_completions"],
+            "additionalProperties": false,
+            "properties": {
+                "hash": {
+                    "type": "string",
+                    "description": "Canonical signed transaction hash (hex, lowercase)."
+                },
+                "transaction": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Exact committed transaction with authenticated entrypoint, result, and durable batch receipts."
+                },
+                "trigger_completions": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/JsonValue" }
                 }
             }
         }),
@@ -26209,7 +26374,7 @@ fn insert_openapi_schemas_part_2(schemas: &mut Map) {
             "properties": {
                 "body": {
                     "$ref": "#/components/schemas/JsonValue",
-                    "description": "Canonical versioned plan body containing the authority, chain, block anchor, ordered resources and frames, exact totals, diagnostics, and expiry."
+                    "description": "Canonical versioned plan body containing the authority, exact genesis-derived NetworkId, block anchor, ordered resources and frames, exact totals, diagnostics, and expiry. Legacy chain_id fields are rejected."
                 },
                 "plan_hash": {
                     "type": "string",
@@ -26257,7 +26422,7 @@ fn insert_openapi_schemas_part_2(schemas: &mut Map) {
             "properties": {
                 "body": {
                     "$ref": "#/components/schemas/JsonValue",
-                    "description": "Canonical versioned lifecycle plan body containing the authority, chain, block anchor, exact operation, disposition, optional frame/quote, totals, diagnostics, and expiry."
+                    "description": "Canonical versioned lifecycle plan body containing the authority, exact genesis-derived NetworkId, block anchor, exact operation, disposition, optional frame/quote, totals, diagnostics, and expiry. Legacy chain_id fields are rejected."
                 },
                 "plan_hash": {
                     "type": "string",
@@ -27532,10 +27697,14 @@ fn insert_openapi_schemas_part_2(schemas: &mut Map) {
         "FeeSponsorProgram".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["id", "lifecycle"],
+            "required": ["id", "payout_account", "lifecycle"],
             "additionalProperties": false,
             "properties": {
                 "id": {"$ref": "#/components/schemas/FeeSponsorProgramId"},
+                "payout_account": {
+                    "type": "string",
+                    "description": "Immutable registered bare I105 account receiving vault withdrawals."
+                },
                 "lifecycle": {
                     "type": "object",
                     "required": ["state", "value"],
@@ -27637,13 +27806,44 @@ fn insert_openapi_schemas_part_2(schemas: &mut Map) {
         }),
     );
     schemas.insert(
+        "NetworkId".to_owned(),
+        norito::json!({
+            "allOf": [{"$ref": "#/components/schemas/Hash"}],
+            "description": "Exact genesis-header-derived deployment identity encoded as one canonical Norito JSON hash literal."
+        }),
+    );
+    schemas.insert(
+        "TransactionDomain".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["kind", "value"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind": {"const": "network"},
+                        "value": {"$ref": "#/components/schemas/NetworkId"}
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["kind"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind": {"const": "genesis"}
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
         "TransactionPayload".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["chain", "authority", "creation_time_ms", "instructions", "fee_payment", "metadata"],
+            "required": ["domain", "authority", "creation_time_ms", "instructions", "time_to_live_ms", "fee_payment", "metadata"],
             "additionalProperties": false,
             "properties": {
-                "chain": {"type": "string"},
+                "domain": {"$ref": "#/components/schemas/TransactionDomain"},
                 "authority": {"type": "string"},
                 "creation_time_ms": {"type": "integer", "format": "uint64"},
                 "instructions": {
@@ -27653,7 +27853,12 @@ fn insert_openapi_schemas_part_2(schemas: &mut Map) {
                 "time_to_live_ms": {"type": "integer", "format": "uint64", "minimum": 1},
                 "nonce": {"type": "integer", "format": "uint32", "minimum": 1},
                 "fee_payment": {"$ref": "#/components/schemas/FeePaymentIntent"},
-                "metadata": {"type": "object"}
+                "metadata": {"type": "object"},
+                "attachments": {
+                    "type": "string",
+                    "contentEncoding": "base64",
+                    "description": "Optional canonical bounded ProofAttachmentList frame encoded as padded base64."
+                }
             }
         }),
     );
@@ -29023,6 +29228,7 @@ fn openapi_schemas() -> Map {
     insert_openapi_schemas_part_1(&mut schemas);
     insert_openapi_schemas_part_2(&mut schemas);
     insert_openapi_schemas_part_3(&mut schemas);
+    insert_connect_schemas(&mut schemas);
     schemas
 }
 
@@ -29338,6 +29544,129 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual_properties, expected_properties, "{name} properties");
+    }
+
+    #[test]
+    fn transaction_payload_schema_requires_closed_network_domain_and_positive_ttl() {
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+        assert_strict_object_schema(
+            schemas,
+            "TransactionPayload",
+            &[
+                "domain",
+                "authority",
+                "creation_time_ms",
+                "instructions",
+                "time_to_live_ms",
+                "fee_payment",
+                "metadata",
+            ],
+            &["nonce", "attachments"],
+        );
+
+        let payload = schemas
+            .get("TransactionPayload")
+            .and_then(Value::as_object)
+            .expect("TransactionPayload schema");
+        let properties = payload
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("TransactionPayload properties");
+        for retired in ["chain", "chain_id", "chainId"] {
+            assert!(
+                !properties.contains_key(retired),
+                "retired transaction identity key `{retired}` must be absent"
+            );
+        }
+        assert_eq!(
+            properties
+                .get("domain")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/TransactionDomain")
+        );
+        assert_eq!(
+            properties
+                .get("time_to_live_ms")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("minimum"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let network_id = schemas
+            .get("NetworkId")
+            .and_then(Value::as_object)
+            .expect("NetworkId schema");
+        assert_eq!(
+            network_id
+                .get("allOf")
+                .and_then(Value::as_array)
+                .and_then(|schemas| schemas.first())
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/Hash")
+        );
+
+        let domain_variants = schemas
+            .get("TransactionDomain")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("oneOf"))
+            .and_then(Value::as_array)
+            .expect("TransactionDomain variants");
+        assert_eq!(domain_variants.len(), 2);
+        for variant in domain_variants {
+            let variant = variant.as_object().expect("domain variant object");
+            assert_eq!(
+                variant.get("additionalProperties"),
+                Some(&Value::Bool(false))
+            );
+        }
+        let network = domain_variants[0]
+            .as_object()
+            .expect("network domain variant");
+        assert_eq!(
+            network
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("kind"))
+                .and_then(Value::as_object)
+                .and_then(|kind| kind.get("const"))
+                .and_then(Value::as_str),
+            Some("network")
+        );
+        assert_eq!(
+            network
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("value"))
+                .and_then(Value::as_object)
+                .and_then(|value| value.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/NetworkId")
+        );
+        let genesis = domain_variants[1]
+            .as_object()
+            .expect("genesis domain variant");
+        assert_eq!(
+            genesis
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("kind"))
+                .and_then(Value::as_object)
+                .and_then(|kind| kind.get("const"))
+                .and_then(Value::as_str),
+            Some("genesis")
+        );
+        assert!(
+            !genesis
+                .get("properties")
+                .and_then(Value::as_object)
+                .is_some_and(|properties| properties.contains_key("value"))
+        );
     }
 
     fn assert_no_retired_vpn_fee_fields(value: &Value, location: &str) {
@@ -34252,7 +34581,7 @@ mod tests {
         assert_eq!(
             component_required(schemas, "OfflineSpendStatement"),
             [
-                "chain_id",
+                "network_id",
                 "asset",
                 "asset_scale",
                 "final_root",
@@ -34328,7 +34657,7 @@ mod tests {
             ),
             ("OfflineRedemptionIntent", "parent_peer_hop_count", (0, 8)),
             ("OfflineBranchPath", "depth", (0, 64)),
-            ("OfflineReadiness", "required_bridge_abi_version", (21, 21)),
+            ("OfflineReadiness", "required_bridge_abi_version", (22, 22)),
             ("OfflineReadiness", "max_hops", (8, 8)),
             (
                 "OfflineAuthenticatedArtifactSet",
@@ -34910,7 +35239,7 @@ mod tests {
             component_required(schemas, "OfflineTopUpFinalityHeightContext"),
             [
                 "context_id",
-                "chain_id",
+                "network_id",
                 "protocol_version",
                 "height",
                 "epoch",
@@ -34976,7 +35305,7 @@ mod tests {
             component_required(schemas, "OfflineTopUpAnchor"),
             [
                 "version",
-                "chain_id",
+                "network_id",
                 "payer",
                 "asset",
                 "asset_scale",
@@ -35997,25 +36326,9 @@ mod tests {
     }
 
     #[test]
-    fn musubi_chain_and_chunker_text_bounds_match_the_wire_types() {
+    fn musubi_chunker_text_bounds_match_the_wire_type() {
         let document = generate_spec();
         let schemas = component_schemas(&document);
-        let chain_id = schemas
-            .get("MusubiChainIdV1")
-            .and_then(Value::as_object)
-            .expect("Musubi chain-id schema");
-        assert_eq!(
-            chain_id.get("maxLength").and_then(Value::as_u64),
-            Some(
-                u64::try_from(iroha_data_model::id::MAX_CHAIN_ID_BYTES)
-                    .expect("chain-id bound fits u64")
-            )
-        );
-        assert_eq!(
-            chain_id.get("pattern").and_then(Value::as_str),
-            Some("^[A-Za-z0-9](?:[A-Za-z0-9._:-]*[A-Za-z0-9])?$")
-        );
-
         let chunker = schemas
             .get("MusubiChunkerProfileHandleV1")
             .and_then(Value::as_object)
@@ -38197,6 +38510,8 @@ mod tests {
     }
 
     include!("openapi/tests/finality_app_contracts.rs");
+
+    include!("openapi/tests/iso20022_auth.rs");
 
     include!("openapi/tests/vpn_da.rs");
 }

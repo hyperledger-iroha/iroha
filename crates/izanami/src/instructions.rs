@@ -28,7 +28,7 @@ use iroha_data_model::{
             DvpIsi, SettlementId, SettlementInstructionBox, SettlementLeg, SettlementPlan,
         },
         sorafs::{
-            ApprovePinManifest, IssueReplicationOrder, RegisterPinManifest, RegisterProviderOwner,
+            ApprovePinManifest, IssueReplicationOrder, RegisterPinManifest,
             SetProviderIngestCompletionAuthority,
         },
         space_directory::{
@@ -69,10 +69,7 @@ use iroha_executor_data_model::permission::{
     nexus::CanPublishSpaceDirectoryManifest,
     nft::CanRegisterNft,
     role::CanManageRoles,
-    sorafs::{
-        CanApproveSorafsPin, CanIssueSorafsReplicationOrder, CanRegisterSorafsPin,
-        CanRegisterSorafsProviderOwner,
-    },
+    sorafs::CanIssueSorafsReplicationOrder,
     trigger::CanRegisterTrigger,
 };
 use norito::{
@@ -269,6 +266,8 @@ pub struct PreparedChaos {
     pub state: ChaosState,
     pub genesis: Vec<Vec<InstructionBox>>,
     pub recipes: Vec<RecipeKind>,
+    /// Provider-owner bindings that the local network must load before genesis.
+    pub sorafs_provider_owners: BTreeMap<String, String>,
 }
 
 /// Build post-topology NPoS bootstrap instructions using an explicit minimum self-bond.
@@ -424,6 +423,16 @@ pub fn prepare_state(
     } else {
         None
     };
+    let mut sorafs_provider_owners = BTreeMap::new();
+    if let Some(replication) = sorafs_replication.as_ref() {
+        sorafs_provider_owners.insert(
+            replication.provider_id.to_string(),
+            treasury
+                .id
+                .canonical_i105()
+                .map_err(|error| eyre!("failed to encode Izanami SoraFS owner: {error}"))?,
+        );
+    }
 
     let effective_peers = peer_count.unwrap_or(account_count.max(1)).max(1);
     let mut nexus_genesis = Vec::new();
@@ -662,18 +671,6 @@ pub fn prepare_state(
         .collect();
     if sorafs_replication.is_some() {
         genesis_tx.push(InstructionBox::from(Grant::account_permission(
-            CanRegisterSorafsPin,
-            treasury.id.clone(),
-        )));
-        genesis_tx.push(InstructionBox::from(Grant::account_permission(
-            CanApproveSorafsPin,
-            treasury.id.clone(),
-        )));
-        genesis_tx.push(InstructionBox::from(Grant::account_permission(
-            CanRegisterSorafsProviderOwner,
-            treasury.id.clone(),
-        )));
-        genesis_tx.push(InstructionBox::from(Grant::account_permission(
             CanIssueSorafsReplicationOrder,
             treasury.id.clone(),
         )));
@@ -755,6 +752,7 @@ pub fn prepare_state(
         state,
         genesis,
         recipes,
+        sorafs_provider_owners,
     })
 }
 
@@ -2719,23 +2717,12 @@ impl ChaosState {
             },
         );
         let instructions = vec![
-            InstructionBox::from(RegisterPinManifest::new(
-                manifest_payload,
-                manifest_epoch,
-                None,
-                None,
-            )),
+            InstructionBox::from(RegisterPinManifest::new(manifest_payload, None, None)),
             InstructionBox::from(ApprovePinManifest {
                 digest: manifest_digest,
-                approved_epoch: manifest_epoch,
                 council_envelope: None,
                 council_envelope_digest: Some(council_digest),
             }),
-            Box::new(RegisterProviderOwner {
-                provider_id,
-                owner: self.treasury.id.clone(),
-            })
-            .into_instruction_box(),
             InstructionBox::from(SetProviderIngestCompletionAuthority::new(
                 provider_id,
                 None,
@@ -2808,6 +2795,7 @@ impl ChaosState {
                 order_payload: payload,
                 issued_epoch,
                 deadline_epoch,
+                musubi_archive: None,
             })],
             signer: self.treasury.clone(),
             expect_success: true,
@@ -3792,9 +3780,24 @@ mod tests {
     #[test]
     fn replication_order_payload_references_seeded_manifest() {
         let profile = NexusProfile::sora_defaults().expect("profile");
-        let PreparedChaos { mut state, .. } =
-            prepare_state(2, None, Some(&profile), WorkloadProfile::Stable, false)
-                .expect("state prepared");
+        let PreparedChaos {
+            mut state,
+            sorafs_provider_owners,
+            ..
+        } = prepare_state(2, None, Some(&profile), WorkloadProfile::Stable, false)
+            .expect("state prepared");
+        let replication = state.sorafs_replication.as_ref().expect("replication seed");
+        assert_eq!(
+            sorafs_provider_owners.get(&replication.provider_id.to_string()),
+            Some(
+                &state
+                    .treasury
+                    .id
+                    .canonical_i105()
+                    .expect("canonical treasury owner")
+            ),
+            "Izanami must seed provider ownership through pre-genesis configuration"
+        );
         let mut rng = StdRng::seed_from_u64(52);
         let seed = state
             .plan_issue_replication_order(&mut rng)
@@ -3846,6 +3849,8 @@ mod tests {
             }
             SettlementInstructionBox::Pvp(_)
             | SettlementInstructionBox::SetFxCorridorPolicy(_)
+            | SettlementInstructionBox::FundFxCorridorEscrow(_)
+            | SettlementInstructionBox::RefundFxCorridorEscrow(_)
             | SettlementInstructionBox::SettleFxCorridor(_) => {
                 panic!("expected DvP settlement instruction");
             }
@@ -4971,24 +4976,6 @@ mod tests {
                 .iter()
                 .any(|record| record.id == registered_account),
             "successful account registration should publish the new signer"
-        );
-    }
-
-    #[test]
-    fn publish_manifest_records_dataspace() {
-        let PreparedChaos { mut state, .. } =
-            prepare_state(2, None, None, WorkloadProfile::Stable, false).expect("state prepared");
-        let mut rng = StdRng::seed_from_u64(99);
-        let plan = state
-            .plan_publish_space_manifest(&mut rng)
-            .expect("manifest plan builds");
-        assert_eq!(plan.label, "publish_space_directory_manifest");
-        assert!(
-            state
-                .space_directory_manifests
-                .values()
-                .any(|spaces| spaces.contains(&DataSpaceId::UNIVERSAL)),
-            "dataspace should be recorded as published"
         );
     }
 

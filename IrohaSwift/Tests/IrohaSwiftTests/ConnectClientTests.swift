@@ -67,22 +67,27 @@ final class ConnectClientTests: XCTestCase {
                                    webSocketFactory: StubWebSocketFactory(task: stub).factory)
         await client.start()
         let appPublicKey = Data(repeating: 0xFF, count: 32)
-        let sessionID = Data(repeating: 0x22, count: 32)
+        let nonce = Data(repeating: 0x33, count: 16)
+        let sessionID = try ConnectCrypto.deriveSessionID(
+            networkID: TestNetworkIds.canonical,
+            appPublicKey: appPublicKey,
+            nonce: nonce
+        )
         let open = ConnectOpen(appPublicKey: appPublicKey,
                                appMetadata: ConnectAppMetadata(name: "demo", iconURL: nil, description: nil),
-                               constraints: ConnectConstraints(chainID: "chain"),
+                               constraints: ConnectConstraints(networkID: TestNetworkIds.canonical),
                                permissions: ConnectPermissions(methods: ["sign"]))
         let frame = ConnectFrame(sessionID: sessionID,
                                  direction: .appToWallet,
                                  sequence: 1,
                                  kind: .control(.open(open)))
-        try await client.send(frame: frame)
+        try await client.send(frame: frame, launchNonce: nonce)
         let decoded = try XCTUnwrap(stub.sentData.first.flatMap { try? ConnectCodec.decode($0) })
         XCTAssertEqual(decoded.sessionID, sessionID)
         XCTAssertEqual(decoded.direction, .appToWallet)
         if case let .control(.open(decodedOpen)) = decoded.kind {
             XCTAssertEqual(decodedOpen.appPublicKey, appPublicKey)
-            XCTAssertEqual(decodedOpen.constraints.chainID, "chain")
+            XCTAssertEqual(decodedOpen.constraints.networkID, TestNetworkIds.canonical)
         } else {
             XCTFail("Expected open frame")
         }

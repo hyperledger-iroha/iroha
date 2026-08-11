@@ -1,4 +1,73 @@
 #[test]
+#[allow(clippy::too_many_lines)]
+fn complete_certified_serve_episode_cannot_veto_pacemaker() {
+    let calls = Cell::new(0_u8);
+    for older_runtime_episode_claimed in [true, false] {
+        service_certified_serve_barrier_pacemaker_turn(
+            false,
+            older_runtime_episode_claimed,
+            || {
+                calls.set(calls.get().saturating_add(1));
+                Ok::<(), ()>(())
+            },
+        )
+        .expect("live certified Serve barrier services one pacemaker turn");
+    }
+    assert_eq!(
+        calls.get(),
+        2,
+        "a Complete predecessor episode must service the pacemaker exactly like a newly claimed episode"
+    );
+
+    service_certified_serve_barrier_pacemaker_turn(false, false, || {
+        calls.set(calls.get().saturating_add(1));
+        Err::<(), _>("typed pacemaker failure")
+    })
+    .expect_err("live runner propagates a typed pacemaker failure");
+    assert_eq!(calls.get(), 3);
+
+    service_certified_serve_barrier_pacemaker_turn(true, false, || {
+        calls.set(calls.get().saturating_add(1));
+        Ok::<(), ()>(())
+    })
+    .expect("interrupted-tip recovery does not arm a fresh pacemaker");
+    assert_eq!(calls.get(), 3);
+
+    #[cfg(feature = "bls")]
+    {
+        let mut recovery =
+            super::super::v2_worker::tests::SelectedServeTimeoutRecoveryFixture::new();
+        for _ in 0..16 {
+            let older_runtime_episode_claimed = recovery
+                .service_exact_serve_runtime_prefix()
+                .expect("service the exact selected-Serve runtime prefix");
+            service_certified_serve_barrier_liveness_turn(
+                false,
+                older_runtime_episode_claimed,
+                |action| match action {
+                    CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode => {
+                        recovery.service_timeout_vote_episode()
+                    }
+                    CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
+                        recovery.service_timeout_recovery_prefix()
+                    }
+                    CertifiedServeBarrierLivenessAction::Pacemaker => recovery.service_pacemaker(),
+                },
+            )
+            .expect("the selected-Serve suffix retains typed timeout recovery");
+            if recovery.entered_view_one() {
+                break;
+            }
+        }
+        recovery.assert_complete();
+
+        let mut late_passive_fetch =
+            super::super::v2_worker::tests::SelectedServeTimeoutRecoveryFixture::new_late_passive_fetch();
+        late_passive_fetch.assert_late_passive_fetch_completion_reopens_selected_serve();
+    }
+}
+
+#[test]
 fn canonical_body_recovery_batches_all_ordered_heights_before_gate_close() {
     let need = |height: u64| {
         let executed_block_wire_hash = Hash::new(&height.to_le_bytes());
@@ -209,7 +278,7 @@ fn context() -> (wire::HeightContext, Vec<KeyPair>) {
         .collect::<Vec<_>>();
     (
         wire::HeightContext {
-            chain_id: ChainId::from("v2-runner-test"),
+            network_id: crate::sumeragi::synthetic_network_id("v2-runner-test"),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
@@ -518,17 +587,6 @@ fn decided_lane_checked_drain_requires_staged_or_prepared_outcome() {
 
 #[test]
 fn decided_lane_commit_orders_bind_before_history_or_volatile_retirement() {
-    let mut replica_advert = RecordingDecidedLaneCommitter::new(None);
-    assert_eq!(
-        commit_decided_lane_recovery_drain(
-            DecidedLaneRecoveryDrainAuthorization::KuraReplicaAdvert,
-            &mut replica_advert,
-        )
-        .expect("route Kura replica advert outside the reducer"),
-        DecidedLaneRecoveryDrainCommitOutcome::KuraReplicaAdvert
-    );
-    assert_eq!(replica_advert.calls, ["kura-replica-advert"]);
-
     let mut exact = RecordingDecidedLaneCommitter::new(None);
     assert_eq!(
         commit_decided_lane_recovery_drain(
@@ -554,6 +612,17 @@ fn decided_lane_commit_orders_bind_before_history_or_volatile_retirement() {
         DecidedLaneRecoveryDrainCommitOutcome::CurrentServe
     );
     assert_eq!(negative.calls, ["retire-staged-negative"]);
+
+    let mut kura_replica_advert = RecordingDecidedLaneCommitter::new(None);
+    assert_eq!(
+        commit_decided_lane_recovery_drain(
+            DecidedLaneRecoveryDrainAuthorization::KuraReplicaAdvert,
+            &mut kura_replica_advert,
+        )
+        .expect("route Kura replica advert"),
+        DecidedLaneRecoveryDrainCommitOutcome::KuraReplicaAdvert
+    );
+    assert_eq!(kura_replica_advert.calls, ["kura-replica-advert"]);
 
     let mut historical = RecordingDecidedLaneCommitter::new(None);
     assert_eq!(
@@ -743,6 +812,217 @@ fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traf
     ));
 }
 
+fn height_ingress_bindings_fixture(
+    owner_marker: u8,
+) -> (
+    TempDir,
+    Arc<FairV2Ingress>,
+    Arc<AtomicBool>,
+    HeightIngressBindings,
+    CertifiedServeIngressGate,
+    Arc<LeaderWireLifecycleStoreGate>,
+) {
+    let (context, _) = context();
+    let roster = context
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<BTreeSet<_>>();
+    let directory = TempDir::new().expect("temporary joint height-ingress directory");
+    let ingress = Arc::new(
+        FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
+            64,
+            512 * 1024 * 1024,
+            64 * 1024 * 1024,
+            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+            8 * 1024 * 1024,
+            8 * 1024 * 1024,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            None,
+        ),
+    );
+    ingress
+        .configure_roster_for_context(roster.iter().cloned(), &context.chain_id, context.da_layout)
+        .expect("configure joint height ingress");
+    ingress.require_certified_serve_gate();
+    ingress.require_leader_wire_lifecycle_gate();
+
+    let ingress_ready = Arc::new(AtomicBool::new(false));
+    let (serve_gate, lifecycle_ordinals) =
+        super::super::v2_worker::tests::certified_serve_ingress_gate_fixture();
+    let certified_serve = CertifiedServeIngressBinding::bind(
+        Arc::clone(&ingress_ready),
+        Arc::clone(&ingress),
+        serve_gate.clone(),
+    )
+    .expect("bind joint height Serve gate");
+
+    let capacity = LeaderWireLifecycleStoreGate::derived_capacity(
+        roster.len(),
+        context.da_layout.max_chunk_count,
+    )
+    .expect("derive joint height leader-wire capacity");
+    let owner = [owner_marker; 32];
+    let recovery_authority =
+        super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            context.id(),
+            context.height,
+            owner,
+            0,
+            false,
+        );
+    let (leader_gate, restore) = LeaderWireLifecycleStoreGate::open(
+        &directory.path().join("joint-height-ingress.wal"),
+        context.id(),
+        context.height,
+        owner,
+        roster,
+        capacity,
+        context.da_layout.max_chunk_count,
+        recovery_authority,
+        &[],
+        &[],
+    )
+    .expect("open joint height leader-wire gate");
+    let leader_wire = LeaderWireIngressBinding::bind(
+        Arc::clone(&ingress_ready),
+        Arc::clone(&ingress),
+        Arc::clone(&leader_gate),
+        restore,
+        lifecycle_ordinals,
+        context.id(),
+        context.height,
+    )
+    .expect("bind joint height leader-wire gate");
+    let bindings = HeightIngressBindings::new(certified_serve, leader_wire);
+    ingress.open().expect("open joint height ingress");
+    ingress_ready.store(true, Ordering::Release);
+    (
+        directory,
+        ingress,
+        ingress_ready,
+        bindings,
+        serve_gate,
+        leader_gate,
+    )
+}
+
+#[test]
+fn height_ingress_bindings_retire_both_gates_in_one_closed_cut() {
+    let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
+        height_ingress_bindings_fixture(0xD5);
+    {
+        let state = ingress.state.lock();
+        assert!(state.open);
+        assert!(
+            state
+                .certified_serve_gate
+                .as_ref()
+                .is_some_and(|bound| bound.ptr_eq(&serve_gate))
+        );
+        assert!(
+            state
+                .leader_wire_lifecycle_gate
+                .as_ref()
+                .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate))
+        );
+    }
+
+    bindings
+        .retire()
+        .expect("retire both per-height ingress gates atomically");
+    assert!(!ingress_ready.load(Ordering::Acquire));
+    assert!(bindings.certified_serve.gate.is_none());
+    assert!(bindings.leader_wire.gate.is_none());
+    {
+        let state = ingress.state.lock();
+        assert!(!state.open);
+        assert!(state.certified_serve_gate.is_none());
+        assert!(state.leader_wire_lifecycle_gate.is_none());
+        assert!(state.leader_wire_lifecycle_ordinals.is_none());
+        assert!(state.leader_wire_context.is_none());
+    }
+    bindings
+        .retire()
+        .expect("joint height retirement remains idempotent");
+}
+
+#[test]
+fn height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership() {
+    {
+        let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
+            height_ingress_bindings_fixture(0xD6);
+        bindings.leader_wire.ingress_ready = Arc::new(AtomicBool::new(true));
+        let error = bindings
+            .retire()
+            .expect_err("mismatched readiness ownership must reject joint retirement");
+        assert!(matches!(
+            error,
+            V2RunnerError::Service(ref reason)
+                if reason == "per-height ingress gates changed their shared queue"
+        ));
+        assert!(ingress_ready.load(Ordering::Acquire));
+        assert!(ingress.state.lock().open);
+
+        drop(bindings);
+        assert!(!ingress_ready.load(Ordering::Acquire));
+        let state = ingress.state.lock();
+        assert!(!state.open);
+        assert!(
+            state
+                .certified_serve_gate
+                .as_ref()
+                .is_some_and(|bound| bound.ptr_eq(&serve_gate)),
+            "a failed joint validation cannot partially detach the Serve gate"
+        );
+        assert!(
+            state
+                .leader_wire_lifecycle_gate
+                .as_ref()
+                .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate)),
+            "a failed joint validation cannot partially detach the leader-wire gate"
+        );
+    }
+
+    {
+        let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
+            height_ingress_bindings_fixture(0xD7);
+        bindings.leader_wire.gate = None;
+        let error = bindings
+            .retire()
+            .expect_err("partial child ownership must reject joint retirement");
+        assert!(matches!(
+            error,
+            V2RunnerError::Service(ref reason)
+                if reason == "per-height ingress gates changed joint ownership"
+        ));
+        assert!(ingress_ready.load(Ordering::Acquire));
+        assert!(ingress.state.lock().open);
+
+        drop(bindings);
+        assert!(!ingress_ready.load(Ordering::Acquire));
+        let state = ingress.state.lock();
+        assert!(!state.open);
+        assert!(
+            state
+                .certified_serve_gate
+                .as_ref()
+                .is_some_and(|bound| bound.ptr_eq(&serve_gate)),
+            "partial child ownership cannot trigger split Serve teardown"
+        );
+        assert!(
+            state
+                .leader_wire_lifecycle_gate
+                .as_ref()
+                .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate)),
+            "partial child ownership cannot trigger split leader-wire teardown"
+        );
+    }
+}
+
 fn leader_wire_runtime_ingress_fixture() -> (
     TempDir,
     FairV2Ingress,
@@ -765,14 +1045,10 @@ fn leader_wire_runtime_ingress_fixture() -> (
         )),
         payload_hash: Hash::new(&body),
     };
-    let manifest = wire::PayloadManifest::derive(
-        &context,
-        round,
-        subject,
-        u64::try_from(body.len()).expect("small runner fixture body"),
-        std::slice::from_ref(&body),
-    )
-    .expect("runner leader-wire fixture manifest");
+    let manifest = encode_payload(&context, round, subject, &body)
+        .expect("encode runner leader-wire fixture payload")
+        .manifest()
+        .clone();
     let proposer = context.leader(round.view);
     let mut proposal = wire::Proposal {
         round,
@@ -802,15 +1078,21 @@ fn leader_wire_runtime_ingress_fixture() -> (
         .map(|entry| entry.validator.clone())
         .collect::<Vec<_>>();
     let directory = TempDir::new().expect("temporary runner leader-wire directory");
-    let ingress = FairV2Ingress::new(
+    let ingress = FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
         64,
         512 * 1024 * 1024,
         64 * 1024 * 1024,
+        super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
         8 * 1024 * 1024,
         8 * 1024 * 1024,
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+        None,
     );
     ingress
-        .configure_roster_for_context(roster.clone(), &context.chain_id, context.da_layout)
+        .configure_roster_for_context(roster.clone(), &context.network_id, context.da_layout)
         .expect("configure runner leader-wire ingress");
     ingress.require_leader_wire_lifecycle_gate();
     let capacity = LeaderWireLifecycleStoreGate::derived_capacity(
@@ -916,33 +1198,6 @@ fn fail_closed_authenticated_coalesce_releases_gate_and_suppresses_retry() {
             .expect("retry retains the terminal tombstone"),
         None
     );
-}
-
-#[test]
-fn heartbeat_provider_accepts_only_an_empty_descriptor_batch() {
-    let (context, _) = context();
-    let mut provider = HeartbeatOnlyWorkProvider;
-    assert_eq!(
-        provider
-            .prepare(&context, 0, &[])
-            .expect("an explicit heartbeat has no lane work")
-            .native_amx_receipts,
-        Vec::new()
-    );
-    assert_eq!(
-        certified_merge_selection_for_npos(true),
-        PendingCertifiedMergeSelection::ControlOnly
-    );
-    assert_eq!(
-        certified_merge_selection_for_npos(false),
-        PendingCertifiedMergeSelection::Any
-    );
-    assert!(candidate_work_requires_wait(false, false, 0, 1));
-    assert!(
-        !candidate_work_requires_wait(false, true, 0, 1),
-        "ordinary FIFO deferral must not stall a selected exact-empty execution carrier"
-    );
-    assert!(!candidate_work_requires_wait(true, false, 0, 1));
 }
 
 fn test_predecessor(context: &wire::HeightContext, label: &[u8]) -> DurableV2PredecessorIdentity {

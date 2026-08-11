@@ -24,8 +24,8 @@ pub struct SorafsPopCredentialService {
     pub issuer_policy_digest: [u8; 32],
     /// Governed issuer identifier.
     pub issuer_id: String,
-    /// Non-secret runtime HSM key handle.
-    pub issuer_hsm_key_id: String,
+    /// Non-secret authenticated external signer handle.
+    pub issuer_signer_handle: String,
     /// Governed raw Ed25519 issuer public key.
     pub issuer_public_key: [u8; 32],
     /// Non-secret runtime hybrid recipient-key handle.

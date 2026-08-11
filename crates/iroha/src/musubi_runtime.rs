@@ -18,7 +18,7 @@ use std::{
 use base64::Engine as _;
 use iroha_crypto::{PublicKey, SignatureOf};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::{AccountController, AccountId, MultisigPolicy},
     musubi::{
         ArchiveId, MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MAX_BUNDLE_PAYLOAD_BYTES_V1,
@@ -172,8 +172,8 @@ pub struct MusubiPublicationRuntimeAuthorizationPayloadV1 {
     pub operation: MusubiPublicationRuntimeOperationV1,
     /// Stable idempotency key derived from the immutable publication request.
     pub operation_id: [u8; 32],
-    /// Deployment-selected chain identity.
-    pub chain_id: ChainId,
+    /// Exact deployment identity derived from the committed genesis header.
+    pub network_id: NetworkId,
     /// Account authorizing this request.
     pub publisher: AccountId,
     /// Domain-separated digest of the exact typed request metadata.
@@ -190,7 +190,7 @@ impl MusubiPublicationRuntimeAuthorizationPayloadV1 {
         if self.domain != AUTH_DOMAIN_V1
             || self.version != 1
             || self.operation_id.iter().all(|byte| *byte == 0)
-            || self.chain_id.as_str().is_empty()
+            || self.network_id.as_bytes()[31] & 1 != 1
             || validate_musubi_account_id_v1(&self.publisher).is_err()
             || self.request_digest.iter().all(|byte| *byte == 0)
             || self.issued_at_ms == 0
@@ -753,10 +753,8 @@ fn seed_ingress_plan_digest(
 pub struct MusubiFinalizedArchiveRegistrationEvidenceV1 {
     /// Closed schema version; must equal one.
     pub version: u8,
-    /// Deployment-selected chain identity.
-    pub chain_id: ChainId,
-    /// Exact committed genesis block hash.
-    pub genesis_block_hash: [u8; 32],
+    /// Exact deployment identity derived from the committed genesis header.
+    pub network_id: NetworkId,
     /// Exact finalized transaction identity that registered the archive.
     pub transaction_hash: [u8; 32],
     /// Finalized registry snapshot at or after registration.
@@ -785,11 +783,9 @@ impl MusubiFinalizedArchiveRegistrationEvidenceV1 {
         })?;
         let binding = &self.registration.staging_receipt.payload.binding;
         if self.version != 1
-            || self.chain_id.as_str().is_empty()
-            || self.genesis_block_hash.iter().all(|byte| *byte == 0)
+            || self.network_id.as_bytes()[31] & 1 != 1
             || self.transaction_hash.iter().all(|byte| *byte == 0)
-            || binding.chain_id != self.chain_id
-            || binding.genesis_block_hash != self.genesis_block_hash
+            || binding.network_id != self.network_id
             || self.registration.registered_at_height > self.snapshot.finalized_height
         {
             return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
@@ -811,10 +807,8 @@ pub struct MusubiStorageCoordinationRequestV1 {
     pub generation: u8,
     /// Sorted identities used by every earlier generation; none may be returned again.
     pub prior_location_ids: Vec<MusubiArchiveLocationIdV1>,
-    /// Deployment-selected chain identity.
-    pub chain_id: ChainId,
-    /// Exact committed genesis block hash.
-    pub genesis_block_hash: [u8; 32],
+    /// Exact deployment identity derived from the committed genesis header.
+    pub network_id: NetworkId,
     /// Account that registered the archive.
     pub publisher: AccountId,
     /// Complete immutable archive commitment.
@@ -866,17 +860,15 @@ impl MusubiStorageCoordinationRequestV1 {
                 .prior_location_ids
                 .windows(2)
                 .any(|pair| pair[0] >= pair[1])
-            || self.genesis_block_hash.iter().all(|byte| *byte == 0)
+            || self.network_id.as_bytes()[31] & 1 != 1
             || self.expected_policy_revision == 0
             || self.verification_lock_digest.is_zero()
-            || binding.chain_id != self.chain_id
-            || binding.genesis_block_hash != self.genesis_block_hash
+            || binding.network_id != self.network_id
             || binding.publisher != self.publisher
             || binding.archive_id != self.commitment.archive_id()
             || binding.car_body_digest != self.commitment.car_digest
             || binding.car_body_length != self.commitment.car_size
-            || self.finalized_registration.chain_id != self.chain_id
-            || self.finalized_registration.genesis_block_hash != self.genesis_block_hash
+            || self.finalized_registration.network_id != self.network_id
             || self.finalized_registration.registration.archive_id != self.commitment.archive_id()
             || self.finalized_registration.registration.commitment != self.commitment
             || self.finalized_registration.registration.staging_receipt != self.staging_receipt
@@ -1013,8 +1005,7 @@ impl MusubiStorageCoordinationResponseV1 {
                             )
                         })?;
                     let binding = &attestation.payload.binding;
-                    if binding.chain_id != request.chain_id
-                        || binding.genesis_block_hash != request.genesis_block_hash
+                    if binding.network_id != request.network_id
                         || binding.archive_id != request.commitment.archive_id()
                         || binding.replication_order != self.replication_order
                         || binding.bundle_digest != request.commitment.bundle_digest
@@ -1072,10 +1063,8 @@ pub struct MusubiProviderReadbackRequestV1 {
     pub version: u8,
     /// Stable idempotency key for the immutable publication request.
     pub operation_id: [u8; 32],
-    /// Deployment-selected chain identity.
-    pub chain_id: ChainId,
-    /// Exact committed genesis block hash.
-    pub genesis_block_hash: [u8; 32],
+    /// Exact deployment identity derived from the committed genesis header.
+    pub network_id: NetworkId,
     /// Account publishing the release.
     pub publisher: AccountId,
     /// Exact finalized location and provider selected for readback.
@@ -1115,8 +1104,7 @@ impl MusubiProviderReadbackRequestV1 {
         })?;
         if self.version != 1
             || self.operation_id.iter().all(|byte| *byte == 0)
-            || self.chain_id.as_str().is_empty()
-            || self.genesis_block_hash.iter().all(|byte| *byte == 0)
+            || self.network_id.as_bytes()[31] & 1 != 1
             || self.location.archive_id != self.commitment.archive_id()
             || self.location.state == MusubiArchiveLocationStateV1::Retired
             || self
@@ -1340,7 +1328,7 @@ pub enum MusubiPublicationServiceErrorCodeV1 {
     /// The request body or seed metadata was malformed, noncanonical, or too large.
     #[codec(index = 5)]
     RequestInvalid,
-    /// The chain, genesis, publisher, broker, provider, or operation binding differs.
+    /// The network, publisher, broker, provider, or operation binding differs.
     #[codec(index = 6)]
     IdentityMismatch,
     /// The framed plan or exact CAR differs from the authenticated binding.
@@ -1470,10 +1458,8 @@ pub struct MusubiPublicationPrivateHttpResponseV1 {
 /// Public, non-secret identity constraints for one private publication service.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MusubiPublicationServiceConfigurationV1 {
-    /// Exact chain accepted by every request.
-    pub chain_id: ChainId,
-    /// Exact committed genesis hash accepted by every request.
-    pub genesis_block_hash: [u8; 32],
+    /// Exact deployment identity accepted by every request.
+    pub network_id: NetworkId,
     /// Account whose controller signs seed-ingress receipts.
     pub ingress_broker: AccountId,
     /// Exact admitted provider served by seed ingress.
@@ -1486,7 +1472,7 @@ pub struct MusubiPublicationServiceConfigurationV1 {
 
 impl MusubiPublicationServiceConfigurationV1 {
     fn validate(&self) -> Result<(), MusubiPublicationServiceErrorCodeV1> {
-        if self.genesis_block_hash.iter().all(|byte| *byte == 0)
+        if self.network_id.as_bytes()[31] & 1 != 1
             || self.seed_provider.as_bytes().iter().all(|byte| *byte == 0)
             || self.max_future_clock_skew_ms > MUSUBI_PUBLICATION_SERVICE_MAX_CLOCK_SKEW_MS_V1
             || self.receipt_lifetime_ms == 0
@@ -1505,10 +1491,8 @@ impl MusubiPublicationServiceConfigurationV1 {
 /// lifetime without discarding immutable replay/idempotency history.
 #[derive(Clone, Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 pub struct MusubiPublicationServiceJournalBindingV1 {
-    /// Exact chain accepted by every retained operation.
-    pub chain_id: ChainId,
-    /// Exact committed genesis hash for that chain incarnation.
-    pub genesis_block_hash: [u8; 32],
+    /// Exact deployment identity accepted by every retained operation.
+    pub network_id: NetworkId,
     /// Account whose controller signs retained seed-ingress receipts.
     pub ingress_broker: AccountId,
     /// Exact admitted seed provider for this private service.
@@ -1520,15 +1504,14 @@ impl MusubiPublicationServiceJournalBindingV1 {
     #[must_use]
     pub fn from_configuration(configuration: &MusubiPublicationServiceConfigurationV1) -> Self {
         Self {
-            chain_id: configuration.chain_id.clone(),
-            genesis_block_hash: configuration.genesis_block_hash,
+            network_id: configuration.network_id,
             ingress_broker: configuration.ingress_broker.clone(),
             seed_provider: configuration.seed_provider,
         }
     }
 
     fn validate(&self) -> Result<(), MusubiPublicationServiceJournalErrorV1> {
-        if self.genesis_block_hash.iter().all(|byte| *byte == 0)
+        if self.network_id.as_bytes()[31] & 1 != 1
             || self.seed_provider.as_bytes().iter().all(|byte| *byte == 0)
             || !controller_fits_publication_approval_bound(&self.ingress_broker)
             || norito::encode_canonical(self)
@@ -1656,10 +1639,8 @@ pub trait MusubiProviderReadbackBackendV1: Send {
 pub struct MusubiPublicationOperationBindingV1 {
     /// Stable publisher-selected operation id.
     pub operation_id: [u8; 32],
-    /// Exact chain identity.
-    pub chain_id: ChainId,
-    /// Exact committed genesis hash for the selected chain incarnation.
-    pub genesis_block_hash: [u8; 32],
+    /// Exact deployment identity derived from the committed genesis header.
+    pub network_id: NetworkId,
     /// Exact publisher identity.
     pub publisher: AccountId,
     /// Derived immutable archive identity.
@@ -1673,9 +1654,8 @@ pub struct MusubiPublicationOperationBindingV1 {
 impl MusubiPublicationOperationBindingV1 {
     fn validate(&self) -> Result<(), MusubiPublicationServiceJournalErrorV1> {
         if self.operation_id.iter().all(|byte| *byte == 0)
-            || self.chain_id.as_str().is_empty()
+            || self.network_id.as_bytes()[31] & 1 != 1
             || validate_musubi_account_id_v1(&self.publisher).is_err()
-            || self.genesis_block_hash.iter().all(|byte| *byte == 0)
             || self.archive_id.is_zero()
             || self.car_body_digest.is_zero()
             || self.car_body_length == 0
@@ -1905,8 +1885,7 @@ impl InMemoryMusubiPublicationServiceJournalV1 {
     ) -> Result<(), MusubiPublicationServiceJournalErrorV1> {
         attempt.binding.validate()?;
         if current_time_ms == 0
-            || attempt.binding.chain_id != self.binding.chain_id
-            || attempt.binding.genesis_block_hash != self.binding.genesis_block_hash
+            || attempt.binding.network_id != self.binding.network_id
             || attempt.key.operation_id != attempt.binding.operation_id
             || match attempt.key.operation {
                 MusubiPublicationRuntimeOperationV1::ProviderReadback => {
@@ -2489,7 +2468,7 @@ impl MusubiPublicationPrivateServiceV1 {
             MusubiPublicationRuntimeOperationV1::SeedIngress,
             metadata.value.operation_id,
             digest,
-            &metadata.value.binding.chain_id,
+            &metadata.value.binding.network_id,
             &metadata.value.binding.publisher,
             current_time_ms,
         )?;
@@ -2498,8 +2477,7 @@ impl MusubiPublicationPrivateServiceV1 {
             MusubiPublicationRuntimeOperationV1::SeedIngress,
             metadata.value.operation_id,
             [0_u8; 32],
-            &metadata.value.binding.chain_id,
-            metadata.value.binding.genesis_block_hash,
+            &metadata.value.binding.network_id,
             &metadata.value.binding.publisher,
             metadata.value.binding.archive_id,
             metadata.value.binding.car_body_digest,
@@ -2630,11 +2608,7 @@ impl MusubiPublicationPrivateServiceV1 {
             MAX_CONTROL_REQUEST_BYTES,
             CONTROL_REQUEST_DECODE_LIMITS,
         )?;
-        self.validate_control_identity(
-            &decoded.value.chain_id,
-            decoded.value.genesis_block_hash,
-            &decoded.value.publisher,
-        )?;
+        self.validate_control_identity(&decoded.value.network_id, &decoded.value.publisher)?;
         let digest = request_digest(
             MusubiPublicationRuntimeOperationV1::StorageCoordination,
             &decoded.canonical,
@@ -2649,7 +2623,7 @@ impl MusubiPublicationPrivateServiceV1 {
             MusubiPublicationRuntimeOperationV1::StorageCoordination,
             decoded.value.operation_id,
             digest,
-            &decoded.value.chain_id,
+            &decoded.value.network_id,
             &decoded.value.publisher,
             current_time_ms,
         )?;
@@ -2694,8 +2668,7 @@ impl MusubiPublicationPrivateServiceV1 {
             MusubiPublicationRuntimeOperationV1::StorageCoordination,
             decoded.value.operation_id,
             storage_generation_target(decoded.value.generation),
-            &decoded.value.chain_id,
-            decoded.value.genesis_block_hash,
+            &decoded.value.network_id,
             &decoded.value.publisher,
             decoded.value.commitment.archive_id(),
             decoded.value.commitment.car_digest,
@@ -2750,11 +2723,7 @@ impl MusubiPublicationPrivateServiceV1 {
             MAX_CONTROL_REQUEST_BYTES,
             CONTROL_REQUEST_DECODE_LIMITS,
         )?;
-        self.validate_control_identity(
-            &decoded.value.chain_id,
-            decoded.value.genesis_block_hash,
-            &decoded.value.publisher,
-        )?;
+        self.validate_control_identity(&decoded.value.network_id, &decoded.value.publisher)?;
         let digest = request_digest(
             MusubiPublicationRuntimeOperationV1::ProviderReadback,
             &decoded.canonical,
@@ -2769,7 +2738,7 @@ impl MusubiPublicationPrivateServiceV1 {
             MusubiPublicationRuntimeOperationV1::ProviderReadback,
             decoded.value.operation_id,
             digest,
-            &decoded.value.chain_id,
+            &decoded.value.network_id,
             &decoded.value.publisher,
             current_time_ms,
         )?;
@@ -2782,8 +2751,7 @@ impl MusubiPublicationPrivateServiceV1 {
             MusubiPublicationRuntimeOperationV1::ProviderReadback,
             decoded.value.operation_id,
             provider_readback_target(&decoded.value.location, decoded.value.provider),
-            &decoded.value.chain_id,
-            decoded.value.genesis_block_hash,
+            &decoded.value.network_id,
             &decoded.value.publisher,
             decoded.value.commitment.archive_id(),
             decoded.value.commitment.car_digest,
@@ -2835,11 +2803,7 @@ impl MusubiPublicationPrivateServiceV1 {
         request: &MusubiSeedIngressStageRequestV1,
     ) -> Result<(), MusubiPublicationServiceErrorV1> {
         let binding = &request.binding;
-        self.validate_control_identity(
-            &binding.chain_id,
-            binding.genesis_block_hash,
-            &binding.publisher,
-        )?;
+        self.validate_control_identity(&binding.network_id, &binding.publisher)?;
         if binding.ingress_broker != self.config.ingress_broker
             || binding.seed_provider != self.config.seed_provider
         {
@@ -2852,12 +2816,10 @@ impl MusubiPublicationPrivateServiceV1 {
 
     fn validate_control_identity(
         &self,
-        chain_id: &ChainId,
-        genesis_block_hash: [u8; 32],
+        network_id: &NetworkId,
         _publisher: &AccountId,
     ) -> Result<(), MusubiPublicationServiceErrorV1> {
-        if chain_id != &self.config.chain_id || genesis_block_hash != self.config.genesis_block_hash
-        {
+        if network_id != &self.config.network_id {
             return Err(MusubiPublicationServiceErrorV1::permanent(
                 MusubiPublicationServiceErrorCodeV1::IdentityMismatch,
             ));
@@ -2875,7 +2837,7 @@ impl MusubiPublicationPrivateServiceV1 {
         operation: MusubiPublicationRuntimeOperationV1,
         operation_id: [u8; 32],
         digest: [u8; 32],
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         publisher: &AccountId,
         current_time_ms: u64,
     ) -> Result<
@@ -2893,9 +2855,9 @@ impl MusubiPublicationPrivateServiceV1 {
                 AUTHORIZATION_DECODE_LIMITS,
                 MusubiPublicationServiceErrorCodeV1::AuthorizationInvalid,
             )?;
-        if &authorization.value.payload.chain_id != chain_id
+        if &authorization.value.payload.network_id != network_id
             || &authorization.value.payload.publisher != publisher
-            || chain_id != &self.config.chain_id
+            || network_id != &self.config.network_id
         {
             return Err(MusubiPublicationServiceErrorV1::permanent(
                 MusubiPublicationServiceErrorCodeV1::IdentityMismatch,
@@ -3343,8 +3305,7 @@ fn journal_attempt(
     operation: MusubiPublicationRuntimeOperationV1,
     operation_id: [u8; 32],
     target: [u8; 32],
-    chain_id: &ChainId,
-    genesis_block_hash: [u8; 32],
+    network_id: &NetworkId,
     publisher: &AccountId,
     archive_id: ArchiveId,
     car_body_digest: MusubiContentDigestV1,
@@ -3360,8 +3321,7 @@ fn journal_attempt(
         },
         binding: MusubiPublicationOperationBindingV1 {
             operation_id,
-            chain_id: chain_id.clone(),
-            genesis_block_hash,
+            network_id: *network_id,
             publisher: publisher.clone(),
             archive_id,
             car_body_digest,
@@ -3747,7 +3707,7 @@ impl MusubiPreparedSeedIngressRequestV1 {
 /// timestamps for signed requests.
 #[derive(Clone)]
 pub struct AuthenticatedMusubiPublicationRuntimeClientV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     publisher: AccountId,
     authorization_signer: Arc<dyn MusubiPublicationRuntimeAuthorizationSigningProviderV1>,
     publication_clock_floor_ms: Arc<AtomicU64>,
@@ -3758,7 +3718,7 @@ impl fmt::Debug for AuthenticatedMusubiPublicationRuntimeClientV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("AuthenticatedMusubiPublicationRuntimeClientV1")
-            .field("chain_id", &self.chain_id)
+            .field("network_id", &self.network_id)
             .field("publisher", &self.publisher)
             .finish_non_exhaustive()
     }
@@ -3782,7 +3742,7 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
             client.key_pair.clone(),
         )?;
         Self::from_authorization_signer(
-            client.chain.clone(),
+            client.network_id,
             client.account.clone(),
             Arc::new(signer),
             timeout,
@@ -3794,7 +3754,7 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
     /// # Errors
     /// Returns a stable error when the provider identity or timeout is invalid.
     pub fn from_authorization_signer(
-        chain_id: ChainId,
+        network_id: NetworkId,
         publisher: AccountId,
         authorization_signer: Arc<dyn MusubiPublicationRuntimeAuthorizationSigningProviderV1>,
         timeout: Duration,
@@ -3827,7 +3787,7 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
                 )
             })?;
         Ok(Self {
-            chain_id,
+            network_id,
             publisher,
             authorization_signer,
             publication_clock_floor_ms: Arc::new(AtomicU64::new(0)),
@@ -3835,10 +3795,10 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         })
     }
 
-    /// Return the exact configured chain identity.
+    /// Return the exact configured deployment identity.
     #[must_use]
-    pub const fn chain_id(&self) -> &ChainId {
-        &self.chain_id
+    pub const fn network_id(&self) -> &NetworkId {
+        &self.network_id
     }
 
     /// Return the exact configured publisher identity.
@@ -3864,7 +3824,7 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         car: &mut dyn Read,
     ) -> Result<MusubiPreparedSeedIngressRequestV1, MusubiPublicationRuntimeTransportErrorV1> {
         request.validate()?;
-        self.ensure_request_identity(&request.binding.chain_id, &request.binding.publisher)?;
+        self.ensure_request_identity(&request.binding.network_id, &request.binding.publisher)?;
         let witness = MusubiSeedIngressCarPlanV1::from_car_build_plan(plan, &request.commitment)?;
         let canonical_plan = witness.canonical_bytes()?;
         let canonical_plan_digest = seed_ingress_plan_digest(&canonical_plan)?;
@@ -3972,7 +3932,7 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         request: &MusubiStorageCoordinationRequestV1,
     ) -> Result<MusubiStorageCoordinationResponseV1, MusubiPublicationRuntimeTransportErrorV1> {
         request.validate()?;
-        self.ensure_request_identity(&request.chain_id, &request.publisher)?;
+        self.ensure_request_identity(&request.network_id, &request.publisher)?;
         let request_bytes = norito::encode_canonical(request).map_err(|_| {
             MusubiPublicationRuntimeTransportErrorV1::permanent(
                 "MUSUBI_STORAGE_COORDINATION_REQUEST_INVALID",
@@ -4002,7 +3962,7 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
         request: &MusubiProviderReadbackRequestV1,
     ) -> Result<MusubiProviderReadbackResponseV1, MusubiPublicationRuntimeTransportErrorV1> {
         request.validate()?;
-        self.ensure_request_identity(&request.chain_id, &request.publisher)?;
+        self.ensure_request_identity(&request.network_id, &request.publisher)?;
         let request_bytes = norito::encode_canonical(request).map_err(|_| {
             MusubiPublicationRuntimeTransportErrorV1::permanent(
                 "MUSUBI_PROVIDER_READBACK_REQUEST_INVALID",
@@ -4091,7 +4051,7 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
             version: 1,
             operation,
             operation_id,
-            chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
             publisher: self.publisher.clone(),
             request_digest: digest,
             issued_at_ms: current_time_ms,
@@ -4149,10 +4109,10 @@ impl AuthenticatedMusubiPublicationRuntimeClientV1 {
 
     fn ensure_request_identity(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         publisher: &AccountId,
     ) -> Result<(), MusubiPublicationRuntimeTransportErrorV1> {
-        if chain_id != &self.chain_id || publisher != &self.publisher {
+        if network_id != &self.network_id || publisher != &self.publisher {
             return Err(MusubiPublicationRuntimeTransportErrorV1::permanent(
                 "MUSUBI_RUNTIME_REQUEST_IDENTITY_MISMATCH",
             ));

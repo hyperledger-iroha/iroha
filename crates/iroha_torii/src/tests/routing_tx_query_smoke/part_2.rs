@@ -11,7 +11,7 @@
         ));
 
         // Accounts and chain
-        let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+        let network_id = *state.network_id_ref();
         let kp_b = checked_smoke_keypair(
             0x6F,
             iroha_crypto::Algorithm::Ed25519,
@@ -56,7 +56,7 @@
 
         // tx_success: authority == B, deterministic success
         let mut success_builder = dm::TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             acc_b.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -67,7 +67,7 @@
         let tx_success = AcceptedTransaction::new_unchecked(Cow::Owned(signed_success));
         // tx_fail_c: failure due to missing account
         let mut fail_c_builder = dm::TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             acc_b.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -80,7 +80,7 @@
 
         // tx_fail_d: failure due to missing account (unregister non-existent)
         let mut unregister_missing_builder = dm::TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             acc_b.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -93,7 +93,7 @@
 
         // tx_fail_e: another failure case (duplicate domain register)
         let mut duplicate_domain_builder = dm::TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             acc_b.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -213,7 +213,7 @@
         ));
 
         // Accounts and chain
-        let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+        let network_id = *state.network_id_ref();
         let kp_a = checked_smoke_keypair(
             0x72,
             iroha_crypto::Algorithm::Ed25519,
@@ -260,7 +260,7 @@
 
         // A_true@1000
         let mut b1 = dm::TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             acc_a.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -272,7 +272,7 @@
         let tx1 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_a));
         // A_false@2000 (fail)
         let mut b2 = dm::TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             acc_a.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -287,7 +287,7 @@
         let tx2 = AcceptedTransaction::new_unchecked(Cow::Owned(signed_b));
         // A_false@2000 (fail)
         let mut b3 = dm::TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             acc_a.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );

@@ -6,7 +6,7 @@
 //! before endpoint access, so supplementary-group membership never authorizes
 //! a peer. It never discovers endpoints or credentials. V1 uses a bounded
 //! canonical Norito exchange framed by a four-byte big-endian body length, with
-//! an exact client-selected subset-catalog handshake and monotonically
+//! an exact-network, client-selected subset-catalog handshake and monotonically
 //! ordered, session-bound requests. Every requested binding must be present
 //! byte-for-byte in the server's qualified catalog, and each session may use
 //! only the subset it authenticated during that handshake.
@@ -15,7 +15,7 @@
 //! unknown future role identifiers fail closed.
 //!
 //! Hedging/billing slots 35–40 expose only finalized query and verification,
-//! HSM statement signing, immutable publication/readback, authoritative
+//! External statement signing, immutable publication/readback, authoritative
 //! acknowledgement reconciliation, and sealed monotonic epoch witnesses.
 //! Every call is bounded and identity-qualified before and after external
 //! work. Automatic hedge execution is intentionally absent from the V1 broker
@@ -54,6 +54,7 @@ mod protocol {
         defaults::sorafs::storage::provider_ingest_runtime::outbox as provider_ingest_outbox_defaults,
         validate_webauthn_origin_v1, validate_webauthn_rp_id_v1,
     };
+    use iroha_data_model::NetworkId;
     use norito::{
         DecodeLimits, NoritoDeserialize, NoritoSerialize,
         codec::{Decode, Encode},
@@ -145,9 +146,8 @@ mod protocol {
     // streaming-plan protocol rather than raising this wire limit.
     const MAX_PROVIDER_INGEST_SOURCE_PLAN_PAYLOAD_BYTES_V1: usize =
         MAX_BROKER_UNARY_PAYLOAD_BYTES_V1;
-    // Keep the HSM transport exactly aligned with the canonical Governance
-    // node/block/head encoder. A valid schema payload must never be rejected
-    // only because signing crossed this process boundary.
+    // Keep external-signer transport aligned with the canonical Governance encoders.
+    // Valid schema payloads must not fail only because signing crossed processes.
     const MAX_SIGNING_PAYLOAD_BYTES_V1: usize =
         sorafs_manifest::GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1;
     const MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1: usize =
@@ -1041,8 +1041,7 @@ mod protocol {
                 governance_dag_publisher_peer_id: binding
                     .governance_dag_publisher_peer_id()
                     .map(<[u8]>::to_vec),
-                governance_dag_publisher_public_key: binding
-                    .governance_dag_publisher_public_key(),
+                governance_dag_publisher_public_key: binding.governance_dag_publisher_public_key(),
                 governance_request_ingress_binding: binding
                     .governance_request_ingress_binding()
                     .map(governance_request_ingress_binding_to_wire),
@@ -1419,6 +1418,8 @@ mod protocol {
                 return Err(BrokerError::BindingMismatch);
             }
         } else if pop_registry {
+            use iroha_config::parameters::is_production_runtime_handle;
+
             let exact = binding
                 .pop_credential_runtime_binding
                 .as_ref()
@@ -1429,16 +1430,10 @@ mod protocol {
                     > sorafs_manifest::pop_credentials::POP_IDENTITY_TEXT_MAX_BYTES_V1
                 || exact.issuer_id.trim() != exact.issuer_id
                 || exact.issuer_id.chars().any(char::is_control)
-                || !iroha_config::parameters::is_production_runtime_handle(&exact.issuer_hsm_key_id)
-                || !iroha_config::parameters::is_production_runtime_handle(
-                    &exact.enrollment_recipient_key_id,
-                )
-                || !iroha_config::parameters::is_production_runtime_handle(
-                    &exact.wallet_recipient_key_id,
-                )
-                || !iroha_config::parameters::is_production_runtime_handle(
-                    &exact.wallet_wrapping_key_id,
-                )
+                || !is_production_runtime_handle(&exact.issuer_signer_handle)
+                || !is_production_runtime_handle(&exact.enrollment_recipient_key_id)
+                || !is_production_runtime_handle(&exact.wallet_recipient_key_id)
+                || !is_production_runtime_handle(&exact.wallet_wrapping_key_id)
                 || exact.enrollment_recipient_public_key_digest == [0; 32]
                 || exact.wallet_recipient_public_key_digest == [0; 32]
                 || exact.issuer_public_key == [0; 32]
@@ -2074,6 +2069,7 @@ mod protocol {
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct HandshakeTranscriptFieldsV1 {
         chain_id: String,
+        network_id: NetworkId,
         requested_catalog: Vec<ProviderBindingWireV1>,
         client_nonce: [u8; 32],
         catalog_digest: [u8; 32],
@@ -2082,6 +2078,7 @@ mod protocol {
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct HandshakeRequestV1 {
         chain_id: String,
+        network_id: NetworkId,
         requested_catalog: Vec<ProviderBindingWireV1>,
         client_nonce: [u8; 32],
         catalog_digest: [u8; 32],
@@ -2091,6 +2088,7 @@ mod protocol {
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ServerTranscriptFieldsV1 {
         chain_id: String,
+        network_id: NetworkId,
         requested_catalog: Vec<ProviderBindingWireV1>,
         client_nonce: [u8; 32],
         catalog_digest: [u8; 32],
@@ -2102,6 +2100,7 @@ mod protocol {
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct HandshakeResponseV1 {
         chain_id: String,
+        network_id: NetworkId,
         requested_catalog: Vec<ProviderBindingWireV1>,
         client_nonce: [u8; 32],
         catalog_digest: [u8; 32],
@@ -2394,18 +2393,18 @@ mod protocol {
     fn validate_bootle_lantern_prepare_request(
         request: &BootleLanternPrepareAuthorizationRequestWireV1,
         binding: &ProviderBindingWireV1,
-        session_chain_id: Option<&str>,
+        session_network_id: &NetworkId,
     ) -> Result<(), BrokerError> {
         let exact = validate_bootle_lantern_policy_binding(binding, &request.policy)?;
         if request.canonical_genesis_hash == [0; 32]
+            || request.context.network_id.as_bytes() != &request.canonical_genesis_hash
             || request.requester_authorization_digest == [0; 32]
             || request.issued_at_height == 0
             || request
                 .expires_at_height
                 .checked_sub(request.issued_at_height)
                 != Some(exact.authorization_lifetime_blocks())
-            || session_chain_id
-                .is_some_and(|chain_id| request.context.chain_id.as_str() != chain_id)
+            || &request.context.network_id != session_network_id
         {
             return Err(BrokerError::Rejected);
         }
@@ -2415,7 +2414,7 @@ mod protocol {
     fn decode_bootle_lantern_issue_request(
         payload: &[u8],
         binding: &ProviderBindingWireV1,
-        session_chain_id: Option<&str>,
+        session_network_id: &NetworkId,
     ) -> Result<
         (
             BootleLanternIssueRequestWireV1,
@@ -2430,11 +2429,11 @@ mod protocol {
         )?;
         let exact = validate_bootle_lantern_policy_binding(binding, &request.policy)?;
         if request.canonical_genesis_hash == [0; 32]
+            || request.context.network_id.as_bytes() != &request.canonical_genesis_hash
             || request.current_height == 0
             || request.authorization.len() != BOOTLE_LANTERN_AUTHORIZATION_BYTES_V1
             || request.request.len() != BOOTLE_LANTERN_REQUEST_BYTES_V1
-            || session_chain_id
-                .is_some_and(|chain_id| request.context.chain_id.as_str() != chain_id)
+            || &request.context.network_id != session_network_id
         {
             return Err(BrokerError::Rejected);
         }
@@ -3655,46 +3654,6 @@ mod protocol {
     }
 
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct SignRequestWireV1 {
-        payload: Vec<u8>,
-    }
-
-    impl fmt::Debug for SignRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("SignRequestWireV1")
-                .field("payload_len", &self.payload.len())
-                .finish_non_exhaustive()
-        }
-    }
-
-    impl Drop for SignRequestWireV1 {
-        fn drop(&mut self) {
-            self.payload.fill(0);
-            let _ = std::hint::black_box(&self.payload);
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct SignResultWireV1 {
-        signature: [u8; 64],
-    }
-
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-    struct VariableSignatureResultWireV1 {
-        signature: Vec<u8>,
-    }
-
-    impl fmt::Debug for VariableSignatureResultWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("VariableSignatureResultWireV1")
-                .field("signature_len", &self.signature.len())
-                .finish_non_exhaustive()
-        }
-    }
-
-    #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct PotrSignRequestWireV1 {
         payload: Vec<u8>,
         expected_public_key: Vec<u8>,
@@ -3922,14 +3881,6 @@ mod protocol {
             self.body.fill(0);
             let _ = std::hint::black_box(&self.body);
         }
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PopIssuerSignRequestWireV1 {
-        digest: [u8; 32],
-    }
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct PopIssuerSignResultWireV1 {
-        signature: [u8; 64],
     }
     #[derive(PartialEq, Eq, Decode, Encode)]
     struct PopAuthenticateRequestWireV1 {
@@ -4483,7 +4434,7 @@ mod protocol {
     struct ModerationPanelNotificationArchiveQualifyRequestWireV1 {
         version: u16,
         slot: u16,
-        chain_id: String,
+        network_id: NetworkId,
     }
 
     impl fmt::Debug for ModerationPanelNotificationArchiveQualifyRequestWireV1 {
@@ -4510,7 +4461,7 @@ mod protocol {
     struct ModerationPanelNotificationArchiveInstallRequestWireV1 {
         version: u16,
         slot: u16,
-        chain_id: String,
+        network_id: NetworkId,
         operation_id: [u8; 32],
         receipt_message: [u8; 32],
         canonical_artifact: Vec<u8>,
@@ -4551,7 +4502,7 @@ mod protocol {
     struct ModerationPanelNotificationArchiveReadRequestWireV1 {
         version: u16,
         slot: u16,
-        chain_id: String,
+        network_id: NetworkId,
         operation_id: [u8; 32],
     }
 
@@ -4602,7 +4553,7 @@ mod protocol {
     struct ModerationPanelNotificationSourceAttestRequestWireV1 {
         version: u16,
         slot: u16,
-        chain_id: String,
+        network_id: NetworkId,
         statement:
             sorafs_node::moderation_orchestrator::ModerationPanelNotificationSourceAttestationV1,
     }
@@ -4619,7 +4570,7 @@ mod protocol {
     struct ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
         version: u16,
         slot: u16,
-        chain_id: String,
+        network_id: NetworkId,
         head: sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1,
         canonical_head: Vec<u8>,
     }
@@ -4911,24 +4862,24 @@ mod protocol {
 
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestRetentionLoadRequestWireV1 {
-        chain_id: String,
+        network_id: NetworkId,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestRetentionCompareAndSwapRequestWireV1 {
-        chain_id: String,
+        network_id: NetworkId,
         expected_revision: Option<[u8; 32]>,
         next_record: Vec<u8>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ReputationRetentionLoadRequestWireV1 {
-        chain_id: String,
+        network_id: NetworkId,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ReputationRetentionCompareAndSwapRequestWireV1 {
-        chain_id: String,
+        network_id: NetworkId,
         expected_revision: Option<[u8; 32]>,
         next_record: Vec<u8>,
     }
@@ -4941,7 +4892,7 @@ mod protocol {
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ReputationJournalTransactionRequestWireV1 {
         sequence: u64,
-        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
         authority: iroha_data_model::account::AccountId,
         event_id: iroha_data_model::sorafs::reputation::ReputationJournalEventIdV1,
         source_id: iroha_data_model::sorafs::reputation::ReputationJournalSourceIdV1,
@@ -5027,7 +4978,7 @@ mod protocol {
 
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct BillingVerifyPageRequestWireV1 {
-        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
         previous: Option<sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1>,
         page: sorafs_node::hedging_billing_service::HedgingBillingFinalizedEventPageV1,
     }
@@ -5036,7 +4987,7 @@ mod protocol {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
                 .debug_struct("BillingVerifyPageRequestWireV1")
-                .field("chain_id", &self.chain_id)
+                .field("network_id", &self.network_id)
                 .field(
                     "previous_next_sequence",
                     &self
@@ -5052,13 +5003,13 @@ mod protocol {
 
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingVerifyPeriodCloseRequestWireV1 {
-        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
         close: sorafs_node::hedging_billing_service::HedgingBillingFinalizedPeriodCloseV1,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingVerifyEpochTransitionRequestWireV1 {
-        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
         transition: sorafs_node::hedging_billing_service::HedgingBillingEpochTransitionV1,
     }
 
@@ -5184,16 +5135,6 @@ mod protocol {
             && !value.chars().any(char::is_control)
     }
 
-    fn validate_billing_chain_id(chain_id: &iroha_data_model::ChainId) -> Result<(), BrokerError> {
-        validate_provider_ingest_chain_id(chain_id.as_str())?;
-        if chain_id.as_str().len()
-            > sorafs_node::hedging_billing_service::HEDGING_BILLING_CHAIN_ID_MAX_BYTES_V1
-        {
-            return Err(BrokerError::Rejected);
-        }
-        Ok(())
-    }
-
     fn validate_billing_cursor(
         cursor: sorafs_node::hedging_billing_service::HedgingBillingFinalizedCursorV1,
     ) -> Result<(), BrokerError> {
@@ -5205,10 +5146,12 @@ mod protocol {
 
     fn validate_billing_journal_commitment(
         commitment: sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1,
+        network_id: iroha_data_model::NetworkId,
     ) -> Result<(), BrokerError> {
         validate_billing_cursor(commitment.finalized_cursor)?;
         if commitment.version
             != sorafs_node::hedging_billing_service::HEDGING_BILLING_JOURNAL_COMMITMENT_VERSION_V1
+            || commitment.network_id != network_id
             || commitment.journal_next_sequence == 0
             || commitment.journal_root == [0; 32]
         {
@@ -5219,12 +5162,13 @@ mod protocol {
 
     fn validate_billing_query_position(
         position: BillingQueryPositionWireV1,
+        network_id: iroha_data_model::NetworkId,
     ) -> Result<(), BrokerError> {
         if position.next_sequence == 0 {
             return Err(BrokerError::Rejected);
         }
         if let Some(commitment) = position.journal_commitment {
-            validate_billing_journal_commitment(commitment)?;
+            validate_billing_journal_commitment(commitment, network_id)?;
             if position.next_sequence > commitment.journal_next_sequence {
                 return Err(BrokerError::Rejected);
             }
@@ -5254,8 +5198,7 @@ mod protocol {
         page: &sorafs_node::hedging_billing_service::HedgingBillingFinalizedEventPageV1,
         request: Option<(BillingQueryPositionWireV1, u32)>,
     ) -> Result<(), BrokerError> {
-        validate_billing_chain_id(&page.chain_id)?;
-        validate_billing_journal_commitment(page.journal_commitment)?;
+        validate_billing_journal_commitment(page.journal_commitment, page.network_id)?;
         let expected_next = page
             .start_sequence
             .checked_add(u64::try_from(page.events.len()).map_err(|_| BrokerError::Rejected)?)
@@ -5316,8 +5259,7 @@ mod protocol {
         close: &sorafs_node::hedging_billing_service::HedgingBillingFinalizedPeriodCloseV1,
         expected_period_end_unix: Option<u64>,
     ) -> Result<(), BrokerError> {
-        validate_billing_chain_id(&close.chain_id)?;
-        validate_billing_journal_commitment(close.journal_commitment)?;
+        validate_billing_journal_commitment(close.journal_commitment, close.network_id)?;
         if close.version
             != sorafs_node::hedging_billing_service::HEDGING_BILLING_PERIOD_CLOSE_VERSION_V1
             || close.period_end_unix == 0
@@ -5338,7 +5280,6 @@ mod protocol {
     fn validate_billing_signed_statement_shape(
         statement: &sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1,
     ) -> Result<[u8; 32], BrokerError> {
-        validate_billing_chain_id(&statement.chain_id)?;
         validate_billing_cursor(statement.finalized_cursor)?;
         validate_billing_record_id(statement.governed_statement.statement.statement_id)?;
         if statement.version
@@ -5366,10 +5307,12 @@ mod protocol {
 
     fn validate_billing_publish_request(
         publish: &BillingPublishStatementRequestWireV1,
+        network_id: iroha_data_model::NetworkId,
     ) -> Result<(), BrokerError> {
         let statement_id = publish.statement.governed_statement.statement.statement_id;
         let digest = validate_billing_signed_statement_shape(&publish.statement)?;
         if publish.idempotency_key != statement_id
+            || publish.statement.network_id != network_id
             || publish.signed_statement_digest != digest
             || publish.signed_statement_digest == [0; 32]
         {
@@ -5380,20 +5323,27 @@ mod protocol {
 
     fn validate_billing_acknowledgement_request(
         request: &BillingAcknowledgementRequestWireV1,
+        network_id: iroha_data_model::NetworkId,
     ) -> Result<(), BrokerError> {
         validate_billing_signed_statement_shape(&request.statement)?;
+        if request.statement.network_id != network_id {
+            return Err(BrokerError::BindingMismatch);
+        }
         validate_billing_acknowledgement_shape(
             &request.acknowledgement,
             request.statement.governed_statement.statement.statement_id,
+            network_id,
         )
     }
 
     fn validate_billing_acknowledgement_shape(
         acknowledgement: &sorafs_node::hedging_billing_service::BillingStatementAcknowledgementV1,
         expected_statement_id: [u8; 32],
+        network_id: iroha_data_model::NetworkId,
     ) -> Result<(), BrokerError> {
         if acknowledgement.version
             != sorafs_node::hedging_billing_service::BILLING_STATEMENT_ACKNOWLEDGEMENT_VERSION_V1
+            || acknowledgement.network_id != network_id
             || acknowledgement.statement_id != expected_statement_id
             || acknowledgement.account_digest == [0; 32]
             || acknowledgement.request_binding_digest == [0; 32]
@@ -5418,6 +5368,7 @@ mod protocol {
         publication: &BillingAuthoritativePublicationWireV1,
         requested_statement_id: [u8; 32],
         identity: &BillingStatementPublisherIdentityWireV1,
+        network_id: iroha_data_model::NetworkId,
     ) -> Result<(), BrokerError> {
         let statement_digest =
             validate_billing_signed_statement_shape(&publication.signed_statement)?;
@@ -5428,6 +5379,7 @@ mod protocol {
             .statement
             .statement_id
             != requested_statement_id
+            || publication.signed_statement.network_id != network_id
             || receipt.route_id != identity.route_id
             || receipt.publisher_id != identity.publisher_id
         {
@@ -5492,9 +5444,17 @@ mod protocol {
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestSourceFetchRequestWireV1 {
+    struct ProviderIngestSourceMusubiArchiveWireV1 {
+        network_id: iroha_data_model::NetworkId,
+        observed_finalized_cursor: sorafs_node::ProviderIngestFinalizedCursorV1,
+        binding: iroha_data_model::musubi::MusubiReplicationOrderArchiveBindingV1,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+    struct ProviderIngestSourceFetchRequestWireV2 {
         authorization: sorafs_node::FinalizedProviderIngestAuthorizationV1,
         source_provider_ids: Vec<[u8; 32]>,
+        musubi_archive: Option<ProviderIngestSourceMusubiArchiveWireV1>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
@@ -6085,30 +6045,68 @@ mod protocol {
         source_plan_from_wire(wire)
     }
 
+    fn source_request_from_wire(
+        fetch: ProviderIngestSourceFetchRequestWireV2,
+    ) -> Result<sorafs_node::ProviderIngestSourceRequestV1, BrokerError> {
+        let musubi_archive = match fetch.musubi_archive {
+            Some(musubi) => Some(
+                sorafs_node::ProviderIngestMusubiArchiveFetchBindingV1::new(
+                    musubi.network_id,
+                    fetch.authorization.provider_id(),
+                    musubi.observed_finalized_cursor,
+                    musubi.binding,
+                )
+                .map_err(|_| BrokerError::Rejected)?,
+            ),
+            None => None,
+        };
+        sorafs_node::ProviderIngestSourceRequestV1::new(
+            fetch.authorization,
+            fetch.source_provider_ids,
+            musubi_archive,
+        )
+        .map_err(|_| BrokerError::Rejected)
+    }
+
+    fn source_request_to_wire(
+        request: sorafs_node::ProviderIngestSourceRequestV1,
+    ) -> Result<ProviderIngestSourceFetchRequestWireV2, BrokerError> {
+        let (authorization, source_provider_ids, musubi_archive) = request.into_parts();
+        let musubi_archive = match musubi_archive {
+            Some(musubi) => {
+                if !musubi.matches_authorization(&authorization) {
+                    return Err(BrokerError::BindingMismatch);
+                }
+                Some(ProviderIngestSourceMusubiArchiveWireV1 {
+                    network_id: *musubi.network_id(),
+                    observed_finalized_cursor: musubi.observed_finalized_cursor(),
+                    binding: musubi.binding().clone(),
+                })
+            }
+            None => None,
+        };
+        let fetch = ProviderIngestSourceFetchRequestWireV2 {
+            authorization,
+            source_provider_ids,
+            musubi_archive,
+        };
+        source_request_from_wire(fetch.clone())?;
+        Ok(fetch)
+    }
+
     fn validate_source_fetch_request(
-        fetch: &ProviderIngestSourceFetchRequestWireV1,
+        fetch: &ProviderIngestSourceFetchRequestWireV2,
         binding: &ProviderBindingWireV1,
         admitted_provider_ids: Option<&[[u8; 32]]>,
     ) -> Result<(), BrokerError> {
-        fetch
-            .authorization
-            .validate()
-            .map_err(|_| BrokerError::Rejected)?;
+        source_request_from_wire(fetch.clone())?;
         let limits = binding
             .provider_ingest_source_limits
             .ok_or(BrokerError::BindingMismatch)?;
         let max_sources =
             usize::try_from(limits.max_source_providers).map_err(|_| BrokerError::Rejected)?;
         if fetch.authorization.content_length() > limits.max_content_bytes
-            || fetch.source_provider_ids.is_empty()
             || fetch.source_provider_ids.len() > max_sources
-            || fetch.source_provider_ids.iter().any(|provider_id| {
-                *provider_id == [0; 32] || *provider_id == fetch.authorization.provider_id()
-            })
-            || fetch
-                .source_provider_ids
-                .windows(2)
-                .any(|pair| pair[0] >= pair[1])
         {
             return Err(BrokerError::Rejected);
         }
@@ -6534,6 +6532,7 @@ mod protocol {
 
     fn catalog_digest(
         chain_id: &str,
+        network_id: &NetworkId,
         catalog: &[ProviderBindingWireV1],
     ) -> Result<[u8; 32], BrokerError> {
         let bytes = encode_canonical(&catalog.to_vec(), MAX_HANDSHAKE_FRAME_BYTES_V1)?;
@@ -6543,6 +6542,7 @@ mod protocol {
                 &BROKER_MAGIC_V1,
                 &BROKER_VERSION_V1.to_be_bytes(),
                 chain_id.as_bytes(),
+                network_id.as_bytes(),
                 &bytes,
             ],
         ))
@@ -6628,6 +6628,7 @@ mod protocol {
 
     fn make_handshake_request(
         chain_id: &str,
+        network_id: NetworkId,
         requested_catalog: Vec<ProviderBindingWireV1>,
         client_nonce: [u8; 32],
     ) -> Result<HandshakeRequestV1, BrokerError> {
@@ -6648,9 +6649,10 @@ mod protocol {
         {
             return Err(BrokerError::BindingMismatch);
         }
-        let catalog_digest = catalog_digest(chain_id, &requested_catalog)?;
+        let catalog_digest = catalog_digest(chain_id, &network_id, &requested_catalog)?;
         let transcript = HandshakeTranscriptFieldsV1 {
             chain_id: chain_id.to_owned(),
+            network_id,
             requested_catalog: requested_catalog.clone(),
             client_nonce,
             catalog_digest,
@@ -6658,6 +6660,7 @@ mod protocol {
         let client_transcript_digest = client_transcript_digest(&transcript)?;
         Ok(HandshakeRequestV1 {
             chain_id: chain_id.to_owned(),
+            network_id,
             requested_catalog,
             client_nonce,
             catalog_digest,
@@ -6668,6 +6671,7 @@ mod protocol {
     fn validate_handshake_request(request: &HandshakeRequestV1) -> Result<(), BrokerError> {
         let expected = make_handshake_request(
             &request.chain_id,
+            request.network_id,
             request.requested_catalog.clone(),
             request.client_nonce,
         )?;
@@ -6690,6 +6694,7 @@ mod protocol {
         }
         let transcript = ServerTranscriptFieldsV1 {
             chain_id: request.chain_id.clone(),
+            network_id: request.network_id,
             requested_catalog: request.requested_catalog.clone(),
             client_nonce: request.client_nonce,
             catalog_digest: request.catalog_digest,
@@ -6699,6 +6704,7 @@ mod protocol {
         };
         Ok(HandshakeResponseV1 {
             chain_id: request.chain_id.clone(),
+            network_id: request.network_id,
             requested_catalog: request.requested_catalog.clone(),
             client_nonce: request.client_nonce,
             catalog_digest: request.catalog_digest,
@@ -7102,6 +7108,7 @@ mod protocol {
         response: &HandshakeResponseV1,
     ) -> Result<(), BrokerError> {
         if response.chain_id != request.chain_id
+            || response.network_id != request.network_id
             || response.requested_catalog != request.requested_catalog
             || response.client_nonce != request.client_nonce
             || response.catalog_digest != request.catalog_digest
@@ -7116,6 +7123,7 @@ mod protocol {
         }
         let transcript = ServerTranscriptFieldsV1 {
             chain_id: response.chain_id.clone(),
+            network_id: response.network_id,
             requested_catalog: response.requested_catalog.clone(),
             client_nonce: response.client_nonce,
             catalog_digest: response.catalog_digest,
@@ -7168,19 +7176,25 @@ mod protocol {
 
     #[cfg(test)]
     fn validate_operation_request(request: &OperationRequestV1) -> Result<(), BrokerError> {
-        validate_operation_request_with_session_chain(request, None)
+        validate_operation_request_with_session(
+            request,
+            None,
+            &crate::runtime_provider_registry::runtime_provider_test_network_id(),
+        )
     }
 
     fn validate_operation_request_for_session(
         request: &OperationRequestV1,
         session_chain_id: &str,
+        session_network_id: &NetworkId,
     ) -> Result<(), BrokerError> {
-        validate_operation_request_with_session_chain(request, Some(session_chain_id))
+        validate_operation_request_with_session(request, Some(session_chain_id), session_network_id)
     }
 
-    fn validate_operation_request_with_session_chain(
+    fn validate_operation_request_with_session(
         request: &OperationRequestV1,
         session_chain_id: Option<&str>,
+        session_network_id: &NetworkId,
     ) -> Result<(), BrokerError> {
         if request.session_id == [0; 32]
             || request.request_id == 0
@@ -7204,7 +7218,7 @@ mod protocol {
         if operation_request_digest(&fields)? != request.request_digest {
             return Err(BrokerError::Protocol);
         }
-        validate_operation_payload(request, session_chain_id)?;
+        validate_operation_payload(request, session_chain_id, session_network_id)?;
         Ok(())
     }
 
@@ -7372,6 +7386,7 @@ mod protocol {
     fn validate_moderation_handoff_request(
         wire: &ModerationDurableHandoffRequestWireV1,
         slot: u16,
+        expected_network_id: Option<&NetworkId>,
     ) -> Result<
         iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffRequestV1,
         BrokerError,
@@ -7380,6 +7395,7 @@ mod protocol {
             moderation_handoff_kind_for_slot(slot).ok_or(BrokerError::BindingMismatch)?;
         let handoff = &wire.handoff;
         if handoff.kind != expected_kind
+            || !handoff.is_bound_to_network(expected_network_id.unwrap_or(&handoff.network_id))
             || handoff.handoff_id == [0; 32]
             || handoff.outcome_digest == [0; 32]
             || handoff.finalized_cursor.block_height == 0
@@ -7415,13 +7431,13 @@ mod protocol {
             handoff: request.handoff.clone(),
             canonical_handoff: request.canonical_handoff.clone(),
         };
-        validate_moderation_handoff_request(&wire, slot)?;
+        validate_moderation_handoff_request(&wire, slot, None)?;
         Ok(wire)
     }
 
     fn validate_moderation_panel_notification_archive_head_publish_request(
         wire: &ModerationPanelNotificationArchiveHeadPublishRequestWireV1,
-        session_chain_id: &str,
+        session_network_id: &NetworkId,
     ) -> Result<
         iroha_torii::sorafs::moderation_runtime::ModerationDurableArchiveHeadPublicationRequestV1,
         BrokerError,
@@ -7429,9 +7445,8 @@ mod protocol {
         let publication_slot = IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id();
         if wire.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1
             || wire.slot != publication_slot
-            || wire.chain_id != session_chain_id
-            || wire.chain_id.parse::<iroha_data_model::ChainId>().is_err()
-            || wire.head.chain_id != wire.chain_id
+            || wire.network_id != *session_network_id
+            || wire.head.network_id != wire.network_id
             || wire.canonical_head.is_empty()
             || wire.canonical_head.len() > MAX_MODERATION_HANDOFF_CANONICAL_BYTES_V1
             || wire
@@ -7465,7 +7480,7 @@ mod protocol {
 
     fn validate_moderation_panel_notification_archive_head_at_broker_boundary(
         canonical_head: &[u8],
-        chain_id: &str,
+        network_id: &NetworkId,
         catalog: &[ProviderBindingWireV1],
     ) -> Result<
         (
@@ -7475,9 +7490,6 @@ mod protocol {
         ),
         BrokerError,
     >{
-        let chain_id = chain_id
-            .parse::<iroha_data_model::ChainId>()
-            .map_err(|_| BrokerError::BindingMismatch)?;
         let archive_binding = catalog
             .iter()
             .find(|binding| {
@@ -7496,7 +7508,7 @@ mod protocol {
             .ok_or(BrokerError::BindingMismatch)?;
         let expectation = sorafs_node::moderation_orchestrator::
             ModerationPanelNotificationArchiveBrokerExpectationV1 {
-                chain_id: &chain_id,
+                network_id,
                 archive_handle: &archive_binding.handle,
                 archive_qualification: sorafs_node::moderation_orchestrator::
                     ModerationRuntimeProviderQualificationV1::new(
@@ -7540,7 +7552,7 @@ mod protocol {
 
     fn validate_moderation_panel_notification_archive_public_head_readback_at_broker_boundary(
         canonical_head: &[u8],
-        chain_id: &str,
+        network_id: &NetworkId,
     ) -> Result<
         sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1,
         BrokerError,
@@ -7553,7 +7565,7 @@ mod protocol {
         let head = decode_canonical::<
             sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1,
         >(canonical_head, MAX_MODERATION_HANDOFF_CANONICAL_BYTES_V1)?;
-        if head.chain_id != chain_id
+        if head.network_id != *network_id
             || norito::to_bytes(&head).map_err(|_| BrokerError::Rejected)?.as_slice()
                 != canonical_head
             || head
@@ -7577,21 +7589,21 @@ mod protocol {
     fn moderation_panel_notification_archive_head_publish_request_to_wire(
         request: &iroha_torii::sorafs::moderation_runtime::
             ModerationDurableArchiveHeadPublicationRequestV1,
-        chain_id: &str,
+        network_id: &NetworkId,
         catalog: &[ProviderBindingWireV1],
     ) -> Result<ModerationPanelNotificationArchiveHeadPublishRequestWireV1, BrokerError> {
         let wire = ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
             version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
             slot: IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id(),
-            chain_id: chain_id.to_owned(),
+            network_id: *network_id,
             head: request.head.clone(),
             canonical_head: request.canonical_head.clone(),
         };
-        validate_moderation_panel_notification_archive_head_publish_request(&wire, chain_id)?;
+        validate_moderation_panel_notification_archive_head_publish_request(&wire, network_id)?;
         let (validated_head, _) =
             validate_moderation_panel_notification_archive_head_at_broker_boundary(
                 &wire.canonical_head,
-                chain_id,
+                network_id,
                 catalog,
             )?;
         if validated_head != wire.head {
@@ -7602,12 +7614,15 @@ mod protocol {
 
     fn validate_moderation_panel_notification_request(
         wire: &ModerationDurablePanelNotificationRequestWireV1,
+        expected_network_id: Option<&NetworkId>,
     ) -> Result<
         iroha_torii::sorafs::moderation_runtime::ModerationDurablePanelNotificationRequestV1,
         BrokerError,
     > {
         let notification = &wire.notification;
-        if notification.notification_id == [0; 32]
+        if !notification
+            .is_bound_to_network(expected_network_id.unwrap_or(&notification.network_id))
+            || notification.notification_id == [0; 32]
             || notification.source_operation_id == [0; 32]
             || notification.scope_digest == [0; 32]
             || notification.finalized_event_cursor.sequence == 0
@@ -7649,7 +7664,7 @@ mod protocol {
             attempt: request.attempt,
             attempt_limit: request.attempt_limit,
         };
-        validate_moderation_panel_notification_request(&wire)?;
+        validate_moderation_panel_notification_request(&wire, None)?;
         Ok(wire)
     }
 
@@ -8105,7 +8120,7 @@ mod protocol {
         iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderBindingsV1::try_new(
             exact.issuer_policy_digest,
             exact.issuer_id.clone(),
-            exact.issuer_hsm_key_id.clone(),
+            exact.issuer_signer_handle.clone(),
             exact.issuer_public_key,
             exact.enrollment_recipient_key_id.clone(),
             exact.enrollment_recipient_public_key_digest,
@@ -8654,9 +8669,7 @@ mod protocol {
         material: &sorafs_node::reputation::ReputationUnsignedSigningMaterialV1,
     ) -> Result<(), BrokerError> {
         if material.version != sorafs_node::reputation::REPUTATION_UNSIGNED_MATERIAL_VERSION_V1
-            || material.chain_id.as_str().is_empty()
-            || material.chain_id.as_str().len()
-                > sorafs_node::reputation::REPUTATION_INGEST_MAX_CHAIN_ID_BYTES_V1
+            || material.network_id.as_bytes()[31] & 1 != 1
             || material.ingest_policy_digest == [0; 32]
             || material.snapshot_trust_policy_digest == [0; 32]
             || material.window_start_height == 0
@@ -8707,11 +8720,11 @@ mod protocol {
         Ok(())
     }
 
-    fn ensure_reputation_session_chain(
-        chain_id: &iroha_data_model::ChainId,
-        session_chain_id: &str,
+    fn ensure_reputation_session_network(
+        network_id: &iroha_data_model::NetworkId,
+        session_network_id: &iroha_data_model::NetworkId,
     ) -> Result<(), BrokerError> {
-        if chain_id.as_str() != session_chain_id {
+        if session_network_id != network_id {
             return Err(BrokerError::BindingMismatch);
         }
         Ok(())
@@ -8737,7 +8750,7 @@ mod protocol {
         };
         Ok(ReputationJournalTransactionRequestWireV1 {
             sequence: request.sequence,
-            chain_id: request.chain_id.clone(),
+            network_id: request.network_id,
             authority: request.authority.clone(),
             event_id: request.event_id,
             source_id: request.source_id,
@@ -8776,7 +8789,7 @@ mod protocol {
         };
         let request = sorafs_node::reputation::runtime::ReputationJournalTransactionRequestV1 {
             sequence: wire.sequence,
-            chain_id: wire.chain_id,
+            network_id: wire.network_id,
             authority: wire.authority,
             event_id: wire.event_id,
             source_id: wire.source_id,
@@ -9017,7 +9030,7 @@ mod protocol {
             OPERATION_SEALED_LOAD_V1
             | OPERATION_SEALED_COMPARE_AND_SWAP_V1
             | OPERATION_SEALED_DELETE_V1 => GOVERNANCE_SEALED_STATE_DECODE_POLICY_V1,
-            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1 => SOURCE_PLAN_DECODE_POLICY_V1,
+            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2 => SOURCE_PLAN_DECODE_POLICY_V1,
             OPERATION_PROVIDER_INGEST_SIGN_V1 => PROVIDER_INGEST_SIGN_DECODE_POLICY_V1,
             OPERATION_APPEAL_FINANCE_CHECKPOINT_LOAD_V1
             | OPERATION_APPEAL_FINANCE_CHECKPOINT_COMPARE_AND_SWAP_V1 => {
@@ -9124,7 +9137,7 @@ mod protocol {
             | OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1 => {
                 MAX_PROVIDER_INGEST_RETENTION_FRAME_BYTES_V1
             }
-            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1 => {
+            OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2 => {
                 MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1
             }
             OPERATION_QUALIFY_V1
@@ -9326,7 +9339,7 @@ mod protocol {
                 | OPERATION_PROVIDER_INGEST_RETENTION_LOAD_V1
                 | OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1
                 | OPERATION_PROVIDER_INGEST_SOURCE_READINESS_V1
-                | OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1
+                | OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2
                 | OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1
                 | OPERATION_MODERATION_QUARANTINE_UNWRAP_DEK_V1
                 | OPERATION_EVIDENCE_VIEWER_ISSUE_CHALLENGE_V1
@@ -9467,12 +9480,11 @@ mod protocol {
         Ok(())
     }
 
-    fn ensure_transaction_session_chain(
+    fn ensure_transaction_session_network(
         payload: &iroha_data_model::transaction::TransactionPayload,
-        session_chain_id: &str,
+        session_network_id: &NetworkId,
     ) -> Result<(), BrokerError> {
-        validate_provider_ingest_chain_id(session_chain_id)?;
-        if payload.chain().as_str() != session_chain_id {
+        if payload.network_id() != Some(session_network_id) {
             return Err(BrokerError::BindingMismatch);
         }
         Ok(())
@@ -9481,9 +9493,9 @@ mod protocol {
     fn ensure_provider_ingest_completion_payload(
         payload: &iroha_data_model::transaction::TransactionPayload,
         context: &sorafs_node::ProviderIngestCompletionSignerResolutionContextV1,
-        session_chain_id: &str,
+        session_network_id: &NetworkId,
     ) -> Result<(), BrokerError> {
-        ensure_transaction_session_chain(payload, session_chain_id)?;
+        ensure_transaction_session_network(payload, session_network_id)?;
         ensure_provider_ingest_completion_payload_context(payload, context)
     }
 
@@ -9535,12 +9547,12 @@ mod protocol {
     fn ensure_provider_ingest_completion_transaction(
         transaction: &iroha_data_model::transaction::SignedTransaction,
         context: &sorafs_node::ProviderIngestCompletionSignerResolutionContextV1,
-        session_chain_id: &str,
+        session_network_id: &NetworkId,
     ) -> Result<(), BrokerError> {
         ensure_provider_ingest_completion_payload(
             transaction.payload(),
             context,
-            session_chain_id,
+            session_network_id,
         )?;
         if transaction.attachments().is_some()
             || transaction.multisig_signatures().is_some()
@@ -9784,6 +9796,7 @@ mod protocol {
     fn decode_moderation_checkpoint_record(
         bytes: &[u8],
         binding: &ProviderBindingWireV1,
+        expected_network_id: Option<&NetworkId>,
     ) -> Result<sorafs_node::moderation_orchestrator::ModerationCheckpointStoreRecordV1, BrokerError>
     {
         let record = decode_canonical::<
@@ -9794,13 +9807,15 @@ mod protocol {
                 binding.revision.ok_or(BrokerError::BindingMismatch)?,
                 binding.policy_digest.ok_or(BrokerError::BindingMismatch)?,
             );
-        if !record.has_valid_provider_envelope(
-            &binding.handle,
-            qualification,
-            binding
-                .moderation_checkpoint_max_bytes
-                .ok_or(BrokerError::BindingMismatch)?,
-        ) {
+        if expected_network_id.is_some_and(|expected| record.network_id != *expected)
+            || !record.has_valid_provider_envelope(
+                &binding.handle,
+                qualification,
+                binding
+                    .moderation_checkpoint_max_bytes
+                    .ok_or(BrokerError::BindingMismatch)?,
+            )
+        {
             return Err(BrokerError::Rejected);
         }
         Ok(record)
@@ -9874,16 +9889,13 @@ mod protocol {
 
     fn validate_moderation_panel_notification_archive_artifact_at_broker_boundary(
         canonical_artifact: &[u8],
-        chain_id: &str,
+        network_id: &NetworkId,
         archive_binding: &ProviderBindingWireV1,
         catalog: &[ProviderBindingWireV1],
     ) -> Result<
         sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveBrokerValidationV1,
         BrokerError,
     > {
-        let chain_id = chain_id
-            .parse::<iroha_data_model::ChainId>()
-            .map_err(|_| BrokerError::BindingMismatch)?;
         let checkpoint_binding = catalog
             .iter()
             .find(|binding| {
@@ -9915,7 +9927,7 @@ mod protocol {
             usize::try_from(archive.max_records).map_err(|_| BrokerError::BindingMismatch)?;
         let expectation = sorafs_node::moderation_orchestrator::
             ModerationPanelNotificationArchiveBrokerExpectationV1 {
-                chain_id: &chain_id,
+                network_id,
                 archive_handle: &archive_binding.handle,
                 archive_qualification,
                 archive_id: archive.archive_id,
@@ -9942,16 +9954,13 @@ mod protocol {
 
     fn validate_moderation_panel_notification_archive_readback_at_broker_boundary(
         canonical_artifact: &[u8],
-        chain_id: &str,
+        network_id: &NetworkId,
         archive_binding: &ProviderBindingWireV1,
         catalog: &[ProviderBindingWireV1],
     ) -> Result<
         sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveBrokerValidationV1,
         BrokerError,
     > {
-        let chain_id = chain_id
-            .parse::<iroha_data_model::ChainId>()
-            .map_err(|_| BrokerError::BindingMismatch)?;
         let checkpoint_binding = catalog
             .iter()
             .find(|binding| {
@@ -9983,7 +9992,7 @@ mod protocol {
             usize::try_from(archive.max_records).map_err(|_| BrokerError::BindingMismatch)?;
         let expectation = sorafs_node::moderation_orchestrator::
             ModerationPanelNotificationArchiveBrokerExpectationV1 {
-                chain_id: &chain_id,
+                network_id,
                 archive_handle: &archive_binding.handle,
                 archive_qualification,
                 archive_id: archive.archive_id,
@@ -10011,13 +10020,10 @@ mod protocol {
     fn validate_moderation_panel_notification_source_attestation_at_broker_boundary(
         statement: &sorafs_node::moderation_orchestrator::
             ModerationPanelNotificationSourceAttestationV1,
-        chain_id: &str,
+        network_id: &NetworkId,
         binding: &ProviderBindingWireV1,
         current_record: &sorafs_node::moderation_orchestrator::ModerationCheckpointStoreRecordV1,
     ) -> Result<[u8; 32], BrokerError> {
-        let chain_id = chain_id
-            .parse::<iroha_data_model::ChainId>()
-            .map_err(|_| BrokerError::BindingMismatch)?;
         let qualification =
             sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1::new(
                 binding.revision.ok_or(BrokerError::BindingMismatch)?,
@@ -10025,14 +10031,15 @@ mod protocol {
             );
         let canonical_record =
             encode_canonical(current_record, moderation_checkpoint_record_limit(binding)?)?;
-        let validated_record = decode_moderation_checkpoint_record(&canonical_record, binding)?;
+        let validated_record =
+            decode_moderation_checkpoint_record(&canonical_record, binding, Some(network_id))?;
         if &validated_record != current_record {
             return Err(BrokerError::Rejected);
         }
         sorafs_node::moderation_orchestrator::
             validate_moderation_panel_notification_source_attestation_for_broker_v1(
                 statement,
-                &chain_id,
+                network_id,
                 &binding.handle,
                 qualification,
                 binding
@@ -10512,7 +10519,7 @@ mod protocol {
                         &request.payload,
                         MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
                     )?;
-                    validate_moderation_handoff_request(&handoff, request.binding.slot)
+                    validate_moderation_handoff_request(&handoff, request.binding.slot, None)
                         .map_err(|_| BrokerError::Protocol)?;
                 }
                 OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1 => {
@@ -10523,7 +10530,7 @@ mod protocol {
                     )?;
                     validate_moderation_panel_notification_archive_head_publish_request(
                         &publish,
-                        &publish.chain_id,
+                        &publish.network_id,
                     )
                     .map_err(|_| BrokerError::Protocol)?;
                     let outcome =
@@ -10591,7 +10598,7 @@ mod protocol {
                             &request.payload,
                             MAX_MODERATION_PANEL_NOTIFICATION_FRAME_BYTES_V1,
                         )?;
-                    validate_moderation_panel_notification_request(&notification)
+                    validate_moderation_panel_notification_request(&notification, None)
                         .map_err(|_| BrokerError::Protocol)?;
                     let receipt = decode_canonical::<ModerationPanelNotificationReceiptWireV1>(
                         result,
@@ -10940,6 +10947,7 @@ mod protocol {
                     validate_billing_acknowledgement_shape(
                         &recorded,
                         expected.statement.governed_statement.statement.statement_id,
+                        expected.statement.network_id,
                     )
                     .map_err(|_| BrokerError::Protocol)?;
                 }
@@ -10956,8 +10964,12 @@ mod protocol {
                         result, MAX_BILLING_RUNTIME_FRAME_BYTES_V1
                     )?;
                     if let Some(acknowledgement) = acknowledgement.as_ref() {
-                        validate_billing_acknowledgement_shape(acknowledgement, lookup.record_id)
-                            .map_err(|_| BrokerError::Protocol)?;
+                        validate_billing_acknowledgement_shape(
+                            acknowledgement,
+                            lookup.record_id,
+                            acknowledgement.network_id,
+                        )
+                        .map_err(|_| BrokerError::Protocol)?;
                     }
                 }
                 OPERATION_BILLING_LOAD_LATEST_EPOCH_V1 | OPERATION_BILLING_LOAD_EPOCH_V1 => {
@@ -10982,6 +10994,9 @@ mod protocol {
                             }
                         }
                     }
+                }
+                OPERATION_SIGN_V1 => {
+                    validate_governance_sign_operation_result(request, result)?;
                 }
                 OPERATION_STREAM_TOKEN_SIGN_V1 => {
                     let signed = decode_canonical::<SignResultWireV1>(
@@ -11199,6 +11214,14 @@ mod protocol {
                         .pop_credential_runtime_binding
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?;
+                    if sign.digest == [0; 32]
+                        || sorafs_node::pop_credentials::PopIssuerSigningPurposeV1::try_from_wire_id(
+                            sign.purpose,
+                        )
+                        .is_none()
+                    {
+                        return Err(BrokerError::Protocol);
+                    }
                     verify_evidence_viewer_ed25519_signature(
                         exact.issuer_public_key,
                         signed.signature,
@@ -11517,10 +11540,12 @@ mod protocol {
                         result,
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                     )?;
-                    let sign = decode_canonical::<SignRequestWireV1>(
+                    let sign = decode_canonical::<PurposeSignRequestWireV1>(
                         &request.payload,
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                     )?;
+                    validate_evidence_purpose_signing_request(&sign, &request.binding)
+                        .map_err(|_| BrokerError::Protocol)?;
                     let public_key = request
                         .binding
                         .evidence_viewer_receipt_signer_public_key
@@ -11557,7 +11582,7 @@ mod protocol {
                         MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1,
                     )?;
                     if let Some(record) = record {
-                        decode_moderation_checkpoint_record(&record, &request.binding)
+                        decode_moderation_checkpoint_record(&record, &request.binding, None)
                             .map_err(|_| BrokerError::Protocol)?;
                     }
                 }
@@ -11934,6 +11959,7 @@ mod protocol {
         #[derive(Clone)]
         struct BrokerServerStateV1 {
             chain_id: String,
+            network_id: NetworkId,
             catalog: Vec<ProviderBindingWireV1>,
             observations: Vec<ProviderObservationWireV1>,
             backends: RuntimeProviderBrokerBackendsV1,
@@ -13679,6 +13705,7 @@ mod protocol {
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(BrokerServerStateV1 {
                 chain_id: bindings.chain_id().to_owned(),
+                network_id: *bindings.network_id(),
                 catalog,
                 observations,
                 backends,
@@ -13719,6 +13746,7 @@ mod protocol {
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(BrokerServerStateV1 {
                 chain_id: bindings.chain_id().to_owned(),
+                network_id: *bindings.network_id(),
                 catalog,
                 observations,
                 backends,
@@ -14362,8 +14390,8 @@ mod protocol {
                     validate_moderation_panel_notification_archive_wire_scope(
                         qualify.version,
                         qualify.slot,
-                        &qualify.chain_id,
-                        Some(&state.chain_id),
+                        &qualify.network_id,
+                        &state.network_id,
                     )?;
                     let archive = state
                         .backends
@@ -14552,7 +14580,7 @@ mod protocol {
                     let (issue, authorization) = decode_bootle_lantern_issue_request(
                         &request.payload,
                         &request.binding,
-                        Some(&state.chain_id),
+                        &state.network_id,
                     )?;
                     let expected = iroha_core::privacy_engines::bootle_lantern::issuer::
                         issuer_validate_blind_issuance_request_encoded_v1(
@@ -14612,7 +14640,7 @@ mod protocol {
                     let (issue, authorization) = decode_bootle_lantern_issue_request(
                         &request.payload,
                         &request.binding,
-                        Some(&state.chain_id),
+                        &state.network_id,
                     )?;
                     let outcome = state
                         .backends
@@ -14960,7 +14988,7 @@ mod protocol {
                         MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
                     )?;
                     let submit = reputation_journal_request_from_wire(wire)?;
-                    ensure_reputation_session_chain(&submit.chain_id, &state.chain_id)?;
+                    ensure_reputation_session_network(&submit.network_id, &state.network_id)?;
                     let submitter = state
                         .backends
                         .reputation_journal_transaction_submitter
@@ -14987,7 +15015,10 @@ mod protocol {
                         MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
                     )?;
                     let signing = reputation_threshold_request_from_wire(wire)?;
-                    ensure_reputation_session_chain(&signing.material.chain_id, &state.chain_id)?;
+                    ensure_reputation_session_network(
+                        &signing.material.network_id,
+                        &state.network_id,
+                    )?;
                     let signer = state
                         .backends
                         .reputation_threshold_signer
@@ -15473,7 +15504,7 @@ mod protocol {
                         &request.payload,
                         MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    validate_billing_query_position(query.position)?;
+                    validate_billing_query_position(query.position, state.network_id)?;
                     let page = state
                         .backends
                         .billing_finalized_query
@@ -15489,7 +15520,7 @@ mod protocol {
                             page,
                             Some((query.position, query.max_events)),
                         )?;
-                        if page.chain_id.as_str() != state.chain_id {
+                        if page.network_id != state.network_id {
                             return Err(BrokerError::BindingMismatch);
                         }
                     }
@@ -15507,7 +15538,7 @@ mod protocol {
                         &request.payload,
                         MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    validate_billing_query_position(query.position)?;
+                    validate_billing_query_position(query.position, state.network_id)?;
                     let close = state
                         .backends
                         .billing_finalized_query
@@ -15520,7 +15551,7 @@ mod protocol {
                         .map_err(|error| billing_external_error(error, false))?;
                     if let Some(close) = close.as_ref() {
                         validate_billing_period_close_shape(close, Some(query.period_end_unix))?;
-                        if close.chain_id.as_str() != state.chain_id {
+                        if close.network_id != state.network_id {
                             return Err(BrokerError::BindingMismatch);
                         }
                     }
@@ -15538,17 +15569,21 @@ mod protocol {
                         &request.payload,
                         MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    if verify.chain_id.as_str() != state.chain_id
-                        || verify.page.chain_id != verify.chain_id
+                    if verify.network_id != state.network_id
+                        || verify.page.network_id != verify.network_id
                     {
                         return Err(BrokerError::BindingMismatch);
+                    }
+                    validate_billing_page_shape(&verify.page, None)?;
+                    if let Some(previous) = verify.previous {
+                        validate_billing_journal_commitment(previous, verify.network_id)?;
                     }
                     state
                         .backends
                         .billing_journal_verifier
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?
-                        .verify_page(&verify.chain_id, verify.previous, &verify.page)
+                        .verify_page(&verify.network_id, verify.previous, &verify.page)
                         .map_err(|error| billing_external_error(error, false))?;
                     qualify_server_binding(
                         state,
@@ -15564,17 +15599,18 @@ mod protocol {
                         &request.payload,
                         MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    if verify.chain_id.as_str() != state.chain_id
-                        || verify.close.chain_id != verify.chain_id
+                    if verify.network_id != state.network_id
+                        || verify.close.network_id != verify.network_id
                     {
                         return Err(BrokerError::BindingMismatch);
                     }
+                    validate_billing_period_close_shape(&verify.close, None)?;
                     state
                         .backends
                         .billing_journal_verifier
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?
-                        .verify_period_close(&verify.chain_id, &verify.close)
+                        .verify_period_close(&verify.network_id, &verify.close)
                         .map_err(|error| billing_external_error(error, false))?;
                     qualify_server_binding(
                         state,
@@ -15590,9 +15626,9 @@ mod protocol {
                         &request.payload,
                         MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    if verify.chain_id.as_str() != state.chain_id
-                        || verify.transition.previous_service_policy.chain_id != verify.chain_id
-                        || verify.transition.next_service_policy.chain_id != verify.chain_id
+                    if verify.network_id != state.network_id
+                        || verify.transition.previous_service_policy.network_id != verify.network_id
+                        || verify.transition.next_service_policy.network_id != verify.network_id
                     {
                         return Err(BrokerError::BindingMismatch);
                     }
@@ -15601,7 +15637,7 @@ mod protocol {
                         .billing_journal_verifier
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?
-                        .verify_epoch_transition(&verify.chain_id, &verify.transition)
+                        .verify_epoch_transition(&verify.network_id, &verify.transition)
                         .map_err(|error| billing_external_error(error, false))?;
                     qualify_server_binding(
                         state,
@@ -15658,7 +15694,7 @@ mod protocol {
                         &request.payload,
                         MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    validate_billing_publish_request(&publish)?;
+                    validate_billing_publish_request(&publish, state.network_id)?;
                     let publisher = state
                         .backends
                         .billing_statement_publisher
@@ -15697,6 +15733,7 @@ mod protocol {
                         &readback_wire,
                         publish.idempotency_key,
                         &identity_wire,
+                        state.network_id,
                     )
                     .map_err(|_| BrokerError::Ambiguous)?;
                     qualify_server_binding(
@@ -15740,6 +15777,7 @@ mod protocol {
                             publication,
                             lookup.record_id,
                             &identity_wire,
+                            state.network_id,
                         )?;
                     }
                     qualify_server_binding(
@@ -15756,7 +15794,7 @@ mod protocol {
                         &request.payload,
                         MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    validate_billing_acknowledgement_request(&acknowledgement)?;
+                    validate_billing_acknowledgement_request(&acknowledgement, state.network_id)?;
                     state
                         .backends
                         .billing_acknowledgement_authority
@@ -15778,7 +15816,7 @@ mod protocol {
                         &request.payload,
                         MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
                     )?;
-                    validate_billing_acknowledgement_request(&acknowledgement)?;
+                    validate_billing_acknowledgement_request(&acknowledgement, state.network_id)?;
                     let authority = state
                         .backends
                         .billing_acknowledgement_authority
@@ -15819,7 +15857,8 @@ mod protocol {
                         .lookup(lookup.record_id)
                         .map_err(|error| billing_external_error(error, false))?;
                     if let Some(acknowledgement) = acknowledgement.as_ref()
-                        && acknowledgement.statement_id != lookup.record_id
+                        && (acknowledgement.statement_id != lookup.record_id
+                            || acknowledgement.network_id != state.network_id)
                     {
                         return Err(BrokerError::Rejected);
                     }
@@ -15841,6 +15880,9 @@ mod protocol {
                         .load_latest()
                         .map_err(|error| billing_external_error(error, false))?;
                     if let Some(record) = record.as_ref() {
+                        if record.network_id != state.network_id {
+                            return Err(BrokerError::BindingMismatch);
+                        }
                         record
                             .validate(
                                 sorafs_node::hedging_billing_service::
@@ -15870,6 +15912,9 @@ mod protocol {
                         .load_epoch(load.epoch_sequence)
                         .map_err(|error| billing_external_error(error, false))?;
                     if let Some(record) = record.as_ref() {
+                        if record.network_id != state.network_id {
+                            return Err(BrokerError::BindingMismatch);
+                        }
                         record
                             .validate(
                                 sorafs_node::hedging_billing_service::
@@ -15901,6 +15946,9 @@ mod protocol {
                                 HEDGING_BILLING_MAX_CHECKPOINT_BYTES_V1,
                         )
                         .map_err(|_| BrokerError::Rejected)?;
+                    if compare.next.network_id != state.network_id {
+                        return Err(BrokerError::BindingMismatch);
+                    }
                     let store = state
                         .backends
                         .billing_epoch_witness_store
@@ -15909,6 +15957,12 @@ mod protocol {
                     let current = store
                         .load_latest()
                         .map_err(|error| billing_external_error(error, false))?;
+                    if current
+                        .as_ref()
+                        .is_some_and(|record| record.network_id != state.network_id)
+                    {
+                        return Err(BrokerError::BindingMismatch);
+                    }
                     let monotonic = match current.as_ref() {
                         None => {
                             compare.expected_revision.is_none() && compare.next.epoch_sequence == 1
@@ -16382,7 +16436,7 @@ mod protocol {
                         &request.payload,
                         MAX_APPEAL_FINANCE_TRANSACTION_BYTES_V1,
                     )?;
-                    ensure_transaction_session_chain(&payload, &state.chain_id)?;
+                    ensure_transaction_session_network(&payload, &state.network_id)?;
                     let expected = payload.clone();
                     let exact = request
                         .binding
@@ -16905,8 +16959,8 @@ mod protocol {
                         }
                     }
                     })?;
-                    if providers.issuer_hsm.key_id() != exact.issuer_hsm_key_id
-                        || providers.issuer_hsm.public_key() != exact.issuer_public_key
+                    if providers.issuer_signer.key_id() != exact.issuer_signer_handle
+                        || providers.issuer_signer.public_key() != exact.issuer_public_key
                         || providers.enrollment_recipient.key_id()
                             != exact.enrollment_recipient_key_id
                         || providers.enrollment_recipient.public_key_digest()
@@ -16917,7 +16971,7 @@ mod protocol {
                         || providers.wallet_key_wrapper.active_key_id()
                             != exact.wallet_wrapping_key_id
                         || !iroha_config::parameters::is_production_runtime_handle(
-                            providers.issuer_hsm.key_id(),
+                            providers.issuer_signer.key_id(),
                         )
                         || !iroha_config::parameters::is_production_runtime_handle(
                             providers.enrollment_recipient.key_id(),
@@ -16932,8 +16986,8 @@ mod protocol {
                         return Err(BrokerError::Ambiguous);
                     }
                     let outcome = PopRuntimeOpenResultWireV1 {
-                        issuer_hsm_key_id: providers.issuer_hsm.key_id().to_owned(),
-                        issuer_public_key: providers.issuer_hsm.public_key(),
+                        issuer_signer_handle: providers.issuer_signer.key_id().to_owned(),
+                        issuer_public_key: providers.issuer_signer.public_key(),
                         enrollment_recipient_key_id: providers
                             .enrollment_recipient
                             .key_id()
@@ -17043,19 +17097,28 @@ mod protocol {
                         .providers
                         .as_ref()
                         .ok_or(BrokerError::Rejected)?;
-                    if providers.issuer_hsm.key_id() != exact.issuer_hsm_key_id
-                        || providers.issuer_hsm.public_key() != exact.issuer_public_key
+                    if providers.issuer_signer.key_id() != exact.issuer_signer_handle
+                        || providers.issuer_signer.public_key() != exact.issuer_public_key
                     {
                         return Err(BrokerError::StaleOrRevoked);
                     }
-                    let signature_result = providers.issuer_hsm.sign_digest(wire.digest);
+                    let purpose =
+                        sorafs_node::pop_credentials::PopIssuerSigningPurposeV1::try_from_wire_id(
+                            wire.purpose,
+                        )
+                        .ok_or(BrokerError::Rejected)?;
+                    if wire.digest == [0; 32] {
+                        return Err(BrokerError::Rejected);
+                    }
+                    let signature_result =
+                        providers.issuer_signer.sign_digest(purpose, wire.digest);
                     qualify_server_binding(
                         state,
                         &request.binding,
                         request.provider_metadata_digest,
                     )?;
-                    if providers.issuer_hsm.key_id() != exact.issuer_hsm_key_id
-                        || providers.issuer_hsm.public_key() != exact.issuer_public_key
+                    if providers.issuer_signer.key_id() != exact.issuer_signer_handle
+                        || providers.issuer_signer.public_key() != exact.issuer_public_key
                     {
                         return Err(BrokerError::StaleOrRevoked);
                     }
@@ -17481,7 +17544,7 @@ mod protocol {
                     if slot == moderation_transaction_signer_slot =>
                 {
                     let payload = decode_native_transaction_payload(&request.payload)?;
-                    ensure_transaction_session_chain(&payload, &state.chain_id)?;
+                    ensure_transaction_session_network(&payload, &state.network_id)?;
                     let signed = sign_moderation_transaction(state, payload)?;
                     qualify_server_binding(
                         state,
@@ -17498,7 +17561,8 @@ mod protocol {
                         &request.payload,
                         MAX_MODERATION_HANDOFF_FRAME_BYTES_V1,
                     )?;
-                    let handoff = validate_moderation_handoff_request(&wire, slot)?;
+                    let handoff =
+                        validate_moderation_handoff_request(&wire, slot, Some(&state.network_id))?;
                     let boundary = if slot == moderation_settlement_handoff_slot {
                         state.backends.moderation_settlement_handoff.as_ref()
                     } else {
@@ -17545,12 +17609,12 @@ mod protocol {
                     let publication =
                         validate_moderation_panel_notification_archive_head_publish_request(
                             &wire,
-                            &state.chain_id,
+                            &state.network_id,
                         )?;
                     let (validated_head, validated) =
                         validate_moderation_panel_notification_archive_head_at_broker_boundary(
                             &publication.canonical_head,
-                            &state.chain_id,
+                            &state.network_id,
                             &state.catalog,
                         )?;
                     if validated_head != publication.head {
@@ -17643,7 +17707,7 @@ mod protocol {
                         let validated_head =
                             validate_moderation_panel_notification_archive_public_head_readback_at_broker_boundary(
                                 canonical_head,
-                                &state.chain_id,
+                                &state.network_id,
                             )?;
                         if &validated_head != head {
                             return Err(BrokerError::Rejected);
@@ -17670,7 +17734,10 @@ mod protocol {
                         &request.payload,
                         MAX_MODERATION_PANEL_NOTIFICATION_FRAME_BYTES_V1,
                     )?;
-                    let notification = validate_moderation_panel_notification_request(&wire)?;
+                    let notification = validate_moderation_panel_notification_request(
+                        &wire,
+                        Some(&state.network_id),
+                    )?;
                     let receipt = state
                         .backends
                         .moderation_panel_notification
@@ -17709,7 +17776,7 @@ mod protocol {
                     if native_transaction_signer_role_for_slot(slot).is_some() =>
                 {
                     let payload = decode_native_transaction_payload(&request.payload)?;
-                    ensure_transaction_session_chain(&payload, &state.chain_id)?;
+                    ensure_transaction_session_network(&payload, &state.network_id)?;
                     let signed = sign_native_transaction(state, &request.binding, payload)?;
                     qualify_server_binding(
                         state,
@@ -17724,7 +17791,7 @@ mod protocol {
                     if slot == soracloud_runtime_signer_slot =>
                 {
                     let payload = decode_native_transaction_payload(&request.payload)?;
-                    ensure_transaction_session_chain(&payload, &state.chain_id)?;
+                    ensure_transaction_session_network(&payload, &state.network_id)?;
                     let signer = qualified_soracloud_runtime_signer(state, &request.binding)?;
                     let signed = signer
                         .sign_transaction(payload)
@@ -17800,17 +17867,19 @@ mod protocol {
                         .map_err(|_| BrokerError::Ambiguous)
                 }
                 (slot, OPERATION_SIGN_V1) if slot == governance_signer_slot => {
-                    let sign = decode_canonical::<SignRequestWireV1>(
+                    let sign = decode_canonical::<PurposeSignRequestWireV1>(
                         &request.payload,
                         MAX_OPERATION_FRAME_BYTES_V1,
                     )?;
+                    let purpose =
+                        validate_governance_purpose_signing_request(&sign, &request.binding)?;
                     let signer = state
                         .backends
                         .governance_dag_signer
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?;
                     let signature = signer
-                        .sign(&sign.payload)
+                        .sign(purpose, &sign.payload)
                         .map_err(|_| BrokerError::Rejected)?;
                     if signature == [0; 64] {
                         return Err(BrokerError::Rejected);
@@ -18065,7 +18134,11 @@ mod protocol {
                             .ok_or(BrokerError::BindingMismatch)?,
                     )
                     .map_err(|_| BrokerError::Rejected)?;
-                    ensure_provider_ingest_completion_payload(&payload, &context, &state.chain_id)?;
+                    ensure_provider_ingest_completion_payload(
+                        &payload,
+                        &context,
+                        &state.network_id,
+                    )?;
                     let signer = resolved_provider_signer(state, context.clone())?
                         .ok_or(BrokerError::Rejected)?;
                     validate_resolved_provider_signer(
@@ -18094,7 +18167,7 @@ mod protocol {
                     ensure_provider_ingest_completion_transaction(
                         &signed,
                         &context,
-                        &state.chain_id,
+                        &state.network_id,
                     )?;
                     qualify_server_binding(
                         state,
@@ -18232,7 +18305,7 @@ mod protocol {
                         &request.payload,
                         MAX_OPERATION_FRAME_BYTES_V1,
                     )?;
-                    if load.chain_id != state.chain_id {
+                    if state.network_id != load.network_id {
                         return Err(BrokerError::BindingMismatch);
                     }
                     let authority = state
@@ -18240,11 +18313,7 @@ mod protocol {
                         .provider_ingest_retention_authority
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?;
-                    let chain_id = load
-                        .chain_id
-                        .parse::<iroha_data_model::ChainId>()
-                        .map_err(|_| BrokerError::BindingMismatch)?;
-                    let record = authority.load_latest(&chain_id).map_err(|error| {
+                    let record = authority.load_latest(&load.network_id).map_err(|error| {
                         match error {
                         iroha_core::query::provider_ingest_finalized::
                             ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1::
@@ -18279,7 +18348,7 @@ mod protocol {
                     >(
                         &request.payload, MAX_OPERATION_FRAME_BYTES_V1
                     )?;
-                    if compare.chain_id != state.chain_id {
+                    if state.network_id != compare.network_id {
                         return Err(BrokerError::BindingMismatch);
                     }
                     reserve_external_canonical_decode(
@@ -18295,12 +18364,10 @@ mod protocol {
                         .provider_ingest_retention_authority
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?;
-                    let chain_id = compare
-                        .chain_id
-                        .parse::<iroha_data_model::ChainId>()
-                        .map_err(|_| BrokerError::BindingMismatch)?;
-                    let current = authority.load_latest(&chain_id).map_err(|error| {
-                        match error {
+                    let current = authority
+                        .load_latest(&compare.network_id)
+                        .map_err(|error| {
+                            match error {
                         iroha_core::query::provider_ingest_finalized::
                             ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1::
                             Unavailable => BrokerError::Unavailable,
@@ -18311,7 +18378,7 @@ mod protocol {
                             ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1::
                             Ambiguous => BrokerError::Protocol,
                     }
-                    })?;
+                        })?;
                     let monotonic = match &current {
                         None => {
                             compare.expected_revision.is_none()
@@ -18334,7 +18401,11 @@ mod protocol {
                         return Err(BrokerError::Rejected);
                     }
                     authority
-                        .compare_and_swap_latest(&chain_id, compare.expected_revision, &next)
+                        .compare_and_swap_latest(
+                            &compare.network_id,
+                            compare.expected_revision,
+                            &next,
+                        )
                         .map_err(|error| {
                             match error {
                             iroha_core::query::provider_ingest_finalized::
@@ -18349,7 +18420,7 @@ mod protocol {
                         }
                         })?;
                     let readback = authority
-                        .load_latest(&chain_id)
+                        .load_latest(&compare.network_id)
                         .map_err(|_| BrokerError::Ambiguous)?;
                     if readback.as_ref() != Some(&next) {
                         return Err(BrokerError::Ambiguous);
@@ -18369,7 +18440,7 @@ mod protocol {
                         &request.payload,
                         MAX_REPUTATION_RETENTION_FRAME_BYTES_V1,
                     )?;
-                    if load.chain_id != state.chain_id {
+                    if state.network_id != load.network_id {
                         return Err(BrokerError::BindingMismatch);
                     }
                     let authority = state
@@ -18377,11 +18448,7 @@ mod protocol {
                         .reputation_finalized_archive_retention_authority
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?;
-                    let chain_id = load
-                        .chain_id
-                        .parse::<iroha_data_model::ChainId>()
-                        .map_err(|_| BrokerError::BindingMismatch)?;
-                    let record = authority.load_latest(&chain_id).map_err(|error| {
+                    let record = authority.load_latest(&load.network_id).map_err(|error| {
                         match error {
                         iroha_core::query::reputation_finalized::
                             ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1::
@@ -18421,7 +18488,7 @@ mod protocol {
                         &request.payload,
                         MAX_REPUTATION_RETENTION_FRAME_BYTES_V1,
                     )?;
-                    if compare.chain_id != state.chain_id
+                    if state.network_id != compare.network_id
                         || compare.expected_revision == Some([0; 32])
                         || compare.next_record.is_empty()
                         || compare.next_record.len() > MAX_REPUTATION_RETENTION_APPROVAL_BYTES_V1
@@ -18450,12 +18517,10 @@ mod protocol {
                         .reputation_finalized_archive_retention_authority
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?;
-                    let chain_id = compare
-                        .chain_id
-                        .parse::<iroha_data_model::ChainId>()
-                        .map_err(|_| BrokerError::BindingMismatch)?;
-                    let current = authority.load_latest(&chain_id).map_err(|error| {
-                        match error {
+                    let current = authority
+                        .load_latest(&compare.network_id)
+                        .map_err(|error| {
+                            match error {
                         iroha_core::query::reputation_finalized::
                             ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1::
                             Unavailable => BrokerError::Unavailable,
@@ -18466,7 +18531,7 @@ mod protocol {
                             ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1::
                             Ambiguous => BrokerError::Protocol,
                     }
-                    })?;
+                        })?;
                     let monotonic = match &current {
                         None => {
                             compare.expected_revision.is_none()
@@ -18490,7 +18555,11 @@ mod protocol {
                         return Err(BrokerError::Rejected);
                     }
                     authority
-                        .compare_and_swap_latest(&chain_id, compare.expected_revision, &next)
+                        .compare_and_swap_latest(
+                            &compare.network_id,
+                            compare.expected_revision,
+                            &next,
+                        )
                         .map_err(|error| {
                             match error {
                             iroha_core::query::reputation_finalized::
@@ -18505,7 +18574,7 @@ mod protocol {
                         }
                         })?;
                     let readback = authority
-                        .load_latest(&chain_id)
+                        .load_latest(&compare.network_id)
                         .map_err(|_| BrokerError::Ambiguous)?;
                     if readback.as_ref() != Some(&next) {
                         return Err(BrokerError::Ambiguous);
@@ -18705,16 +18774,18 @@ mod protocol {
                 (slot, OPERATION_EVIDENCE_VIEWER_RECEIPT_SIGN_V1)
                     if slot == evidence_receipt_signer_slot =>
                 {
-                    let sign = decode_canonical::<SignRequestWireV1>(
+                    let sign = decode_canonical::<PurposeSignRequestWireV1>(
                         &request.payload,
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                     )?;
+                    let purpose =
+                        validate_evidence_purpose_signing_request(&sign, &request.binding)?;
                     let signer = state
                         .backends
                         .evidence_viewer_receipt_signer
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?;
-                    let signature = signer.sign(&sign.payload).map_err(|error| match error {
+                    let signature = signer.sign(purpose, &sign.payload).map_err(|error| match error {
                         sorafs_node::evidence_viewer::EvidenceViewerExternalErrorV1::Rejected => {
                             BrokerError::Rejected
                         }
@@ -18907,7 +18978,11 @@ mod protocol {
                                 &record,
                                 moderation_checkpoint_record_limit(&request.binding)?,
                             )?;
-                            decode_moderation_checkpoint_record(&bytes, &request.binding)?;
+                            decode_moderation_checkpoint_record(
+                                &bytes,
+                                &request.binding,
+                                Some(&state.network_id),
+                            )?;
                             Ok(bytes)
                         })
                         .transpose()?;
@@ -18929,6 +19004,7 @@ mod protocol {
                     let next = decode_moderation_checkpoint_record(
                         &compare.next_record,
                         &request.binding,
+                        Some(&state.network_id),
                     )?;
                     let store = state
                         .backends
@@ -18943,8 +19019,12 @@ mod protocol {
                             current,
                             moderation_checkpoint_record_limit(&request.binding)?,
                         )?;
-                        decode_moderation_checkpoint_record(&bytes, &request.binding)
-                            .map_err(|_| BrokerError::Protocol)?;
+                        decode_moderation_checkpoint_record(
+                            &bytes,
+                            &request.binding,
+                            Some(&state.network_id),
+                        )
+                        .map_err(|_| BrokerError::Protocol)?;
                     }
                     validate_moderation_checkpoint_successor(
                         current.as_ref(),
@@ -18990,8 +19070,8 @@ mod protocol {
                     validate_moderation_panel_notification_source_attest_wire_scope(
                         attest.version,
                         attest.slot,
-                        &attest.chain_id,
-                        Some(&state.chain_id),
+                        &attest.network_id,
+                        &state.network_id,
                     )?;
                     let store = state
                         .backends
@@ -19005,7 +19085,7 @@ mod protocol {
                     let statement_digest =
                         validate_moderation_panel_notification_source_attestation_at_broker_boundary(
                             &attest.statement,
-                            &state.chain_id,
+                            &state.network_id,
                             &request.binding,
                             &current_record,
                         )?;
@@ -19148,13 +19228,13 @@ mod protocol {
                     validate_moderation_panel_notification_archive_wire_scope(
                         install.version,
                         install.slot,
-                        &install.chain_id,
-                        Some(&state.chain_id),
+                        &install.network_id,
+                        &state.network_id,
                     )?;
                     let validated =
                         validate_moderation_panel_notification_archive_artifact_at_broker_boundary(
                             &install.canonical_artifact,
-                            &state.chain_id,
+                            &state.network_id,
                             &request.binding,
                             &state.catalog,
                         )?;
@@ -19219,8 +19299,8 @@ mod protocol {
                     validate_moderation_panel_notification_archive_wire_scope(
                         read.version,
                         read.slot,
-                        &read.chain_id,
-                        Some(&state.chain_id),
+                        &read.network_id,
+                        &state.network_id,
                     )?;
                     let max_bytes = usize::try_from(
                         request
@@ -19260,7 +19340,7 @@ mod protocol {
                             let validated =
                                 validate_moderation_panel_notification_archive_readback_at_broker_boundary(
                                     &readback.canonical_artifact,
-                                    &state.chain_id,
+                                    &state.network_id,
                                     &request.binding,
                                     &state.catalog,
                                 )?;
@@ -19435,7 +19515,7 @@ mod protocol {
         fn fetch_provider_ingest_source(
             source: &dyn crate::sorafs_provider_ingest_runtime::
                 ProviderIngestAuthenticatedSourceRuntimeV1,
-            fetch: ProviderIngestSourceFetchRequestWireV1,
+            request: sorafs_node::ProviderIngestSourceRequestV1,
             timeout: Duration,
         ) -> Result<
             crate::sorafs_provider_ingest_runtime::VerifiedProviderIngestPayloadV1,
@@ -19448,13 +19528,7 @@ mod protocol {
             runtime
                 .block_on(tokio::time::timeout(
                     timeout,
-                    sorafs_node::ProviderIngestAuthenticatedSourceFetchV1::fetch(
-                        source,
-                        sorafs_node::ProviderIngestSourceRequestV1 {
-                            authorization: fetch.authorization,
-                            source_provider_ids: fetch.source_provider_ids,
-                        },
-                    ),
+                    sorafs_node::ProviderIngestAuthenticatedSourceFetchV1::fetch(source, request),
                 ))
                 .map_err(|_| BrokerError::Unavailable)?
                 .map_err(source_fetch_error)
@@ -19519,7 +19593,7 @@ mod protocol {
             apply_source_socket_deadline(&stream, deadline)?;
             let configured =
                 qualify_server_binding(state, &request.binding, request.provider_metadata_digest)?;
-            let fetch = decode_canonical::<ProviderIngestSourceFetchRequestWireV1>(
+            let fetch = decode_canonical::<ProviderIngestSourceFetchRequestWireV2>(
                 &request.payload,
                 MAX_PROVIDER_INGEST_SOURCE_REQUEST_BYTES_V1,
             )?;
@@ -19529,6 +19603,7 @@ mod protocol {
                 Some(&configured.provider_ingest_source_provider_ids),
             )?;
             let authorization = fetch.authorization.clone();
+            let source_request = source_request_from_wire(fetch)?;
             let source = state
                 .backends
                 .provider_ingest_authenticated_source
@@ -19536,7 +19611,7 @@ mod protocol {
                 .ok_or(BrokerError::BindingMismatch)?;
             let mut fetched = fetch_provider_ingest_source(
                 source.as_ref(),
-                fetch,
+                source_request,
                 source_deadline_remaining(deadline)?,
             )?;
             validate_source_payload_metadata(&authorization, &fetched.manifest, &fetched.plan)?;
@@ -19545,7 +19620,7 @@ mod protocol {
             let frame_count = source_stream_frame_count(content_length)?;
             let mut transcript = {
                 let initial_admission = DecodeResourceAdmissionV1::acquire_operation(
-                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
                 )?;
                 let _initial_scope = initial_admission.enter();
                 let manifest = fetched
@@ -19718,7 +19793,7 @@ mod protocol {
             if lifecycle.shutdown_requested() {
                 return Ok(());
             }
-            if handshake.chain_id != state.chain_id {
+            if handshake.chain_id != state.chain_id || handshake.network_id != state.network_id {
                 return Err(BrokerError::BindingMismatch);
             }
             let live_observations = handshake
@@ -19766,7 +19841,11 @@ mod protocol {
                     FRAME_KIND_OPERATION_REQUEST_V1,
                     announced_operation,
                 )?;
-                validate_operation_request_for_session(&request, &state.chain_id)?;
+                validate_operation_request_for_session(
+                    &request,
+                    &state.chain_id,
+                    &state.network_id,
+                )?;
                 if request.binding.slot != announced_slot
                     || request.operation != announced_operation
                     || request.session_id != session_id
@@ -19800,7 +19879,7 @@ mod protocol {
                 };
                 if request.binding.slot
                     == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id()
-                    && request.operation == OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1
+                    && request.operation == OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2
                 {
                     let Ok(source_stream_permit) =
                         Arc::clone(&source_stream_permits).try_acquire_owned()
@@ -20477,6 +20556,7 @@ mod protocol {
         struct BrokerSession {
             connection: Mutex<BrokerConnection>,
             chain_id: String,
+            network_id: NetworkId,
             endpoint: EndpointPolicy,
             requested_catalog: Vec<ProviderBindingWireV1>,
         }
@@ -20484,6 +20564,7 @@ mod protocol {
         fn connect_broker_connection(
             policy: &EndpointPolicy,
             chain_id: &str,
+            network_id: NetworkId,
             requested_catalog: Vec<ProviderBindingWireV1>,
             io_timeout: Option<Duration>,
         ) -> Result<(BrokerConnection, Vec<ProviderObservationWireV1>), BrokerError> {
@@ -20505,7 +20586,8 @@ mod protocol {
             if client_nonce == [0; 32] {
                 return Err(BrokerError::Unavailable);
             }
-            let request = make_handshake_request(chain_id, requested_catalog, client_nonce)?;
+            let request =
+                make_handshake_request(chain_id, network_id, requested_catalog, client_nonce)?;
             let request_frame = encode_frame(
                 FRAME_KIND_HANDSHAKE_REQUEST_V1,
                 &request,
@@ -20542,14 +20624,21 @@ mod protocol {
             fn connect(
                 policy: &EndpointPolicy,
                 chain_id: &str,
+                network_id: NetworkId,
                 requested_catalog: Vec<ProviderBindingWireV1>,
             ) -> Result<(Arc<Self>, Vec<ProviderObservationWireV1>), BrokerError> {
-                let (connection, observations) =
-                    connect_broker_connection(policy, chain_id, requested_catalog.clone(), None)?;
+                let (connection, observations) = connect_broker_connection(
+                    policy,
+                    chain_id,
+                    network_id,
+                    requested_catalog.clone(),
+                    None,
+                )?;
                 Ok((
                     Arc::new(Self {
                         connection: Mutex::new(connection),
                         chain_id: chain_id.to_owned(),
+                        network_id,
                         endpoint: policy.clone(),
                         requested_catalog,
                     }),
@@ -20561,6 +20650,7 @@ mod protocol {
                 let (connection, _) = connect_broker_connection(
                     &self.endpoint,
                     &self.chain_id,
+                    self.network_id,
                     self.requested_catalog.clone(),
                     None,
                 )?;
@@ -21531,6 +21621,7 @@ mod protocol {
             fn open_stream(
                 endpoint: EndpointPolicy,
                 chain_id: String,
+                network_id: NetworkId,
                 requested_catalog: Vec<ProviderBindingWireV1>,
                 binding: ProviderBindingWireV1,
                 metadata_digest: [u8; 32],
@@ -21546,14 +21637,12 @@ mod protocol {
                 let deadline = std::time::Instant::now()
                     .checked_add(Duration::from_millis(limits.operation_timeout_ms))
                     .ok_or(BrokerError::Rejected)?;
-                let fetch = ProviderIngestSourceFetchRequestWireV1 {
-                    authorization: request.authorization,
-                    source_provider_ids: request.source_provider_ids,
-                };
+                let fetch = source_request_to_wire(request)?;
                 validate_source_fetch_request(&fetch, &binding, Some(&source_provider_ids))?;
                 let (mut connection, observations) = connect_broker_connection(
                     &endpoint,
                     &chain_id,
+                    network_id,
                     requested_catalog,
                     Some(source_deadline_remaining(deadline)?),
                 )?;
@@ -21568,7 +21657,7 @@ mod protocol {
                 }
                 apply_source_socket_deadline(&connection.stream, deadline)?;
                 let decode_admission = DecodeResourceAdmissionV1::acquire_operation(
-                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
                 )?;
                 let decode_scope = decode_admission.enter();
                 let payload =
@@ -21578,7 +21667,7 @@ mod protocol {
                     connection.next_request_id,
                     binding,
                     metadata_digest,
-                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
                     payload,
                 )?;
                 let request_frame = encode_frame(
@@ -21600,7 +21689,7 @@ mod protocol {
                 let response = decode_operation_frame::<OperationResponseV1>(
                     &response_frame,
                     FRAME_KIND_OPERATION_RESPONSE_V1,
-                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+                    OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
                 )?;
                 validate_operation_response(&operation_request, &response)?;
                 match response.status {
@@ -21675,6 +21764,7 @@ mod protocol {
             > {
                 let endpoint = self.endpoint.clone();
                 let chain_id = self.chain_id.clone();
+                let network_id = self.session.network_id;
                 let requested_catalog = self.requested_catalog.clone();
                 let binding = self.binding.clone();
                 let metadata_digest = self.metadata_digest;
@@ -21684,6 +21774,7 @@ mod protocol {
                         Self::open_stream(
                             endpoint,
                             chain_id,
+                            network_id,
                             requested_catalog,
                             binding,
                             metadata_digest,
@@ -22180,7 +22271,8 @@ mod protocol {
                 iroha_torii::SoraFsAppealFinanceSigningError,
             > {
                 if payload.authority() != &self.authority
-                    || ensure_transaction_session_chain(&payload, &self.session.chain_id).is_err()
+                    || ensure_transaction_session_network(&payload, &self.session.network_id)
+                        .is_err()
                 {
                     return Err(iroha_torii::SoraFsAppealFinanceSigningError::Refused);
                 }
@@ -22852,9 +22944,9 @@ mod protocol {
                             key_id: exact.enrollment_recipient_key_id.clone(),
                             public_key_digest: exact.enrollment_recipient_public_key_digest,
                         }),
-                        issuer_hsm: Arc::new(PopBrokerIssuerHsm {
+                        issuer_signer: Arc::new(PopBrokerIssuerSigner {
                             provider: self.provider.clone(),
-                            key_id: exact.issuer_hsm_key_id.clone(),
+                            key_id: exact.issuer_signer_handle.clone(),
                             public_key: exact.issuer_public_key,
                         }),
                         authenticator: Arc::new(PopBrokerAuthenticator {
@@ -22892,23 +22984,23 @@ mod protocol {
         include!("runtime_provider_broker/pop_recipient_client.rs");
 
         #[derive(Clone)]
-        struct PopBrokerIssuerHsm {
+        struct PopBrokerIssuerSigner {
             provider: PopBrokerProvider,
             key_id: String,
             public_key: [u8; 32],
         }
 
-        impl fmt::Debug for PopBrokerIssuerHsm {
+        impl fmt::Debug for PopBrokerIssuerSigner {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
-                    .debug_struct("PopBrokerIssuerHsm")
+                    .debug_struct("PopBrokerIssuerSigner")
                     .field("key_id", &self.key_id)
                     .field("private_signer", &"[REDACTED]")
                     .finish_non_exhaustive()
             }
         }
 
-        impl sorafs_node::pop_credentials::PopIssuerHsm for PopBrokerIssuerHsm {
+        impl sorafs_node::pop_credentials::PopIssuerSigner for PopBrokerIssuerSigner {
             fn key_id(&self) -> &str {
                 &self.key_id
             }
@@ -22917,12 +23009,19 @@ mod protocol {
                 self.public_key
             }
 
-            fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], String> {
+            fn sign_digest(
+                &self,
+                purpose: sorafs_node::pop_credentials::PopIssuerSigningPurposeV1,
+                digest: [u8; 32],
+            ) -> Result<[u8; 64], String> {
                 if digest == [0; 32] {
                     return Err("PoP runtime provider unavailable".to_owned());
                 }
                 let payload = encode_canonical(
-                    &PopIssuerSignRequestWireV1 { digest },
+                    &PopIssuerSignRequestWireV1 {
+                        purpose: purpose.wire_id(),
+                        digest,
+                    },
                     MAX_POP_RUNTIME_FRAME_BYTES_V1,
                 )
                 .map_err(|error| self.provider.redacted_string_error(error))?;
@@ -24640,7 +24739,7 @@ mod protocol {
                 iroha_data_model::transaction::SignedTransaction,
                 iroha_torii::sorafs::moderation_runtime::ModerationSigningFailureV1,
             > {
-                ensure_transaction_session_chain(&payload, &self.session.chain_id)
+                ensure_transaction_session_network(&payload, &self.session.network_id)
                     .map_err(moderation_signing_error)?;
                 self.live_qualification()
                     .map_err(moderation_signing_error)?;
@@ -24870,7 +24969,7 @@ mod protocol {
                 }
                 let wire = moderation_panel_notification_archive_head_publish_request_to_wire(
                     request,
-                    &self.provider.session.chain_id,
+                    &self.provider.session.network_id,
                     &self.provider.session.requested_catalog,
                 )
                 .map_err(moderation_handoff_error)?;
@@ -24976,7 +25075,7 @@ mod protocol {
                     .map(|canonical_head| {
                         validate_moderation_panel_notification_archive_public_head_readback_at_broker_boundary(
                             canonical_head,
-                            &self.provider.session.chain_id,
+                            &self.provider.session.network_id,
                         )
                     })
                     .transpose()
@@ -25132,7 +25231,7 @@ mod protocol {
                 if payload.authority() != self.exact_binding.authority() {
                     return Err(BrokerError::Rejected);
                 }
-                ensure_transaction_session_chain(&payload, &self.session.chain_id)?;
+                ensure_transaction_session_network(&payload, &self.session.network_id)?;
                 let payload = encode_native_transaction_payload(&payload)?;
                 let result = self.session.call(
                     &self.binding,
@@ -25480,7 +25579,7 @@ mod protocol {
                             InputAuthorityMismatch,
                     );
                 }
-                ensure_transaction_session_chain(&payload, &self.session.chain_id)
+                ensure_transaction_session_network(&payload, &self.session.network_id)
                     .map_err(|error| self.signing_error(error))?;
                 let payload = encode_native_transaction_payload(&payload)
                     .map_err(|error| self.signing_error(error))?;
@@ -25791,16 +25890,19 @@ mod protocol {
                 self.public_key
             }
 
-            fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
-                validate_signing_payload_len(payload.len())
+            fn sign(
+                &self,
+                purpose: sorafs_node::GovernanceDagSigningPurposeV1,
+                payload: &[u8],
+            ) -> Result<[u8; 64], String> {
+                let request = PurposeSignRequestWireV1 {
+                    purpose: purpose.wire_id(),
+                    payload: payload.to_vec(),
+                };
+                validate_governance_purpose_signing_request(&request, &self.binding)
                     .map_err(|_| ERROR_REJECTED.to_owned())?;
-                let payload = encode_canonical(
-                    &SignRequestWireV1 {
-                        payload: payload.to_vec(),
-                    },
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )
-                .map_err(redacted_provider_error)?;
+                let payload = encode_canonical(&request, MAX_OPERATION_FRAME_BYTES_V1)
+                    .map_err(redacted_provider_error)?;
                 let result = self
                     .session
                     .call(
@@ -26548,16 +26650,21 @@ mod protocol {
 
             fn sign(
                 &self,
+                purpose: sorafs_node::evidence_viewer::EvidenceViewerSigningPurposeV1,
                 message: &[u8],
             ) -> Result<[u8; 64], sorafs_node::evidence_viewer::EvidenceViewerExternalErrorV1>
             {
+                let sign = PurposeSignRequestWireV1 {
+                    purpose: purpose.wire_id(),
+                    payload: message.to_vec(),
+                };
+                validate_evidence_purpose_signing_request(&sign, &self.provider.binding)
+                    .map_err(evidence_viewer_external_error)?;
                 let result = self
                     .provider
                     .call_sensitive(
                         OPERATION_EVIDENCE_VIEWER_RECEIPT_SIGN_V1,
-                        &SignRequestWireV1 {
-                            payload: message.to_vec(),
-                        },
+                        &sign,
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                         false,
                     )
@@ -26808,8 +26915,12 @@ mod protocol {
                     .map_err(moderation_checkpoint_error)?;
                 record
                     .map(|record| {
-                        decode_moderation_checkpoint_record(&record, &self.provider.binding)
-                            .map_err(moderation_checkpoint_error)
+                        decode_moderation_checkpoint_record(
+                            &record,
+                            &self.provider.binding,
+                            Some(&self.provider.session.network_id),
+                        )
+                        .map_err(moderation_checkpoint_error)
                     })
                     .transpose()
             }
@@ -26851,7 +26962,7 @@ mod protocol {
                 [u8; 64],
                 sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1,
             > {
-                if statement.chain_id != self.provider.session.chain_id
+                if statement.network_id != self.provider.session.network_id
                     || statement.attestor_slot
                         != IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id()
                     || statement.attestor_handle != self.provider.binding.handle
@@ -26873,7 +26984,7 @@ mod protocol {
                         &ModerationPanelNotificationSourceAttestRequestWireV1 {
                             version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
                             slot: IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id(),
-                            chain_id: self.provider.session.chain_id.clone(),
+                            network_id: self.provider.session.network_id,
                             statement: statement.clone(),
                         },
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
@@ -26921,7 +27032,7 @@ mod protocol {
                         version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
                         slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
                             .wire_id(),
-                        chain_id: self.provider.session.chain_id.clone(),
+                        network_id: self.provider.session.network_id,
                     },
                     MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                     false,
@@ -27017,7 +27128,7 @@ mod protocol {
                 let validated =
                     validate_moderation_panel_notification_archive_artifact_at_broker_boundary(
                         canonical_artifact,
-                        &self.provider.session.chain_id,
+                        &self.provider.session.network_id,
                         &self.provider.binding,
                         &self.provider.session.requested_catalog,
                     )
@@ -27036,7 +27147,7 @@ mod protocol {
                             version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
                             slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
                                 .wire_id(),
-                            chain_id: self.provider.session.chain_id.clone(),
+                            network_id: self.provider.session.network_id,
                             operation_id,
                             receipt_message,
                             canonical_artifact: canonical_artifact.to_vec(),
@@ -27088,7 +27199,7 @@ mod protocol {
                             version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
                             slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
                                 .wire_id(),
-                            chain_id: self.provider.session.chain_id.clone(),
+                            network_id: self.provider.session.network_id,
                             operation_id,
                         },
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
@@ -27117,7 +27228,7 @@ mod protocol {
                         let validated =
                             validate_moderation_panel_notification_archive_readback_at_broker_boundary(
                                 &readback.canonical_artifact,
-                                &self.provider.session.chain_id,
+                                &self.provider.session.network_id,
                                 &self.provider.binding,
                                 &self.provider.session.requested_catalog,
                             )
@@ -27589,7 +27700,7 @@ mod protocol {
                 ensure_provider_ingest_completion_payload(
                     &transaction_payload,
                     &self.resolution_context,
-                    &self.session.chain_id,
+                    &self.session.network_id,
                 )
                 .map_err(provider_ingest_signer_error)?;
                 self.live_resolver_state()
@@ -27640,7 +27751,7 @@ mod protocol {
                 if ensure_provider_ingest_completion_transaction(
                     &signed,
                     &self.resolution_context,
-                    &self.session.chain_id,
+                    &self.session.network_id,
                 )
                 .is_err()
                 {
@@ -27969,20 +28080,16 @@ mod protocol {
                 Ok(expected)
             }
 
-            fn chain_id_wire(
-                &self,
-                chain_id: &iroha_data_model::ChainId,
-            ) -> Result<String, BrokerError> {
-                validate_provider_ingest_chain_id(chain_id.as_str())?;
-                if chain_id.as_str() != self.session.chain_id {
+            fn network_id_wire(&self, network_id: &NetworkId) -> Result<NetworkId, BrokerError> {
+                if &self.session.network_id != network_id {
                     return Err(BrokerError::BindingMismatch);
                 }
-                Ok(chain_id.as_str().to_owned())
+                Ok(*network_id)
             }
 
             fn load_latest_raw(
                 &self,
-                chain_id: &iroha_data_model::ChainId,
+                network_id: &NetworkId,
             ) -> Result<
                 Option<
                     iroha_core::query::provider_ingest_finalized::
@@ -27990,9 +28097,9 @@ mod protocol {
                 >,
                 BrokerError,
             >{
-                let chain_id = self.chain_id_wire(chain_id)?;
+                let network_id = self.network_id_wire(network_id)?;
                 let payload = encode_canonical(
-                    &ProviderIngestRetentionLoadRequestWireV1 { chain_id },
+                    &ProviderIngestRetentionLoadRequestWireV1 { network_id },
                     MAX_OPERATION_FRAME_BYTES_V1,
                 )?;
                 let result = self.session.call(
@@ -28055,7 +28162,7 @@ mod protocol {
 
             fn load_latest(
                 &self,
-                chain_id: &iroha_data_model::ChainId,
+                network_id: &NetworkId,
             ) -> Result<
                 Option<
                     iroha_core::query::provider_ingest_finalized::
@@ -28067,7 +28174,7 @@ mod protocol {
                 self.live_qualification()
                     .map_err(provider_ingest_retention_error)?;
                 let record = self
-                    .load_latest_raw(chain_id)
+                    .load_latest_raw(network_id)
                     .map_err(provider_ingest_retention_error)?;
                 self.live_qualification()
                     .map_err(provider_ingest_retention_error)?;
@@ -28076,7 +28183,7 @@ mod protocol {
 
             fn compare_and_swap_latest(
                 &self,
-                chain_id: &iroha_data_model::ChainId,
+                network_id: &NetworkId,
                 expected_revision: Option<[u8; 32]>,
                 next: &iroha_core::query::provider_ingest_finalized::
                     ProviderIngestFinalizedArchiveRetentionApprovalRecordV1,
@@ -28100,7 +28207,7 @@ mod protocol {
                 self.live_qualification()
                     .map_err(provider_ingest_retention_error)?;
                 let current = self
-                    .load_latest_raw(chain_id)
+                    .load_latest_raw(network_id)
                     .map_err(provider_ingest_retention_error)?;
                 let monotonic = match &current {
                     None => {
@@ -28123,8 +28230,8 @@ mod protocol {
                 if !monotonic {
                     return Err(Error::Rejected);
                 }
-                let chain_id_wire = self
-                    .chain_id_wire(chain_id)
+                let network_id = self
+                    .network_id_wire(network_id)
                     .map_err(provider_ingest_retention_error)?;
                 let next_record = next.to_canonical_bytes().map_err(|_| Error::Rejected)?;
                 if next_record.len() > MAX_PROVIDER_INGEST_RETENTION_APPROVAL_BYTES_V1 {
@@ -28132,7 +28239,7 @@ mod protocol {
                 }
                 let payload = encode_canonical(
                     &ProviderIngestRetentionCompareAndSwapRequestWireV1 {
-                        chain_id: chain_id_wire,
+                        network_id,
                         expected_revision,
                         next_record,
                     },
@@ -28154,7 +28261,7 @@ mod protocol {
                             Error::Ambiguous
                         })
                     })?;
-                let readback = self.load_latest_raw(chain_id).map_err(|error| {
+                let readback = self.load_latest_raw(&network_id).map_err(|error| {
                     self.session.poison();
                     match error {
                         BrokerError::StaleOrRevoked
@@ -28241,20 +28348,16 @@ mod protocol {
                 Ok(expected)
             }
 
-            fn chain_id_wire(
-                &self,
-                chain_id: &iroha_data_model::ChainId,
-            ) -> Result<String, BrokerError> {
-                validate_provider_ingest_chain_id(chain_id.as_str())?;
-                if chain_id.as_str() != self.session.chain_id {
+            fn network_id_wire(&self, network_id: &NetworkId) -> Result<NetworkId, BrokerError> {
+                if &self.session.network_id != network_id {
                     return Err(BrokerError::BindingMismatch);
                 }
-                Ok(chain_id.as_str().to_owned())
+                Ok(*network_id)
             }
 
             fn load_latest_raw(
                 &self,
-                chain_id: &iroha_data_model::ChainId,
+                network_id: &NetworkId,
             ) -> Result<
                 Option<
                     iroha_core::query::reputation_finalized::
@@ -28262,9 +28365,9 @@ mod protocol {
                 >,
                 BrokerError,
             >{
-                let chain_id = self.chain_id_wire(chain_id)?;
+                let network_id = self.network_id_wire(network_id)?;
                 let payload = encode_canonical(
-                    &ReputationRetentionLoadRequestWireV1 { chain_id },
+                    &ReputationRetentionLoadRequestWireV1 { network_id },
                     MAX_REPUTATION_RETENTION_FRAME_BYTES_V1,
                 )?;
                 let result = self.session.call(
@@ -28326,7 +28429,7 @@ mod protocol {
 
             fn load_latest(
                 &self,
-                chain_id: &iroha_data_model::ChainId,
+                network_id: &NetworkId,
             ) -> Result<
                 Option<
                     iroha_core::query::reputation_finalized::
@@ -28338,7 +28441,7 @@ mod protocol {
                 self.live_qualification()
                     .map_err(reputation_retention_error)?;
                 let record = self
-                    .load_latest_raw(chain_id)
+                    .load_latest_raw(network_id)
                     .map_err(reputation_retention_error)?;
                 self.live_qualification()
                     .map_err(reputation_retention_error)?;
@@ -28347,7 +28450,7 @@ mod protocol {
 
             fn compare_and_swap_latest(
                 &self,
-                chain_id: &iroha_data_model::ChainId,
+                network_id: &NetworkId,
                 expected_revision: Option<[u8; 32]>,
                 next: &iroha_core::query::reputation_finalized::
                     ReputationFinalizedArchiveRetentionApprovalRecordV1,
@@ -28370,7 +28473,7 @@ mod protocol {
                 self.live_qualification()
                     .map_err(reputation_retention_error)?;
                 let current = self
-                    .load_latest_raw(chain_id)
+                    .load_latest_raw(network_id)
                     .map_err(reputation_retention_error)?;
                 let monotonic = match &current {
                     None => {
@@ -28394,8 +28497,8 @@ mod protocol {
                 if !monotonic {
                     return Err(Error::Rejected);
                 }
-                let chain_id_wire = self
-                    .chain_id_wire(chain_id)
+                let network_id = self
+                    .network_id_wire(network_id)
                     .map_err(reputation_retention_error)?;
                 let next_record = next.to_canonical_bytes().map_err(|_| Error::Rejected)?;
                 if next_record.is_empty()
@@ -28405,7 +28508,7 @@ mod protocol {
                 }
                 let payload = encode_canonical(
                     &ReputationRetentionCompareAndSwapRequestWireV1 {
-                        chain_id: chain_id_wire,
+                        network_id,
                         expected_revision,
                         next_record,
                     },
@@ -28427,7 +28530,7 @@ mod protocol {
                             Error::Ambiguous
                         })
                     })?;
-                let readback = self.load_latest_raw(chain_id).map_err(|error| {
+                let readback = self.load_latest_raw(&network_id).map_err(|error| {
                     self.session.poison();
                     match error {
                         BrokerError::StaleOrRevoked
@@ -29130,12 +29233,11 @@ mod protocol {
                     .decode_operation_result::<()>(&result, operation)
             }
 
-            fn ensure_chain_id(
+            fn ensure_network_id(
                 &self,
-                chain_id: &iroha_data_model::ChainId,
+                network_id: &iroha_data_model::NetworkId,
             ) -> Result<(), BrokerError> {
-                validate_billing_chain_id(chain_id)?;
-                if chain_id.as_str() != self.session.chain_id {
+                if network_id != &self.session.network_id {
                     return Err(BrokerError::BindingMismatch);
                 }
                 Ok(())
@@ -29272,15 +29374,20 @@ mod protocol {
                     })?;
                 publication
                     .map(|publication| {
-                        validate_billing_publication_shape(&publication, statement_id, identity)
-                            .map_err(|error| {
-                                self.session.poison();
-                                if after_write {
-                                    BrokerError::Ambiguous
-                                } else {
-                                    error
-                                }
-                            })?;
+                        validate_billing_publication_shape(
+                            &publication,
+                            statement_id,
+                            identity,
+                            self.session.network_id,
+                        )
+                        .map_err(|error| {
+                            self.session.poison();
+                            if after_write {
+                                BrokerError::Ambiguous
+                            } else {
+                                error
+                            }
+                        })?;
                         Ok(
                             sorafs_node::hedging_billing_service::
                                 BillingStatementAuthoritativePublicationV1 {
@@ -29340,6 +29447,14 @@ mod protocol {
                         }
                     })?;
                 if let Some(record) = record.as_ref() {
+                    if record.network_id != self.session.network_id {
+                        self.session.poison();
+                        return Err(if after_write {
+                            BrokerError::Ambiguous
+                        } else {
+                            BrokerError::BindingMismatch
+                        });
+                    }
                     record
                         .validate(
                             sorafs_node::hedging_billing_service::
@@ -29511,7 +29626,8 @@ mod protocol {
                 sorafs_node::hedging_billing_service::HedgingBillingExternalError,
             > {
                 let position = billing_query_position_to_wire(position);
-                validate_billing_query_position(position).map_err(billing_client_external_error)?;
+                validate_billing_query_position(position, self.session.network_id)
+                    .map_err(billing_client_external_error)?;
                 if max_events == 0
                     || max_events
                         > sorafs_node::hedging_billing_service::
@@ -29553,7 +29669,7 @@ mod protocol {
                             billing_client_external_error(error)
                         },
                     )?;
-                    self.ensure_chain_id(&page.chain_id).map_err(|error| {
+                    self.ensure_network_id(&page.network_id).map_err(|error| {
                         self.session.poison();
                         billing_client_external_error(error)
                     })?;
@@ -29570,7 +29686,8 @@ mod protocol {
                 sorafs_node::hedging_billing_service::HedgingBillingExternalError,
             > {
                 let position = billing_query_position_to_wire(position);
-                validate_billing_query_position(position).map_err(billing_client_external_error)?;
+                validate_billing_query_position(position, self.session.network_id)
+                    .map_err(billing_client_external_error)?;
                 if period_end_unix == 0 {
                     return Err(
                         sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected,
@@ -29607,7 +29724,7 @@ mod protocol {
                             billing_client_external_error(error)
                         },
                     )?;
-                    self.ensure_chain_id(&close.chain_id).map_err(|error| {
+                    self.ensure_network_id(&close.network_id).map_err(|error| {
                         self.session.poison();
                         billing_client_external_error(error)
                     })?;
@@ -29643,24 +29760,28 @@ mod protocol {
 
             fn verify_page(
                 &self,
-                chain_id: &iroha_data_model::ChainId,
+                network_id: &iroha_data_model::NetworkId,
                 previous: Option<
                     sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1,
                 >,
                 page: &sorafs_node::hedging_billing_service::HedgingBillingFinalizedEventPageV1,
             ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
             {
-                self.ensure_chain_id(chain_id)
+                self.ensure_network_id(network_id)
                     .map_err(billing_client_external_error)?;
-                if &page.chain_id != chain_id {
+                if &page.network_id != network_id {
                     return Err(
                         sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected,
                     );
                 }
                 validate_billing_page_shape(page, None).map_err(billing_client_external_error)?;
+                if let Some(previous) = previous {
+                    validate_billing_journal_commitment(previous, *network_id)
+                        .map_err(billing_client_external_error)?;
+                }
                 let payload = encode_canonical(
                     &BillingVerifyPageRequestWireV1 {
-                        chain_id: chain_id.clone(),
+                        network_id: *network_id,
                         previous,
                         page: page.clone(),
                     },
@@ -29684,13 +29805,13 @@ mod protocol {
 
             fn verify_period_close(
                 &self,
-                chain_id: &iroha_data_model::ChainId,
+                network_id: &iroha_data_model::NetworkId,
                 close: &sorafs_node::hedging_billing_service::HedgingBillingFinalizedPeriodCloseV1,
             ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
             {
-                self.ensure_chain_id(chain_id)
+                self.ensure_network_id(network_id)
                     .map_err(billing_client_external_error)?;
-                if &close.chain_id != chain_id {
+                if &close.network_id != network_id {
                     return Err(
                         sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected,
                     );
@@ -29699,7 +29820,7 @@ mod protocol {
                     .map_err(billing_client_external_error)?;
                 let payload = encode_canonical(
                     &BillingVerifyPeriodCloseRequestWireV1 {
-                        chain_id: chain_id.clone(),
+                        network_id: *network_id,
                         close: close.clone(),
                     },
                     MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
@@ -29725,17 +29846,17 @@ mod protocol {
 
             fn verify_epoch_transition(
                 &self,
-                chain_id: &iroha_data_model::ChainId,
+                network_id: &iroha_data_model::NetworkId,
                 transition: &sorafs_node::hedging_billing_service::HedgingBillingEpochTransitionV1,
             ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
             {
-                self.ensure_chain_id(chain_id)
+                self.ensure_network_id(network_id)
                     .map_err(billing_client_external_error)?;
                 transition.verify().map_err(|_| {
                     sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected
                 })?;
-                if &transition.previous_service_policy.chain_id != chain_id
-                    || &transition.next_service_policy.chain_id != chain_id
+                if &transition.previous_service_policy.network_id != network_id
+                    || &transition.next_service_policy.network_id != network_id
                 {
                     return Err(
                         sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected,
@@ -29743,7 +29864,7 @@ mod protocol {
                 }
                 let payload = encode_canonical(
                     &BillingVerifyEpochTransitionRequestWireV1 {
-                        chain_id: chain_id.clone(),
+                        network_id: *network_id,
                         transition: transition.clone(),
                     },
                     MAX_BILLING_RUNTIME_FRAME_BYTES_V1,
@@ -29892,7 +30013,7 @@ mod protocol {
                     signed_statement_digest,
                     statement: statement.clone(),
                 };
-                validate_billing_publish_request(&publish)
+                validate_billing_publish_request(&publish, self.session.network_id)
                     .map_err(billing_client_external_error)?;
                 let identity = self
                     .publisher_identity()
@@ -30014,7 +30135,7 @@ mod protocol {
                     statement: statement.clone(),
                     acknowledgement: acknowledgement.clone(),
                 };
-                validate_billing_acknowledgement_request(&request)
+                validate_billing_acknowledgement_request(&request, self.session.network_id)
                     .map_err(billing_client_external_error)?;
                 let payload = encode_canonical(&request, MAX_BILLING_RUNTIME_FRAME_BYTES_V1)
                     .map_err(billing_client_external_error)?;
@@ -30049,7 +30170,7 @@ mod protocol {
                     statement: statement.clone(),
                     acknowledgement: acknowledgement.clone(),
                 };
-                validate_billing_acknowledgement_request(&request)
+                validate_billing_acknowledgement_request(&request, self.session.network_id)
                     .map_err(billing_client_external_error)?;
                 let payload = encode_canonical(&request, MAX_BILLING_RUNTIME_FRAME_BYTES_V1)
                     .map_err(billing_client_external_error)?;
@@ -30142,12 +30263,15 @@ mod protocol {
                         )
                         .map_err(billing_client_external_error)?;
                 if let Some(acknowledgement) = acknowledgement.as_ref() {
-                    validate_billing_acknowledgement_shape(acknowledgement, statement_id).map_err(
-                        |error| {
-                            self.session.poison();
-                            billing_client_external_error(error)
-                        },
-                    )?;
+                    validate_billing_acknowledgement_shape(
+                        acknowledgement,
+                        statement_id,
+                        self.session.network_id,
+                    )
+                    .map_err(|error| {
+                        self.session.poison();
+                        billing_client_external_error(error)
+                    })?;
                 }
                 Ok(acknowledgement)
             }
@@ -30192,6 +30316,7 @@ mod protocol {
             ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
             {
                 if expected_revision == Some([0; 32])
+                    || next.network_id != self.session.network_id
                     || next
                         .validate(
                             sorafs_node::hedging_billing_service::
@@ -30429,9 +30554,13 @@ mod protocol {
                         ),
                 ));
             }
-            let (session, observations) =
-                BrokerSession::connect(endpoint, bindings.chain_id(), requested_catalog.clone())
-                    .map_err(registry_error)?;
+            let (session, observations) = BrokerSession::connect(
+                endpoint,
+                bindings.chain_id(),
+                *bindings.network_id(),
+                requested_catalog.clone(),
+            )
+            .map_err(registry_error)?;
 
             let mut dependencies = IrohaRuntimeDeps::default();
             let mut appeal_finance_signers: Vec<
@@ -31625,18 +31754,16 @@ mod protocol {
                 0xC8, 0xFD, 0x7C, 0x39, 0x17, 0xB6, 0xCA, 0x61, 0xA8, 0xC2, 0x83, 0x3A, 0x19, 0xE0,
                 0x00, 0xAA, 0xC2, 0xE4,
             ];
-            const SERVER_TEST_SIGNER_HANDLE: &str =
-                "hsm://governance/runtime-broker-server-primary";
-            const SERVER_TEST_IPFS_AUTH_HANDLE: &str =
-                "hsm://governance/runtime-broker-ipfs-auth-primary";
+            const SERVER_TEST_SIGNER_HANDLE: &str = "software://sorafs/governance-dag/primary";
+            const SERVER_TEST_IPFS_AUTH_HANDLE: &str = "auth://sorafs/governance-dag/ipfs-primary";
             const SERVER_TEST_CHECKPOINT_HANDLE: &str =
                 "sealed://governance/runtime-broker-checkpoint-primary";
             const SERVER_TEST_MODERATION_HANDLE: &str =
                 "kms://moderation/quarantine-wrapper-primary";
             const SERVER_TEST_MODERATION_TRANSACTION_SIGNER_HANDLE: &str =
-                "hsm://moderation/transaction-signer-primary";
+                "software://sorafs/moderation/primary";
             const SERVER_TEST_APPEAL_FINANCE_SIGNER_HANDLE: &str =
-                "hsm://sorafs/appeal-finance/transaction-signer-primary";
+                "software://sorafs/appeal-finance/primary";
             const SERVER_TEST_MODERATION_SETTLEMENT_HANDLE: &str =
                 "queue://moderation/settlement-handoff-primary";
             const SERVER_TEST_MODERATION_PUBLICATION_HANDLE: &str =
@@ -31654,7 +31781,7 @@ mod protocol {
             const SERVER_TEST_ACME_HANDLE: &str = "network://sorafs/gateway/acme-primary";
             const SERVER_TEST_COMPLIANCE_HANDLE: &str =
                 "network://sorafs/gateway/compliance-primary";
-            const SERVER_TEST_POR_ARCHIVE_HANDLE: &str = "hsm://sorafs/por-replay-archive/primary";
+            const SERVER_TEST_POR_ARCHIVE_HANDLE: &str = "object-lock://sorafs/por/primary";
             const SERVER_TEST_PRIVACY_PRF_HANDLE: &str =
                 "threshold-prf://sorafs/transparency/primary";
             const SERVER_TEST_PRIVACY_RELEASE_ANCHOR_HANDLE: &str =
@@ -31666,7 +31793,7 @@ mod protocol {
             const SERVER_TEST_REPUTATION_JOURNAL_HANDLE: &str =
                 "queue://sorafs/reputation/journal-primary";
             const SERVER_TEST_REPUTATION_THRESHOLD_HANDLE: &str =
-                "hsm://sorafs/reputation/threshold-primary";
+                "software://sorafs/reputation/primary";
             const SERVER_TEST_REPUTATION_GOVERNANCE_HANDLE: &str =
                 "dag://sorafs/reputation/publication-primary";
             const SERVER_TEST_REPUTATION_CHECKPOINT_HANDLE: &str =
@@ -31675,8 +31802,7 @@ mod protocol {
                 "ledger://sorafs/billing/finalized-query-primary";
             const SERVER_TEST_BILLING_VERIFIER_HANDLE: &str =
                 "ledger://sorafs/billing/journal-verifier-primary";
-            const SERVER_TEST_BILLING_SIGNER_HANDLE: &str =
-                "hsm://sorafs/billing/statement-signer-primary";
+            const SERVER_TEST_BILLING_SIGNER_HANDLE: &str = "software://sorafs/billing/primary";
             const SERVER_TEST_BILLING_PUBLISHER_HANDLE: &str =
                 "immutable://sorafs/billing/statement-publisher-primary";
             const SERVER_TEST_BILLING_ACKNOWLEDGEMENT_HANDLE: &str =
@@ -31686,7 +31812,19 @@ mod protocol {
             const SERVER_TEST_EVIDENCE_TRANSPARENCY_PUBLISHER_HANDLE: &str =
                 "transparency://sorafs/evidence-viewer/publisher-primary";
             const SERVER_TEST_BOOTLE_LANTERN_HANDLE: &str =
-                "hsm://privacy/bootle-lantern/issuer-primary";
+                "runtime://sorafs/privacy/bootle-lantern-primary";
+
+            fn test_network_id(byte: u8) -> NetworkId {
+                NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::prehashed([byte; iroha_crypto::Hash::LENGTH]),
+                ))
+            }
+
+            fn server_test_network_id() -> NetworkId {
+                test_network_id(0x15)
+            }
 
             struct ServerTestBootleLanternBackend {
                 revision: AtomicU64,
@@ -32022,7 +32160,7 @@ mod protocol {
                         OPAQUE_BLOB_DECODE_POLICY_V1,
                     ),
                     (
-                        OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1,
+                        OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
                         MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
                         SOURCE_PLAN_DECODE_POLICY_V1,
                     ),
@@ -32277,13 +32415,7 @@ mod protocol {
             fn compact_server_sequence_exceeds_live_peak_but_fits_cumulative_cap() {
                 let state = prepare_server_state(&server_test_catalog(), server_test_backends())
                     .expect("prepare governance signer server state");
-                let payload = encode_canonical(
-                    &SignRequestWireV1 {
-                        payload: vec![0xA5; 16 * 1024],
-                    },
-                    MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
-                )
-                .expect("encode compact signing payload");
+                let payload = valid_governance_sign_request_payload();
                 let request = make_operation_request(
                     TEST_SESSION_ID,
                     1,
@@ -32430,13 +32562,7 @@ mod protocol {
             fn operation_policies_decode_actual_request_and_response_frames() {
                 let binding = signer_binding();
                 let metadata_digest = observation(&binding).metadata_digest;
-                let payload = encode_canonical(
-                    &SignRequestWireV1 {
-                        payload: vec![0xA5; 16 * 1024],
-                    },
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )
-                .expect("encode sign request");
+                let payload = valid_governance_sign_request_payload();
                 let request = make_operation_request(
                     TEST_SESSION_ID,
                     1,
@@ -33337,7 +33463,11 @@ mod protocol {
                     TEST_SIGNER_KEY
                 }
 
-                fn sign(&self, _payload: &[u8]) -> Result<[u8; 64], String> {
+                fn sign(
+                    &self,
+                    _purpose: sorafs_node::GovernanceDagSigningPurposeV1,
+                    _payload: &[u8],
+                ) -> Result<[u8; 64], String> {
                     Ok([0xA5; 64])
                 }
             }
@@ -33656,16 +33786,16 @@ mod protocol {
             ) -> &'static str {
                 match role {
                     iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome => {
-                        "hsm://sorafs/proof-outcome/broker-primary"
+                        "software://sorafs/proof-outcome/broker-primary"
                     }
                     iroha_torii::SorafsNativeTransactionSignerRoleV1::Repair => {
-                        "hsm://sorafs/repair/broker-primary"
+                        "software://sorafs/repair/broker-primary"
                     }
                     iroha_torii::SorafsNativeTransactionSignerRoleV1::Reserve => {
-                        "hsm://sorafs/reserve/broker-primary"
+                        "software://sorafs/reserve/broker-primary"
                     }
                     iroha_torii::SorafsNativeTransactionSignerRoleV1::Orderbook => {
-                        "hsm://sorafs/orderbook/broker-primary"
+                        "software://sorafs/orderbook/broker-primary"
                     }
                 }
             }
@@ -33896,9 +34026,7 @@ mod protocol {
                         ServerTestModerationTransactionSignerMode::SubstitutedPayload => {
                             let substituted =
                                 iroha_data_model::transaction::TransactionBuilder::new(
-                                    iroha_data_model::ChainId::from(
-                                        "server-test-chain-substituted",
-                                    ),
+                                    test_network_id(0x16),
                                     payload.authority().clone(),
                                     iroha_data_model::transaction::FeePaymentIntent::authority(
                                         Vec::new(),
@@ -34426,7 +34554,7 @@ mod protocol {
                                     == Some(previous.chain_commitment)
                                 && request.head.source_checkpoint_generation
                                     > previous.source_checkpoint_generation
-                                && request.head.chain_id == previous.chain_id
+                                && request.head.network_id == previous.network_id
                         });
                     if !monotonic {
                         return Err(Failure::Permanent);
@@ -34799,7 +34927,7 @@ mod protocol {
 
                 fn load_latest(
                     &self,
-                    _chain_id: &iroha_data_model::ChainId,
+                    _network_id: &NetworkId,
                 ) -> Result<
                     Option<
                         iroha_core::query::reputation_finalized::
@@ -34813,7 +34941,7 @@ mod protocol {
 
                 fn compare_and_swap_latest(
                     &self,
-                    _chain_id: &iroha_data_model::ChainId,
+                    _network_id: &NetworkId,
                     _expected_revision: Option<[u8; 32]>,
                     _next: &iroha_core::query::reputation_finalized::
                         ReputationFinalizedArchiveRetentionApprovalRecordV1,
@@ -34974,6 +35102,8 @@ mod protocol {
                 revision: Arc<AtomicU64>,
                 fetch_delay: Duration,
                 drift_on_eof: bool,
+                observed_request:
+                    Option<Arc<Mutex<Option<sorafs_node::ProviderIngestSourceRequestV1>>>>,
             }
 
             impl fmt::Debug for ServerTestProviderSource {
@@ -34991,7 +35121,7 @@ mod protocol {
 
                 fn fetch<'a>(
                     &'a self,
-                    _request: sorafs_node::ProviderIngestSourceRequestV1,
+                    request: sorafs_node::ProviderIngestSourceRequestV1,
                 ) -> sorafs_node::ProviderIngestFutureV1<
                     'a,
                     Result<Self::Fetched, sorafs_node::ProviderIngestSourceFetchErrorV1>,
@@ -35002,7 +35132,12 @@ mod protocol {
                     let revision = Arc::clone(&self.revision);
                     let fetch_delay = self.fetch_delay;
                     let drift_on_eof = self.drift_on_eof;
+                    let observed_request = self.observed_request.clone();
                     Box::pin(async move {
+                        if let Some(observed_request) = observed_request {
+                            *observed_request.lock().expect("capture source request") =
+                                Some(request);
+                        }
                         if !fetch_delay.is_zero() {
                             tokio::time::sleep(fetch_delay).await;
                         }
@@ -35115,6 +35250,93 @@ mod protocol {
                 (authorization, manifest, plan)
             }
 
+            fn test_source_musubi_fetch_binding(
+                authorization: &sorafs_node::FinalizedProviderIngestAuthorizationV1,
+                manifest: &sorafs_manifest::ManifestV1,
+                plan: &sorafs_car::CarBuildPlan,
+            ) -> (
+                sorafs_node::FinalizedProviderIngestAuthorizationV1,
+                sorafs_node::ProviderIngestMusubiArchiveFetchBindingV1,
+            ) {
+                let commitment = iroha_data_model::musubi::MusubiArchiveCommitmentV1 {
+                    root_cid:
+                        iroha_data_model::sorafs::pin_registry::ManifestRootCid::try_from_slice(
+                            &manifest.root_cid,
+                        )
+                        .expect("canonical source root CID"),
+                    chunker: iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
+                        profile_id: manifest.chunking.profile_id.0,
+                        namespace: manifest.chunking.namespace.clone(),
+                        name: manifest.chunking.name.clone(),
+                        semver: manifest.chunking.semver.clone(),
+                        multihash_code: manifest.chunking.multihash_code,
+                    },
+                    chunk_plan_digest: iroha_data_model::musubi::MusubiContentDigestV1::new(
+                        manifest.chunk_digest_sha3_256,
+                    ),
+                    por_root: iroha_data_model::musubi::MusubiContentDigestV1::new(
+                        manifest.por_root,
+                    ),
+                    content_length: manifest.content_length,
+                    car_digest: iroha_data_model::musubi::MusubiContentDigestV1::new(
+                        manifest.car_digest,
+                    ),
+                    car_size: manifest.car_size,
+                    bundle_digest: iroha_data_model::musubi::MusubiContentDigestV1::new([0xB1; 32]),
+                    source_tree_digest: iroha_data_model::musubi::MusubiContentDigestV1::new(
+                        [0xB2; 32],
+                    ),
+                    descriptor_digest: iroha_data_model::musubi::MusubiContentDigestV1::new(
+                        [0xB3; 32],
+                    ),
+                    file_count: u32::try_from(plan.files.len())
+                        .expect("source file count fits u32"),
+                    chunk_count: u32::try_from(plan.chunks.len())
+                        .expect("source chunk count fits u32"),
+                };
+                let archive_id = commitment.archive_id();
+                let binding = iroha_data_model::musubi::MusubiReplicationOrderArchiveBindingV1::new(
+                    iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new(
+                        authorization.order_id(),
+                    ),
+                    archive_id,
+                    commitment,
+                );
+                let network_id =
+                    iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                        iroha_data_model::block::BlockHeader,
+                    >::from_untyped_unchecked(
+                        iroha_crypto::Hash::prehashed([0xA7; 32]),
+                    ));
+                let musubi_authorization =
+                    sorafs_node::FinalizedProviderIngestAuthorizationV1::from_finalized_musubi_state(
+                        authorization.finalized_height(),
+                        authorization.finalized_block_hash(),
+                        authorization.provider_id(),
+                        authorization.order_id(),
+                        authorization.manifest_digest(),
+                        authorization.manifest_cid().to_vec(),
+                        authorization.chunker_handle().to_owned(),
+                        authorization.chunk_digest_sha3_256(),
+                        authorization.por_root(),
+                        authorization.content_length(),
+                        sorafs_node::provider_ingest_outbox::FinalizedProviderIngestMusubiContextV1::new(
+                            network_id,
+                            archive_id,
+                        )
+                        .expect("construct source Musubi context"),
+                    )
+                    .expect("construct source Musubi authorization");
+                let fetch_binding = sorafs_node::ProviderIngestMusubiArchiveFetchBindingV1::new(
+                    network_id,
+                    authorization.provider_id(),
+                    authorization.admission_finalized_cursor(),
+                    binding,
+                )
+                .expect("construct Musubi source binding");
+                (musubi_authorization, fetch_binding)
+            }
+
             fn source_test_catalog(
                 timeout: Duration,
                 max_content_bytes: u64,
@@ -35183,7 +35405,7 @@ mod protocol {
                                 checkpoint_store_revision: 9,
                                 checkpoint_store_policy_digest: [0x83; 32],
                                 signer_handle:
-                                    "hsm://sorafs/evidence-viewer/receipts-primary".to_owned(),
+                                    "software://sorafs/evidence-viewer/primary".to_owned(),
                                 signer_public_key: TEST_SIGNER_KEY,
                                 signature: [0x84; 64],
                             },
@@ -35237,6 +35459,7 @@ mod protocol {
                         ),
                     ],
                 )
+                .with_network_id_for_test(server_test_network_id())
             }
 
             fn proof_native_signer_test_catalog() -> IrohaRuntimeProviderBindingsV1 {
@@ -35250,6 +35473,7 @@ mod protocol {
                         signer.binding(),
                     )],
                 )
+                .with_network_id_for_test(server_test_network_id())
             }
 
             fn native_signer_test_backends() -> RuntimeProviderBrokerBackendsV1 {
@@ -35270,14 +35494,12 @@ mod protocol {
                     )))
             }
 
-            fn native_signer_test_payload_for_chain(
-                chain_id: &str,
+            fn native_signer_test_payload_for_network(
+                network_id: NetworkId,
                 authority: iroha_data_model::account::AccountId,
             ) -> iroha_data_model::transaction::TransactionPayload {
                 iroha_data_model::transaction::TransactionBuilder::new(
-                    chain_id
-                        .parse::<iroha_data_model::ChainId>()
-                        .expect("native signer test chain id must be canonical"),
+                    network_id,
                     authority,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -35288,7 +35510,7 @@ mod protocol {
             fn native_signer_test_payload(
                 authority: iroha_data_model::account::AccountId,
             ) -> iroha_data_model::transaction::TransactionPayload {
-                native_signer_test_payload_for_chain("server-test-chain", authority)
+                native_signer_test_payload_for_network(server_test_network_id(), authority)
             }
 
             fn provider_ingest_completion_test_keypair() -> iroha_crypto::KeyPair {
@@ -35354,14 +35576,12 @@ mod protocol {
             }
 
             fn provider_ingest_completion_test_payload_with_executable(
-                chain_id: &str,
+                network_id: NetworkId,
                 authority: iroha_data_model::account::AccountId,
                 executable: iroha_data_model::transaction::Executable,
             ) -> iroha_data_model::transaction::TransactionPayload {
                 iroha_data_model::transaction::TransactionBuilder::new(
-                    chain_id
-                        .parse::<iroha_data_model::ChainId>()
-                        .expect("provider-ingest test chain id must be canonical"),
+                    network_id,
                     authority,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -35375,7 +35595,7 @@ mod protocol {
             ) -> iroha_data_model::transaction::TransactionPayload {
                 let completion = provider_ingest_completion_test_instruction(owner.clone());
                 provider_ingest_completion_test_payload_with_executable(
-                    "server-test-chain",
+                    server_test_network_id(),
                     owner,
                     iroha_data_model::transaction::Executable::Instructions(
                         vec![iroha_data_model::isi::InstructionBox::from(completion)].into(),
@@ -35391,6 +35611,7 @@ mod protocol {
                     7,
                     TEST_POLICY_DIGEST,
                 )
+                .with_network_id_for_test(server_test_network_id())
             }
 
             fn moderation_transaction_signer_test_payload()
@@ -35452,8 +35673,10 @@ mod protocol {
                     iroha_crypto::Algorithm::Ed25519,
                 )
                 .expect("derive moderation handoff actor");
-                let handoff = sorafs_node::moderation_orchestrator::ModerationTerminalHandoffV1 {
-                    handoff_id: [0x31; 32],
+                let mut handoff =
+                    sorafs_node::moderation_orchestrator::ModerationTerminalHandoffV1 {
+                    handoff_id: [0; 32],
+                    network_id: server_test_network_id(),
                     kind,
                     case_id: "case-1".to_owned(),
                     round_id: "round-1".to_owned(),
@@ -35485,6 +35708,7 @@ mod protocol {
                                 ),
                         },
                 };
+                handoff.handoff_id = handoff.canonical_id();
                 let canonical_handoff =
                     norito::to_bytes(&handoff).expect("encode canonical moderation handoff");
                 iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffRequestV1 {
@@ -35501,9 +35725,10 @@ mod protocol {
                     iroha_crypto::Algorithm::Ed25519,
                 )
                 .expect("derive moderation panel recipient");
-                let notification =
+                let mut notification =
                     sorafs_node::moderation_orchestrator::ModerationPanelNotificationV1 {
-                        notification_id: [0x51; 32],
+                        notification_id: [0; 32],
+                        network_id: server_test_network_id(),
                         source_operation_id: [0x52; 32],
                         scope_digest: [0x53; 32],
                         kind: sorafs_node::moderation_orchestrator::
@@ -35521,6 +35746,7 @@ mod protocol {
                                 },
                         source_occurred_at_unix_ms: 1_000,
                     };
+                notification.notification_id = notification.canonical_id();
                 let canonical_notification =
                     norito::to_bytes(&notification).expect("encode canonical panel notification");
                 iroha_torii::sorafs::moderation_runtime::
@@ -35627,6 +35853,7 @@ mod protocol {
                     7,
                     TEST_POLICY_DIGEST,
                 )
+                .with_network_id_for_test(server_test_network_id())
             }
 
             fn reputation_runtime_test_handle(slot: IrohaRuntimeProviderSlotV1) -> &'static str {
@@ -35674,62 +35901,7 @@ mod protocol {
                 .expect("project reputation test binding")
             }
 
-            fn billing_runtime_test_handle(slot: IrohaRuntimeProviderSlotV1) -> &'static str {
-                match slot {
-                    IrohaRuntimeProviderSlotV1::BillingFinalizedQuery => {
-                        SERVER_TEST_BILLING_QUERY_HANDLE
-                    }
-                    IrohaRuntimeProviderSlotV1::BillingJournalVerifier => {
-                        SERVER_TEST_BILLING_VERIFIER_HANDLE
-                    }
-                    IrohaRuntimeProviderSlotV1::BillingStatementSigner => {
-                        SERVER_TEST_BILLING_SIGNER_HANDLE
-                    }
-                    IrohaRuntimeProviderSlotV1::BillingStatementPublisher => {
-                        SERVER_TEST_BILLING_PUBLISHER_HANDLE
-                    }
-                    IrohaRuntimeProviderSlotV1::BillingAcknowledgementAuthority => {
-                        SERVER_TEST_BILLING_ACKNOWLEDGEMENT_HANDLE
-                    }
-                    IrohaRuntimeProviderSlotV1::BillingEpochWitnessStore => {
-                        SERVER_TEST_BILLING_EPOCH_STORE_HANDLE
-                    }
-                    _ => panic!("slot is not a hedging/billing runtime provider"),
-                }
-            }
-
-            fn billing_runtime_test_binding(
-                slot: IrohaRuntimeProviderSlotV1,
-            ) -> ProviderBindingWireV1 {
-                let catalog = IrohaRuntimeProviderBindingsV1::qualified_for_test(
-                    "server-test-chain",
-                    slot,
-                    billing_runtime_test_handle(slot),
-                    7,
-                    TEST_POLICY_DIGEST,
-                );
-                ProviderBindingWireV1::try_from_binding(
-                    catalog.iter().next().expect("one billing binding"),
-                )
-                .expect("project billing test binding")
-            }
-
-            fn billing_operation_request(
-                slot: IrohaRuntimeProviderSlotV1,
-                request_id: u64,
-                operation: u16,
-                payload: Vec<u8>,
-            ) -> OperationRequestV1 {
-                make_operation_request(
-                    TEST_SESSION_ID,
-                    request_id,
-                    billing_runtime_test_binding(slot),
-                    [0xB1; 32],
-                    operation,
-                    payload,
-                )
-                .expect("build billing broker operation")
-            }
+            include!("runtime_provider_broker/hedging_billing_domain_tests.rs");
 
             #[derive(Debug)]
             struct ServerTestBillingProvider {
@@ -35868,7 +36040,7 @@ mod protocol {
 
                 fn verify_page(
                     &self,
-                    _chain_id: &iroha_data_model::ChainId,
+                    _network_id: &iroha_data_model::NetworkId,
                     _previous: Option<
                         sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1,
                     >,
@@ -35881,7 +36053,7 @@ mod protocol {
 
                 fn verify_period_close(
                     &self,
-                    _chain_id: &iroha_data_model::ChainId,
+                    _network_id: &iroha_data_model::NetworkId,
                     _close: &sorafs_node::hedging_billing_service::
                         HedgingBillingFinalizedPeriodCloseV1,
                 ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
@@ -35891,7 +36063,7 @@ mod protocol {
 
                 fn verify_epoch_transition(
                     &self,
-                    _chain_id: &iroha_data_model::ChainId,
+                    _network_id: &iroha_data_model::NetworkId,
                     _transition: &sorafs_node::hedging_billing_service::
                         HedgingBillingEpochTransitionV1,
                 ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
@@ -36304,7 +36476,7 @@ mod protocol {
 
                 fn substituted() -> Self {
                     Self {
-                        handle: "hsm://sorafs/reputation/threshold-substitute",
+                        handle: "software://sorafs/reputation/substitute",
                         ..Self::exact()
                     }
                 }
@@ -36594,7 +36766,7 @@ mod protocol {
                 };
                 let material = sorafs_node::reputation::ReputationUnsignedSigningMaterialV1 {
                     version: sorafs_node::reputation::REPUTATION_UNSIGNED_MATERIAL_VERSION_V1,
-                    chain_id: iroha_data_model::ChainId::from("server-test-chain"),
+                    network_id: server_test_network_id(),
                     ingest_policy_digest: [0x95; 32],
                     snapshot_trust_policy_digest: signed.policy_digest,
                     window_start_height: 1,
@@ -36833,7 +37005,7 @@ mod protocol {
             fn signer_binding() -> ProviderBindingWireV1 {
                 ProviderBindingWireV1 {
                     slot: IrohaRuntimeProviderSlotV1::GovernanceDagSigner.wire_id(),
-                    handle: "hsm://governance/producer-primary".to_owned(),
+                    handle: "software://sorafs/governance-dag/primary".to_owned(),
                     revision: Some(7),
                     policy_digest: Some(TEST_POLICY_DIGEST),
                     bootle_lantern_issuance_bindings: None,
@@ -36876,7 +37048,7 @@ mod protocol {
             fn stream_token_signer_binding() -> ProviderBindingWireV1 {
                 let mut binding = plain_runtime_binding(
                     IrohaRuntimeProviderSlotV1::StreamTokenSigner,
-                    "pkcs11:prod/sorafs/stream-token/primary",
+                    "software://sorafs/stream-token/primary",
                 );
                 binding.stream_token_signer_public_key = Some(TEST_SIGNER_KEY);
                 binding
@@ -36931,6 +37103,7 @@ mod protocol {
                     .expect("observe exact Bootle/Lantern test backend");
                 BrokerServerStateV1 {
                     chain_id: "server-test-chain".to_owned(),
+                    network_id: server_test_network_id(),
                     catalog: vec![binding],
                     observations: vec![observation],
                     backends,
@@ -37053,8 +37226,12 @@ mod protocol {
                     committed_height: 9,
                 };
                 let request = bootle_lantern_auth_operation(1, binding.clone(), &valid);
-                validate_operation_payload(&request, Some("server-test-chain"))
-                    .expect("accept exact authentication payload");
+                validate_operation_payload(
+                    &request,
+                    Some("server-test-chain"),
+                    &server_test_network_id(),
+                )
+                .expect("accept exact authentication payload");
 
                 let mut invalid_requests = Vec::new();
                 let mut invalid = valid.clone();
@@ -37078,26 +37255,40 @@ mod protocol {
                 invalid_requests.push(invalid);
                 for invalid in invalid_requests {
                     let request = bootle_lantern_auth_operation(2, binding.clone(), &invalid);
-                    assert!(validate_operation_payload(&request, None).is_err());
+                    assert!(
+                        validate_operation_payload(&request, None, &server_test_network_id())
+                            .is_err()
+                    );
                 }
 
                 let mut wrong_slot = bootle_lantern_auth_operation(3, binding.clone(), &valid);
                 wrong_slot.binding.slot =
                     IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider.wire_id();
-                assert!(validate_operation_payload(&wrong_slot, None).is_err());
+                assert!(
+                    validate_operation_payload(&wrong_slot, None, &server_test_network_id())
+                        .is_err()
+                );
 
                 let mut wrong_operation = bootle_lantern_auth_operation(4, binding, &valid);
                 wrong_operation.operation =
                     OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1;
-                assert!(validate_operation_payload(&wrong_operation, None).is_err());
+                assert!(
+                    validate_operation_payload(&wrong_operation, None, &server_test_network_id())
+                        .is_err()
+                );
 
                 let mut truncated = request.clone();
                 truncated.payload.pop();
-                assert!(validate_operation_payload(&truncated, None).is_err());
+                assert!(
+                    validate_operation_payload(&truncated, None, &server_test_network_id())
+                        .is_err()
+                );
 
                 let mut trailing = request;
                 trailing.payload.push(0);
-                assert!(validate_operation_payload(&trailing, None).is_err());
+                assert!(
+                    validate_operation_payload(&trailing, None, &server_test_network_id()).is_err()
+                );
             }
 
             #[test]
@@ -37206,7 +37397,8 @@ mod protocol {
                         binding.policy_digest = Some([0x72; 32]);
                     },
                     |binding: &mut ProviderBindingWireV1| {
-                        binding.handle = "hsm://privacy/bootle-lantern/substituted".to_owned();
+                        binding.handle =
+                            "runtime://sorafs/privacy/bootle-lantern-substituted".to_owned();
                     },
                     |binding: &mut ProviderBindingWireV1| {
                         binding
@@ -37262,6 +37454,7 @@ mod protocol {
                     .expect("observe exact appeal-finance transaction signer");
                 BrokerServerStateV1 {
                     chain_id: "server-test-chain".to_owned(),
+                    network_id: server_test_network_id(),
                     catalog: vec![binding],
                     observations: vec![observation],
                     backends,
@@ -37276,7 +37469,7 @@ mod protocol {
                 binding.pop_credential_runtime_binding = Some(PopCredentialRuntimeBindingWireV1 {
                     issuer_policy_digest: [0x81; 32],
                     issuer_id: "pop-issuer-production-primary".to_owned(),
-                    issuer_hsm_key_id: "pkcs11:pop/issuer:primary".to_owned(),
+                    issuer_signer_handle: "software://sorafs/pop-credentials/primary".to_owned(),
                     issuer_public_key: server_test_request_auth_public_key(),
                     enrollment_recipient_key_id: "kms:pop/enrollment:primary".to_owned(),
                     enrollment_recipient_public_key_digest: [0x82; 32],
@@ -37702,7 +37895,7 @@ mod protocol {
             fn evidence_viewer_binding(slot: IrohaRuntimeProviderSlotV1) -> ProviderBindingWireV1 {
                 let mut binding = ProviderBindingWireV1 {
                     slot: slot.wire_id(),
-                    handle: format!("hsm://sorafs/evidence-viewer/slot-{}", slot.wire_id()),
+                    handle: format!("runtime://sorafs/evidence-viewer/slot-{}", slot.wire_id()),
                     revision: Some(7),
                     policy_digest: Some(TEST_POLICY_DIGEST),
                     bootle_lantern_issuance_bindings: None,
@@ -37751,6 +37944,7 @@ mod protocol {
                         binding.evidence_viewer_grant_ttl_ms = Some(300_000);
                     }
                     IrohaRuntimeProviderSlotV1::EvidenceViewerReceiptSigner => {
+                        binding.handle = "software://sorafs/evidence-viewer/primary".to_owned();
                         binding.evidence_viewer_receipt_signer_public_key = Some(TEST_SIGNER_KEY);
                     }
                     IrohaRuntimeProviderSlotV1::EvidenceViewerCheckpointStore => {
@@ -37932,8 +38126,12 @@ mod protocol {
                         | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1
                         | OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1
                 ) {
-                    validate_operation_request_for_session(&request, "server-test-chain")
-                        .expect("validate chain-bound moderation archive operation");
+                    validate_operation_request_for_session(
+                        &request,
+                        "server-test-chain",
+                        &server_test_network_id(),
+                    )
+                    .expect("validate chain-bound moderation archive operation");
                 } else {
                     validate_operation_request(&request)
                         .expect("validate evidence-viewer operation");
@@ -37949,6 +38147,7 @@ mod protocol {
                     .collect::<Vec<_>>();
                 let transcript = ServerTranscriptFieldsV1 {
                     chain_id: request.chain_id.clone(),
+                    network_id: request.network_id,
                     requested_catalog: request.requested_catalog.clone(),
                     client_nonce: request.client_nonce,
                     catalog_digest: request.catalog_digest,
@@ -37958,6 +38157,7 @@ mod protocol {
                 };
                 HandshakeResponseV1 {
                     chain_id: request.chain_id.clone(),
+                    network_id: request.network_id,
                     requested_catalog: request.requested_catalog.clone(),
                     client_nonce: request.client_nonce,
                     catalog_digest: request.catalog_digest,
@@ -37972,11 +38172,16 @@ mod protocol {
             fn assert_valid_handshake_request(request: &HandshakeRequestV1) {
                 assert_eq!(
                     request.catalog_digest,
-                    catalog_digest(&request.chain_id, &request.requested_catalog)
-                        .expect("digest test requested catalog")
+                    catalog_digest(
+                        &request.chain_id,
+                        &request.network_id,
+                        &request.requested_catalog,
+                    )
+                    .expect("digest test requested catalog")
                 );
                 let transcript = HandshakeTranscriptFieldsV1 {
                     chain_id: request.chain_id.clone(),
+                    network_id: request.network_id,
                     requested_catalog: request.requested_catalog.clone(),
                     client_nonce: request.client_nonce,
                     catalog_digest: request.catalog_digest,
@@ -38205,9 +38410,13 @@ mod protocol {
                     .map(ProviderBindingWireV1::try_from_binding)
                     .collect::<Result<Vec<_>, _>>()
                     .expect("project source test catalog");
-                let (session, observations) =
-                    BrokerSession::connect(policy, bindings.chain_id(), requested_catalog.clone())
-                        .expect("connect source broker session");
+                let (session, observations) = BrokerSession::connect(
+                    policy,
+                    bindings.chain_id(),
+                    *bindings.network_id(),
+                    requested_catalog.clone(),
+                )
+                .expect("connect source broker session");
                 let binding = requested_catalog
                     .iter()
                     .find(|binding| {
@@ -38234,9 +38443,13 @@ mod protocol {
 
             fn connect_test_server_session(policy: &EndpointPolicy) -> Arc<BrokerSession> {
                 let binding = signer_binding_for_server();
-                let (session, _) =
-                    BrokerSession::connect(policy, "server-test-chain", vec![binding])
-                        .expect("connect authenticated broker server session");
+                let (session, _) = BrokerSession::connect(
+                    policy,
+                    "server-test-chain",
+                    server_test_network_id(),
+                    vec![binding],
+                )
+                .expect("connect authenticated broker server session");
                 session
             }
 
@@ -39033,120 +39246,6 @@ mod protocol {
             }
 
             #[test]
-            fn catalog_digest_binds_protocol_and_chain_identity() {
-                let catalog = vec![signer_binding()];
-                let canonical_catalog = encode_canonical(&catalog, MAX_HANDSHAKE_FRAME_BYTES_V1)
-                    .expect("encode canonical test catalog");
-                let digest = catalog_digest("test-chain", &catalog)
-                    .expect("digest chain-bound test catalog");
-                assert_eq!(
-                    digest,
-                    digest_parts(
-                        CATALOG_DIGEST_DOMAIN_V1,
-                        &[
-                            &BROKER_MAGIC_V1,
-                            &BROKER_VERSION_V1.to_be_bytes(),
-                            b"test-chain",
-                            &canonical_catalog,
-                        ],
-                    )
-                );
-                assert_ne!(
-                    digest,
-                    catalog_digest("other-chain", &catalog)
-                        .expect("digest catalog for a different chain")
-                );
-                let mut substituted_peer = catalog.clone();
-                substituted_peer[0].governance_dag_publisher_peer_id =
-                    Some(b"12D3KooWRuntimeBrokerSecondary".to_vec());
-                assert_ne!(
-                    digest,
-                    catalog_digest("test-chain", &substituted_peer)
-                        .expect("digest catalog with a substituted publisher peer ID")
-                );
-                let mut substituted_key = catalog.clone();
-                substituted_key[0].governance_dag_publisher_public_key =
-                    Some(server_test_request_auth_public_key());
-                assert_ne!(
-                    digest,
-                    catalog_digest("test-chain", &substituted_key)
-                        .expect("digest catalog with a substituted publisher key")
-                );
-
-                let mut other_magic = BROKER_MAGIC_V1;
-                other_magic[0] ^= 1;
-                assert_ne!(
-                    digest,
-                    digest_parts(
-                        CATALOG_DIGEST_DOMAIN_V1,
-                        &[
-                            &other_magic,
-                            &BROKER_VERSION_V1.to_be_bytes(),
-                            b"test-chain",
-                            &canonical_catalog,
-                        ],
-                    )
-                );
-                assert_ne!(
-                    digest,
-                    digest_parts(
-                        CATALOG_DIGEST_DOMAIN_V1,
-                        &[
-                            &BROKER_MAGIC_V1,
-                            &(BROKER_VERSION_V1 + 1).to_be_bytes(),
-                            b"test-chain",
-                            &canonical_catalog,
-                        ],
-                    )
-                );
-            }
-
-            #[test]
-            fn handshake_rejects_catalog_nonce_session_binding_metadata_and_transcript_confusion() {
-                assert_eq!(
-                    make_handshake_request(
-                        "test-chain",
-                        vec![checkpoint_binding(), signer_binding()],
-                        [0x42; 32],
-                    ),
-                    Err(BrokerError::BindingMismatch),
-                    "the requested catalog order is canonical"
-                );
-                assert_eq!(
-                    make_handshake_request("test-chain", vec![signer_binding()], [0; 32],),
-                    Err(BrokerError::BindingMismatch),
-                    "a zero nonce cannot bind a fresh session"
-                );
-                let request = make_handshake_request(
-                    "test-chain",
-                    vec![signer_binding(), checkpoint_binding()],
-                    [0x42; 32],
-                )
-                .expect("build handshake");
-                let response = handshake_response(&request);
-                validate_handshake_response(&request, &response).expect("validate exact handshake");
-
-                for mutation in 0..8 {
-                    let mut confused = response.clone();
-                    match mutation {
-                        0 => confused.chain_id.push('x'),
-                        1 => confused.requested_catalog.swap(0, 1),
-                        2 => confused.client_nonce[0] ^= 1,
-                        3 => confused.session_id = [0; 32],
-                        4 => confused.observations.swap(0, 1),
-                        5 => confused.observations[0].binding.handle.push('x'),
-                        6 => confused.observations[0].metadata_digest[0] ^= 1,
-                        7 => confused.server_transcript_digest[0] ^= 1,
-                        _ => unreachable!(),
-                    }
-                    assert!(
-                        validate_handshake_response(&request, &confused).is_err(),
-                        "mutation {mutation} must fail"
-                    );
-                }
-            }
-
-            #[test]
             fn signing_payload_bound_matches_canonical_governance_ceiling() {
                 assert_eq!(
                     MAX_SIGNING_PAYLOAD_BYTES_V1,
@@ -39363,7 +39462,7 @@ mod protocol {
 
                 let binding = stream_token_signer_binding();
                 let exact = Arc::new(SignerProbe {
-                    handle: "pkcs11:prod/sorafs/stream-token/primary",
+                    handle: "software://sorafs/stream-token/primary",
                     drift: false,
                     calls: AtomicU64::new(0),
                 });
@@ -39375,12 +39474,12 @@ mod protocol {
 
                 for provider in [
                     SignerProbe {
-                        handle: "pkcs11:prod/sorafs/stream-token/primary",
+                        handle: "software://sorafs/stream-token/primary",
                         drift: true,
                         calls: AtomicU64::new(0),
                     },
                     SignerProbe {
-                        handle: "pkcs11:test/sorafs/stream-token",
+                        handle: "software://sorafs/stream-token/test",
                         drift: false,
                         calls: AtomicU64::new(0),
                     },
@@ -39969,7 +40068,7 @@ mod protocol {
                     OPERATION_REPUTATION_RETENTION_LOAD_V1,
                     encode_canonical(
                         &ReputationRetentionLoadRequestWireV1 {
-                            chain_id: "wrong-chain".to_owned(),
+                            network_id: test_network_id(0x17),
                         },
                         MAX_REPUTATION_RETENTION_FRAME_BYTES_V1,
                     )
@@ -39994,7 +40093,7 @@ mod protocol {
                         OPERATION_REPUTATION_RETENTION_COMPARE_AND_SWAP_V1,
                         encode_canonical(
                             &ReputationRetentionCompareAndSwapRequestWireV1 {
-                                chain_id: "server-test-chain".to_owned(),
+                                network_id: server_test_network_id(),
                                 expected_revision: None,
                                 next_record,
                             },
@@ -40004,7 +40103,11 @@ mod protocol {
                     )
                     .expect("build invalid retention CAS");
                     assert_eq!(
-                        validate_operation_request(&request),
+                        validate_operation_request_for_session(
+                            &request,
+                            "server-test-chain",
+                            &server_test_network_id(),
+                        ),
                         Err(BrokerError::Rejected)
                     );
                 }
@@ -40558,6 +40661,7 @@ mod protocol {
                     .expect("qualify stable threshold-PRF provider");
                 let state = BrokerServerStateV1 {
                     chain_id: "privacy-cycle-prf-test-chain".to_owned(),
+                    network_id: server_test_network_id(),
                     catalog: vec![binding.clone()],
                     observations: vec![observed.clone()],
                     backends,
@@ -40721,6 +40825,7 @@ mod protocol {
                     .expect("qualify stable finalized release anchor");
                 let state = BrokerServerStateV1 {
                     chain_id: "privacy-release-anchor-test-chain".to_owned(),
+                    network_id: server_test_network_id(),
                     catalog: vec![binding.clone()],
                     observations: vec![observed.clone()],
                     backends,
@@ -40845,6 +40950,7 @@ mod protocol {
                     .expect("qualify non-persisting test release anchor");
                 let no_readback_state = BrokerServerStateV1 {
                     chain_id: "privacy-release-anchor-no-readback-test-chain".to_owned(),
+                    network_id: server_test_network_id(),
                     catalog: vec![binding],
                     observations: vec![no_readback_observed],
                     backends: no_readback_backends,
@@ -40962,6 +41068,7 @@ mod protocol {
                     .expect("qualify stable leader-lease provider");
                 let state = BrokerServerStateV1 {
                     chain_id: "transparency-leader-lease-test-chain".to_owned(),
+                    network_id: server_test_network_id(),
                     catalog: vec![binding.clone()],
                     observations: vec![observed.clone()],
                     backends,
@@ -41347,6 +41454,7 @@ mod protocol {
                     .expect("qualify stable fenced privacy publisher");
                 let state = BrokerServerStateV1 {
                     chain_id: "fenced-privacy-publisher-test-chain".to_owned(),
+                    network_id: server_test_network_id(),
                     catalog: vec![binding.clone()],
                     observations: vec![observed.clone()],
                     backends,
@@ -41430,6 +41538,7 @@ mod protocol {
                     .expect("qualify publisher whose receipt is substituted");
                 let substituted_state = BrokerServerStateV1 {
                     chain_id: "fenced-privacy-substituted-receipt-test-chain".to_owned(),
+                    network_id: server_test_network_id(),
                     catalog: vec![binding],
                     observations: vec![substituted_observed],
                     backends: substituted_backends,
@@ -41536,6 +41645,7 @@ mod protocol {
                     .expect("qualify stable fenced privacy head reader");
                 let state = BrokerServerStateV1 {
                     chain_id: "fenced-privacy-head-reader-test-chain".to_owned(),
+                    network_id: server_test_network_id(),
                     catalog: vec![binding.clone()],
                     observations: vec![observed.clone()],
                     backends,
@@ -41650,6 +41760,7 @@ mod protocol {
                     .expect("qualify head reader that substitutes proof evidence");
                 let substituted_state = BrokerServerStateV1 {
                     chain_id: "fenced-privacy-substituted-head-proof-test-chain".to_owned(),
+                    network_id: server_test_network_id(),
                     catalog: vec![binding.clone()],
                     observations: vec![substituted_observed],
                     backends: substituted_backends,
@@ -41668,6 +41779,7 @@ mod protocol {
                     .expect("head reader is stable before its authenticated read");
                 let drift_state = BrokerServerStateV1 {
                     chain_id: "fenced-privacy-head-read-drift-test-chain".to_owned(),
+                    network_id: server_test_network_id(),
                     catalog: vec![binding],
                     observations: vec![drift_observed],
                     backends: drift_backends,
@@ -41913,6 +42025,7 @@ mod protocol {
                     .expect("qualify stable replay archive");
                 let state = BrokerServerStateV1 {
                     chain_id: "por-replay-archive-test-chain".to_owned(),
+                    network_id: server_test_network_id(),
                     catalog: vec![binding.clone()],
                     observations: vec![observed.clone()],
                     backends,
@@ -42290,7 +42403,7 @@ mod protocol {
                     .expect("decode checkpoint load payload"),
                     CHECKPOINT_LOAD_REQUEST_VERSION_V1
                 );
-                validate_operation_payload(&request, None)
+                validate_operation_payload(&request, None, &server_test_network_id())
                     .expect("validate checkpoint load operation payload");
                 validate_operation_request(&request).expect("validate checkpoint load request");
                 let result =
@@ -42434,12 +42547,12 @@ mod protocol {
                 )
                 .expect("prepare exact reputation journal backend");
                 assert_eq!(
-                    ensure_reputation_session_chain(
-                        &iroha_data_model::ChainId::from("cross-chain"),
-                        &journal_state.chain_id,
+                    ensure_reputation_session_network(
+                        &test_network_id(0x16),
+                        &journal_state.network_id,
                     ),
                     Err(BrokerError::BindingMismatch),
-                    "the journal submitter cannot be used as a cross-chain deputy"
+                    "the journal submitter cannot be used as a cross-network deputy"
                 );
                 let supports = reputation_operation_request(
                     &journal_state,
@@ -42496,7 +42609,7 @@ mod protocol {
 
                 let malformed_submit = ReputationJournalTransactionRequestWireV1 {
                     sequence: 0,
-                    chain_id: iroha_data_model::ChainId::from("server-test-chain"),
+                    network_id: server_test_network_id(),
                     authority: authority.clone(),
                     event_id:
                         iroha_data_model::sorafs::reputation::ReputationJournalEventIdV1::ZERO,
@@ -42564,39 +42677,38 @@ mod protocol {
                     MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
                 )
                 .expect("encode reputation threshold request");
-                let mut cross_chain_threshold_request = threshold_request.clone();
-                cross_chain_threshold_request.material.chain_id =
-                    iroha_data_model::ChainId::from("cross-chain");
-                cross_chain_threshold_request.material_digest = reputation_hash_canonical(
+                let mut cross_network_threshold_request = threshold_request.clone();
+                cross_network_threshold_request.material.network_id = test_network_id(0x16);
+                cross_network_threshold_request.material_digest = reputation_hash_canonical(
                     b"sorafs-reputation-unsigned-material-delivery-v1",
-                    &cross_chain_threshold_request.material,
+                    &cross_network_threshold_request.material,
                 )
-                .expect("digest cross-chain reputation threshold material");
-                cross_chain_threshold_request.idempotency_key =
+                .expect("digest cross-network reputation threshold material");
+                cross_network_threshold_request.idempotency_key =
                     reputation_publication_idempotency_key(
                         b"sorafs-reputation-threshold-signing-operation-v1",
-                        cross_chain_threshold_request.sequence,
-                        cross_chain_threshold_request.material_digest,
+                        cross_network_threshold_request.sequence,
+                        cross_network_threshold_request.material_digest,
                         None,
                     )
-                    .expect("derive cross-chain threshold idempotency key");
-                let cross_chain_threshold = reputation_operation_request(
+                    .expect("derive cross-network threshold idempotency key");
+                let cross_network_threshold = reputation_operation_request(
                     &threshold_state,
                     3,
                     OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1,
                     encode_canonical(
-                        &reputation_threshold_request_to_wire(&cross_chain_threshold_request)
-                            .expect("project cross-chain reputation threshold request"),
+                        &reputation_threshold_request_to_wire(&cross_network_threshold_request)
+                            .expect("project cross-network reputation threshold request"),
                         MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
                     )
-                    .expect("encode cross-chain reputation threshold request"),
+                    .expect("encode cross-network reputation threshold request"),
                 );
-                validate_operation_request(&cross_chain_threshold)
-                    .expect("cross-chain threshold request is otherwise canonical");
+                validate_operation_request(&cross_network_threshold)
+                    .expect("cross-network threshold request is otherwise canonical");
                 assert_eq!(
-                    dispatch_server_operation(&threshold_state, &cross_chain_threshold),
+                    dispatch_server_operation(&threshold_state, &cross_network_threshold),
                     Err(BrokerError::BindingMismatch),
-                    "the threshold signer cannot be used as a cross-chain deputy"
+                    "the threshold signer cannot be used as a cross-network deputy"
                 );
                 for request_id in [1, 2] {
                     let operation = reputation_operation_request(
@@ -43028,7 +43140,7 @@ mod protocol {
                         version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
                         slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
                             .wire_id(),
-                        chain_id: "server-test-chain".to_owned(),
+                        network_id: server_test_network_id(),
                     },
                     MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                 )
@@ -43039,7 +43151,11 @@ mod protocol {
                     unit,
                 );
                 assert_eq!(
-                    validate_operation_request_for_session(&qualify, "server-test-chain"),
+                    validate_operation_request_for_session(
+                        &qualify,
+                        "server-test-chain",
+                        &server_test_network_id()
+                    ),
                     Ok(())
                 );
 
@@ -43048,7 +43164,7 @@ mod protocol {
                         version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
                         slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
                             .wire_id(),
-                        chain_id: "server-test-chain".to_owned(),
+                        network_id: server_test_network_id(),
                         operation_id: [0xA1; 32],
                         receipt_message: [0xA2; 32],
                         canonical_artifact: vec![0xA3],
@@ -43062,7 +43178,11 @@ mod protocol {
                     install_payload.clone(),
                 );
                 assert_eq!(
-                    validate_operation_request_for_session(&install, "server-test-chain"),
+                    validate_operation_request_for_session(
+                        &install,
+                        "server-test-chain",
+                        &server_test_network_id()
+                    ),
                     Ok(())
                 );
 
@@ -43071,7 +43191,7 @@ mod protocol {
                         version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
                         slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
                             .wire_id(),
-                        chain_id: "server-test-chain".to_owned(),
+                        network_id: server_test_network_id(),
                         operation_id: [0xA1; 32],
                     },
                     MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
@@ -43083,7 +43203,11 @@ mod protocol {
                     read_payload,
                 );
                 assert_eq!(
-                    validate_operation_request_for_session(&read, "server-test-chain"),
+                    validate_operation_request_for_session(
+                        &read,
+                        "server-test-chain",
+                        &server_test_network_id()
+                    ),
                     Ok(())
                 );
 
@@ -43100,7 +43224,11 @@ mod protocol {
                 )
                 .expect("seal cross-slot archive operation");
                 assert_eq!(
-                    validate_operation_request_for_session(&cross_slot, "server-test-chain"),
+                    validate_operation_request_for_session(
+                        &cross_slot,
+                        "server-test-chain",
+                        &server_test_network_id()
+                    ),
                     Err(BrokerError::BindingMismatch)
                 );
                 for (request_id, operation, payload) in [
@@ -43114,7 +43242,7 @@ mod protocol {
                                 slot:
                                     IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
                                         .wire_id(),
-                                chain_id: "server-test-chain".to_owned(),
+                                network_id: server_test_network_id(),
                             },
                             MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
                         )
@@ -43135,7 +43263,7 @@ mod protocol {
                                 slot:
                                     IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
                                         .wire_id(),
-                                chain_id: "server-test-chain".to_owned(),
+                                network_id: server_test_network_id(),
                                 operation_id: [0xA1; 32],
                             },
                             MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
@@ -43153,7 +43281,11 @@ mod protocol {
                     )
                     .expect("seal moderation operation on evidence slot");
                     assert_eq!(
-                        validate_operation_request_for_session(&request, "server-test-chain"),
+                        validate_operation_request_for_session(
+                            &request,
+                            "server-test-chain",
+                            &server_test_network_id()
+                        ),
                         Err(BrokerError::BindingMismatch)
                     );
                 }
@@ -43194,7 +43326,11 @@ mod protocol {
                     )
                     .expect("seal evidence operation on moderation slot");
                     assert_eq!(
-                        validate_operation_request_for_session(&request, "server-test-chain"),
+                        validate_operation_request_for_session(
+                            &request,
+                            "server-test-chain",
+                            &server_test_network_id()
+                        ),
                         Err(BrokerError::BindingMismatch)
                     );
                 }
@@ -43211,7 +43347,7 @@ mod protocol {
                         version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
                         slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
                             .wire_id(),
-                        chain_id: "server-test-chain".to_owned(),
+                        network_id: server_test_network_id(),
                         operation_id: [0xB1; 32],
                         receipt_message: [0xB2; 32],
                         canonical_artifact: vec![0xB3, 0xB4],
@@ -43229,103 +43365,16 @@ mod protocol {
                 )
                 .expect("seal over-bound archive operation");
                 assert_eq!(
-                    validate_operation_request_for_session(&oversized, "server-test-chain"),
+                    validate_operation_request_for_session(
+                        &oversized,
+                        "server-test-chain",
+                        &server_test_network_id()
+                    ),
                     Err(BrokerError::Rejected)
                 );
             }
 
-            #[test]
-            fn moderation_source_attestation_pre_dispatch_is_typed_chain_and_slot_exact() {
-                let checkpoint =
-                    evidence_viewer_binding(IrohaRuntimeProviderSlotV1::ModerationCheckpointStore);
-                let statement = sorafs_node::moderation_orchestrator::
-                    ModerationPanelNotificationSourceAttestationV1 {
-                        version: sorafs_node::moderation_orchestrator::
-                            MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
-                        attestor_slot: IrohaRuntimeProviderSlotV1::ModerationCheckpointStore
-                            .wire_id(),
-                        chain_id: "server-test-chain".to_owned(),
-                        checkpoint_namespace_digest: [0x31; 32],
-                        checkpoint_generation: 7,
-                        checkpoint_revision: [0x32; 32],
-                        checkpoint_digest: [0x33; 32],
-                        source_manifest_digest: [0x36; 32],
-                        terminal_set_digest: [0x34; 32],
-                        terminal_record_count: 1,
-                        first_notification_id: [0x35; 32],
-                        last_notification_id: [0x35; 32],
-                        attestor_handle: checkpoint.handle.clone(),
-                        attestor_revision: checkpoint.revision.expect("checkpoint revision"),
-                        attestor_policy_digest: checkpoint
-                            .policy_digest
-                            .expect("checkpoint policy"),
-                        attestor_public_key: checkpoint
-                            .moderation_checkpoint_attestation_public_key
-                            .expect("checkpoint attestation key"),
-                    };
-                let payload = encode_canonical(
-                    &ModerationPanelNotificationSourceAttestRequestWireV1 {
-                        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
-                        slot: IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id(),
-                        chain_id: "server-test-chain".to_owned(),
-                        statement: statement.clone(),
-                    },
-                    MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                )
-                .expect("encode typed source attestation");
-                let request = validated_test_operation(
-                    checkpoint.clone(),
-                    OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1,
-                    payload.clone(),
-                );
-                assert_eq!(
-                    validate_operation_request_for_session(&request, "server-test-chain"),
-                    Ok(())
-                );
-
-                let archive = evidence_viewer_binding(
-                    IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive,
-                );
-                let wrong_slot = make_operation_request(
-                    TEST_SESSION_ID,
-                    98,
-                    archive.clone(),
-                    observation(&archive).metadata_digest,
-                    OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1,
-                    payload,
-                )
-                .expect("seal source attestation on archive slot");
-                assert_eq!(
-                    validate_operation_request_for_session(&wrong_slot, "server-test-chain"),
-                    Err(BrokerError::BindingMismatch)
-                );
-
-                let mut substituted = statement;
-                substituted.terminal_set_digest = [0; 32];
-                let substituted_payload = encode_canonical(
-                    &ModerationPanelNotificationSourceAttestRequestWireV1 {
-                        version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
-                        slot: IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id(),
-                        chain_id: "server-test-chain".to_owned(),
-                        statement: substituted,
-                    },
-                    MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
-                )
-                .expect("encode substituted source attestation");
-                let substituted = make_operation_request(
-                    TEST_SESSION_ID,
-                    99,
-                    checkpoint.clone(),
-                    observation(&checkpoint).metadata_digest,
-                    OPERATION_MODERATION_PANEL_NOTIFICATION_SOURCE_ATTEST_V1,
-                    substituted_payload,
-                )
-                .expect("seal substituted source attestation");
-                assert_eq!(
-                    validate_operation_request_for_session(&substituted, "server-test-chain"),
-                    Err(BrokerError::Rejected)
-                );
-            }
+            include!("runtime_provider_broker/moderation_source_attestation_tests.rs");
 
             #[test]
             fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
@@ -43386,7 +43435,7 @@ mod protocol {
                             version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
                             slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
                                 .wire_id(),
-                            chain_id: fixture.chain_id.as_str().to_owned(),
+                            network_id: fixture.network_id,
                             operation_id: fixture.validation.operation_id,
                             receipt_message: substituted_receipt,
                             canonical_artifact: fixture.canonical_artifact.clone(),
@@ -43397,7 +43446,8 @@ mod protocol {
                 );
                 validate_operation_request_for_session(
                     &substituted_install,
-                    fixture.chain_id.as_str(),
+                    "server-test-chain",
+                    &fixture.network_id,
                 )
                 .expect("substituted receipt is structurally canonical");
                 assert_eq!(
@@ -43419,7 +43469,7 @@ mod protocol {
                             version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
                             slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
                                 .wire_id(),
-                            chain_id: fixture.chain_id.as_str().to_owned(),
+                            network_id: fixture.network_id,
                             operation_id: fixture.validation.operation_id,
                             receipt_message: fixture.validation.receipt_message,
                             canonical_artifact: fixture.canonical_artifact.clone(),
@@ -43428,8 +43478,12 @@ mod protocol {
                     )
                     .expect("encode exact archive install"),
                 );
-                validate_operation_request_for_session(&install, fixture.chain_id.as_str())
-                    .expect("validate exact archive install");
+                validate_operation_request_for_session(
+                    &install,
+                    "server-test-chain",
+                    &fixture.network_id,
+                )
+                .expect("validate exact archive install");
                 let install_result = dispatch_server_operation(&state, &install)
                     .expect("install genuine archive fixture");
                 validate_operation_result(&install, STATUS_OK_V1, &install_result)
@@ -43452,7 +43506,7 @@ mod protocol {
                             version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
                             slot: IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive
                                 .wire_id(),
-                            chain_id: fixture.chain_id.as_str().to_owned(),
+                            network_id: fixture.network_id,
                             operation_id: fixture.validation.operation_id,
                         },
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
@@ -43482,7 +43536,7 @@ mod protocol {
                         &ModerationPanelNotificationSourceAttestRequestWireV1 {
                             version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
                             slot: IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id(),
-                            chain_id: fixture.chain_id.as_str().to_owned(),
+                            network_id: fixture.network_id,
                             statement: substituted_statement,
                         },
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
@@ -43491,7 +43545,8 @@ mod protocol {
                 );
                 validate_operation_request_for_session(
                     &substituted_attestation,
-                    fixture.chain_id.as_str(),
+                    "server-test-chain",
+                    &fixture.network_id,
                 )
                 .expect("substituted source digest is structurally canonical");
                 assert_eq!(
@@ -43501,7 +43556,7 @@ mod protocol {
                 assert_eq!(
                     checkpoint.attest_calls.load(Ordering::Acquire),
                     0,
-                    "source substitution must be rejected before the checkpoint HSM signs"
+                    "source substitution must be rejected before checkpoint attestation signing"
                 );
 
                 let attest = operation_for_slot(
@@ -43512,7 +43567,7 @@ mod protocol {
                         &ModerationPanelNotificationSourceAttestRequestWireV1 {
                             version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
                             slot: IrohaRuntimeProviderSlotV1::ModerationCheckpointStore.wire_id(),
-                            chain_id: fixture.chain_id.as_str().to_owned(),
+                            network_id: fixture.network_id,
                             statement: fixture.source_attestation.clone(),
                         },
                         MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
@@ -43556,7 +43611,8 @@ mod protocol {
                 assert_eq!(
                     validate_operation_request_for_session(
                         &cross_slot_read,
-                        fixture.chain_id.as_str(),
+                        "server-test-chain",
+                        &fixture.network_id,
                     ),
                     Err(BrokerError::BindingMismatch)
                 );
@@ -43576,7 +43632,8 @@ mod protocol {
                 assert_eq!(
                     validate_operation_request_for_session(
                         &trailing_read,
-                        fixture.chain_id.as_str(),
+                        "server-test-chain",
+                        &fixture.network_id,
                     ),
                     Err(BrokerError::Protocol)
                 );
@@ -43591,8 +43648,12 @@ mod protocol {
                     OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_READ_V1,
                     archive_head_read_payload.clone(),
                 );
-                validate_operation_request_for_session(&empty_head_read, fixture.chain_id.as_str())
-                    .expect("validate empty archive-head readback request");
+                validate_operation_request_for_session(
+                    &empty_head_read,
+                    "server-test-chain",
+                    &fixture.network_id,
+                )
+                .expect("validate empty archive-head readback request");
                 let empty_head_read_result = dispatch_server_operation(&state, &empty_head_read)
                     .expect("read empty public archive head");
                 validate_operation_result(&empty_head_read, STATUS_OK_V1, &empty_head_read_result)
@@ -43615,7 +43676,7 @@ mod protocol {
                 let publish_wire = ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
                     version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
                     slot: IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff.wire_id(),
-                    chain_id: fixture.chain_id.as_str().to_owned(),
+                    network_id: fixture.network_id,
                     head: head.clone(),
                     canonical_head: fixture.canonical_signed_head.clone(),
                 };
@@ -43631,7 +43692,8 @@ mod protocol {
                 assert_eq!(
                     validate_operation_request_for_session(
                         &cross_slot_publish,
-                        fixture.chain_id.as_str(),
+                        "server-test-chain",
+                        &fixture.network_id,
                     ),
                     Err(BrokerError::BindingMismatch)
                 );
@@ -43653,7 +43715,7 @@ mod protocol {
                             version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
                             slot: IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff
                                 .wire_id(),
-                            chain_id: fixture.chain_id.as_str().to_owned(),
+                            network_id: fixture.network_id,
                             head: substituted_head,
                             canonical_head: substituted_head_bytes,
                         },
@@ -43664,7 +43726,8 @@ mod protocol {
                 assert_eq!(
                     validate_operation_request_for_session(
                         &substituted_publish,
-                        fixture.chain_id.as_str(),
+                        "server-test-chain",
+                        &fixture.network_id,
                     ),
                     Err(BrokerError::Rejected)
                 );
@@ -43684,7 +43747,7 @@ mod protocol {
                 assert_eq!(
                     validate_moderation_panel_notification_archive_head_at_broker_boundary(
                         &fixture.canonical_signed_head,
-                        fixture.chain_id.as_str(),
+                        &fixture.network_id,
                         &substituted_source_catalog,
                     ),
                     Err(BrokerError::Rejected),
@@ -43706,7 +43769,7 @@ mod protocol {
                 assert_eq!(
                     validate_moderation_panel_notification_archive_head_at_broker_boundary(
                         &fixture.canonical_signed_head,
-                        fixture.chain_id.as_str(),
+                        &fixture.network_id,
                         &substituted_signer_catalog,
                     ),
                     Err(BrokerError::Rejected),
@@ -43724,8 +43787,12 @@ mod protocol {
                     OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_HEAD_PUBLISH_V1,
                     publish_payload,
                 );
-                validate_operation_request_for_session(&publish, fixture.chain_id.as_str())
-                    .expect("validate genuine archive-head publication");
+                validate_operation_request_for_session(
+                    &publish,
+                    "server-test-chain",
+                    &fixture.network_id,
+                )
+                .expect("validate genuine archive-head publication");
                 let publish_result = dispatch_server_operation(&state, &publish)
                     .expect("publish genuine signed archive head");
                 validate_operation_result(&publish, STATUS_OK_V1, &publish_result)
@@ -43753,7 +43820,8 @@ mod protocol {
                 );
                 validate_operation_request_for_session(
                     &published_head_read,
-                    fixture.chain_id.as_str(),
+                    "server-test-chain",
+                    &fixture.network_id,
                 )
                 .expect("validate published archive-head readback request");
                 let published_head_read_result =

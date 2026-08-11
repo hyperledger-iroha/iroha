@@ -18,6 +18,12 @@ use iroha_primitives::time::TimeSource;
 
 const FIXTURE_TIME: Duration = Duration::from_millis(1);
 
+fn fixture_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
+        iroha_crypto::Hash::new(b"core-parity-fixture-network"),
+    ))
+}
+
 fn fixtures_dir() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     p.push("tests");
@@ -84,6 +90,7 @@ fn block_time_source() -> TimeSource {
 fn run_block_and_events(
     parallel_apply: bool,
     chain_id: &ChainId,
+    network_id: NetworkId,
     txs: Vec<SignedTransaction>,
 ) -> Result<
     (
@@ -118,8 +125,13 @@ fn run_block_and_events(
     let world = iroha_core::state::World::with_assets([domain], [acc_a, acc_b], [ad], [a0, b0], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let mut state =
-        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let mut state = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
+        world,
+        kura,
+        query,
+        chain_id.clone(),
+        network_id,
+    );
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
@@ -156,6 +168,7 @@ fn run_block_and_events(
 fn main() -> Result<(), Box<dyn Error>> {
     // 1) Mint/Burn/Transfer
     let chain_id = ChainId::from("chain");
+    let network_id = fixture_network_id();
     let alice_id = iroha_test_samples::ALICE_ID.clone();
     let bob_id = iroha_test_samples::BOB_ID.clone();
     let rose: AssetDefinitionId =
@@ -167,7 +180,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
     let tx_mint = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -175,7 +188,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let tx_burn = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -183,7 +196,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let tx_xfer = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -196,10 +209,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (events_seq, _state_seq) = run_block_and_events(
         false,
         &chain_id,
+        network_id,
         vec![tx_mint.clone(), tx_burn.clone(), tx_xfer.clone()],
     )?;
     let (events_par, _state_par) =
-        run_block_and_events(true, &chain_id, vec![tx_mint, tx_burn, tx_xfer])?;
+        run_block_and_events(true, &chain_id, network_id, vec![tx_mint, tx_burn, tx_xfer])?;
     write_parity_fixture("mint_burn_transfer", &events_seq, &events_par);
 
     // 2) KV + NFT lifecycle
@@ -207,7 +221,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let nft_id: NftId = "n0$wonderland".parse().unwrap();
     let tx_acc_set = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -219,7 +233,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let tx_dom_set = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -231,7 +245,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let tx_nft_reg = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -239,7 +253,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let tx_nft_set = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -251,7 +265,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let tx_nft_xfer = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -263,7 +277,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let tx_nft_rm = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -271,7 +285,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let tx_nft_unreg = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -279,7 +293,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let tx_acc_rm = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -290,7 +304,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let tx_dom_rm = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -310,8 +324,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         tx_acc_rm,
         tx_dom_rm,
     ];
-    let (events_seq, _) = run_block_and_events(false, &chain_id, txs.clone())?;
-    let (events_par, _) = run_block_and_events(true, &chain_id, txs)?;
+    let (events_seq, _) = run_block_and_events(false, &chain_id, network_id, txs.clone())?;
+    let (events_par, _) = run_block_and_events(true, &chain_id, network_id, txs)?;
     write_parity_fixture("kv_and_nft_lifecycle", &events_seq, &events_par);
 
     // 3) Asset definition KV set/remove
@@ -321,7 +335,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     let tx_set = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -333,7 +347,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let tx_rm = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -342,15 +356,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             "spec".parse().unwrap(),
         )]),
     )?;
-    let (events_seq, _) =
-        run_block_and_events(false, &chain_id, vec![tx_set.clone(), tx_rm.clone()])?;
-    let (events_par, _) = run_block_and_events(true, &chain_id, vec![tx_set, tx_rm])?;
+    let (events_seq, _) = run_block_and_events(
+        false,
+        &chain_id,
+        network_id,
+        vec![tx_set.clone(), tx_rm.clone()],
+    )?;
+    let (events_par, _) = run_block_and_events(true, &chain_id, network_id, vec![tx_set, tx_rm])?;
     write_parity_fixture("asset_definition_kv", &events_seq, &events_par);
 
     // 4) Owner transfers (domain + asset definition)
     let tx_dom_xfer = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -362,7 +380,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let tx_ad_xfer = sign_fixture_transaction(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -375,10 +393,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (events_seq, _state_seq) = run_block_and_events(
         false,
         &chain_id,
+        network_id,
         vec![tx_dom_xfer.clone(), tx_ad_xfer.clone()],
     )?;
     let (events_par, _state_par) =
-        run_block_and_events(true, &chain_id, vec![tx_dom_xfer, tx_ad_xfer])?;
+        run_block_and_events(true, &chain_id, network_id, vec![tx_dom_xfer, tx_ad_xfer])?;
     write_parity_fixture("owner_transfer_domain_asset_def", &events_seq, &events_par);
     Ok(())
 }
@@ -392,7 +411,7 @@ mod tests {
         let alice_id = iroha_test_samples::ALICE_ID.clone();
         let tx = sign_fixture_transaction(
             TransactionBuilder::new(
-                ChainId::from("chain"),
+                fixture_network_id(),
                 alice_id,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -408,9 +427,10 @@ mod tests {
     fn parity_fixture_block_uses_checked_signing() {
         let alice_id = iroha_test_samples::ALICE_ID.clone();
         let chain_id = ChainId::from("chain");
+        let network_id = fixture_network_id();
         let tx = sign_fixture_transaction(
             TransactionBuilder::new(
-                chain_id.clone(),
+                network_id,
                 alice_id,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -418,7 +438,7 @@ mod tests {
         )
         .expect("parity fixture transaction should sign");
 
-        let (_events, _state) = run_block_and_events(false, &chain_id, vec![tx])
+        let (_events, _state) = run_block_and_events(false, &chain_id, network_id, vec![tx])
             .expect("parity fixture block should sign");
     }
 }

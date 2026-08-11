@@ -7,7 +7,6 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        ChainId,
         block::consensus::SumeragiLanePayloadOwnership,
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
@@ -154,7 +153,7 @@ mod tests {
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         wire::HeightContext {
-            chain_id: ChainId::from("autonomous-reservation-slot-test"),
+            network_id: crate::sumeragi::synthetic_network_id("autonomous-reservation-slot-test"),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 7,

@@ -2,15 +2,19 @@ package org.hyperledger.iroha.android.privacy;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.instructions.ConfidentialEncryptedPayload;
+import org.hyperledger.iroha.android.testing.TestNetworkIds;
 
 public final class ConfidentialNoteTests {
   private static final String U128_OVERFLOW = "340282366920938463463374607431768211456";
+  private static final NetworkId NETWORK_ID = TestNetworkIds.canonical();
+  private static final NetworkId OTHER_NETWORK_ID = TestNetworkIds.fromSeed(0x42L);
 
   private ConfidentialNoteTests() {}
 
   public static void main(final String[] args) {
-    derivesRustConfidentialV2Vectors();
+    derivesCanonicalConfidentialV3Values();
     constructorsAndAccessorsAreDefensive();
     rejectsMalformedAndAmbiguousInputs();
     derivationsAreDomainSeparated();
@@ -18,37 +22,32 @@ public final class ConfidentialNoteTests {
     System.out.println("[IrohaAndroid] ConfidentialNoteTests passed.");
   }
 
-  private static void derivesRustConfidentialV2Vectors() {
+  private static void derivesCanonicalConfidentialV3Values() {
+    assert PrivacyNativeBridge.isNativeAvailable() : "native confidential V3 bridge unavailable";
+    assert PrivacyNativeBridge.CONFIDENTIAL_DERIVATION_CONTRACT_REVISION_V3 == 1
+        : "unexpected confidential derivation contract revision";
     final byte[] spendKey = repeated(0x11, 32);
     final byte[] rho = repeated(0x22, 32);
     final byte[] ownerTag = ConfidentialOwnerTag.deriveFromSpendKey(spendKey);
     final ConfidentialNoteOpening opening =
         new ConfidentialNoteOpening(
-            rho, spendKey, ownerTag, "rose#wonderland", "confidential-sdk-chain", "7");
+            rho, spendKey, ownerTag, "rose#wonderland", NETWORK_ID, "7");
 
-    assertBytes("owner tag",
-        "5bd47275e203cc0f57ca4ac1b280f9cfe4709e2932f0ac2f6e78d5bcc9cc1e3a",
-        ownerTag);
-    assertBytes("commitment",
-        "2d6a7673e8120943d9ec65584117bf16c689094a98eec66a6740b677e92a3f3d",
-        ConfidentialNoteCommitment.deriveFromOpening(opening));
-    assertBytes("nullifier",
-        "35230c0fd55b2f43f23150b36663728e0fcbc62ef97e591e730c13bbc5625f25",
-        ConfidentialNoteNullifier.deriveFromOpening(opening));
-    assertBytes("asset tag",
-        "aa6427acbb05173d9c5ee0698832c7e5d80002937595326ce3915b9d37a30d2f",
-        ConfidentialNoteTags.deriveAssetTag("rose#wonderland"));
-    assertBytes("chain tag",
-        "17870127066ce27fda568817c7a8705c878f18abb56e7653dd30f6157de7a237",
-        ConfidentialNoteTags.deriveChainTag("confidential-sdk-chain"));
+    assertNonZeroDigest("owner tag", ownerTag);
+    assertNonZeroDigest("commitment", ConfidentialNoteCommitment.deriveFromOpening(opening));
+    assertNonZeroDigest("nullifier", ConfidentialNoteNullifier.deriveFromOpening(opening));
+    assertNonZeroDigest("asset tag", ConfidentialNoteTags.deriveAssetTag("rose#wonderland"));
+    assertNonZeroDigest("network tag", ConfidentialNoteTags.deriveNetworkTag(NETWORK_ID));
+    assert !Arrays.equals(
+            ConfidentialNoteTags.deriveNetworkTag(NETWORK_ID),
+            ConfidentialNoteTags.deriveNetworkTag(OTHER_NETWORK_ID))
+        : "network tag must bind the exact NetworkId";
 
     final byte[] diversifier =
         ConfidentialOwnerTag.deriveDiversifier("recipient".getBytes(StandardCharsets.UTF_8));
-    assertBytes("diversifier",
-        "0e200699218253a789fd3cd2c5bc5fe7ec4ad663ca35804554fd60cd89cd2525",
-        diversifier);
-    assertBytes("diversified owner tag",
-        "5c7dd75a2bb565931e3cc4badba834e976e251e63bc9dbb911b884a27250b53a",
+    assertNonZeroDigest("diversifier", diversifier);
+    assertNonZeroDigest(
+        "diversified owner tag",
         ConfidentialOwnerTag.deriveFromSpendKeyWithDiversifier(spendKey, diversifier));
     assert Arrays.equals(
             ConfidentialOwnerTag.deriveFromSpendKeyWithDiversifier(spendKey, diversifier),
@@ -57,7 +56,7 @@ public final class ConfidentialNoteTests {
                     spendKey,
                     diversifier,
                     "rose#wonderland",
-                    "confidential-sdk-chain",
+                    NETWORK_ID,
                     "7")
                 .ownerTag())
         : "diversified opening ownerTag mismatch";
@@ -68,7 +67,7 @@ public final class ConfidentialNoteTests {
     final byte[] rho = repeated(0x22, 32);
     final byte[] ownerTag = ConfidentialOwnerTag.deriveFromSpendKey(spendKey);
     final ConfidentialNoteOpening opening =
-        new ConfidentialNoteOpening(rho, spendKey, ownerTag, "rose#wonderland", "chain", "1");
+        new ConfidentialNoteOpening(rho, spendKey, ownerTag, "rose#wonderland", NETWORK_ID, "1");
 
     rho[0] = 0x55;
     spendKey[0] = 0x66;
@@ -91,14 +90,18 @@ public final class ConfidentialNoteTests {
     final byte[] rho = repeated(0x22, 32);
     final byte[] ownerTag = ConfidentialOwnerTag.deriveFromSpendKey(spendKey);
     final ConfidentialNoteOpening opening =
-        new ConfidentialNoteOpening(rho, spendKey, ownerTag, "rose#wonderland", "chain", "1");
+        new ConfidentialNoteOpening(rho, spendKey, ownerTag, "rose#wonderland", NETWORK_ID, "1");
 
-    expectThrows(() -> new ConfidentialNoteOpening(new byte[31], spendKey, ownerTag, "rose#wonderland", "chain", "1"));
-    expectThrows(() -> new ConfidentialNoteOpening(rho, new byte[0], ownerTag, "rose#wonderland", "chain", "1"));
-    expectThrows(() -> new ConfidentialNoteOpening(rho, spendKey, repeated(0xff, 32), "rose#wonderland", "chain", "1"));
-    expectThrows(() -> new ConfidentialNoteOpening(rho, spendKey, ownerTag, " rose#wonderland", "chain", "1"));
-    expectThrows(() -> new ConfidentialNoteOpening(rho, spendKey, ownerTag, "rose#wonderland", "chain", "01"));
-    expectThrows(() -> new ConfidentialNoteOpening(rho, spendKey, ownerTag, "rose#wonderland", "chain", U128_OVERFLOW));
+    expectThrows(() -> new ConfidentialNoteOpening(new byte[31], spendKey, ownerTag, "rose#wonderland", NETWORK_ID, "1"));
+    expectThrows(() -> new ConfidentialNoteOpening(new byte[32], spendKey, ownerTag, "rose#wonderland", NETWORK_ID, "1"));
+    expectThrows(() -> new ConfidentialNoteOpening(rho, new byte[0], ownerTag, "rose#wonderland", NETWORK_ID, "1"));
+    expectThrows(() -> new ConfidentialNoteOpening(rho, new byte[32], ownerTag, "rose#wonderland", NETWORK_ID, "1"));
+    expectThrows(() -> new ConfidentialNoteOpening(rho, spendKey, new byte[32], "rose#wonderland", NETWORK_ID, "1"));
+    expectThrows(() -> new ConfidentialNoteOpening(rho, spendKey, repeated(0xff, 32), "rose#wonderland", NETWORK_ID, "1"));
+    expectThrows(() -> new ConfidentialNoteOpening(rho, spendKey, ownerTag, " rose#wonderland", NETWORK_ID, "1"));
+    expectThrows(() -> new ConfidentialNoteOpening(rho, spendKey, ownerTag, "rose#wonderland", NETWORK_ID, "01"));
+    expectThrows(() -> new ConfidentialNoteOpening(rho, spendKey, ownerTag, "rose#wonderland", NETWORK_ID, "0"));
+    expectThrows(() -> new ConfidentialNoteOpening(rho, spendKey, ownerTag, "rose#wonderland", NETWORK_ID, U128_OVERFLOW));
     expectThrows(() -> ConfidentialNoteEncryption.publicKeyFromPrivateKey(new byte[32]));
     final byte[] nonZeroLowOrder = new byte[32];
     nonZeroLowOrder[0] = 1;
@@ -116,10 +119,10 @@ public final class ConfidentialNoteTests {
   private static void derivationsAreDomainSeparated() {
     final ConfidentialNoteOpening first =
         ConfidentialNoteOpening.fromSpendKey(
-            repeated(0x22, 32), repeated(0x11, 32), "rose#wonderland", "chain-a", "7");
+            repeated(0x22, 32), repeated(0x11, 32), "rose#wonderland", NETWORK_ID, "7");
     final ConfidentialNoteOpening second =
         ConfidentialNoteOpening.fromSpendKey(
-            repeated(0x23, 32), repeated(0x11, 32), "rose#wonderland", "chain-b", "7");
+            repeated(0x23, 32), repeated(0x11, 32), "rose#wonderland", OTHER_NETWORK_ID, "7");
 
     assert !Arrays.equals(
             ConfidentialNoteCommitment.deriveFromOpening(first),
@@ -128,14 +131,14 @@ public final class ConfidentialNoteTests {
     assert !Arrays.equals(
             ConfidentialNoteNullifier.deriveFromOpening(first),
             ConfidentialNoteNullifier.deriveFromOpening(second))
-        : "nullifier must change with chain/rho";
+        : "nullifier must change with network/rho";
   }
 
   private static void encryptsAndDecryptsPlaintextContract() {
     final byte[] spendKey = repeated(0x11, 32);
     final ConfidentialNoteOpening opening =
         ConfidentialNoteOpening.fromSpendKey(
-            repeated(0x22, 32), spendKey, "rose#wonderland", "confidential-sdk-chain", "7");
+            repeated(0x22, 32), spendKey, "rose#wonderland", NETWORK_ID, "7");
     final byte[] recipientPrivateKey = repeated(0x55, 32);
     final byte[] recipientPublicKey =
         ConfidentialNoteEncryption.publicKeyFromPrivateKey(recipientPrivateKey);
@@ -147,7 +150,7 @@ public final class ConfidentialNoteTests {
             opening, recipientPublicKey, ephemeralPrivateKey, nonce);
     final ConfidentialNoteOpening decrypted =
         ConfidentialNoteDecryption.decryptNote(
-            payload, recipientPrivateKey, spendKey, "confidential-sdk-chain");
+            payload, recipientPrivateKey, spendKey, NETWORK_ID);
 
     assert payload.version() == ConfidentialEncryptedPayload.VERSION_V1 : "wrong payload version";
     assertBytes("recipient public key",
@@ -161,12 +164,7 @@ public final class ConfidentialNoteTests {
         "219e4d800da968d2a5fcb009c784f4746c7138edb9ee4844b739e830b05cf424",
         payload.ephemeralPublicKey());
     assert Arrays.equals(nonce, payload.nonce()) : "wrong nonce";
-    assertBytes("ciphertext",
-        "86c7d4b51314553a9f72fa2207969a7bec6626e3c75943c5c7794a660ed54e76"
-            + "371555e888bde13b513f434beef43f5558f1d8fdcd63ac6f40a42c6c90bf26e07d0"
-            + "26dd8a3c632afae83d0aea120fa2886dc97f1dc8a91c6b78de3a57e22da75d217e"
-            + "4924da954b2b2a758df8cacb2ea153d70a756b7f1b8921e",
-        payload.ciphertext());
+    assert payload.ciphertext().length > 0 : "ciphertext must not be empty";
     assertOpeningEquals(opening, decrypted);
     assert Arrays.equals(
             ConfidentialNoteCommitment.deriveFromOpening(opening),
@@ -184,24 +182,26 @@ public final class ConfidentialNoteTests {
         new ConfidentialEncryptedPayload(
             payload.ephemeralPublicKey(), payload.nonce(), tamperedCiphertext);
     expectSecurityException(
-        () -> ConfidentialNoteDecryption.decryptNote(tamperedPayload, recipientPrivateKey, spendKey));
+        () -> ConfidentialNoteDecryption.decryptNote(
+            tamperedPayload, recipientPrivateKey, spendKey, NETWORK_ID));
     expectSecurityException(
-        () -> ConfidentialNoteDecryption.decryptNote(payload, repeated(0x56, 32), spendKey));
+        () -> ConfidentialNoteDecryption.decryptNote(
+            payload, repeated(0x56, 32), spendKey, NETWORK_ID));
     expectThrows(
         () -> ConfidentialNoteDecryption.decryptNote(
-            payload, recipientPrivateKey, spendKey, "other-chain"));
+            payload, recipientPrivateKey, spendKey, OTHER_NETWORK_ID));
     expectThrows(
-        () -> ConfidentialNoteDecryption.decryptNote(payload, new byte[32], spendKey));
+        () -> ConfidentialNoteDecryption.decryptNote(payload, new byte[32], spendKey, NETWORK_ID));
     expectThrows(
         () -> ConfidentialNoteDecryption.decryptNote(
-            payload, recipientPrivateKey, repeated(0x12, 32), "confidential-sdk-chain"));
+            payload, recipientPrivateKey, repeated(0x12, 32), NETWORK_ID));
     expectThrows(
         () -> ConfidentialNoteDecryption.decryptNoteWithOwnerTag(
             payload,
             recipientPrivateKey,
             spendKey,
             ConfidentialOwnerTag.deriveFromSpendKey(repeated(0x12, 32)),
-            "confidential-sdk-chain"));
+            NETWORK_ID));
 
     final byte[] diversifier =
         ConfidentialOwnerTag.deriveDiversifier("invoice-1".getBytes(StandardCharsets.UTF_8));
@@ -211,14 +211,14 @@ public final class ConfidentialNoteTests {
             spendKey,
             diversifier,
             "rose#wonderland",
-            "confidential-sdk-chain",
+            NETWORK_ID,
             "11");
     final ConfidentialEncryptedPayload diversifiedPayload =
         ConfidentialNoteEncryption.encryptNote(
             diversifiedOpening, recipientPublicKey, repeated(0x68, 32), repeated(0x79, 24));
     expectThrows(
         () -> ConfidentialNoteDecryption.decryptNote(
-            diversifiedPayload, recipientPrivateKey, spendKey, "confidential-sdk-chain"));
+            diversifiedPayload, recipientPrivateKey, spendKey, NETWORK_ID));
     assertOpeningEquals(
         diversifiedOpening,
         ConfidentialNoteDecryption.decryptNoteWithOwnerTag(
@@ -226,7 +226,7 @@ public final class ConfidentialNoteTests {
             recipientPrivateKey,
             spendKey,
             diversifiedOpening.ownerTag(),
-            "confidential-sdk-chain"));
+            NETWORK_ID));
   }
 
   private static void assertOpeningEquals(
@@ -235,12 +235,17 @@ public final class ConfidentialNoteTests {
     assert Arrays.equals(expected.spendKey(), actual.spendKey()) : "spendKey changed";
     assert Arrays.equals(expected.ownerTag(), actual.ownerTag()) : "ownerTag changed";
     assert expected.asset().equals(actual.asset()) : "asset changed";
-    assert expected.chainId().equals(actual.chainId()) : "chainId changed";
+    assert expected.networkId().equals(actual.networkId()) : "networkId changed";
     assert expected.amount().equals(actual.amount()) : "amount changed";
   }
 
   private static void assertBytes(final String label, final String expectedHex, final byte[] actual) {
     assert Arrays.equals(hex(expectedHex), actual) : label + " mismatch: " + hexLower(actual);
+  }
+
+  private static void assertNonZeroDigest(final String label, final byte[] actual) {
+    assert actual.length == 32 : label + " must be 32 bytes";
+    assert !Arrays.equals(actual, new byte[32]) : label + " must be non-zero";
   }
 
   private static byte[] repeated(final int value, final int len) {

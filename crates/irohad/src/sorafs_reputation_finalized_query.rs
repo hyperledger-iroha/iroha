@@ -37,7 +37,7 @@ use iroha_core::{
     sumeragi::{V2StartupReplayPlan, plan_v2_startup_replay},
 };
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     query::sorafs::prelude::{
         FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
     },
@@ -234,7 +234,7 @@ impl PreparedReputationFinalizedArchiveV1 {
     ) -> Option<ReputationFinalizedArchiveRetentionControllerV1> {
         let authority = self.retention_authority.as_ref()?.clone();
         Some(ReputationFinalizedArchiveRetentionControllerV1 {
-            chain_id: self.activation.chain_id.clone(),
+            network_id: self.activation.network_id,
             archive: Arc::clone(&self.archive),
             state: Arc::clone(&self.activation.state),
             kura: Arc::clone(&self.activation.kura),
@@ -355,7 +355,7 @@ pub(crate) trait ReputationFinalizedArchiveRetentionControlV1:
 /// State/Kura/archive-bound implementation of explicit governed retention.
 #[derive(Clone)]
 pub(crate) struct ReputationFinalizedArchiveRetentionControllerV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     archive: Arc<ReputationFinalizedArchive>,
     state: Arc<State>,
     kura: Arc<Kura>,
@@ -367,7 +367,7 @@ impl fmt::Debug for ReputationFinalizedArchiveRetentionControllerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ReputationFinalizedArchiveRetentionControllerV1")
-            .field("chain_id", &self.chain_id)
+            .field("network_id", &self.network_id)
             .field("archive_root", &self.archive.root())
             .field("authority_handle", &self.binding.handle())
             .field("authority_qualification", &self.binding.qualification())
@@ -434,7 +434,7 @@ impl ReputationFinalizedArchiveRetentionControllerV1 {
                 },
             );
         }
-        if view.chain_id() != &self.chain_id {
+        if view.network_id() != &self.network_id {
             return Err(
                 ReputationFinalizedArchiveRetentionControlErrorV1::Boundary {
                     reason: "committed State is bound to another chain",
@@ -460,7 +460,7 @@ impl ReputationFinalizedArchiveRetentionControllerV1 {
                     reason: "retention parameter changed reserved identity",
                 },
             )?;
-        if request.chain_id != self.chain_id {
+        if request.network_id != self.network_id {
             return Err(
                 ReputationFinalizedArchiveRetentionControlErrorV1::Boundary {
                     reason: "retention request targets another chain",
@@ -509,14 +509,14 @@ impl ReputationFinalizedArchiveRetentionControllerV1 {
                 },
             )?;
         let authorization_anchor = ReputationFinalizedArchiveKeyV1::try_new(
-            self.chain_id.clone(),
+            self.network_id,
             authorization_height,
             authorization_hash,
         )
         .map_err(Self::archive_error)?;
         let qualification = self
             .archive
-            .qualify_against_kura_tip(&self.chain_id, self.kura.as_ref(), 0)
+            .qualify_against_kura_tip(&self.network_id, self.kura.as_ref(), 0)
             .map_err(Self::archive_error)?;
         if qualification.archive_tip() != &authorization_anchor {
             return Err(
@@ -556,7 +556,7 @@ fn classify_retention_request(
     ReputationRetentionDecisionV1,
     ReputationFinalizedArchiveRetentionControlErrorV1,
 > {
-    if request.chain_id != authorization_anchor.chain_id
+    if request.network_id != authorization_anchor.network_id
         || request.compact_through.height >= authorization_anchor.height
     {
         return Err(
@@ -566,12 +566,12 @@ fn classify_retention_request(
         );
     }
     let target = ReputationFinalizedArchiveKeyV1::try_new(
-        request.chain_id.clone(),
+        request.network_id,
         request.compact_through.height,
         request.compact_through.block_hash,
     )
     .map_err(ReputationFinalizedArchiveRetentionControllerV1::archive_error)?;
-    if activation_floor.chain_id != target.chain_id {
+    if activation_floor.network_id != target.network_id {
         return Err(
             ReputationFinalizedArchiveRetentionControlErrorV1::Boundary {
                 reason: "retention activation floor is bound to another chain",
@@ -805,7 +805,7 @@ struct ArchiveActivationBoundaryV1 {
 /// Cloneable fail-closed activation probe for deferred reputation assembly.
 #[derive(Clone)]
 pub(crate) struct ReputationFinalizedArchiveActivationV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     archive: Arc<ReputationFinalizedArchive>,
     state: Arc<State>,
     kura: Arc<Kura>,
@@ -817,7 +817,7 @@ impl fmt::Debug for ReputationFinalizedArchiveActivationV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("ReputationFinalizedArchiveActivationV1")
-            .field("chain_id", &self.chain_id)
+            .field("network_id", &self.network_id)
             .field("archive_root", &self.archive.root())
             .field(
                 "maximum_kura_tip_lag_blocks",
@@ -842,7 +842,7 @@ impl ReputationFinalizedArchiveActivationV1 {
     /// gaps, forks, and storage failures.
     pub(crate) fn activation_ready(&self) -> Result<bool, ReputationFinalizedArchiveError> {
         let strict_result = self.archive.qualify_against_kura_tip(
-            &self.chain_id,
+            &self.network_id,
             self.kura.as_ref(),
             self.maximum_kura_tip_lag_blocks,
         );
@@ -899,7 +899,7 @@ impl ReputationFinalizedArchiveActivationV1 {
             }
             let qualification =
                 self.archive
-                    .qualify_against_kura_tip(&self.chain_id, self.kura.as_ref(), 0)?;
+                    .qualify_against_kura_tip(&self.network_id, self.kura.as_ref(), 0)?;
             if boundary.durable_kura_blocks == 1 && qualification.archive_tip().height == 1 {
                 return Ok(false);
             }
@@ -929,7 +929,7 @@ impl ReputationFinalizedArchiveActivationV1 {
         }
         let qualification =
             self.archive
-                .qualify_against_kura_tip(&self.chain_id, self.kura.as_ref(), 1)?;
+                .qualify_against_kura_tip(&self.network_id, self.kura.as_ref(), 1)?;
         validate_pending_archive_tip(
             pending_tip_height,
             boundary.state_height,
@@ -1049,7 +1049,7 @@ fn archive_startup_error(
 
 fn open_reputation_finalized_archive(
     config: &SorafsReputationRuntime,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     kura: &Kura,
     authority: Option<Arc<dyn ReputationFinalizedArchiveRetentionAuthorityV1>>,
 ) -> ArchiveStartupResultV1<(
@@ -1082,7 +1082,7 @@ fn open_reputation_finalized_archive(
             let archive = ReputationFinalizedArchive::try_open_with_retention_authority(
                 &config.finalized_archive_root,
                 bounds,
-                chain_id,
+                network_id,
                 kura,
                 &binding,
                 authority.as_ref(),
@@ -1159,7 +1159,7 @@ fn authenticate_archive_startup<'state>(
 
 fn qualify_existing_archive(
     archive: &ReputationFinalizedArchive,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     kura: &Kura,
     startup: &AuthenticatedArchiveStartupV1<'_>,
     maximum_kura_tip_lag_blocks: u64,
@@ -1168,7 +1168,7 @@ fn qualify_existing_archive(
         .reconcile_kura_authenticated_state_tip(&startup.state_view, kura)
         .map_err(|source| archive_startup_error("exact Kura-tip reconciliation", source))?;
     let live_qualification = archive
-        .qualify_against_kura_tip(chain_id, kura, maximum_kura_tip_lag_blocks)
+        .qualify_against_kura_tip(network_id, kura, maximum_kura_tip_lag_blocks)
         .map_err(|source| archive_startup_error("configured live-lag qualification", source))?;
     Ok(ReputationFinalizedArchiveStartupModeV1::Qualified {
         reconciliation,
@@ -1178,11 +1178,11 @@ fn qualify_existing_archive(
 
 fn qualify_pending_archive(
     archive: &ReputationFinalizedArchive,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     kura: &Kura,
 ) -> ArchiveStartupResultV1<ReputationFinalizedArchiveQualificationV1> {
     archive
-        .qualify_against_kura_tip(chain_id, kura, 1)
+        .qualify_against_kura_tip(network_id, kura, 1)
         .map_err(|source| archive_startup_error("pending-tip one-block qualification", source))
 }
 
@@ -1209,7 +1209,7 @@ fn capture_pending_archive_predecessor(
 
 fn prepare_pending_archive_mode(
     archive: &ReputationFinalizedArchive,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     kura: &Kura,
     startup: &AuthenticatedArchiveStartupV1<'_>,
     archive_empty: bool,
@@ -1221,13 +1221,13 @@ fn prepare_pending_archive_mode(
         } else {
             capture_pending_archive_predecessor(archive, kura, startup)?;
             (
-                Some(qualify_pending_archive(archive, chain_id, kura)?),
+                Some(qualify_pending_archive(archive, network_id, kura)?),
                 true,
             )
         }
     } else {
         (
-            Some(qualify_pending_archive(archive, chain_id, kura)?),
+            Some(qualify_pending_archive(archive, network_id, kura)?),
             false,
         )
     };
@@ -1248,7 +1248,7 @@ fn prepare_pending_archive_mode(
 
 fn prepare_archive_startup_mode(
     archive: &ReputationFinalizedArchive,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     kura: &Kura,
     startup: &AuthenticatedArchiveStartupV1<'_>,
     archive_empty: bool,
@@ -1265,13 +1265,13 @@ fn prepare_archive_startup_mode(
         }
         ArchiveStartupBoundaryV1::Qualified => qualify_existing_archive(
             archive,
-            chain_id,
+            network_id,
             kura,
             startup,
             maximum_kura_tip_lag_blocks,
         ),
         ArchiveStartupBoundaryV1::PendingTip { height } => {
-            prepare_pending_archive_mode(archive, chain_id, kura, startup, archive_empty, height)
+            prepare_pending_archive_mode(archive, network_id, kura, startup, archive_empty, height)
         }
     }
 }
@@ -1295,7 +1295,7 @@ fn prepare_archive_startup_mode(
 /// archive coverage, or a configured lag violation.
 pub(crate) fn prepare_reputation_finalized_archive_v1(
     config: &SorafsReputationRuntime,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     state: &Arc<State>,
     kura: &Arc<Kura>,
     startup_replay_plan: &V2StartupReplayPlan,
@@ -1305,14 +1305,14 @@ pub(crate) fn prepare_reputation_finalized_archive_v1(
     ReputationFinalizedArchiveStartupErrorV1,
 > {
     let (archive, retention_authority) =
-        open_reputation_finalized_archive(config, chain_id, kura.as_ref(), retention_authority)?;
+        open_reputation_finalized_archive(config, network_id, kura.as_ref(), retention_authority)?;
     let startup = authenticate_archive_startup(state.as_ref(), kura.as_ref(), startup_replay_plan)?;
     let archive_empty = archive.is_empty().map_err(|source| {
         archive_startup_error("complete bootstrap namespace validation", source)
     })?;
     let startup_mode = prepare_archive_startup_mode(
         archive.as_ref(),
-        chain_id,
+        network_id,
         kura.as_ref(),
         &startup,
         archive_empty,
@@ -1322,7 +1322,7 @@ pub(crate) fn prepare_reputation_finalized_archive_v1(
         authority.revalidate()?;
     }
     let activation = ReputationFinalizedArchiveActivationV1 {
-        chain_id: chain_id.clone(),
+        network_id: *network_id,
         archive: Arc::clone(&archive),
         state: Arc::clone(state),
         kura: Arc::clone(kura),
@@ -1382,12 +1382,12 @@ impl ArchivedReputationFinalizedQueryV1 {
 
     fn ensure_at_or_above_activation_floor(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         height: u64,
     ) -> ExternalResult<()> {
         if self
             .archive
-            .activation_floor(chain_id)
+            .activation_floor(network_id)
             .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
             .is_some_and(|floor| height < floor.height)
         {
@@ -1398,30 +1398,30 @@ impl ArchivedReputationFinalizedQueryV1 {
 
     fn select_at_or_before(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         maximum_height: u64,
     ) -> ExternalResult<ReputationFinalizedProjectionV1> {
-        if chain_id.as_str().is_empty() || maximum_height == 0 {
+        if network_id.as_bytes()[31] & 1 != 1 || maximum_height == 0 {
             return Err(external_failure(FAILURE_INVALID_REQUEST));
         }
-        self.ensure_at_or_above_activation_floor(chain_id, maximum_height)?;
+        self.ensure_at_or_above_activation_floor(network_id, maximum_height)?;
         self.archive
-            .latest_at_or_before(chain_id, maximum_height)
+            .latest_at_or_before(network_id, maximum_height)
             .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
             .ok_or_else(|| external_failure(FAILURE_MISSING_ANCHOR))
     }
 
     fn select_delivery_at_or_before(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         maximum_height: u64,
     ) -> ExternalResult<(ReputationFinalizedProjectionV1, Vec<AuthorityPolicyRecord>)> {
-        if chain_id.as_str().is_empty() || maximum_height == 0 {
+        if network_id.as_bytes()[31] & 1 != 1 || maximum_height == 0 {
             return Err(external_failure(FAILURE_INVALID_REQUEST));
         }
-        self.ensure_at_or_above_activation_floor(chain_id, maximum_height)?;
+        self.ensure_at_or_above_activation_floor(network_id, maximum_height)?;
         self.archive
-            .latest_at_or_before_with_policy_history(chain_id, maximum_height)
+            .latest_at_or_before_with_policy_history(network_id, maximum_height)
             .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
             .ok_or_else(|| external_failure(FAILURE_MISSING_ANCHOR))
     }
@@ -1430,7 +1430,7 @@ impl ArchivedReputationFinalizedQueryV1 {
         &self,
         anchor: &ReputationFinalizedAnchorV1,
     ) -> ExternalResult<ReputationFinalizedProjectionV1> {
-        if anchor.chain_id.as_str().is_empty()
+        if anchor.network_id.as_bytes()[31] & 1 != 1
             || anchor.identity.height == 0
             || anchor.identity.block_hash == [0; 32]
             || anchor.finalized_at_unix_ms == 0
@@ -1439,12 +1439,12 @@ impl ArchivedReputationFinalizedQueryV1 {
             return Err(external_failure(FAILURE_INVALID_REQUEST));
         }
         let key = ReputationFinalizedArchiveKeyV1::try_new(
-            anchor.chain_id.clone(),
+            anchor.network_id,
             anchor.identity.height,
             anchor.identity.block_hash,
         )
         .map_err(|_| external_failure(FAILURE_INVALID_REQUEST))?;
-        self.ensure_at_or_above_activation_floor(&anchor.chain_id, key.height)?;
+        self.ensure_at_or_above_activation_floor(&anchor.network_id, key.height)?;
         let projection = self
             .archive
             .get_exact(&key)
@@ -1512,23 +1512,23 @@ impl ReputationRuntimeProviderV1 for ArchivedReputationFinalizedQueryV1 {
 impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
     fn finalized_at_or_before(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         maximum_height: u64,
     ) -> ExternalResult<ReputationFinalizedAnchorV1> {
-        let projection = self.select_at_or_before(chain_id, maximum_height)?;
+        let projection = self.select_at_or_before(network_id, maximum_height)?;
         Ok(anchor_from_projection(&projection))
     }
 
     fn reputation_journal_delivery_view(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         maximum_height: u64,
         _policy_query: FindSorafsReputationJournalAuthorityPolicy,
         after: Option<ReputationJournalFinalizedEventCursorV1>,
         limit: u32,
     ) -> ExternalResult<ReputationJournalDeliveryFinalizedViewV1> {
         let (projection, authority_policy_history) =
-            self.select_delivery_at_or_before(chain_id, maximum_height)?;
+            self.select_delivery_at_or_before(network_id, maximum_height)?;
         let journal_page = Self::journal_page_from_projection(&projection, after, limit)?;
         let view = ReputationJournalDeliveryFinalizedViewV1 {
             anchor: anchor_from_projection(&projection),
@@ -1536,18 +1536,18 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
             authority_policy: projection.authority_policy,
             journal_page,
         };
-        view.validate_for_request(chain_id, after, limit, maximum_height)
+        view.validate_for_request(network_id, after, limit, maximum_height)
             .map_err(|_| external_failure(FAILURE_PAGE_BOUNDS))?;
         Ok(view)
     }
 
     fn reputation_journal_event_by_source_id(
         &self,
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         maximum_height: u64,
         query: FindSorafsReputationJournalEventBySourceId,
     ) -> ExternalResult<ReputationJournalSourceFinalizedViewV1> {
-        if chain_id.as_str().is_empty()
+        if network_id.as_bytes()[31] & 1 != 1
             || maximum_height == 0
             || query.source_id() == ReputationJournalSourceIdV1::ZERO
         {
@@ -1561,9 +1561,9 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
                 if cursor.height > maximum_height {
                     return Err(external_failure(FAILURE_PAGE_BOUNDS));
                 }
-                self.ensure_at_or_above_activation_floor(chain_id, cursor.height)?;
+                self.ensure_at_or_above_activation_floor(network_id, cursor.height)?;
                 let key = ReputationFinalizedArchiveKeyV1::try_new(
-                    chain_id.clone(),
+                    *network_id,
                     cursor.height,
                     cursor.block_hash,
                 )
@@ -1579,10 +1579,10 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
                 source_view
             }
             None => {
-                self.ensure_at_or_above_activation_floor(chain_id, maximum_height)?;
+                self.ensure_at_or_above_activation_floor(network_id, maximum_height)?;
                 self.archive
                     .latest_journal_event_by_source_at_or_before(
-                        chain_id,
+                        network_id,
                         maximum_height,
                         query.source_id(),
                     )
@@ -1592,7 +1592,7 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
         };
         let view = ReputationJournalSourceFinalizedViewV1 {
             anchor: ReputationFinalizedAnchorV1 {
-                chain_id: source_view.key.chain_id,
+                network_id: source_view.key.network_id,
                 identity: ReputationFinalizedIdentityV1 {
                     height: source_view.key.height,
                     block_hash: source_view.key.block_hash,
@@ -1601,7 +1601,7 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
             },
             event: source_view.event,
         };
-        view.validate_for_request(chain_id, maximum_height, query)
+        view.validate_for_request(network_id, maximum_height, query)
             .map_err(|_| external_failure(FAILURE_PAGE_BOUNDS))?;
         Ok(view)
     }
@@ -1762,7 +1762,7 @@ fn anchor_from_projection(
     projection: &ReputationFinalizedProjectionV1,
 ) -> ReputationFinalizedAnchorV1 {
     ReputationFinalizedAnchorV1 {
-        chain_id: projection.key.chain_id.clone(),
+        network_id: projection.key.network_id,
         identity: ReputationFinalizedIdentityV1 {
             height: projection.key.height,
             block_hash: projection.key.block_hash,
@@ -1863,7 +1863,7 @@ mod tests {
         },
         state::World,
     };
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::AccountId,
         sorafs::reputation::{
@@ -1878,8 +1878,15 @@ mod tests {
 
     use super::*;
 
-    const CHAIN_ID: &str = "reputation-archive-chain";
     const FINALIZED_AT_MS: u64 = 1_800_000_010_000;
+
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
+                vec![seed; 32],
+            )),
+        )
+    }
 
     fn runtime_config(root: PathBuf) -> SorafsReputationRuntime {
         SorafsReputationRuntime {
@@ -1931,7 +1938,7 @@ mod tests {
         target_hash: [u8; 32],
     ) -> ReputationFinalizedArchiveRetentionRequestV1 {
         ReputationFinalizedArchiveRetentionRequestV1::try_new(
-            ChainId::from(CHAIN_ID),
+            network_id(0x61),
             1,
             None,
             ReputationFinalizedArchiveRetentionTargetV1::try_new(target_height, target_hash)
@@ -1941,7 +1948,7 @@ mod tests {
     }
 
     fn archive_key(height: u64, block_hash: [u8; 32]) -> ReputationFinalizedArchiveKeyV1 {
-        ReputationFinalizedArchiveKeyV1::try_new(ChainId::from(CHAIN_ID), height, block_hash)
+        ReputationFinalizedArchiveKeyV1::try_new(network_id(0x61), height, block_hash)
             .expect("valid archive key")
     }
 
@@ -2006,10 +2013,10 @@ mod tests {
             },
         );
         let kura = Kura::blank_kura_for_testing();
-        let chain_id = ChainId::from("reputation-retention-missing");
+        let network_id = network_id(0x63);
 
         assert!(matches!(
-            open_reputation_finalized_archive(&config, &chain_id, kura.as_ref(), None,),
+            open_reputation_finalized_archive(&config, &network_id, kura.as_ref(), None,),
             Err(ReputationFinalizedArchiveStartupErrorV1::RetentionAuthorityConfiguration { .. })
         ));
     }
@@ -2022,18 +2029,18 @@ mod tests {
             .join("archive");
         let config = runtime_config(root);
         let kura = Kura::blank_kura_for_testing();
-        let chain_id = ChainId::from("reputation-empty-state");
+        let network_id = network_id(0x64);
         let state = Arc::new(State::new_with_chain_for_testing(
             World::default(),
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
-            chain_id.clone(),
+            network_id,
         ));
         let replay_plan =
             iroha_core::sumeragi::plan_v2_startup_replay(kura.as_ref()).expect("startup plan");
         let prepared = prepare_reputation_finalized_archive_v1(
             &config,
-            &chain_id,
+            &network_id,
             &state,
             &kura,
             &replay_plan,
@@ -2075,18 +2082,18 @@ mod tests {
                 .expect("insert stale anchor");
         }
         let kura = Kura::blank_kura_for_testing();
-        let chain_id = ChainId::from("different-fresh-chain");
+        let network_id = network_id(0x65);
         let state = Arc::new(State::new_with_chain_for_testing(
             World::default(),
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
-            chain_id.clone(),
+            network_id,
         ));
         let replay_plan =
             iroha_core::sumeragi::plan_v2_startup_replay(kura.as_ref()).expect("startup plan");
         let error = prepare_reputation_finalized_archive_v1(
             &config,
-            &chain_id,
+            &network_id,
             &state,
             &kura,
             &replay_plan,
@@ -2227,12 +2234,8 @@ mod tests {
         journal_events: Vec<ReputationJournalFinalizedEventV1>,
     ) -> ReputationFinalizedProjectionV1 {
         ReputationFinalizedProjectionV1 {
-            key: ReputationFinalizedArchiveKeyV1::try_new(
-                ChainId::from(CHAIN_ID),
-                height,
-                block_hash,
-            )
-            .expect("valid archive key"),
+            key: ReputationFinalizedArchiveKeyV1::try_new(network_id(0x61), height, block_hash)
+                .expect("valid archive key"),
             finalized_at_unix_ms: FINALIZED_AT_MS,
             authority_policy: authority_record(),
             proof_outcomes: Vec::new(),
@@ -2278,7 +2281,7 @@ mod tests {
 
     fn anchor(height: u64, block_hash: [u8; 32]) -> ReputationFinalizedAnchorV1 {
         ReputationFinalizedAnchorV1 {
-            chain_id: ChainId::from(CHAIN_ID),
+            network_id: network_id(0x61),
             identity: ReputationFinalizedIdentityV1 { height, block_hash },
             finalized_at_unix_ms: FINALIZED_AT_MS,
         }
@@ -2298,24 +2301,24 @@ mod tests {
         );
         assert_eq!(
             adapter
-                .finalized_at_or_before(&ChainId::from(CHAIN_ID), 8)
+                .finalized_at_or_before(&network_id(0x61), 8)
                 .expect("select height seven"),
             anchor(7, [0x71; 32])
         );
         assert_eq!(
             adapter
-                .finalized_at_or_before(&ChainId::from(CHAIN_ID), 9)
+                .finalized_at_or_before(&network_id(0x61), 9)
                 .expect("select height nine"),
             anchor(9, [0x91; 32])
         );
         assert!(
             adapter
-                .finalized_at_or_before(&ChainId::from("another-chain"), 9)
+                .finalized_at_or_before(&network_id(0x62), 9)
                 .is_err()
         );
         assert_eq!(
             adapter
-                .finalized_at_or_before(&ChainId::from(CHAIN_ID), 6)
+                .finalized_at_or_before(&network_id(0x61), 6)
                 .expect_err("request below explicit activation floor")
                 .receipt(),
             [FAILURE_BELOW_ACTIVATION_FLOOR; 32]
@@ -2374,7 +2377,7 @@ mod tests {
 
         let delivery = adapter
             .reputation_journal_delivery_view(
-                &ChainId::from(CHAIN_ID),
+                &network_id(0x61),
                 9,
                 FindSorafsReputationJournalAuthorityPolicy,
                 Some(first.cursor()),
@@ -2382,7 +2385,7 @@ mod tests {
             )
             .expect("single-row policy and journal view");
         delivery
-            .validate_for_request(&ChainId::from(CHAIN_ID), Some(first.cursor()), 1, 9)
+            .validate_for_request(&network_id(0x61), Some(first.cursor()), 1, 9)
             .expect("adapter returns a coherently revalidated delivery view");
         assert_eq!(delivery.anchor, exact_anchor);
         assert_eq!(delivery.authority_policy, authority_record());
@@ -2399,10 +2402,10 @@ mod tests {
             Some(finalized_cursor),
         );
         let source = adapter
-            .reputation_journal_event_by_source_id(&ChainId::from(CHAIN_ID), 9, source_query)
+            .reputation_journal_event_by_source_id(&network_id(0x61), 9, source_query)
             .expect("source-indexed immutable view");
         source
-            .validate_for_request(&ChainId::from(CHAIN_ID), 9, source_query)
+            .validate_for_request(&network_id(0x61), 9, source_query)
             .expect("source response matches request");
         assert_eq!(source.anchor, exact_anchor);
         assert_eq!(source.event, Some(second));
@@ -2414,7 +2417,7 @@ mod tests {
             None,
         );
         let absent = adapter
-            .reputation_journal_event_by_source_id(&ChainId::from(CHAIN_ID), 9, absent_query)
+            .reputation_journal_event_by_source_id(&network_id(0x61), 9, absent_query)
             .expect("complete archive proves source absence");
         assert_eq!(absent.event, None);
 
@@ -2448,12 +2451,12 @@ mod tests {
         );
 
         let view = adapter
-            .reputation_journal_event_by_source_id(&ChainId::from(CHAIN_ID), 9, query)
+            .reputation_journal_event_by_source_id(&network_id(0x61), 9, query)
             .expect("load exact historical source view");
 
         assert_eq!(view.anchor, anchor(8, historical_hash));
         assert_eq!(view.event, Some(historical_event));
-        view.validate_for_request(&ChainId::from(CHAIN_ID), 9, query)
+        view.validate_for_request(&network_id(0x61), 9, query)
             .expect("historical response honors the expected cursor");
 
         let timestamp_substitution = FindSorafsReputationJournalEventBySourceId::new(
@@ -2466,7 +2469,7 @@ mod tests {
         assert_eq!(
             adapter
                 .reputation_journal_event_by_source_id(
-                    &ChainId::from(CHAIN_ID),
+                    &network_id(0x61),
                     9,
                     timestamp_substitution,
                 )
@@ -2482,12 +2485,12 @@ mod tests {
         let floor_event = journal_event(1, 0, 0x41, 7, floor_hash);
         let (_directory, adapter) =
             adapter_with([projection(7, floor_hash, vec![floor_event.clone()])]);
-        let chain_id = ChainId::from(CHAIN_ID);
+        let network_id = network_id(0x61);
         let cursorless =
             FindSorafsReputationJournalEventBySourceId::new(floor_event.entry.source_id, None);
         assert_eq!(
             adapter
-                .reputation_journal_event_by_source_id(&chain_id, 6, cursorless)
+                .reputation_journal_event_by_source_id(&network_id, 6, cursorless)
                 .expect_err("cursorless source request below activation floor")
                 .receipt(),
             [FAILURE_BELOW_ACTIVATION_FLOOR; 32]
@@ -2504,7 +2507,7 @@ mod tests {
         );
         assert_eq!(
             adapter
-                .reputation_journal_event_by_source_id(&chain_id, 7, exact_below_floor)
+                .reputation_journal_event_by_source_id(&network_id, 7, exact_below_floor)
                 .expect_err("exact source request below activation floor")
                 .receipt(),
             [FAILURE_BELOW_ACTIVATION_FLOOR; 32]
@@ -2520,7 +2523,7 @@ mod tests {
         );
         assert_eq!(
             adapter
-                .reputation_journal_event_by_source_id(&chain_id, 8, missing_above_floor)
+                .reputation_journal_event_by_source_id(&network_id, 8, missing_above_floor)
                 .expect_err("missing exact source anchor remains distinct from activation floor")
                 .receipt(),
             [FAILURE_MISSING_ANCHOR; 32]
@@ -2536,7 +2539,7 @@ mod tests {
         );
         assert_eq!(
             adapter
-                .reputation_journal_event_by_source_id(&chain_id, 7, mismatched_floor_time)
+                .reputation_journal_event_by_source_id(&network_id, 7, mismatched_floor_time)
                 .expect_err("exact source timestamp mismatch remains distinct")
                 .receipt(),
             [FAILURE_ANCHOR_MISMATCH; 32]
@@ -2562,7 +2565,7 @@ mod tests {
         let query = FindSorafsReputationJournalEventBySourceId::new(event.entry.source_id, None);
         assert_eq!(
             adapter
-                .reputation_journal_event_by_source_id(&ChainId::from(CHAIN_ID), 7, query)
+                .reputation_journal_event_by_source_id(&network_id(0x61), 7, query)
                 .expect_err("corrupt source archive must stay an archive-read failure")
                 .receipt(),
             [FAILURE_ARCHIVE_READ; 32]
@@ -2752,7 +2755,7 @@ mod tests {
                 .is_err()
         );
         let mut wrong_chain = exact_anchor;
-        wrong_chain.chain_id = ChainId::from("another-chain");
+        wrong_chain.network_id = network_id(0x62);
         assert!(adapter.proof_outcome_page(&wrong_chain, None, 1).is_err());
     }
 
@@ -2832,7 +2835,7 @@ mod tests {
         );
         assert!(
             empty_adapter
-                .finalized_at_or_before(&ChainId::from(CHAIN_ID), u64::MAX)
+                .finalized_at_or_before(&network_id(0x61), u64::MAX)
                 .is_err(),
             "data reads remain unavailable before genesis capture"
         );

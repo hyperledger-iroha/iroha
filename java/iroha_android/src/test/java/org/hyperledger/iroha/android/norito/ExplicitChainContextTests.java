@@ -23,6 +23,7 @@ import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.RegisterZkAssetInstruction;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
@@ -30,6 +31,7 @@ import org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProver;
 import org.hyperledger.iroha.android.sccp.SccpV1;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
+import org.hyperledger.iroha.android.testing.TestNetworkIds;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
@@ -163,7 +165,8 @@ public final class ExplicitChainContextTests {
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter(TAIRA);
     final TransactionPayload payload =
         TransactionPayload.builder()
-            .setChainId("00000001")
+            .setNetworkId(
+                org.hyperledger.iroha.android.testing.TestNetworkIds.fromSeed(1L))
             .setAuthority(account(0x46, TAIRA))
             .setCreationTimeMs(1_735_369_000_000L)
             .setExecutable(Executable.ivm(new byte[] {0x01}))
@@ -196,6 +199,21 @@ public final class ExplicitChainContextTests {
               SignedTransactionEncoder.decode(
                   replaceSizedField(canonicalEnvelope, 1, rejected)));
     }
+  }
+
+  @Test
+  public void nativeSignerBoundaryUsesNominalNetworkIdAndRawFixed32Jni() {
+    assertAllMethodOverloadsHaveParameter(
+        NativeSignerBridge.class,
+        "encodeRegisterZkAssetSignedTransaction",
+        1,
+        NetworkId.class);
+    assertMethodHasParameter(
+        NativeSignerBridge.class,
+        "nativeEncodeRegisterZkAssetSignedTransaction",
+        1,
+        byte[].class);
+    assertEquals(NetworkId.BYTE_LENGTH, TestNetworkIds.canonical().bytes().length);
   }
 
   @Test
@@ -233,7 +251,7 @@ public final class ExplicitChainContextTests {
         () ->
             NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
                 SigningAlgorithm.ED25519,
-                "chain",
+                TestNetworkIds.canonical(),
                 -1,
                 "authority",
                 0L,
@@ -242,7 +260,7 @@ public final class ExplicitChainContextTests {
                 feePayment));
 
     if (!NativeSignerBridge.isNativeAvailable()) {
-      throw new AssertionError("connect_norito_bridge ABI 21 is required");
+      throw new AssertionError("connect_norito_bridge ABI 22 is required");
     }
     final NativeSignerBridge.KeypairBytes keypair =
         NativeSignerBridge.keypairFromSeed(SigningAlgorithm.ED25519, fill(0x21, 32));
@@ -261,7 +279,7 @@ public final class ExplicitChainContextTests {
         () ->
             NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
                 SigningAlgorithm.ED25519,
-                "00000042",
+                TestNetworkIds.canonical(),
                 OTHER,
                 tairaAuthority,
                 1_736_000_000_000L,
@@ -272,7 +290,7 @@ public final class ExplicitChainContextTests {
 
   private static TransactionPayload payload(final String authority) {
     return TransactionPayload.builder()
-        .setChainId("00000001")
+        .setNetworkId(org.hyperledger.iroha.android.testing.TestNetworkIds.fromSeed(1L))
         .setAuthority(authority)
         .setCreationTimeMs(1_735_369_000_000L)
         .setExecutable(Executable.ivm(new byte[] {0x01}))
@@ -349,6 +367,14 @@ public final class ExplicitChainContextTests {
 
   private static void assertAllMethodOverloadsHaveIntParameter(
       final Class<?> type, final String name, final int parameterIndex) {
+    assertAllMethodOverloadsHaveParameter(type, name, parameterIndex, int.class);
+  }
+
+  private static void assertAllMethodOverloadsHaveParameter(
+      final Class<?> type,
+      final String name,
+      final int parameterIndex,
+      final Class<?> parameterType) {
     int matches = 0;
     for (final Method method : type.getDeclaredMethods()) {
       if (!method.getName().equals(name) || !Modifier.isStatic(method.getModifiers())) {
@@ -356,20 +382,28 @@ public final class ExplicitChainContextTests {
       }
       matches++;
       assertTrue(method.getParameterCount() > parameterIndex);
-      assertEquals(int.class, method.getParameterTypes()[parameterIndex]);
+      assertEquals(parameterType, method.getParameterTypes()[parameterIndex]);
     }
     assertTrue("missing method " + type.getName() + "." + name, matches > 0);
   }
 
   private static void assertMethodHasIntParameter(
       final Class<?> type, final String name, final int parameterIndex) {
+    assertMethodHasParameter(type, name, parameterIndex, int.class);
+  }
+
+  private static void assertMethodHasParameter(
+      final Class<?> type,
+      final String name,
+      final int parameterIndex,
+      final Class<?> parameterType) {
     final Method method =
         Arrays.stream(type.getDeclaredMethods())
             .filter(candidate -> candidate.getName().equals(name))
             .findFirst()
             .orElseThrow(() -> new AssertionError("missing method " + type.getName() + "." + name));
     assertTrue(method.getParameterCount() > parameterIndex);
-    assertEquals(int.class, method.getParameterTypes()[parameterIndex]);
+    assertEquals(parameterType, method.getParameterTypes()[parameterIndex]);
   }
 
   private static void assertMethodHasParameterCount(

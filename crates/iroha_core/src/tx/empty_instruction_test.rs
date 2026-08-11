@@ -1,5 +1,3 @@
-// Empty-instruction admission coverage for state transaction validation.
-
 #[test]
 fn state_rejects_empty_instruction_transactions() {
     let chain: ChainId = "empty-instructions-chain".parse().unwrap();
@@ -9,7 +7,7 @@ fn state_rejects_empty_instruction_transactions() {
     let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
     let tx = TransactionBuilder::new(
-        chain,
+        test_network_id(),
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

@@ -112,7 +112,7 @@ test("packed canonical-request subpath executes securely and has strict DOM type
       label.includes("canonicalRequest"),
     );
     assert.ok(target);
-    assert.equal(result.outputFiles[0].contents.byteLength, 98_089);
+    assert.equal(result.outputFiles[0].contents.byteLength, 100_416);
     assert.ok(
       result.outputFiles[0].contents.byteLength <= Math.floor(97_869 * 1.05),
       "packed canonical-request regressed more than 5% from the protected pre-reset tree",
@@ -143,6 +143,9 @@ test("packed canonical-request subpath executes securely and has strict DOM type
     const method = "POST";
     const requestPath = "/v1/aliases/resolve";
     const body = '{"alias":"tidal-river-4160@mibank.paynet"}';
+    const networkId = canonicalRequest.NetworkId.fromBytes(
+      Uint8Array.from({ length: 32 }, () => 0xa5),
+    );
     const headers = await withGlobalCrypto(
       {
         getRandomValues(view) {
@@ -153,6 +156,7 @@ test("packed canonical-request subpath executes securely and has strict DOM type
       () =>
         canonicalRequest.buildCanonicalRequestHeaders({
           accountId: "operator@wonderland",
+          networkId,
           method,
           path: requestPath,
           body,
@@ -164,6 +168,7 @@ test("packed canonical-request subpath executes securely and has strict DOM type
     assert.match(headers["X-Iroha-Nonce"], /^[0-9a-f]{32}$/u);
     assert.equal(headers["X-Iroha-Timestamp-Ms"], String(timestampMs));
     const message = canonicalRequest.canonicalRequestSignatureMessage({
+      networkId,
       method,
       path: requestPath,
       body,
@@ -218,16 +223,18 @@ test("packed canonical-request subpath executes securely and has strict DOM type
         "  canonicalQueryString,",
         "  canonicalRequestMessage,",
         "  canonicalRequestSignatureMessage,",
+        "  NetworkId,",
         '  type CanonicalJsonRequest,',
         '  type CanonicalJsonRequestSignerInput,',
         '  type CanonicalRequestHeaders,',
         '} from "@iroha/iroha-js/canonical-request";',
         "const query: string = canonicalQueryString(new URLSearchParams([[\"b\", \"2\"], [\"a\", \"1\"]]));",
         "const base: Uint8Array = canonicalRequestMessage({ method: \"POST\", path: \"/v1\", query, body: new Uint8Array() });",
-        "const signed: Uint8Array = canonicalRequestSignatureMessage({ method: \"POST\", path: \"/v1\", timestampMs: 1, nonce: \"nonce\" });",
-        "const headers: CanonicalRequestHeaders = buildCanonicalRequestHeaders({ accountId: \"a@b\", method: \"POST\", path: \"/v1\", privateKey: new Uint8Array(32) });",
+        "const networkId = NetworkId.fromBytes(Uint8Array.from({ length: 32 }, () => 0xa5));",
+        "const signed: Uint8Array = canonicalRequestSignatureMessage({ networkId, method: \"POST\", path: \"/v1\", timestampMs: 1, nonce: \"nonce\" });",
+        "const headers: CanonicalRequestHeaders = buildCanonicalRequestHeaders({ accountId: \"a@b\", networkId, method: \"POST\", path: \"/v1\", privateKey: new Uint8Array(32) });",
         "const request: Promise<CanonicalJsonRequest> = buildCanonicalJsonRequest({",
-        "  accountId: \"a@b\", path: \"/v1\", headers: new Headers(),",
+        "  accountId: \"a@b\", networkId, path: \"/v1\", headers: new Headers(),",
         "  sign(input: CanonicalJsonRequestSignerInput): Uint8Array {",
         "    const message: Uint8Array = input.message;",
         "    void message;",

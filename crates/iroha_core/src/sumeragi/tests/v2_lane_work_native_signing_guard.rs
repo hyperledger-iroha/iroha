@@ -36,7 +36,11 @@ fn native_signing_boundary_rechecks_view_routes_predecessors_and_authority() {
     let mut wrong_epoch = exact.clone();
     wrong_epoch.body.epoch = wrong_epoch.body.epoch.saturating_add(1);
     let mut wrong_chain = exact.clone();
-    wrong_chain.body.chain_id_hash = Hash::new(b"other-chain");
+    wrong_chain.body.network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"foreign-signing-guard-genesis"),
+        ),
+    );
     let mut wrong_coordinator_dataspace = exact.clone();
     wrong_coordinator_dataspace.body.coordinator_dataspace_id = DataSpaceId::new(70);
     let mut wrong_coordinator_incarnation = exact.clone();

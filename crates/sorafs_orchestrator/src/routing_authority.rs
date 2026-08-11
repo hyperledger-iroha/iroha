@@ -678,6 +678,7 @@ mod tests {
             order_id,
             manifest_digest: manifest.0,
             manifest_root_cid: manifest.1.root_cid,
+            musubi_archive: None,
             issued_by,
             issued_epoch: 5,
             deadline_epoch: 20,

@@ -9,7 +9,8 @@
 /// authenticated Governance DAG publication/readback/head updates, sealed
 /// monotonic Governance DAG checkpoints, externally sealed reputation journal
 /// checkpoints, the Soracloud mutation/provenance signer, and the authenticated
-/// Hugging Face credential provider are the
+/// Hugging Face credential provider, plus the reserved Musubi provider-
+/// attestation clock, approval signer, and authenticated inventory, are the
 /// reference-node boundaries for
 /// ledger access, PKCS#11, managed-KMS, and threshold services. Provider
 /// credentials, unwrapped keys, PRF shares, seeds, and outputs must stay inside
@@ -141,8 +142,13 @@ pub struct IrohaRuntimeDeps {
         Option<Arc<dyn soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1>>,
     soracloud_hf_inference_credential_provider:
         Option<Arc<dyn soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1>>,
+    sorafs_musubi_provider_attestation_clock_seal:
+        Option<Arc<dyn sorafs_node::MusubiProviderAttestationClockSealV1>>,
+    sorafs_musubi_provider_attestation_approval_signer:
+        Option<Arc<dyn sorafs_node::MusubiProviderAttestationSignerV1>>,
+    sorafs_musubi_provider_attestation_inventory:
+        Option<Arc<dyn sorafs_node::MusubiProviderAttestationInventoryRuntimeV1>>,
 }
-
 impl IrohaRuntimeDeps {
     /// Return whether no deployment-owned runtime dependency is attached.
     ///
@@ -206,6 +212,11 @@ impl IrohaRuntimeDeps {
             && self.sorafs_por_finalized_replay_archive.is_none()
             && self.soracloud_runtime_mutation_signer.is_none()
             && self.soracloud_hf_inference_credential_provider.is_none()
+            && self.sorafs_musubi_provider_attestation_clock_seal.is_none()
+            && self
+                .sorafs_musubi_provider_attestation_approval_signer
+                .is_none()
+            && self.sorafs_musubi_provider_attestation_inventory.is_none()
     }
 
     /// Attach the deployment-owned Bootle/Lantern issuer and authentication registry.
@@ -855,6 +866,39 @@ impl IrohaRuntimeDeps {
         archive: Arc<dyn sorafs_node::PorFinalizedReplayArchiveV1>,
     ) -> Self {
         self.sorafs_por_finalized_replay_archive = Some(archive);
+        self
+    }
+
+    /// Attach the rollback-resistant monotonic clock seal reserved for the
+    /// supervised Musubi provider-attestation journal.
+    #[must_use]
+    pub fn with_sorafs_musubi_provider_attestation_clock_seal(
+        mut self,
+        seal: Arc<dyn sorafs_node::MusubiProviderAttestationClockSealV1>,
+    ) -> Self {
+        self.sorafs_musubi_provider_attestation_clock_seal = Some(seal);
+        self
+    }
+
+    /// Attach the approval-only HSM/KMS or threshold signer reserved for the
+    /// supervised Musubi provider-attestation journal.
+    #[must_use]
+    pub fn with_sorafs_musubi_provider_attestation_approval_signer(
+        mut self,
+        signer: Arc<dyn sorafs_node::MusubiProviderAttestationSignerV1>,
+    ) -> Self {
+        self.sorafs_musubi_provider_attestation_approval_signer = Some(signer);
+        self
+    }
+
+    /// Attach the authenticated coordinator inventory reserved for the
+    /// supervised Musubi provider-attestation journal.
+    #[must_use]
+    pub fn with_sorafs_musubi_provider_attestation_inventory(
+        mut self,
+        inventory: Arc<dyn sorafs_node::MusubiProviderAttestationInventoryRuntimeV1>,
+    ) -> Self {
+        self.sorafs_musubi_provider_attestation_inventory = Some(inventory);
         self
     }
 }

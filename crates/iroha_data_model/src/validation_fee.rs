@@ -11,7 +11,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
-    ChainId, Level,
+    Level, NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
     isi::{InstructionBox, Log},
@@ -288,8 +288,8 @@ pub enum ValidationFeePolicyRegistryError {
         /// Version of the malformed entry.
         policy_version: u64,
     },
-    /// A successor changed the immutable chain or genesis binding.
-    ChainIdentityChanged {
+    /// A successor changed the immutable exact network binding.
+    NetworkIdentityChanged {
         /// Version of the malformed entry.
         policy_version: u64,
     },
@@ -339,9 +339,9 @@ impl core::fmt::Display for ValidationFeePolicyRegistryError {
                 f,
                 "validation-fee policy effective height moves backwards at version {policy_version}"
             ),
-            Self::ChainIdentityChanged { policy_version } => write!(
+            Self::NetworkIdentityChanged { policy_version } => write!(
                 f,
-                "validation-fee policy changes the immutable chain identity at version {policy_version}"
+                "validation-fee policy changes the immutable network identity at version {policy_version}"
             ),
             Self::InvalidParliamentAuthorization { policy_version } => write!(
                 f,
@@ -1063,8 +1063,7 @@ impl ValidationFeePolicyRegistryV1 {
         let mut expected_version = 2u64;
         let mut previous_hash = first.policy_hash;
         let mut previous_effective_height = first.policy.effective_from_height;
-        let chain_id = first.policy.chain_id.clone();
-        let genesis_hash = first.policy.genesis_hash;
+        let network_id = first.policy.network_id;
 
         for entry in entries {
             if entry.policy.policy_version != expected_version {
@@ -1088,8 +1087,8 @@ impl ValidationFeePolicyRegistryV1 {
                     policy_version: entry.policy.policy_version,
                 });
             }
-            if entry.policy.chain_id != chain_id || entry.policy.genesis_hash != genesis_hash {
-                return Err(ValidationFeePolicyRegistryError::ChainIdentityChanged {
+            if entry.policy.network_id != network_id {
+                return Err(ValidationFeePolicyRegistryError::NetworkIdentityChanged {
                     policy_version: entry.policy.policy_version,
                 });
             }
@@ -1675,19 +1674,18 @@ impl ValidationFeeTreasuryPayoutBindingV1 {
     }
 }
 
-/// Chain-level validation-fee policy.
+/// Exact-network validation-fee policy.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct ValidationFeePolicyV1 {
     /// Policy schema version.
     pub schema_version: u16,
-    /// Chain identifier bound into the policy.
-    pub chain_id: ChainId,
-    /// Genesis hash bound into the policy.
-    pub genesis_hash: [u8; 32],
+    /// Exact genesis-derived network identity bound into the policy.
+    pub network_id: NetworkId,
     /// Monotonic policy version.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
     pub policy_version: u64,
@@ -1752,8 +1750,8 @@ impl ValidationFeePolicyV1 {
         if self.schema_version != VALIDATION_FEE_POLICY_SCHEMA_VERSION {
             return Some("unsupported validation-fee policy schema version");
         }
-        if self.genesis_hash == [0; 32] {
-            return Some("validation-fee policy genesis hash must be non-zero");
+        if self.network_id.as_bytes() == &[0; 32] {
+            return Some("validation-fee policy network id must be non-zero");
         }
         if self.policy_version == 0 {
             return Some("validation-fee policy version must be positive");
@@ -2016,8 +2014,9 @@ mod parliament_tests {
     fn policy(version: u64, previous_policy_hash: Option<[u8; 32]>) -> ValidationFeePolicyV1 {
         ValidationFeePolicyV1 {
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            chain_id: ChainId::from("parliament-test"),
-            genesis_hash: [7; 32],
+            network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                Hash::prehashed([7; 32]),
+            )),
             policy_version: version,
             previous_policy_hash,
             ds_asset_id: fee_asset(),
@@ -2162,6 +2161,45 @@ mod parliament_tests {
             observed
         };
         assert_eq!(ambient, baseline);
+    }
+
+    #[test]
+    fn validation_fee_policy_roundtrips_canonical_network_id_wire() {
+        let policy = policy(1, None);
+        let canonical =
+            norito::encode_canonical(&policy).expect("encode canonical validation-fee policy");
+        let decoded: ValidationFeePolicyV1 =
+            norito::decode_canonical(&canonical).expect("decode canonical validation-fee policy");
+        assert_eq!(decoded, policy);
+        assert_eq!(
+            norito::encode_canonical(&decoded).expect("re-encode validation-fee policy"),
+            canonical,
+            "the mandatory typed NetworkId must have one canonical Norito representation"
+        );
+
+        let json = norito::json::to_json(&policy).expect("encode validation-fee policy JSON");
+        assert!(json.contains("\"network_id\""));
+        assert!(!json.contains("\"chain_id\""));
+        assert!(!json.contains("\"genesis_hash\""));
+        let decoded_json: ValidationFeePolicyV1 =
+            norito::json::from_json(&json).expect("decode validation-fee policy JSON");
+        assert_eq!(decoded_json, policy);
+
+        let mut legacy = norito::json::to_value(&policy).expect("encode legacy mutation source");
+        let legacy = legacy
+            .as_object_mut()
+            .expect("validation-fee policy JSON object");
+        legacy.remove("network_id");
+        legacy.insert("chain_id".into(), norito::json::Value::from("same-label"));
+        legacy.insert(
+            "genesis_hash".into(),
+            norito::json::Value::from(hex::encode([7; 32])),
+        );
+        let legacy = norito::json::to_json(&legacy).expect("encode legacy identity fields");
+        assert!(
+            norito::json::from_json::<ValidationFeePolicyV1>(&legacy).is_err(),
+            "the first-release decoder must not accept dual ChainId + genesis_hash identity"
+        );
     }
 
     #[test]
@@ -2462,6 +2500,24 @@ mod parliament_tests {
                 .policy_version,
             2
         );
+    }
+
+    #[test]
+    fn registry_rejects_successor_from_another_exact_network() {
+        let first = policy(1, None);
+        let first_entry = entry(first, 1);
+        let second = policy(2, Some(first_entry.policy_hash));
+        let mut registry = ValidationFeePolicyRegistryV1 {
+            registered_policies: vec![first_entry, entry(second, 2)],
+        };
+        registry.registered_policies[1].policy.network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::from_untyped_unchecked(Hash::prehashed([9; 32])),
+        );
+
+        assert!(matches!(
+            registry.validate(),
+            Err(ValidationFeePolicyRegistryError::NetworkIdentityChanged { policy_version: 2 })
+        ));
     }
 
     #[test]

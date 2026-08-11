@@ -28,11 +28,15 @@ fn build_tx_size_transaction(
     payload: String,
     key_pair: &KeyPair,
 ) -> Result<SignedTransaction, TransactionSignatureError> {
-    let chain = ChainId::from("00000000-0000-0000-0000-000000000000");
+    let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+        iroha_data_model::block::BlockHeader,
+    >::from_untyped_unchecked(
+        iroha_crypto::Hash::new(b"tx-size-example-genesis"),
+    ));
     let authority = AccountId::new(key_pair.public_key().clone());
 
     TransactionBuilder::new(
-        chain,
+        network_id,
         authority,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

@@ -181,7 +181,20 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
                 "-- --test-threads=1"
             ),
             "fetch_name": "Prime privacy native Cargo dependencies",
+            "install_name": "Install host-qualified privacy SDK Rust toolchain",
+            "provision_name": "Provision private privacy SDK Cargo lock",
+            "verify_name": "Verify privacy SDK Cargo lock isolation",
+            "python_path": None,
             "python_path_count": 0,
+        },
+        "privacy_jvm_sdk_tests": {
+            "consumer": "run: ci/check_privacy_jvm_sdk.sh",
+            "fetch_name": "Prime privacy JVM native dependencies",
+            "install_name": "Install host-qualified privacy JVM Rust toolchain",
+            "provision_name": "Provision private privacy JVM Cargo lock",
+            "verify_name": "Verify privacy JVM Cargo lock isolation",
+            "python_path": "${{ steps.privacy-jvm-python.outputs.python-path }}",
+            "python_path_count": 4,
         },
         "privacy_python_sdk_tests": {
             "consumer": (
@@ -189,6 +202,10 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
                 "ci/check_privacy_python_sdk.sh"
             ),
             "fetch_name": "Prime privacy Python SDK Cargo dependencies",
+            "install_name": "Install host-qualified privacy SDK Rust toolchain",
+            "provision_name": "Provision private privacy SDK Cargo lock",
+            "verify_name": "Verify privacy SDK Cargo lock isolation",
+            "python_path": "${{ steps.privacy-python.outputs.python-path }}",
             "python_path_count": 3,
         },
         "privacy-sdk-guard": {
@@ -197,20 +214,33 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
                 "ci/check_privacy_sdk_guard.sh"
             ),
             "fetch_name": "Prime privacy Python SDK Cargo dependencies",
+            "install_name": "Install host-qualified privacy SDK Rust toolchain",
+            "provision_name": "Provision private privacy SDK Cargo lock",
+            "verify_name": "Verify privacy SDK Cargo lock isolation",
+            "python_path": "${{ steps.privacy-python.outputs.python-path }}",
             "python_path_count": 5,
         },
     }
-    setup_python_path = "${{ steps.privacy-python.outputs.python-path }}"
-    assert workflow.count("ci/privacy_sdk_cargo_lockfile.sh provision-ci") == 3
-    assert workflow.count("ci/privacy_sdk_cargo_lockfile.sh verify-ci") == 6
-    assert workflow.count("run: cargo fetch --locked") == 3
+    assert workflow.count("ci/privacy_sdk_cargo_lockfile.sh provision-ci") == 4
+    assert workflow.count("ci/privacy_sdk_cargo_lockfile.sh verify-ci") == 8
+    assert workflow.count("run: cargo fetch --locked") == 5
+    assert workflow.count("cargo fetch --locked") == 6
     assert "Swatinem/rust-cache@" not in workflow
-    assert workflow.count("id: privacy-python") == 3
-    assert workflow.count('python-version: "3.12"') == 3
-    assert workflow.count("update-environment: false") == 3
+    assert workflow.count("id: privacy-python") == 2
+    for setup_id, expected_count in {
+        "privacy-swift-python": 1,
+        "privacy-jvm-python": 4,
+        "privacy-csharp-python": 3,
+        "privacy-js-python": 2,
+        "privacy-python": 8,
+    }.items():
+        assert workflow.count(
+            f"${{{{ steps.{setup_id}.outputs.python-path }}}}"
+        ) == expected_count
+    assert workflow.count('python-version: "3.12"') == 6
+    assert workflow.count("update-environment: false") == 6
     assert "cache: pip" not in workflow
     assert "cache-dependency-path: python/iroha_python/requirements-ci.lock" not in workflow
-    assert workflow.count(setup_python_path) == 9
     for job, policy in cargo_jobs.items():
         match = re.search(
             rf"(?ms)^  {re.escape(job)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
@@ -222,23 +252,38 @@ def test_privacy_gate_enforces_the_ci_lock_and_native_build_policy() -> None:
         assert block.count("verify-ci") == 2
         assert block.count("run: cargo fetch --locked") == 1
         assert block.count('CARGO_NET_OFFLINE: "false"') == 1
-        assert block.count(setup_python_path) == policy["python_path_count"]
+        if policy["python_path"] is not None:
+            assert block.count(policy["python_path"]) == policy["python_path_count"]
         positions = [
             block.find(marker)
             for marker in (
-                "Install host-qualified privacy SDK Rust toolchain",
-                "Provision private privacy SDK Cargo lock",
-                "Verify privacy SDK Cargo lock isolation",
+                policy["install_name"],
+                policy["provision_name"],
+                policy["verify_name"],
                 policy["fetch_name"],
                 'CARGO_NET_OFFLINE: "false"',
                 "run: cargo fetch --locked",
                 policy["consumer"],
-                "Verify final privacy SDK Cargo lock isolation",
+                f"Verify final {policy['verify_name'][7:]}",
             )
         ]
         assert -1 not in positions
         assert positions == sorted(positions)
         assert "if: always()" in block[positions[-1] :]
+    for artifact_job in (
+        "privacy_javascript_sdk_tests",
+        "privacy_swift_sdk_parse",
+    ):
+        block = re.search(
+            rf"(?ms)^  {artifact_job}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+            workflow,
+        )
+        assert block is not None
+        source = block.group(1)
+        assert source.count("Install and verify the frozen workspace Cargo lock") == 1
+        assert source.count("cargo fetch --locked") == 1
+        assert "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" in source
+        assert "provision-ci" not in source
     for workflow_path in (
         ".gitignore",
         ".cargo/config",

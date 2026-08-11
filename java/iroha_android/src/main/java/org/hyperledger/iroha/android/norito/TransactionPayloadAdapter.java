@@ -24,6 +24,7 @@ import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.instructions.LanePrivacyMerkleWitness;
 import org.hyperledger.iroha.android.model.instructions.LanePrivacyProof;
@@ -41,8 +42,8 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 /**
  * Norito adapter that mirrors the {@link TransactionPayload} structure used by the Android library.
  * IVM bytecode payloads are encoded directly. Instruction payloads must be provided as wire-framed
- * Norito blobs (wire id + Norito header). Metadata values are encoded as raw JSON literals to match
- * the Rust `Json` wrapper.
+ * Norito blobs (wire id + Norito header). Metadata values use the one canonical JSON spelling
+ * required by the Rust {@code Json} wrapper.
  */
 final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload> {
 
@@ -66,7 +67,8 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final ThreadLocal<Integer> CHAIN_DISCRIMINANT = new ThreadLocal<>();
   private static final TypeAdapter<String> STRING_ADAPTER = NoritoAdapters.stringAdapter();
   private static final TypeAdapter<String> ACCOUNT_ID_ADAPTER = new AccountIdAdapter();
-  private static final TypeAdapter<String> CHAIN_ID_ADAPTER = new ChainIdAdapter();
+  private static final TypeAdapter<NetworkId> TRANSACTION_DOMAIN_ADAPTER =
+      new TransactionDomainAdapter();
   private static final TypeAdapter<String> JSON_VALUE_ADAPTER = new JsonAdapter();
   private static final TypeAdapter<Long> UINT64_ADAPTER = NoritoAdapters.uint(64);
   private static final TypeAdapter<Long> UINT32_ADAPTER = NoritoAdapters.uint(32);
@@ -113,6 +115,8 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       NoritoAdapters.sequence(new EncodedInstructionAdapter());
   private static final TypeAdapter<Long> ENUM_TAG_ADAPTER = NoritoAdapters.uint(32);
   private static final long EXECUTABLE_INSTRUCTIONS_TAG = 0L;
+  private static final long TRANSACTION_DOMAIN_NETWORK_TAG = 0L;
+  private static final long TRANSACTION_DOMAIN_GENESIS_TAG = 1L;
   private static final long EXECUTABLE_CONTRACT_CALL_TAG = 1L;
   private static final long EXECUTABLE_IVM_TAG = 2L;
   private static final long EXECUTABLE_IVM_PROVED_TAG = 3L;
@@ -199,7 +203,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
             throw new IllegalArgumentException(
                 "feePayment.gasLimit is required for IVM and contract-call executables");
           }
-          encodeSizedField(encoder, CHAIN_ID_ADAPTER, value.chainId());
+          encodeSizedField(encoder, TRANSACTION_DOMAIN_ADAPTER, value.networkId());
           encodeSizedField(encoder, ACCOUNT_ID_ADAPTER, value.authority());
           encodeSizedField(encoder, UINT64_ADAPTER, value.creationTimeMs());
           encodeSizedField(encoder, EXECUTABLE_ADAPTER, value.executable());
@@ -217,7 +221,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     return withChainContext(
         chainDiscriminant,
         () -> {
-          final String chainId = decodeSizedField(decoder, CHAIN_ID_ADAPTER);
+          final NetworkId networkId = decodeSizedField(decoder, TRANSACTION_DOMAIN_ADAPTER);
           final String authority = decodeAuthorityField(decoder);
           final long creationTimeMs = decodeSizedField(decoder, UINT64_ADAPTER);
           final Executable executable = decodeSizedField(decoder, EXECUTABLE_ADAPTER);
@@ -235,7 +239,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
           final TransactionPayload.Builder builder =
               TransactionPayload.builder()
-                  .setChainId(chainId)
+                  .setNetworkId(networkId)
                   .setAuthority(authority)
                   .setCreationTimeMs(creationTimeMs)
                   .setExecutable(executable)
@@ -946,6 +950,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
   private static final class InstructionAdapter implements TypeAdapter<InstructionBox> {
     @Override
     public void encode(final NoritoEncoder encoder, final InstructionBox value) {
+      value.requirePrivacyExact12ConstructionAdmission();
       final InstructionBox.InstructionPayload payload = value.payload();
       if (payload instanceof InstructionBox.WirePayload wire) {
         if (!isWirePayloadCandidate(wire.wireName(), wire.payloadBytes())) {
@@ -1618,26 +1623,24 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     }
   }
 
-  private static final class ChainIdAdapter implements TypeAdapter<String> {
+  private static final class TransactionDomainAdapter implements TypeAdapter<NetworkId> {
     @Override
-    public void encode(final NoritoEncoder encoder, final String value) {
-      encodeSizedField(encoder, STRING_ADAPTER, value);
+    public void encode(final NoritoEncoder encoder, final NetworkId value) {
+      ENUM_TAG_ADAPTER.encode(encoder, TRANSACTION_DOMAIN_NETWORK_TAG);
+      encodeSizedField(encoder, FIXED_HASH_ADAPTER, value.bytes());
     }
 
     @Override
-    public String decode(final NoritoDecoder decoder) {
-      final byte[] payload = decoder.readBytes(decoder.remaining());
-      return decodePayload(payload, decoder.flags(), decoder.flagsHint());
-    }
-
-    private static String decodePayload(
-        final byte[] payload, final int flags, final int flagsHint) {
-      final NoritoDecoder sized = new NoritoDecoder(payload, flags, flagsHint);
-      final String value = decodeSizedField(sized, STRING_ADAPTER);
-      if (sized.remaining() != 0) {
-        throw new IllegalArgumentException("Trailing bytes after ChainId payload");
+    public NetworkId decode(final NoritoDecoder decoder) {
+      final long tag = ENUM_TAG_ADAPTER.decode(decoder);
+      if (tag == TRANSACTION_DOMAIN_GENESIS_TAG) {
+        throw new IllegalArgumentException(
+            "Genesis-only transaction domains are not accepted by the SDK");
       }
-      return value;
+      if (tag != TRANSACTION_DOMAIN_NETWORK_TAG) {
+        throw new IllegalArgumentException("Unknown TransactionDomain discriminant: " + tag);
+      }
+      return NetworkId.fromBytes(decodeSizedField(decoder, FIXED_HASH_ADAPTER));
     }
   }
 
@@ -1738,14 +1741,14 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     @Override
     public void encode(final NoritoEncoder encoder, final MetadataEntry entry) {
       encodeSizedField(encoder, STRING_ADAPTER, entry.key());
-      encodeSizedField(encoder, JSON_VALUE_ADAPTER, entry.value().rawJson());
+      encodeSizedField(encoder, JSON_VALUE_ADAPTER, entry.value().canonicalJson());
     }
 
     @Override
     public MetadataEntry decode(final NoritoDecoder decoder) {
       final String key = decodeSizedField(decoder, STRING_ADAPTER);
       final String value = decodeSizedField(decoder, JSON_VALUE_ADAPTER);
-      return new MetadataEntry(key, JsonValue.raw(value));
+      return new MetadataEntry(key, JsonValue.fromCanonicalWire(value));
     }
   }
 

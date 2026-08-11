@@ -115,8 +115,8 @@ impl Drop for JindoOpeningV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Consensus-bound transcript field that failed validation.
 pub enum JindoBindingFieldV1 {
-    /// Chain identifier.
-    ChainId,
+    /// Genesis-header-derived network identity.
+    NetworkId,
     /// Transaction action index.
     ActionIndex,
     /// Digest of the public statement.
@@ -760,9 +760,9 @@ fn validate_statement_and_binding(
             return Err(JindoErrorV1::BindingMismatch { field });
         }
     }
-    if binding.chain_id != context.chain_id.as_str().as_bytes() {
+    if binding.network_id != context.network_id.as_bytes() {
         return Err(JindoErrorV1::BindingMismatch {
-            field: JindoBindingFieldV1::ChainId,
+            field: JindoBindingFieldV1::NetworkId,
         });
     }
     if binding.action_index != context.action_index {

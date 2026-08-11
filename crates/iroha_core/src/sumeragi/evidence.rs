@@ -16,13 +16,13 @@ use iroha_crypto::{Algorithm, Signature};
 #[cfg(test)]
 use iroha_data_model::block::BlockHeader;
 use iroha_data_model::{
+    NetworkId,
     block::{
         consensus::{EvidenceRecord, Height, SumeragiV2EquivocationEvidence, View},
         consensus_v2 as wire_v2,
     },
     consensus::NposPenaltyAction,
     peer::PeerId,
-    prelude::ChainId,
 };
 use mv::storage::StorageReadOnly;
 
@@ -52,8 +52,8 @@ pub(crate) const MAX_V2_EVIDENCE_ADMISSION_BYTES: usize = 4 * 1024 * 1024;
 pub struct EvidenceValidationContext<'a> {
     /// Commit topology used to resolve validator indices for signature checks.
     pub topology: &'a super::network_topology::Topology,
-    /// Chain identifier bound into consensus preimages.
-    pub chain_id: &'a ChainId,
+    /// Exact genesis-derived network identity bound into consensus preimages.
+    pub network_id: &'a NetworkId,
     /// Consensus mode tag (permissioned or `NPoS`) for preimage separation.
     pub mode_tag: &'a str,
     /// Optional PRF seed for `NPoS` topology rotation.
@@ -97,7 +97,7 @@ fn archival_topology_for_view(
 fn archival_vote_signature_check(
     vote: &Vote,
     topology: &super::network_topology::Topology,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     mode_tag: &str,
 ) -> Result<(), EvidenceValidationError> {
     let index =
@@ -117,7 +117,10 @@ fn archival_vote_signature_check(
     }
     .map_err(|_| EvidenceValidationError::SignatureInvalid)?;
     signature
-        .verify(peer.public_key(), &vote_preimage(chain_id, mode_tag, vote))
+        .verify(
+            peer.public_key(),
+            &vote_preimage(network_id, mode_tag, vote),
+        )
         .map_err(|_| EvidenceValidationError::SignatureInvalid)
 }
 
@@ -167,7 +170,9 @@ fn canonicalize_evidence(ev: &Evidence) -> Evidence {
     }
 }
 
-fn canonicalize_v2_conflict(
+/// Return an exact v2 conflict with its signed artifacts in canonical wire order.
+#[must_use]
+pub(crate) fn canonicalize_v2_conflict(
     conflict: &wire_v2::SumeragiV2Equivocation,
 ) -> wire_v2::SumeragiV2Equivocation {
     use norito::codec::Encode;
@@ -285,8 +290,8 @@ pub(crate) fn validate_v2_evidence_admissions(
     let mut keys = Vec::with_capacity(admissions.len());
     let mut previous_key: Option<Vec<u8>> = None;
     for evidence in admissions {
-        if &evidence.context.chain_id != state.chain_id_ref() {
-            return Err(EvidenceValidationError::V2AdmissionWrongChain);
+        if &evidence.context.network_id != state.network_id_ref() {
+            return Err(EvidenceValidationError::V2AdmissionWrongNetwork);
         }
         let round = v2_conflict_round(&evidence.conflict);
         if round.height >= block_height {
@@ -384,7 +389,7 @@ pub(crate) fn pending_v2_evidence_admissions(
         };
         let evidence = canonicalize_v2_equivocation_evidence(evidence);
         let round = v2_conflict_round(&evidence.conflict);
-        if &evidence.context.chain_id != state.chain_id_ref()
+        if &evidence.context.network_id != state.network_id_ref()
             || round.height >= proposal_height
             || !evidence_within_configured_horizon(proposal_height, horizon, Some(round.height))
         {
@@ -609,7 +614,6 @@ pub fn persist_record(
 /// trusted context store. They are copied into the record only after the full
 /// pair passes structural, roster, PoP, and individual-signature validation.
 /// A canonical WSV key makes exact replay and swapped-pair replay idempotent.
-#[cfg(test)]
 pub(crate) fn persist_sumeragi_v2_equivocation(
     state: &State,
     context: &wire_v2::HeightContext,
@@ -845,8 +849,8 @@ pub enum EvidenceValidationError {
     V2AdmissionTooMany,
     /// A candidate's exact v2 proof batch exceeds the aggregate byte bound.
     V2AdmissionTooLarge,
-    /// A candidate's exact v2 proof is bound to another chain.
-    V2AdmissionWrongChain,
+    /// A candidate's exact v2 proof is bound to another genesis-derived network.
+    V2AdmissionWrongNetwork,
     /// The deterministic v2 context history needed to anchor a proof is absent.
     V2AdmissionContextUnavailable,
     /// A proof's embedded context differs from committed v2 context history.
@@ -910,7 +914,7 @@ impl std::fmt::Display for EvidenceValidationError {
             }
             V2AdmissionTooMany => "too many Sumeragi v2 evidence admissions in one block",
             V2AdmissionTooLarge => "Sumeragi v2 evidence admission batch exceeds byte limit",
-            V2AdmissionWrongChain => "Sumeragi v2 evidence admission belongs to another chain",
+            V2AdmissionWrongNetwork => "Sumeragi v2 evidence admission belongs to another network",
             V2AdmissionContextUnavailable => {
                 "committed Sumeragi v2 context history is unavailable for evidence admission"
             }
@@ -979,7 +983,7 @@ pub fn validate_evidence(
             EvidenceKind::SumeragiV2Equivocation,
             EvidencePayload::SumeragiV2Equivocation(evidence),
         ) => {
-            if &evidence.context.chain_id != context.chain_id {
+            if &evidence.context.network_id != context.network_id {
                 return Err(EvidenceValidationError::V2ContextInvalid);
             }
             let trusted_roster = context.topology.as_ref();
@@ -1019,14 +1023,14 @@ fn validate_vote_signatures(
     archival_vote_signature_check(
         v1,
         &signature_topology_v1,
-        context.chain_id,
+        context.network_id,
         context.mode_tag,
     )
     .map_err(|_| EvidenceValidationError::SignatureInvalid)?;
     archival_vote_signature_check(
         v2,
         &signature_topology_v2,
-        context.chain_id,
+        context.network_id,
         context.mode_tag,
     )
     .map_err(|_| EvidenceValidationError::SignatureInvalid)?;
@@ -1398,6 +1402,7 @@ fn verify_v2_aggregate_signature(
 mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
+        NetworkId,
         block::BlockHeader,
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         parameter::{Parameter, Parameters, system::SumeragiNposParameters},
@@ -1432,7 +1437,7 @@ mod tests {
     }
 
     struct EvidenceTestContext {
-        chain_id: ChainId,
+        network_id: NetworkId,
         mode_tag: &'static str,
         prf_seed: [u8; 32],
         keypairs: Vec<KeyPair>,
@@ -1447,7 +1452,7 @@ mod tests {
                 .map(|kp| PeerId::new(kp.public_key().clone()));
             let topology = super::super::network_topology::Topology::new(peers);
             Self {
-                chain_id: ChainId::from("test"),
+                network_id: test_network_id(b"legacy-evidence-genesis"),
                 mode_tag: super::super::consensus::PERMISSIONED_TAG,
                 prf_seed: [0x11; 32],
                 keypairs,
@@ -1458,7 +1463,7 @@ mod tests {
         fn validation_context(&self) -> EvidenceValidationContext<'_> {
             EvidenceValidationContext {
                 topology: &self.topology,
-                chain_id: &self.chain_id,
+                network_id: &self.network_id,
                 mode_tag: self.mode_tag,
                 prf_seed: Some(self.prf_seed),
             }
@@ -1507,7 +1512,7 @@ mod tests {
         fn sign_vote(&self, vote: &mut Vote) {
             let keypair = self.signer_keypair_for_view(vote.signer, vote.height, vote.view);
             let preimage =
-                super::super::consensus::vote_preimage(&self.chain_id, self.mode_tag, vote);
+                super::super::consensus::vote_preimage(&self.network_id, self.mode_tag, vote);
             let signature = Signature::try_new(keypair.private_key(), &preimage)
                 .expect("test fixture signing should succeed");
             vote.bls_sig = signature.payload().to_vec();
@@ -1516,6 +1521,12 @@ mod tests {
 
     fn test_context() -> EvidenceTestContext {
         EvidenceTestContext::new(12)
+    }
+
+    fn test_network_id(seed: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            seed,
+        )))
     }
 
     fn zero_state_root() -> Hash {
@@ -1543,10 +1554,16 @@ mod tests {
         State::new_for_testing(World::default(), kura, query)
     }
 
-    fn test_state_for_chain(chain_id: ChainId) -> State {
+    fn test_state_for_network(network_id: NetworkId) -> State {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        State::new_with_chain_for_testing(World::default(), kura, query, chain_id)
+        State::new_with_chain_and_network_id_for_testing(
+            World::default(),
+            kura,
+            query,
+            ChainId::from("evidence-display-name"),
+            network_id,
+        )
     }
 
     fn test_state_for_v2_fixture(fixture: &V2EvidenceFixture) -> State {
@@ -1583,8 +1600,13 @@ mod tests {
     fn test_state_for_v2_fixture_with_world(fixture: &V2EvidenceFixture, world: World) -> State {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state =
-            State::new_with_chain_for_testing(world, kura, query, fixture.context.chain_id.clone());
+        let state = State::new_with_chain_and_network_id_for_testing(
+            world,
+            kura,
+            query,
+            ChainId::from("sumeragi-v2-evidence-display-name"),
+            fixture.context.network_id,
+        );
         install_v2_finality_for_fixture(&state, fixture);
         state
     }
@@ -1612,7 +1634,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let context = wire_v2::HeightContext {
-                chain_id: ChainId::from("sumeragi-v2-evidence-test"),
+                network_id: test_network_id(b"sumeragi-v2-evidence-genesis"),
                 protocol_version: wire_v2::PROTOCOL_VERSION,
                 height: 1,
                 epoch: 7,
@@ -2030,7 +2052,7 @@ mod tests {
     }
 
     #[test]
-    fn sumeragi_v2_equivocation_generic_ingress_anchors_chain_and_roster() {
+    fn sumeragi_v2_equivocation_generic_ingress_anchors_network_and_roster() {
         let fixture = V2EvidenceFixture::new();
         let peers = fixture
             .context
@@ -2050,7 +2072,7 @@ mod tests {
         };
         let context = EvidenceValidationContext {
             topology: &topology,
-            chain_id: &fixture.context.chain_id,
+            network_id: &fixture.context.network_id,
             mode_tag: super::super::consensus::PERMISSIONED_TAG,
             prf_seed: None,
         };
@@ -2067,13 +2089,13 @@ mod tests {
             Err(EvidenceValidationError::V2ContextInvalid)
         );
 
-        let foreign_chain = ChainId::from("foreign-v2-evidence-chain");
-        let wrong_chain = EvidenceValidationContext {
-            chain_id: &foreign_chain,
+        let foreign_network = test_network_id(b"foreign-v2-evidence-genesis");
+        let wrong_network = EvidenceValidationContext {
+            network_id: &foreign_network,
             ..context
         };
         assert_eq!(
-            validate_evidence(&evidence, &wrong_chain),
+            validate_evidence(&evidence, &wrong_network),
             Err(EvidenceValidationError::V2ContextInvalid)
         );
     }
@@ -2215,6 +2237,24 @@ mod tests {
     }
 
     #[test]
+    fn sumeragi_v2_equivocation_persistence_rejects_invalid_artifacts() {
+        let fixture = V2EvidenceFixture::new();
+        let mut forged = fixture.vote(1, wire_v2::GlobalPhase::Prepare, fixture.subject(0x84));
+        forged.signature[0] ^= 0x80;
+        let conflict = wire_v2::SumeragiV2Equivocation::PhaseVote {
+            first: fixture.vote(1, wire_v2::GlobalPhase::Prepare, fixture.subject(0x83)),
+            second: forged,
+        };
+        let state = test_state();
+
+        assert_eq!(
+            persist_sumeragi_v2_equivocation(&state, &fixture.context, &fixture.proofs, conflict,),
+            Err(EvidenceValidationError::V2SignatureInvalid)
+        );
+        assert_eq!(state.world.consensus_evidence.view().iter().count(), 0);
+    }
+
+    #[test]
     fn v2_admission_validates_without_follower_local_observation() {
         let fixture = V2EvidenceFixture::new();
         let evidence = canonical_v2_phase_vote_evidence(&fixture, 0x91, 0x92);
@@ -2245,11 +2285,12 @@ mod tests {
             )
             .expect("persist fixture height context");
         let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_with_chain_for_testing(
+        let state = State::new_with_chain_and_network_id_for_testing(
             World::default(),
             kura,
             query,
-            fixture.context.chain_id.clone(),
+            ChainId::from("sumeragi-v2-evidence-display-name"),
+            fixture.context.network_id,
         );
 
         assert_eq!(
@@ -2318,12 +2359,12 @@ mod tests {
             Err(EvidenceValidationError::V2SignatureInvalid)
         );
 
-        let foreign = test_state_for_chain(ChainId::from("foreign-v2-admission-chain"));
+        let foreign = test_state_for_network(test_network_id(b"foreign-v2-admission-genesis"));
         assert_eq!(
             validate_v2_evidence_admissions(&foreign, 2, &[evidence.clone()]),
-            Err(EvidenceValidationError::V2AdmissionWrongChain)
+            Err(EvidenceValidationError::V2AdmissionWrongNetwork)
         );
-        let missing_context = test_state_for_chain(fixture.context.chain_id.clone());
+        let missing_context = test_state_for_network(fixture.context.network_id);
         assert_eq!(
             validate_v2_evidence_admissions(&missing_context, 2, &[evidence.clone()]),
             Err(EvidenceValidationError::V2AdmissionContextUnavailable)

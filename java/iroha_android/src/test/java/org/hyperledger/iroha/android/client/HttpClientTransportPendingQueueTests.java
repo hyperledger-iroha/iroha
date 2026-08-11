@@ -23,18 +23,23 @@ import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.client.transport.UrlConnectionTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 
-/** Integration tests covering pending-queue flushing and telemetry emission. */
+/** Integration tests proving transaction submission never replays or fills pending queues. */
 public final class HttpClientTransportPendingQueueTests {
 
   private HttpClientTransportPendingQueueTests() {}
 
   public static void main(final String[] args) throws Exception {
-    flushesPendingQueueBeforeNewSubmission();
-    queuesFailedSubmissionAndEmitsTelemetry();
+    if (!ToriiMockServer.isSupported()) {
+      System.out.println(
+          "[IrohaAndroid] HttpClientTransportPendingQueueTests skipped (mock server unavailable).");
+      return;
+    }
+    leavesPendingQueueUntouchedDuringNewSubmission();
+    failedSubmissionDoesNotQueueOrEmitDepthTelemetry();
     System.out.println("[IrohaAndroid] HttpClientTransportPendingQueueTests passed.");
   }
 
-  private static void flushesPendingQueueBeforeNewSubmission() throws Exception {
+  private static void leavesPendingQueueUntouchedDuringNewSubmission() throws Exception {
     try (ToriiMockServer server = ToriiMockServer.create()) {
       final Path queueDir =
           Files.createTempDirectory("http_client_transport_pending_queue_flush");
@@ -56,27 +61,19 @@ public final class HttpClientTransportPendingQueueTests {
         transport.submitTransaction(live).get(5, TimeUnit.SECONDS);
 
         final List<ToriiMockServer.SubmitRequest> submissions = server.submittedTransactions();
-        assert submissions.size() == 3 : "expected queued transactions to flush before live submit";
+        assert submissions.size() == 1 : "only the live transaction may be dispatched";
         assert Arrays.equals(
             submissions.get(0).body(),
-            SignedTransactionEncoder.encodeVersioned(queuedOne))
-            : "first submission should flush the first queued transaction";
-        assert Arrays.equals(
-            submissions.get(1).body(),
-            SignedTransactionEncoder.encodeVersioned(queuedTwo))
-            : "second submission should flush the second queued transaction";
-        assert Arrays.equals(
-            submissions.get(2).body(),
             SignedTransactionEncoder.encodeVersioned(live))
-            : "final submission should be the live transaction";
-        assert queue.size() == 0 : "pending queue should be empty after successful flush";
+            : "submission must use the caller-supplied transaction";
+        assert queue.size() == 2 : "submission must not drain persisted signed bytes";
       } finally {
         deleteRecursively(queueDir);
       }
     }
   }
 
-  private static void queuesFailedSubmissionAndEmitsTelemetry() throws Exception {
+  private static void failedSubmissionDoesNotQueueOrEmitDepthTelemetry() throws Exception {
     final RecordingTelemetrySink telemetrySink = new RecordingTelemetrySink();
     final Path queueDir =
         Files.createTempDirectory("http_client_transport_pending_queue_telemetry");
@@ -94,21 +91,16 @@ public final class HttpClientTransportPendingQueueTests {
       final HttpClientTransport transport = new HttpClientTransport(failingExecutor, config);
       try {
         transport.submitTransaction(fakeTransaction("telemetry-failure")).join();
-        throw new AssertionError("Expected submission to fail and queue the transaction");
+        throw new AssertionError("Expected submission to fail");
       } catch (final CompletionException expected) {
         // Expected path.
       }
 
       final PendingTransactionQueue queue = config.pendingQueue();
-      assert queue.size() == 1 : "failed submission should be queued for later replay";
+      assert queue.size() == 0 : "failed submission must not queue signed bytes for replay";
       final RecordingTelemetrySink.SignalEvent event =
           telemetrySink.findSignal("android.pending_queue.depth");
-      assert event != null : "pending-queue depth telemetry should be emitted";
-      assert "oem_directory".equals(event.fields().get("queue"))
-          : "queue name should reflect the directory-backed queue";
-      final Object depth = event.fields().get("depth");
-      assert depth instanceof Number : "depth should be recorded as a numeric value";
-      assert ((Number) depth).longValue() == 1L : "queued depth should reflect the failed submit";
+      assert event == null : "submission must not emit automatic pending-queue telemetry";
     } finally {
       deleteRecursively(queueDir);
     }
@@ -118,7 +110,8 @@ public final class HttpClientTransportPendingQueueTests {
     final int nonce = Math.floorMod(marker.hashCode(), 1000) + 1;
     final TransactionPayload payload =
         TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
-            .setChainId(String.format("%08x", nonce))
+            .setNetworkId(
+                org.hyperledger.iroha.android.testing.TestNetworkIds.fromSeed(nonce))
             .setAuthority(TestAccountIds.ed25519Authority(0x24))
             .setCreationTimeMs(1_700_000_000_000L + nonce)
             .setInstructionBytes(marker.getBytes(StandardCharsets.UTF_8))

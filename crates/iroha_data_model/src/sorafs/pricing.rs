@@ -775,7 +775,11 @@ pub struct ProviderCreditRecord {
     pub provider_id: ProviderId,
     /// Available nominal credit after accounting for pending charges.
     pub available_credit: Quantity,
-    /// Collateral currently bonded for the provider.
+    /// Unslashed collateral currently locked in the authoritative native reserve.
+    ///
+    /// This field is not a funding source. Core accepts it only when it exactly
+    /// matches the owner-funded reserve partition net of treasury-funded
+    /// principal and the custody-backed `slashed` lien.
     pub bonded: Quantity,
     /// Required collateral computed during the last telemetry window.
     pub required_bond: Quantity,
@@ -787,7 +791,7 @@ pub struct ProviderCreditRecord {
     pub last_settlement_epoch: u64,
     /// Epoch when the credit balance last fell below the alert threshold (if any).
     pub low_balance_since_epoch: Option<u64>,
-    /// Total nominal collateral slashed because of under-delivery.
+    /// Total collateral held under a custody-backed slash lien for under-delivery.
     #[cfg_attr(feature = "json", norito(default))]
     pub slashed: Quantity,
     /// Consecutive under-delivery strike counter.
@@ -889,7 +893,7 @@ impl ProviderCreditRecord {
         self.under_delivery_strikes = 0;
     }
 
-    /// Apply a penalty to the bonded collateral and track totals.
+    /// Move a penalty from the usable bond into its custody-backed slash lien.
     ///
     /// # Errors
     ///
@@ -1370,6 +1374,48 @@ mod tests {
             schedule.required_collateral(StorageClass::Hot, 1, 11, 10),
             Err(PricingComputationError::EpochBeforeOnboarding { .. })
         ));
+    }
+
+    #[test]
+    fn public_pin_fee_scales_with_bytes_replicas_and_retention() {
+        let schedule = PricingScheduleRecord::launch_default();
+        let one_gib = u64::try_from(BYTES_PER_GIB).expect("GiB constant fits u64");
+        let base = schedule
+            .public_pin_fee(StorageClass::Hot, one_gib, 1, 0, SECONDS_PER_WEEK)
+            .expect("base public pin fee");
+        let larger = schedule
+            .public_pin_fee(
+                StorageClass::Hot,
+                one_gib.checked_mul(2).expect("two GiB fits u64"),
+                1,
+                0,
+                SECONDS_PER_WEEK,
+            )
+            .expect("larger public pin fee");
+        let replicated = schedule
+            .public_pin_fee(StorageClass::Hot, one_gib, 2, 0, SECONDS_PER_WEEK)
+            .expect("replicated public pin fee");
+        let longer = schedule
+            .public_pin_fee(
+                StorageClass::Hot,
+                one_gib,
+                1,
+                0,
+                SECONDS_PER_WEEK
+                    .checked_mul(2)
+                    .expect("two settlement windows fit u64"),
+            )
+            .expect("longer public pin fee");
+
+        assert!(larger > base, "stored bytes must increase the prepaid fee");
+        assert!(
+            replicated > base,
+            "replica count must increase the prepaid fee"
+        );
+        assert!(
+            longer > base,
+            "retention duration must increase the prepaid fee"
+        );
     }
 
     #[test]

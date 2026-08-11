@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import unicodedata
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -15,6 +14,8 @@ from sorafs_evidence_validation import (
     require_rollout_deployment_id,
     require_rollout_environment,
 )
+from sorafs_response_args import non_negative_int_arg, positive_int_arg
+import taira_constants
 
 
 MANIFEST_SCHEMA = "sorafs.l1.deployment_qualification.v1"
@@ -48,6 +49,14 @@ CANONICAL_READINESS_LANES = (
     "reserve_rent",
     "transparency",
 )
+CANONICAL_TAIRA_VALIDATOR_IDS = tuple(taira_constants.SLUGS)
+CANONICAL_TAIRA_VALIDATOR_IDS_SHA256 = hashlib.sha256(
+    json.dumps(
+        list(CANONICAL_TAIRA_VALIDATOR_IDS),
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+).hexdigest()
 QUALIFICATION_SUMMARY_FIELDS = frozenset(
     {
         "schema",
@@ -59,6 +68,7 @@ QUALIFICATION_SUMMARY_FIELDS = frozenset(
         "canonical_manifest_sha256",
         "deployment",
         "validator_count",
+        "validator_ids",
         "storage_provider_count",
         "gateway_count",
         "governance_dag_instance_count",
@@ -77,25 +87,34 @@ TOPOLOGY_BINDING_FIELDS = frozenset(
         "canonical_manifest_sha256",
         "deployment_id",
         "environment",
+        "network",
+        "chain_id",
+        "chain_discriminant",
+        "validator_ids_sha256",
     }
 )
-SIGNED_QUALIFICATION_ENVELOPE_FIELDS = frozenset(
+AUTHENTICATED_TOPOLOGY_BINDING_FIELDS = TOPOLOGY_BINDING_FIELDS | frozenset(
+    {
+        "signer_authentication_kind",
+        "signer_backend",
+        "signer_service_id",
+        "signer_administrator_id",
+        "signer_key_revision",
+        "signer_policy_revision",
+        "signer_policy_digest_sha256",
+        "signer_public_key_fingerprint_sha256",
+    }
+)
+SIGNED_QUALIFICATION_ENVELOPE_FIELDS = (
+    AUTHENTICATED_TOPOLOGY_BINDING_FIELDS
+    | frozenset(
     {
         "schema",
-        "qualification_summary_sha256",
-        "manifest_sha256",
-        "canonical_manifest_sha256",
-        "deployment_id",
-        "environment",
-        "signer_identity",
-        "signer_backend",
-        "signer_key_revision",
-        "signer_key_fingerprint_hex",
-        "signer_policy_digest_hex",
         "reviewed_at_unix",
         "signature_algorithm",
         "signature_hex",
     }
+    )
 )
 
 
@@ -114,6 +133,56 @@ def add_topology_qualification_argument(
             "Exact schema-qualified, non-promotable L1 topology summary whose "
             "digest must bind this lane."
         ),
+    )
+
+
+def add_signed_topology_qualification_arguments(parser: Any) -> None:
+    """Add the mandatory independently authenticated topology trust tuple."""
+
+    add_topology_qualification_argument(parser)
+    parser.add_argument(
+        "--topology-qualification-envelope",
+        required=True,
+        type=Path,
+        help="Independently signed companion for the exact topology summary.",
+    )
+    parser.add_argument(
+        "--topology-qualification-verification-public-key-hex",
+        required=True,
+        help="Operator-trusted non-zero raw Ed25519 topology verification key.",
+    )
+    parser.add_argument(
+        "--topology-qualification-signer-service-id",
+        required=True,
+        help="Operator-trusted external software signer service identity.",
+    )
+    parser.add_argument(
+        "--topology-qualification-signer-administrator-id",
+        required=True,
+        help="Independently administered topology signer identity.",
+    )
+    parser.add_argument(
+        "--topology-qualification-signer-key-revision",
+        required=True,
+        type=positive_int_arg,
+        help="Operator-trusted positive topology signer key revision.",
+    )
+    parser.add_argument(
+        "--topology-qualification-signer-policy-revision",
+        required=True,
+        type=positive_int_arg,
+        help="Operator-trusted positive topology signer policy revision.",
+    )
+    parser.add_argument(
+        "--topology-qualification-signer-policy-digest-hex",
+        required=True,
+        help="Operator-trusted topology signer policy SHA-256 digest.",
+    )
+    parser.add_argument(
+        "--max-topology-qualification-review-age-secs",
+        type=non_negative_int_arg,
+        default=DEFAULT_MAX_QUALIFICATION_REVIEW_AGE_SECS,
+        help="Maximum accepted age of the independently signed topology review.",
     )
 
 
@@ -158,16 +227,14 @@ def _canonical_signature_hex(value: Any) -> str | None:
     return value if any(decoded) else None
 
 
-def _canonical_identity(value: Any) -> str | None:
-    if (
-        not isinstance(value, str)
-        or not 1 <= len(value) <= 256
-        or value != value.strip()
-        or value != unicodedata.normalize("NFC", value)
-        or any(unicodedata.category(character).startswith("C") for character in value)
-    ):
+def _public_key_from_hex(value: Any) -> bytes | None:
+    if not isinstance(value, str) or len(value) != 64 or value != value.lower():
         return None
-    return value
+    try:
+        public_key = bytes.fromhex(value)
+    except ValueError:
+        return None
+    return public_key if any(public_key) else None
 
 
 def _positive_bounded_integer(value: Any) -> int | None:
@@ -215,7 +282,7 @@ def _validate_qualification_payload(
     *,
     expected_deployment_id: str | None,
     expected_environment: str | None,
-) -> tuple[dict[str, str] | None, list[str]]:
+) -> tuple[dict[str, Any] | None, list[str]]:
     errors: list[str] = []
     if set(payload) != QUALIFICATION_SUMMARY_FIELDS:
         errors.append(
@@ -250,9 +317,12 @@ def _validate_qualification_payload(
     if not isinstance(deployment, dict) or set(deployment) != {
         "deployment_id",
         "environment",
+        "network",
+        "chain_id",
+        "chain_discriminant",
     }:
         errors.append(
-            "topology qualification deployment fields must be deployment_id and environment"
+            "topology qualification deployment fields must match the Taira chain contract"
         )
     else:
         deployment_errors: list[str] = []
@@ -269,6 +339,21 @@ def _validate_qualification_payload(
             errors.append(
                 "topology qualification environment must match the reviewed lane context"
             )
+        if deployment.get("network") != taira_constants.NETWORK_NAME:
+            errors.append(
+                "topology qualification network must be exactly `taira`; Minamoto evidence is not accepted"
+            )
+        if deployment.get("chain_id") != taira_constants.CHAIN_ID:
+            errors.append(
+                "topology qualification chain_id must match the canonical Taira chain"
+            )
+        if (
+            deployment.get("chain_discriminant")
+            != taira_constants.CHAIN_DISCRIMINANT
+        ):
+            errors.append(
+                "topology qualification chain_discriminant must match the canonical Taira discriminator"
+            )
 
     expected_scalars = {
         "validator_count": 4,
@@ -279,6 +364,11 @@ def _validate_qualification_payload(
     for field, expected in expected_scalars.items():
         if payload.get(field) != expected:
             errors.append(f"topology qualification {field} must be {expected}")
+    if payload.get("validator_ids") != list(CANONICAL_TAIRA_VALIDATOR_IDS):
+        errors.append(
+            "topology qualification validator_ids must match the canonical "
+            "ordered Taira validator identities"
+        )
     provider_count = payload.get("storage_provider_count")
     if (
         not isinstance(provider_count, int)
@@ -325,6 +415,10 @@ def _validate_qualification_payload(
         "canonical_manifest_sha256": canonical_sha256,
         "deployment_id": deployment_id,
         "environment": environment,
+        "network": taira_constants.NETWORK_NAME,
+        "chain_id": taira_constants.CHAIN_ID,
+        "chain_discriminant": taira_constants.CHAIN_DISCRIMINANT,
+        "validator_ids_sha256": CANONICAL_TAIRA_VALIDATOR_IDS_SHA256,
     }, errors
 
 
@@ -364,20 +458,25 @@ def load_signed_topology_qualification_binding(
     envelope_path: Path,
     *,
     trusted_public_key: bytes,
-    trusted_signer_identity: str,
+    trusted_signer_service_id: str,
+    trusted_signer_administrator_id: str,
     trusted_key_revision: int,
+    trusted_policy_revision: int,
     trusted_policy_digest_hex: str,
     now_unix: int,
     max_review_age_secs: int = DEFAULT_MAX_QUALIFICATION_REVIEW_AGE_SECS,
     expected_deployment_id: str | None = None,
     expected_environment: str | None = None,
-) -> tuple[dict[str, str] | None, list[str]]:
+    independent_public_keys: Mapping[str, bytes | None] | None = None,
+    independent_administrator_ids: Mapping[str, str | None] | None = None,
+) -> tuple[dict[str, Any] | None, list[str]]:
     """Authenticate one topology binding with an independent Ed25519 envelope.
 
-    The existing unsigned loader remains available for staged call-site
-    migration. New production callers can use this companion API with a
-    topology-specific public key and signer policy.
+    The unsigned loader remains limited to lane-local base bindings. Production
+    callers receive the authenticated signer provenance in this binding.
     """
+
+    import sorafs_software_signer_evidence as software_signer_evidence
 
     errors: list[str] = []
     if (
@@ -386,19 +485,28 @@ def load_signed_topology_qualification_binding(
         or not any(trusted_public_key)
     ):
         errors.append("trusted topology public key must be exactly 32 non-zero bytes")
-    signer_identity = _canonical_identity(trusted_signer_identity)
-    if signer_identity is None:
-        errors.append("trusted topology signer identity must be canonical")
-    key_revision = _positive_bounded_integer(trusted_key_revision)
-    if key_revision is None:
-        errors.append(
-            "trusted topology signer key revision must be a positive bounded integer"
-        )
-    policy_digest = _canonical_sha256(trusted_policy_digest_hex)
-    if policy_digest is None:
-        errors.append(
-            "trusted topology signer policy digest must be canonical non-zero SHA-256"
-        )
+    trusted_signer = software_signer_evidence.validate_foundational_software_signer(
+        {
+            "backend": "software",
+            "service_id": trusted_signer_service_id,
+            "administrator_id": trusted_signer_administrator_id,
+            "key_revision": trusted_key_revision,
+            "policy_revision": trusted_policy_revision,
+            "policy_digest_sha256": trusted_policy_digest_hex,
+        },
+        errors,
+    )
+    for label, candidate in (independent_public_keys or {}).items():
+        if isinstance(candidate, bytes) and candidate == trusted_public_key:
+            errors.append(f"trusted topology public key must differ from {label}")
+    for label, candidate in (independent_administrator_ids or {}).items():
+        if (
+            isinstance(candidate, str)
+            and candidate == trusted_signer["signer_administrator_id"]
+        ):
+            errors.append(
+                f"trusted topology administrator must differ from {label}"
+            )
     validation_clock = _positive_bounded_integer(now_unix)
     if validation_clock is None:
         errors.append(
@@ -447,6 +555,7 @@ def load_signed_topology_qualification_binding(
         "qualification_summary_sha256",
         "manifest_sha256",
         "canonical_manifest_sha256",
+        "validator_ids_sha256",
     ):
         digest = _canonical_sha256(envelope.get(field))
         if digest is None:
@@ -459,64 +568,51 @@ def load_signed_topology_qualification_binding(
                 f"signed topology qualification envelope {field} must match "
                 "the exact qualification binding"
             )
-    for field in ("deployment_id", "environment"):
+    for field in (
+        "deployment_id",
+        "environment",
+        "network",
+        "chain_id",
+        "chain_discriminant",
+    ):
         if envelope.get(field) != binding[field]:
             errors.append(
                 f"signed topology qualification envelope {field} must match "
                 "the exact qualification binding"
             )
-    envelope_signer_identity = _canonical_identity(envelope.get("signer_identity"))
-    if envelope_signer_identity is None:
+    if envelope.get("signer_authentication_kind") != "external-ed25519":
         errors.append(
-            "signed topology qualification envelope signer_identity must be canonical"
+            "signed topology qualification envelope signer_authentication_kind "
+            "must be `external-ed25519`"
         )
-    elif envelope_signer_identity != signer_identity:
-        errors.append(
-            "signed topology qualification envelope signer_identity must match "
-            "the trusted signer"
-        )
-    if envelope.get("signer_backend") != "software":
-        errors.append(
-            "signed topology qualification envelope signer_backend must be `software`"
-        )
-    envelope_key_revision = _positive_bounded_integer(
-        envelope.get("signer_key_revision")
-    )
-    if envelope_key_revision is None:
-        errors.append(
-            "signed topology qualification envelope signer_key_revision must be "
-            "a positive bounded integer"
-        )
-    elif envelope_key_revision != key_revision:
-        errors.append(
-            "signed topology qualification envelope signer_key_revision must "
-            "match the trusted revision"
-        )
+    software_signer_evidence.validate_aggregate_software_signer(envelope, errors)
+    for field in (
+        "signer_backend",
+        "signer_service_id",
+        "signer_administrator_id",
+        "signer_key_revision",
+        "signer_policy_revision",
+        "signer_policy_digest_sha256",
+    ):
+        if envelope.get(field) != trusted_signer[field]:
+            errors.append(
+                f"signed topology qualification envelope {field} must match "
+                "the trusted external software signer"
+            )
     assert isinstance(trusted_public_key, bytes)
     trusted_fingerprint = hashlib.sha256(trusted_public_key).hexdigest()
-    fingerprint = _canonical_sha256(envelope.get("signer_key_fingerprint_hex"))
+    fingerprint = _canonical_sha256(
+        envelope.get("signer_public_key_fingerprint_sha256")
+    )
     if fingerprint is None:
         errors.append(
-            "signed topology qualification envelope signer_key_fingerprint_hex "
+            "signed topology qualification envelope signer public-key fingerprint "
             "must be canonical non-zero SHA-256"
         )
     elif fingerprint != trusted_fingerprint:
         errors.append(
-            "signed topology qualification envelope signer_key_fingerprint_hex "
+            "signed topology qualification envelope signer public-key fingerprint "
             "must match the trusted public key"
-        )
-    envelope_policy_digest = _canonical_sha256(
-        envelope.get("signer_policy_digest_hex")
-    )
-    if envelope_policy_digest is None:
-        errors.append(
-            "signed topology qualification envelope signer_policy_digest_hex "
-            "must be canonical non-zero SHA-256"
-        )
-    elif envelope_policy_digest != policy_digest:
-        errors.append(
-            "signed topology qualification envelope signer_policy_digest_hex "
-            "must match the trusted signer policy"
         )
 
     reviewed_at = _positive_bounded_integer(envelope.get("reviewed_at_unix"))
@@ -571,24 +667,119 @@ def load_signed_topology_qualification_binding(
                 )
     if errors:
         return None, errors
-    return binding, []
+    return {
+        **binding,
+        "signer_authentication_kind": envelope["signer_authentication_kind"],
+        "signer_backend": envelope["signer_backend"],
+        "signer_service_id": envelope["signer_service_id"],
+        "signer_administrator_id": envelope["signer_administrator_id"],
+        "signer_key_revision": envelope["signer_key_revision"],
+        "signer_policy_revision": envelope["signer_policy_revision"],
+        "signer_policy_digest_sha256": envelope["signer_policy_digest_sha256"],
+        "signer_public_key_fingerprint_sha256": envelope[
+            "signer_public_key_fingerprint_sha256"
+        ],
+    }, []
 
 
-def validate_topology_binding_object(
+def load_signed_topology_qualification_from_args(
+    args: Any,
+    *,
+    expected_deployment_id: str | None,
+    expected_environment: str | None,
+) -> tuple[dict[str, str] | None, list[str]]:
+    """Authenticate topology inputs added by the shared signed CLI helper."""
+
+    public_key = _public_key_from_hex(
+        args.topology_qualification_verification_public_key_hex
+    ) or b""
+    independent_public_keys = {}
+    for attribute, label in (
+        ("resilience_qualification_signer_public_key_hex", "resilience signer key"),
+        ("foundational_signer_public_key_hex", "promotion signer key"),
+        ("trusted_public_key_hex", "promotion signer key"),
+        ("provenance_verification_public_key_hex", "lane signer key"),
+    ):
+        candidate = _public_key_from_hex(getattr(args, attribute, None))
+        if candidate is not None:
+            independent_public_keys[label] = candidate
+    independent_administrator_ids = {
+        label: getattr(args, attribute)
+        for attribute, label in (
+            ("signer_administrator_id", "promotion signer administrator"),
+            ("expected_signer_administrator_id", "promotion signer administrator"),
+        )
+        if getattr(args, attribute, None) is not None
+    }
+    return load_signed_topology_qualification_binding(
+        args.topology_qualification_summary,
+        args.topology_qualification_envelope,
+        trusted_public_key=public_key,
+        trusted_signer_service_id=args.topology_qualification_signer_service_id,
+        trusted_signer_administrator_id=(
+            args.topology_qualification_signer_administrator_id
+        ),
+        trusted_key_revision=args.topology_qualification_signer_key_revision,
+        trusted_policy_revision=args.topology_qualification_signer_policy_revision,
+        trusted_policy_digest_hex=args.topology_qualification_signer_policy_digest_hex,
+        now_unix=args.now_unix,
+        max_review_age_secs=args.max_topology_qualification_review_age_secs,
+        expected_deployment_id=expected_deployment_id,
+        expected_environment=expected_environment,
+        independent_public_keys=independent_public_keys,
+        independent_administrator_ids=independent_administrator_ids,
+    )
+
+
+def validate_independent_topology_signer_domains(
+    topology: Any,
+    *signers: tuple[str, Any],
+) -> list[str]:
+    """Reject administrator or key reuse across qualifying signer domains."""
+
+    if not isinstance(topology, Mapping):
+        return []
+    errors: list[str] = []
+    topology_administrator = topology.get("signer_administrator_id")
+    topology_fingerprint = topology.get("signer_public_key_fingerprint_sha256")
+    for label, signer in signers:
+        if not isinstance(signer, Mapping):
+            continue
+        if isinstance(topology_administrator, str) and (
+            signer.get("signer_administrator_id") == topology_administrator
+        ):
+            errors.append(f"topology signer administrator must differ from {label}")
+        if isinstance(topology_fingerprint, str) and (
+            signer.get("signer_public_key_fingerprint_sha256") == topology_fingerprint
+        ):
+            errors.append(f"topology signer public key must differ from {label}")
+    return errors
+
+
+def _validate_topology_binding_object(
     value: Any,
     *,
-    expected: Mapping[str, str] | None = None,
+    expected: Mapping[str, Any] | None,
     path: str = "topology_qualification",
+    authenticated_required: bool,
 ) -> list[str]:
-    """Validate one schema-closed topology binding and optional exact match."""
+    """Validate one base or authenticated topology binding."""
 
     errors: list[str] = []
-    if not isinstance(value, dict) or set(value) != TOPOLOGY_BINDING_FIELDS:
+    observed_fields = frozenset(value) if isinstance(value, dict) else frozenset()
+    allowed_fields = (
+        {AUTHENTICATED_TOPOLOGY_BINDING_FIELDS}
+        if authenticated_required
+        else {TOPOLOGY_BINDING_FIELDS, AUTHENTICATED_TOPOLOGY_BINDING_FIELDS}
+    )
+    if not isinstance(value, dict) or observed_fields not in allowed_fields:
         return [f"{path} fields must match the schema-closed contract"]
+    authenticated = observed_fields == AUTHENTICATED_TOPOLOGY_BINDING_FIELDS
     for field in (
         "qualification_summary_sha256",
         "manifest_sha256",
         "canonical_manifest_sha256",
+        "validator_ids_sha256",
     ):
         if _canonical_sha256(value.get(field)) is None:
             errors.append(f"{path}.{field} must be canonical non-zero SHA-256")
@@ -598,11 +789,72 @@ def validate_topology_binding_object(
     errors.extend(f"{path} {error}" for error in deployment_errors)
     if value.get("environment") not in {"prod", "production"}:
         errors.append(f"{path}.environment must be production")
+    if value.get("network") != taira_constants.NETWORK_NAME:
+        errors.append(
+            f"{path}.network must be exactly `taira`; Minamoto evidence is not accepted"
+        )
+    if value.get("chain_id") != taira_constants.CHAIN_ID:
+        errors.append(f"{path}.chain_id must match the canonical Taira chain")
+    if value.get("chain_discriminant") != taira_constants.CHAIN_DISCRIMINANT:
+        errors.append(
+            f"{path}.chain_discriminant must match the canonical Taira discriminator"
+        )
+    if value.get("validator_ids_sha256") != CANONICAL_TAIRA_VALIDATOR_IDS_SHA256:
+        errors.append(
+            f"{path}.validator_ids_sha256 must bind the canonical ordered Taira validators"
+        )
+    if authenticated:
+        import sorafs_software_signer_evidence as software_signer_evidence
+
+        if value.get("signer_authentication_kind") != "external-ed25519":
+            errors.append(
+                f"{path}.signer_authentication_kind must be `external-ed25519`"
+            )
+        software_signer_evidence.validate_aggregate_software_signer(value, errors)
+        if _canonical_sha256(
+            value.get("signer_public_key_fingerprint_sha256")
+        ) is None:
+            errors.append(
+                f"{path}.signer_public_key_fingerprint_sha256 must be canonical "
+                "non-zero SHA-256"
+            )
     if expected is not None:
-        for field in TOPOLOGY_BINDING_FIELDS:
+        comparison_fields = (
+            AUTHENTICATED_TOPOLOGY_BINDING_FIELDS
+            if authenticated
+            and set(expected) == AUTHENTICATED_TOPOLOGY_BINDING_FIELDS
+            else TOPOLOGY_BINDING_FIELDS
+        )
+        for field in comparison_fields:
             if value.get(field) != expected.get(field):
                 errors.append(f"{path}.{field} must match the reviewed topology")
     return errors
+
+
+def validate_topology_binding_object(
+    value: Any,
+    *,
+    expected: Mapping[str, Any] | None = None,
+    path: str = "topology_qualification",
+) -> list[str]:
+    """Validate a lane-local or authenticated topology binding."""
+
+    return _validate_topology_binding_object(
+        value, expected=expected, path=path, authenticated_required=False
+    )
+
+
+def validate_authenticated_topology_binding_object(
+    value: Any,
+    *,
+    expected: Mapping[str, Any] | None = None,
+    path: str = "topology_qualification",
+) -> list[str]:
+    """Require full external software-signer provenance in a binding."""
+
+    return _validate_topology_binding_object(
+        value, expected=expected, path=path, authenticated_required=True
+    )
 
 
 def lane_summary_deployment_context(

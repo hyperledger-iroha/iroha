@@ -8,8 +8,8 @@
 use std::collections::{BTreeSet, VecDeque};
 
 use super::{
-    BodyState, CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, Effect,
-    EquivocationKind, Event, EventTag, Generation, HeightContext, IgnoreReason, OpaqueSignature,
+    BodyState, CertificateRef, ConsensusMessageV2, ContextId, Digest, Effect, EquivocationKind,
+    Event, EventTag, Generation, HeightContext, IgnoreReason, NetworkId, OpaqueSignature,
     PayloadManifest, Phase, QuorumCertificate, Reducer, Round, SignableMessage, SignatureShare,
     SignedVote, StepDisposition, Subject, TimeoutCertificate, TimeoutSignatureGroup, Validator,
     ValidatorId, Vote, VotingMode, VotingPower, WalEntry, WalRecord,
@@ -1067,7 +1067,7 @@ fn context(validator_count: usize, mode: VotingMode) -> HeightContext {
     );
     HeightContext::new(
         ContextId::repeat(0x42),
-        ChainId::repeat(0x43),
+        NetworkId::repeat(0x43),
         HEIGHT,
         Some(parent),
         7,

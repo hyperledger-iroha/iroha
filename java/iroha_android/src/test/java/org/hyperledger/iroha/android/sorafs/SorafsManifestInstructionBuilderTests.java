@@ -17,9 +17,9 @@ public final class SorafsManifestInstructionBuilderTests {
   public static void main(final String[] args) {
     approvePinManifestRoundTrip();
     approvePinManifestRejectsInvalidEnvelope();
-    approvePinManifestRejectsNegativeEpoch();
+    approvePinManifestRejectsRetiredEpochField();
     retirePinManifestRoundTrip();
-    retirePinManifestRejectsNegativeEpoch();
+    retirePinManifestRejectsRetiredEpochField();
     bindManifestAliasRoundTrip();
     bindManifestAliasRejectsNegativeEpoch();
     System.out.println("[IrohaAndroid] SorafsManifestInstructionBuilderTests passed.");
@@ -34,7 +34,6 @@ public final class SorafsManifestInstructionBuilderTests {
     final ApprovePinManifestInstruction instruction =
         ApprovePinManifestInstruction.builder()
             .setDigestHex(digest)
-            .setApprovedEpoch(42)
             .setCouncilEnvelopeBase64(envelopeBase64)
             .setCouncilEnvelopeDigestHex(envelopeDigest)
             .build();
@@ -46,8 +45,10 @@ public final class SorafsManifestInstructionBuilderTests {
         : "envelope mismatch";
     assert envelopeDigest.equals(args.get("council_envelope_digest_hex"))
         : "envelope digest mismatch";
-    assert instruction.approvedEpoch() == 42 : "approved epoch mismatch";
+    assert !args.containsKey("approved_epoch") : "caller-supplied approval epoch resurfaced";
     assert envelopeBase64.equals(instruction.councilEnvelopeBase64()) : "payload envelope mismatch";
+    assert instruction.equals(ApprovePinManifestInstruction.fromArguments(args))
+        : "approval arguments must round-trip";
   }
 
   private static void approvePinManifestRejectsInvalidEnvelope() {
@@ -55,7 +56,6 @@ public final class SorafsManifestInstructionBuilderTests {
     try {
       ApprovePinManifestInstruction.builder()
           .setDigestHex("a0".repeat(32))
-          .setApprovedEpoch(42)
           .setCouncilEnvelopeBase64("not!base64");
     } catch (final IllegalArgumentException ex) {
       threw = true;
@@ -63,40 +63,51 @@ public final class SorafsManifestInstructionBuilderTests {
     assert threw : "Expected invalid council envelope base64 to throw";
   }
 
-  private static void approvePinManifestRejectsNegativeEpoch() {
+  private static void approvePinManifestRejectsRetiredEpochField() {
+    final Map<String, String> arguments =
+        new java.util.LinkedHashMap<>(
+            ApprovePinManifestInstruction.builder()
+                .setDigestHex("a0".repeat(32))
+                .build()
+                .toArguments());
+    arguments.put("approved_epoch", "42");
     boolean threw = false;
     try {
-      ApprovePinManifestInstruction.builder()
-          .setDigestHex("a0".repeat(32))
-          .setApprovedEpoch(-1);
+      ApprovePinManifestInstruction.fromArguments(arguments);
     } catch (final IllegalArgumentException ex) {
       threw = true;
     }
-    assert threw : "Expected negative approved epoch to throw";
+    assert threw : "Expected caller-supplied approved epoch to throw";
   }
 
   private static void retirePinManifestRoundTrip() {
     final RetirePinManifestInstruction instruction =
         RetirePinManifestInstruction.builder()
             .setDigestHex("c0".repeat(32))
-            .setRetiredEpoch(99)
             .setReason("governance-retired")
             .build();
     final Map<String, String> args = instruction.toArguments();
     assert "governance-retired".equals(args.get("reason")) : "reason mismatch";
-    assert instruction.retiredEpoch() == 99 : "retired epoch mismatch";
+    assert !args.containsKey("retired_epoch") : "caller-supplied retirement epoch resurfaced";
+    assert instruction.equals(RetirePinManifestInstruction.fromArguments(args))
+        : "retirement arguments must round-trip";
   }
 
-  private static void retirePinManifestRejectsNegativeEpoch() {
+  private static void retirePinManifestRejectsRetiredEpochField() {
+    final Map<String, String> arguments =
+        new java.util.LinkedHashMap<>(
+            RetirePinManifestInstruction.builder()
+                .setDigestHex("c0".repeat(32))
+                .build()
+                .toArguments());
+    arguments.put("retired_epoch", "99");
     boolean threw = false;
     try {
-      RetirePinManifestInstruction.builder()
-          .setDigestHex("c0".repeat(32))
-          .setRetiredEpoch(-1);
+      RetirePinManifestInstruction.fromArguments(arguments);
     } catch (final IllegalArgumentException ex) {
       threw = true;
     }
-    assert threw : "Expected negative retired epoch to throw";
+    assert threw : "Expected caller-supplied retired epoch to throw";
   }
 
   private static void bindManifestAliasRoundTrip() {

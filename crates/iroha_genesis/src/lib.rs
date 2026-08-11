@@ -349,10 +349,11 @@ fn validate_signed_manifest_binding(
     let canonical_fee_intent = FeePaymentIntent::authority(Vec::new(), None);
     let mut previous_creation_time: Option<u128> = None;
     for (index, (expected_batch, transaction)) in expected.iter().zip(&actual).enumerate() {
-        if transaction.chain() != manifest.chain_id() || transaction.authority() != &genesis_account
+        if transaction.domain() != &iroha_data_model::transaction::TransactionDomain::Genesis
+            || transaction.authority() != &genesis_account
         {
             return Err(eyre!(
-                "signed genesis transaction {index} has the wrong chain or root authority"
+                "signed genesis transaction {index} has the wrong domain or root authority"
             ));
         }
         if !transaction.metadata().is_empty()
@@ -2105,7 +2106,7 @@ pub mod genesis_instructions_json {
             };
             let instructions = vec![
                 InstructionBox::from(CreateFeeSponsorProgram {
-                    program: FeeSponsorProgram::new(program_id.clone()),
+                    program: FeeSponsorProgram::new(program_id.clone(), program_id.sponsor.clone()),
                 }),
                 InstructionBox::from(StageFeeSponsorProgramRevision { revision }),
                 InstructionBox::from(EnrollFeeSponsorBeneficiary {
@@ -2205,15 +2206,9 @@ pub mod genesis_instructions_json {
                 DomainId::try_new("zk", "universal").expect("domain"),
                 "xor".parse().expect("asset name"),
             );
-            let instruction =
-                InstructionBox::from(iroha_data_model::isi::zk::RegisterZkAsset::new(
-                    asset_definition_id,
-                    iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
-                    true,
-                    true,
-                    None,
-                    None,
-                ));
+            let instruction = InstructionBox::from(
+                iroha_data_model::isi::zk::RegisterZkAsset::new(asset_definition_id, None, None),
+            );
 
             let value = instruction_value(&instruction);
             assert!(
@@ -3098,11 +3093,10 @@ fn is_consensus_handshake_metadata_instruction(instruction: &InstructionBox) -> 
         })
 }
 
-fn compute_consensus_fingerprint_v2(
-    chain_id: &ChainId,
+fn compute_consensus_parameters_fingerprint_v2(
     params: &iroha_data_model::block::consensus::ConsensusGenesisParams,
 ) -> Result<[u8; 32]> {
-    iroha_data_model::block::consensus_v2::fingerprint::compute(chain_id, params)
+    iroha_data_model::block::consensus_v2::fingerprint::compute(params)
         .map_err(|error| eyre!("invalid signed consensus parameters: {error}"))
 }
 
@@ -3375,7 +3369,7 @@ impl RawGenesisTransaction {
             protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
             v2_context: self.sumeragi_v2,
         };
-        let Ok(fp) = compute_consensus_fingerprint_v2(&self.chain, &dm_params) else {
+        let Ok(fp) = compute_consensus_parameters_fingerprint_v2(&dm_params) else {
             self.consensus_fingerprint = None;
             return self;
         };
@@ -3625,6 +3619,16 @@ mod tests2 {
             .consensus_fingerprint
             .unwrap();
         assert_eq!(fp1, fp2);
+        let mut differently_named = tx.clone();
+        differently_named.chain = ChainId::from("same-parameters-different-display-name");
+        let differently_named_fp = differently_named
+            .with_consensus_meta()
+            .consensus_fingerprint
+            .expect("valid parameters fingerprint");
+        assert_eq!(
+            fp1, differently_named_fp,
+            "genesis-embedded parameters fingerprint must not depend on chain display identity"
+        );
 
         // Validate that the injected handshake payload parses as JSON.
         let normalized = tx.normalize().expect("normalize empty manifest");
@@ -3750,16 +3754,13 @@ mod tests2 {
             "effective parameters must reflect block max override"
         );
 
-        let expected = compute_consensus_fingerprint_v2(
-            &chain,
-            &ConsensusGenesisParams {
-                block_cadence_ms: params.sumeragi().block_cadence_ms(),
-                block_max_transactions: params.block().max_transactions(),
-                mode: ConsensusGenesisModeParams::Permissioned,
-                protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
-                v2_context: SumeragiV2GenesisContextParameters::recommended(),
-            },
-        )
+        let expected = compute_consensus_parameters_fingerprint_v2(&ConsensusGenesisParams {
+            block_cadence_ms: params.sumeragi().block_cadence_ms(),
+            block_max_transactions: params.block().max_transactions(),
+            mode: ConsensusGenesisModeParams::Permissioned,
+            protocol_version: iroha_config::parameters::defaults::sumeragi::PROTOCOL_VERSION,
+            v2_context: SumeragiV2GenesisContextParameters::recommended(),
+        })
         .expect("canonical permissioned parameters must fingerprint");
         let observed = manifest
             .consensus_fingerprint
@@ -4889,7 +4890,7 @@ mod tests2 {
                 v2_context: tx.sumeragi_v2,
             };
 
-            compute_consensus_fingerprint_v2(&tx.chain, &dm_params)
+            compute_consensus_parameters_fingerprint_v2(&dm_params)
                 .expect("canonical NPoS fixture must fingerprint")
         }
 
@@ -5303,7 +5304,6 @@ impl RawGenesisTransaction {
         confidential_policy_hash: Option<[u8; 32]>,
         creation_time_base_ms: u64,
     ) -> Result<GenesisBlock> {
-        let chain = self.chain.clone();
         let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
         let instruction_batches = self.parse()?;
         let timestamp_span = u64::try_from(instruction_batches.len())
@@ -5329,8 +5329,7 @@ impl RawGenesisTransaction {
                     encoded.len()
                 );
             }
-            let mut builder = TransactionBuilder::new(
-                chain.clone(),
+            let mut builder = TransactionBuilder::new_genesis(
                 genesis_account.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )

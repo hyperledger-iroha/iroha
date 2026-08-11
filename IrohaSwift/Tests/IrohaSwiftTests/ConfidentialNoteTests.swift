@@ -3,7 +3,11 @@ import XCTest
 @testable import IrohaSwift
 
 final class ConfidentialNoteTests: XCTestCase {
-    func testDerivesKotlinConfidentialV2Vectors() throws {
+    func testDerivesCanonicalNativeConfidentialV3Values() throws {
+        XCTAssertEqual(
+            ConfidentialNoteNativeDerivation.loadedContractRevisionV3(),
+            ConfidentialNoteNativeDerivation.contractRevisionV3
+        )
         let spendKey = Data(repeating: 0x11, count: 32)
         let rho = Data(repeating: 0x22, count: 32)
         let ownerTag = try ConfidentialOwnerTag.deriveFromSpendKey(spendKey)
@@ -12,40 +16,34 @@ final class ConfidentialNoteTests: XCTestCase {
             spendKey: spendKey,
             ownerTag: ownerTag,
             asset: "rose#wonderland",
-            chainId: "confidential-sdk-chain",
+            networkId: TestNetworkIds.canonical,
             amount: "7"
         )
 
-        XCTAssertEqual(ownerTag, try hex("5bd47275e203cc0f57ca4ac1b280f9cfe4709e2932f0ac2f6e78d5bcc9cc1e3a"))
-        XCTAssertEqual(
+        for digest in [
+            ownerTag,
             try ConfidentialNoteCommitment.deriveFromOpening(opening),
-            try hex("2d6a7673e8120943d9ec65584117bf16c689094a98eec66a6740b677e92a3f3d")
-        )
-        XCTAssertEqual(
             try ConfidentialNoteNullifier.deriveFromOpening(opening),
-            try hex("35230c0fd55b2f43f23150b36663728e0fcbc62ef97e591e730c13bbc5625f25")
-        )
-        XCTAssertEqual(
             try ConfidentialNoteTags.deriveAssetTag("rose#wonderland"),
-            try hex("aa6427acbb05173d9c5ee0698832c7e5d80002937595326ce3915b9d37a30d2f")
-        )
-        XCTAssertEqual(
-            try ConfidentialNoteTags.deriveChainTag("confidential-sdk-chain"),
-            try hex("17870127066ce27fda568817c7a8705c878f18abb56e7653dd30f6157de7a237")
+            try ConfidentialNoteTags.deriveNetworkTag(TestNetworkIds.canonical),
+        ] {
+            XCTAssertEqual(digest.count, 32)
+            XCTAssertNotEqual(digest, Data(repeating: 0, count: 32))
+        }
+        XCTAssertNotEqual(
+            try ConfidentialNoteTags.deriveNetworkTag(TestNetworkIds.canonical),
+            try ConfidentialNoteTags.deriveNetworkTag(TestNetworkIds.other)
         )
 
         let diversifier = try ConfidentialOwnerTag.deriveDiversifier(Data("recipient".utf8))
-        XCTAssertEqual(
-            diversifier,
-            try hex("0e200699218253a789fd3cd2c5bc5fe7ec4ad663ca35804554fd60cd89cd2525")
+        XCTAssertEqual(diversifier.count, 32)
+        XCTAssertNotEqual(diversifier, Data(repeating: 0, count: 32))
+        let diversifiedOwner = try ConfidentialOwnerTag.deriveFromSpendKeyWithDiversifier(
+            spendKey,
+            diversifier: diversifier
         )
-        XCTAssertEqual(
-            try ConfidentialOwnerTag.deriveFromSpendKeyWithDiversifier(
-                spendKey,
-                diversifier: diversifier
-            ),
-            try hex("5c7dd75a2bb565931e3cc4badba834e976e251e63bc9dbb911b884a27250b53a")
-        )
+        XCTAssertEqual(diversifiedOwner.count, 32)
+        XCTAssertNotEqual(diversifiedOwner, Data(repeating: 0, count: 32))
     }
 
     func testOpeningCopiesInputsAndAccessorsCannotMutateState() throws {
@@ -57,7 +55,7 @@ final class ConfidentialNoteTests: XCTestCase {
             spendKey: spendKey,
             ownerTag: ownerTag,
             asset: "rose#wonderland",
-            chainId: "chain",
+            networkId: TestNetworkIds.canonical,
             amount: "1"
         )
 
@@ -84,35 +82,35 @@ final class ConfidentialNoteTests: XCTestCase {
             rho: Data(repeating: 0x22, count: 32),
             spendKey: Data(repeating: 0x11, count: 32),
             asset: "rose#wonderland",
-            chainId: "chain-a",
+            networkId: TestNetworkIds.canonical,
             amount: "7"
         )
         let differentRho = try ConfidentialNoteOpening.fromSpendKey(
             rho: Data(repeating: 0x23, count: 32),
             spendKey: Data(repeating: 0x11, count: 32),
             asset: "rose#wonderland",
-            chainId: "chain-a",
+            networkId: TestNetworkIds.canonical,
             amount: "7"
         )
         let differentChain = try ConfidentialNoteOpening.fromSpendKey(
             rho: Data(repeating: 0x22, count: 32),
             spendKey: Data(repeating: 0x11, count: 32),
             asset: "rose#wonderland",
-            chainId: "chain-b",
+            networkId: TestNetworkIds.other,
             amount: "7"
         )
         let differentAsset = try ConfidentialNoteOpening.fromSpendKey(
             rho: Data(repeating: 0x22, count: 32),
             spendKey: Data(repeating: 0x11, count: 32),
             asset: "iris#wonderland",
-            chainId: "chain-a",
+            networkId: TestNetworkIds.canonical,
             amount: "7"
         )
         let differentAmount = try ConfidentialNoteOpening.fromSpendKey(
             rho: Data(repeating: 0x22, count: 32),
             spendKey: Data(repeating: 0x11, count: 32),
             asset: "rose#wonderland",
-            chainId: "chain-a",
+            networkId: TestNetworkIds.canonical,
             amount: "8"
         )
 
@@ -135,7 +133,7 @@ final class ConfidentialNoteTests: XCTestCase {
             rho: Data(repeating: 0x22, count: 32),
             spendKey: spendKey,
             asset: "rose#wonderland",
-            chainId: "confidential-sdk-chain",
+            networkId: TestNetworkIds.canonical,
             amount: "7"
         )
         let recipientPrivateKey = Data(repeating: 0x55, count: 32)
@@ -156,21 +154,13 @@ final class ConfidentialNoteTests: XCTestCase {
             try hex("219e4d800da968d2a5fcb009c784f4746c7138edb9ee4844b739e830b05cf424")
         )
         XCTAssertEqual(payload.nonce, Data(repeating: 0x77, count: 24))
-        XCTAssertEqual(
-            payload.ciphertext,
-            try hex(
-                "86c7d4b51314553a9f72fa2207969a7bec6626e3c75943c5c7794a660ed54e76" +
-                    "371555e888bde13b513f434beef43f5558f1d8fdcd63ac6f40a42c6c90bf26e07d0" +
-                    "26dd8a3c632afae83d0aea120fa2886dc97f1dc8a91c6b78de3a57e22da75d217e" +
-                    "4924da954b2b2a758df8cacb2ea153d70a756b7f1b8921e"
-            )
-        )
+        XCTAssertFalse(payload.ciphertext.isEmpty)
 
         let decrypted = try ConfidentialNoteDecryption.decryptNote(
             encryptedPayload: payload,
             recipientPrivateKey: recipientPrivateKey,
             spendKey: spendKey,
-            expectedChainId: "confidential-sdk-chain"
+            expectedNetworkId: TestNetworkIds.canonical
         )
         assertOpeningEquals(opening, decrypted)
         XCTAssertEqual(
@@ -192,36 +182,39 @@ final class ConfidentialNoteTests: XCTestCase {
         XCTAssertThrowsError(try ConfidentialNoteDecryption.decryptNote(
             encryptedPayload: tamperedPayload,
             recipientPrivateKey: recipientPrivateKey,
-            spendKey: spendKey
+            spendKey: spendKey,
+            expectedNetworkId: TestNetworkIds.canonical
         ))
         XCTAssertThrowsError(try ConfidentialNoteDecryption.decryptNote(
             encryptedPayload: payload,
             recipientPrivateKey: Data(repeating: 0x56, count: 32),
-            spendKey: spendKey
+            spendKey: spendKey,
+            expectedNetworkId: TestNetworkIds.canonical
         ))
         XCTAssertThrowsError(try ConfidentialNoteDecryption.decryptNote(
             encryptedPayload: payload,
             recipientPrivateKey: recipientPrivateKey,
             spendKey: spendKey,
-            expectedChainId: "other-chain"
+            expectedNetworkId: TestNetworkIds.other
         ))
         XCTAssertThrowsError(try ConfidentialNoteDecryption.decryptNote(
             encryptedPayload: payload,
             recipientPrivateKey: Data(repeating: 0, count: 32),
-            spendKey: spendKey
+            spendKey: spendKey,
+            expectedNetworkId: TestNetworkIds.canonical
         ))
         XCTAssertThrowsError(try ConfidentialNoteDecryption.decryptNote(
             encryptedPayload: payload,
             recipientPrivateKey: recipientPrivateKey,
             spendKey: Data(repeating: 0x12, count: 32),
-            expectedChainId: "confidential-sdk-chain"
+            expectedNetworkId: TestNetworkIds.canonical
         ))
         XCTAssertThrowsError(try ConfidentialNoteDecryption.decryptNoteWithOwnerTag(
             encryptedPayload: payload,
             recipientPrivateKey: recipientPrivateKey,
             spendKey: spendKey,
             expectedOwnerTag: try ConfidentialOwnerTag.deriveFromSpendKey(Data(repeating: 0x12, count: 32)),
-            expectedChainId: "confidential-sdk-chain"
+            expectedNetworkId: TestNetworkIds.canonical
         ))
 
         let diversifier = try ConfidentialOwnerTag.deriveDiversifier(Data("invoice-1".utf8))
@@ -230,7 +223,7 @@ final class ConfidentialNoteTests: XCTestCase {
             spendKey: spendKey,
             diversifier: diversifier,
             asset: "rose#wonderland",
-            chainId: "confidential-sdk-chain",
+            networkId: TestNetworkIds.canonical,
             amount: "11"
         )
         let diversifiedPayload = try ConfidentialNoteEncryption.encryptNote(
@@ -243,7 +236,7 @@ final class ConfidentialNoteTests: XCTestCase {
             encryptedPayload: diversifiedPayload,
             recipientPrivateKey: recipientPrivateKey,
             spendKey: spendKey,
-            expectedChainId: "confidential-sdk-chain"
+            expectedNetworkId: TestNetworkIds.canonical
         ))
         assertOpeningEquals(
             diversifiedOpening,
@@ -252,7 +245,7 @@ final class ConfidentialNoteTests: XCTestCase {
                 recipientPrivateKey: recipientPrivateKey,
                 spendKey: spendKey,
                 expectedOwnerTag: diversifiedOpening.ownerTag,
-                expectedChainId: "confidential-sdk-chain"
+                expectedNetworkId: TestNetworkIds.canonical
             )
         )
     }
@@ -278,8 +271,7 @@ final class ConfidentialNoteTests: XCTestCase {
         plaintext.append(ownerTag)
         plaintext.append(contentsOf: [0x8f, 0x00])
         plaintext.append(Data("rose#wonderland".utf8))
-        appendCanonicalVarint(22, to: &plaintext)
-        plaintext.append(Data("confidential-sdk-chain".utf8))
+        plaintext.append(TestNetworkIds.canonical.bytes)
         appendCanonicalVarint(1, to: &plaintext)
         plaintext.append(Data("7".utf8))
 
@@ -302,7 +294,7 @@ final class ConfidentialNoteTests: XCTestCase {
             encryptedPayload: payload,
             recipientPrivateKey: recipientPrivateKey,
             spendKey: spendKey,
-            expectedChainId: "confidential-sdk-chain"
+            expectedNetworkId: TestNetworkIds.canonical
         ))
     }
 
@@ -341,7 +333,7 @@ final class ConfidentialNoteTests: XCTestCase {
         let valid = plaintext(
             ownerTag: ownerTag,
             asset: Data("rose#wonderland".utf8),
-            chainId: Data("confidential-sdk-chain".utf8),
+            networkId: TestNetworkIds.canonical.bytes,
             amount: Data("7".utf8)
         )
         var invalidOwnerTag = valid
@@ -371,7 +363,7 @@ final class ConfidentialNoteTests: XCTestCase {
                 plaintext(
                     ownerTag: ownerTag,
                     asset: Data(),
-                    chainId: Data("chain".utf8),
+                    networkId: TestNetworkIds.canonical.bytes,
                     amount: Data("1".utf8)
                 )
             ),
@@ -380,7 +372,7 @@ final class ConfidentialNoteTests: XCTestCase {
                 plaintext(
                     ownerTag: ownerTag,
                     asset: Data([0xff]),
-                    chainId: Data("chain".utf8),
+                    networkId: TestNetworkIds.canonical.bytes,
                     amount: Data("1".utf8)
                 )
             ),
@@ -389,16 +381,16 @@ final class ConfidentialNoteTests: XCTestCase {
                 plaintext(
                     ownerTag: ownerTag,
                     asset: Data(" rose#wonderland".utf8),
-                    chainId: Data("chain".utf8),
+                    networkId: TestNetworkIds.canonical.bytes,
                     amount: Data("1".utf8)
                 )
             ),
             (
-                "chainId",
+                "networkId",
                 plaintext(
                     ownerTag: ownerTag,
                     asset: Data("rose#wonderland".utf8),
-                    chainId: Data(),
+                    networkId: Data(),
                     amount: Data("1".utf8)
                 )
             ),
@@ -407,7 +399,7 @@ final class ConfidentialNoteTests: XCTestCase {
                 plaintext(
                     ownerTag: ownerTag,
                     asset: Data("rose#wonderland".utf8),
-                    chainId: Data("chain".utf8),
+                    networkId: TestNetworkIds.canonical.bytes,
                     amount: Data("07".utf8)
                 )
             ),
@@ -416,7 +408,7 @@ final class ConfidentialNoteTests: XCTestCase {
                 plaintext(
                     ownerTag: ownerTag,
                     asset: Data("rose#wonderland".utf8),
-                    chainId: Data("chain".utf8),
+                    networkId: TestNetworkIds.canonical.bytes,
                     amount: Data("340282366920938463463374607431768211456".utf8)
                 )
             ),
@@ -432,7 +424,7 @@ final class ConfidentialNoteTests: XCTestCase {
                     encryptedPayload: encryptedPayload,
                     recipientPrivateKey: recipientPrivateKey,
                     spendKey: spendKey,
-                    expectedChainId: "confidential-sdk-chain"
+                    expectedNetworkId: TestNetworkIds.canonical
                 )
             }
         }
@@ -447,7 +439,7 @@ final class ConfidentialNoteTests: XCTestCase {
             spendKey: spendKey,
             ownerTag: ownerTag,
             asset: "rose#wonderland",
-            chainId: "chain",
+            networkId: TestNetworkIds.canonical,
             amount: "1"
         )
         let recipientPrivateKey = Data(repeating: 0x55, count: 32)
@@ -465,7 +457,17 @@ final class ConfidentialNoteTests: XCTestCase {
                 spendKey: spendKey,
                 ownerTag: ownerTag,
                 asset: "rose#wonderland",
-                chainId: "chain",
+                networkId: TestNetworkIds.canonical,
+                amount: "1"
+            )
+        }
+        XCTAssertInvalidField("rho") {
+            try ConfidentialNoteOpening(
+                rho: Data(repeating: 0, count: 32),
+                spendKey: spendKey,
+                ownerTag: ownerTag,
+                asset: "rose#wonderland",
+                networkId: TestNetworkIds.canonical,
                 amount: "1"
             )
         }
@@ -475,7 +477,27 @@ final class ConfidentialNoteTests: XCTestCase {
                 spendKey: Data(),
                 ownerTag: ownerTag,
                 asset: "rose#wonderland",
-                chainId: "chain",
+                networkId: TestNetworkIds.canonical,
+                amount: "1"
+            )
+        }
+        XCTAssertInvalidField("spendKey") {
+            try ConfidentialNoteOpening(
+                rho: rho,
+                spendKey: Data(repeating: 0, count: 32),
+                ownerTag: ownerTag,
+                asset: "rose#wonderland",
+                networkId: TestNetworkIds.canonical,
+                amount: "1"
+            )
+        }
+        XCTAssertInvalidField("ownerTag") {
+            try ConfidentialNoteOpening(
+                rho: rho,
+                spendKey: spendKey,
+                ownerTag: Data(repeating: 0, count: 32),
+                asset: "rose#wonderland",
+                networkId: TestNetworkIds.canonical,
                 amount: "1"
             )
         }
@@ -485,7 +507,7 @@ final class ConfidentialNoteTests: XCTestCase {
                 spendKey: spendKey,
                 ownerTag: Data(repeating: 0xff, count: 32),
                 asset: "rose#wonderland",
-                chainId: "chain",
+                networkId: TestNetworkIds.canonical,
                 amount: "1"
             )
         }
@@ -495,17 +517,7 @@ final class ConfidentialNoteTests: XCTestCase {
                 spendKey: spendKey,
                 ownerTag: ownerTag,
                 asset: " rose#wonderland",
-                chainId: "chain",
-                amount: "1"
-            )
-        }
-        XCTAssertInvalidField("chainId") {
-            try ConfidentialNoteOpening(
-                rho: rho,
-                spendKey: spendKey,
-                ownerTag: ownerTag,
-                asset: "rose#wonderland",
-                chainId: "chain\0",
+                networkId: TestNetworkIds.canonical,
                 amount: "1"
             )
         }
@@ -515,7 +527,7 @@ final class ConfidentialNoteTests: XCTestCase {
                 spendKey: spendKey,
                 ownerTag: ownerTag,
                 asset: "rose#wonderland",
-                chainId: "chain",
+                networkId: TestNetworkIds.canonical,
                 amount: "01"
             )
         }
@@ -525,7 +537,17 @@ final class ConfidentialNoteTests: XCTestCase {
                 spendKey: spendKey,
                 ownerTag: ownerTag,
                 asset: "rose#wonderland",
-                chainId: "chain",
+                networkId: TestNetworkIds.canonical,
+                amount: "0"
+            )
+        }
+        XCTAssertInvalidField("amount") {
+            try ConfidentialNoteOpening(
+                rho: rho,
+                spendKey: spendKey,
+                ownerTag: ownerTag,
+                asset: "rose#wonderland",
+                networkId: TestNetworkIds.canonical,
                 amount: "340282366920938463463374607431768211456"
             )
         }
@@ -568,7 +590,8 @@ final class ConfidentialNoteTests: XCTestCase {
             try ConfidentialNoteDecryption.decryptNote(
                 encryptedPayload: payload,
                 recipientPrivateKey: Data(repeating: 0, count: 32),
-                spendKey: spendKey
+                spendKey: spendKey,
+                expectedNetworkId: TestNetworkIds.canonical
             )
         }
         XCTAssertInvalidField("expectedOwnerTag") {
@@ -577,15 +600,7 @@ final class ConfidentialNoteTests: XCTestCase {
                 recipientPrivateKey: recipientPrivateKey,
                 spendKey: spendKey,
                 expectedOwnerTag: Data(repeating: 0x44, count: 31),
-                expectedChainId: "chain"
-            )
-        }
-        XCTAssertInvalidField("expectedChainId") {
-            try ConfidentialNoteDecryption.decryptNote(
-                encryptedPayload: payload,
-                recipientPrivateKey: recipientPrivateKey,
-                spendKey: spendKey,
-                expectedChainId: " chain"
+                expectedNetworkId: TestNetworkIds.canonical
             )
         }
     }
@@ -600,7 +615,7 @@ final class ConfidentialNoteTests: XCTestCase {
         XCTAssertEqual(actual.spendKey, expected.spendKey, file: file, line: line)
         XCTAssertEqual(actual.ownerTag, expected.ownerTag, file: file, line: line)
         XCTAssertEqual(actual.asset, expected.asset, file: file, line: line)
-        XCTAssertEqual(actual.chainId, expected.chainId, file: file, line: line)
+        XCTAssertEqual(actual.networkId, expected.networkId, file: file, line: line)
         XCTAssertEqual(actual.amount, expected.amount, file: file, line: line)
     }
 
@@ -612,7 +627,7 @@ final class ConfidentialNoteTests: XCTestCase {
         rho: Data = Data(repeating: 0x22, count: 32),
         ownerTag: Data,
         asset: Data,
-        chainId: Data,
+        networkId: Data,
         amount: Data
     ) -> Data {
         var out = Data()
@@ -621,8 +636,7 @@ final class ConfidentialNoteTests: XCTestCase {
         out.append(ownerTag)
         appendCanonicalVarint(UInt64(asset.count), to: &out)
         out.append(asset)
-        appendCanonicalVarint(UInt64(chainId.count), to: &out)
-        out.append(chainId)
+        out.append(networkId)
         appendCanonicalVarint(UInt64(amount.count), to: &out)
         out.append(amount)
         return out

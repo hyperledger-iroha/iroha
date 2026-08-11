@@ -2,17 +2,6 @@ groups:
   - name: sorafs-capacity
     interval: 1m
     rules:
-      - alert: SoraFSReplicationBacklogGrowing
-        expr: torii_sorafs_replication_backlog_total > 10
-        for: 10m
-        labels:
-          severity: critical
-        annotations:
-          summary: "SoraFS replication backlog above threshold"
-          description: |
-            Pending replication orders stayed above 10 for 10 minutes
-            (value={{ printf "%.0f" $value }}). Reassign manifests or investigate
-            stalled providers before deadlines expire.
       - alert: SoraFSCapacityPressure
         expr: torii_sorafs_capacity_utilised_gib / clamp_min(torii_sorafs_capacity_effective_gib, 1) > 0.9
         for: 5m
@@ -37,18 +26,6 @@ groups:
             GiB tied up in outstanding reservations (value={{ humanizePercentage $value }}).
             Audit replication scheduler backlog and confirm incentives before
             accepting additional capacity from this provider.
-      - alert: SoraFSReplicationExpiredOrders
-        expr: increase(torii_sorafs_registry_orders_total{status="expired"}[5m]) > 0
-        for: 0m
-        labels:
-          severity: warning
-        annotations:
-          summary: "SoraFS replication orders expired"
-          description: |
-            At least one replication order expired within the last 5 minutes.
-            Review torii_sorafs_registry_orders_total{status="expired"} to
-            identify the provider and manifest combinations that need manual
-            intervention.
       - alert: SoraFSGCErrorRuns
         expr: increase(torii_sorafs_gc_runs_total{result="error"}[15m]) > 0
         for: 0m

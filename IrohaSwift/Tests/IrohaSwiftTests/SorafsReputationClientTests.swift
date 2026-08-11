@@ -120,7 +120,8 @@ final class SorafsReputationClientTests: XCTestCase {
                 baseURL: baseURL,
                 session: URLSession(configuration: configuration),
                 accountId: account,
-                privateKey: wrongPrivateKey
+                privateKey: wrongPrivateKey,
+                networkId: TestNetworkIds.canonical
             )
         ) { error in
             guard case let SorafsReputationClientError.invalidConfiguration(message) = error else {
@@ -164,29 +165,41 @@ final class SorafsReputationClientTests: XCTestCase {
     }
 
     func testRedirectIsTerminalAndDoesNotReachRedirectTarget() async throws {
+        for status in [307, 308] {
+            let recorder = ReputationRequestRecorder()
+            ReputationStubURLProtocol.handler = { [self] request in
+                recorder.append(request)
+                return try response(
+                    request,
+                    status: status,
+                    body: "",
+                    additionalHeaders: ["Location": "https://attacker.example/stolen"]
+                )
+            }
+            let client = try makeClient()
+
+            do {
+                _ = try await client.weights()
+                XCTFail("expected redirect rejection")
+            } catch let error as SorafsReputationClientError {
+                XCTAssertEqual(error, .httpStatus(status))
+            }
+
+            XCTAssertEqual(recorder.snapshot.count, 1)
+            XCTAssertEqual(recorder.snapshot.first?.url?.host, "reputation.example")
+        }
+    }
+
+    func testNetworkFailureIsTerminalAndNotRetried() async throws {
         let recorder = ReputationRequestRecorder()
-        ReputationStubURLProtocol.handler = { [self] request in
+        ReputationStubURLProtocol.handler = { request in
             recorder.append(request)
-            return try response(
-                request,
-                status: 302,
-                body: "",
-                additionalHeaders: [
-                    "Location": "https://attacker.example/stolen",
-                ]
-            )
+            throw URLError(.networkConnectionLost)
         }
         let client = try makeClient()
 
-        do {
-            _ = try await client.weights()
-            XCTFail("expected redirect rejection")
-        } catch let error as SorafsReputationClientError {
-            XCTAssertEqual(error, .httpStatus(302))
-        }
-
+        await XCTAssertThrowsErrorAsync(try await client.weights()) { _ in }
         XCTAssertEqual(recorder.snapshot.count, 1)
-        XCTAssertEqual(recorder.snapshot.first?.url?.host, "reputation.example")
     }
 
     func testEventsPreserveMaximumUInt64AndBindCursor() async throws {
@@ -451,6 +464,7 @@ final class SorafsReputationClientTests: XCTestCase {
             session: URLSession(configuration: configuration),
             accountId: account,
             privateKey: seed,
+            networkId: TestNetworkIds.canonical,
             maximumResponseBytes: maximumResponseBytes,
             currentTimeMilliseconds: { 4_102_444_800_000 },
             nonceSeed: { "swift-reputation-test" }
@@ -500,6 +514,7 @@ final class SorafsReputationClientTests: XCTestCase {
             )
         )
         let message = try ToriiCanonicalRequest.signatureMessage(
+            networkId: TestNetworkIds.canonical,
             method: "GET",
             url: XCTUnwrap(request.url),
             body: Data(),

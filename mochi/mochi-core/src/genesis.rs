@@ -5,7 +5,7 @@ use std::{collections::BTreeSet, path::PathBuf, sync::LazyLock};
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
     account::Account,
-    asset::{AssetBalancePolicy, AssetDefinition, definition::AssetConfidentialPolicy},
+    asset::{AssetBalancePolicy, AssetDefinition},
     domain::Domain,
     isi::{Grant, GrantBox, Mint, MintBox, Register, RegisterBox, SetParameter, Transfer},
     metadata::Metadata,
@@ -247,8 +247,7 @@ pub fn with_local_account_onboarding_bootstrap(
             AssetBalancePolicy::Global,
             None,
         )
-        .with_metadata(Metadata::default())
-        .confidential_policy(AssetConfidentialPolicy::convertible());
+        .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
     }
     if !authority_is_funded {

@@ -11,7 +11,7 @@ use std::{
 };
 
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     isi::sorafs::{
         ApplySorafsRepairTaskAction, SorafsRepairCompleteV1, SorafsRepairFailV1,
@@ -45,8 +45,8 @@ const TERMINAL_EVIDENCE_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.native-repair.termina
 /// Exact immutable context exposed to a runtime repair orchestrator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeRepairExecutionContextV1 {
-    /// Exact active chain identity.
-    pub chain_id: ChainId,
+    /// Exact genesis-header-derived deployment identity.
+    pub network_id: NetworkId,
     /// Finalized block anchor from which the task and lease were read.
     pub finalized_cursor: RepairFinalizedCursorV1,
     /// Immutable native repair task identity.
@@ -109,9 +109,9 @@ pub enum NativeRepairExecutionErrorV1 {
     /// Local durable storage cannot currently prove healthy state.
     #[error("native repair storage durability is unavailable")]
     StorageDurabilityUnavailable,
-    /// The finalized chain context is invalid.
-    #[error("native repair chain context is invalid")]
-    InvalidChainContext,
+    /// The finalized network context is invalid.
+    #[error("native repair network context is invalid")]
+    InvalidNetworkContext,
     /// The supplied task is not anchored to the exact current finalized cursor.
     #[error("native repair task finalized cursor is stale")]
     StaleFinalizedCursor,
@@ -192,7 +192,7 @@ impl NodeHandle {
         }
         transaction_context
             .validate()
-            .map_err(|_| NativeRepairExecutionErrorV1::InvalidChainContext)?;
+            .map_err(|_| NativeRepairExecutionErrorV1::InvalidNetworkContext)?;
         if finalized_task.finalized_cursor != transaction_context.finalized_cursor {
             return Err(NativeRepairExecutionErrorV1::StaleFinalizedCursor);
         }
@@ -233,7 +233,7 @@ impl NodeHandle {
             .map_err(|_| NativeRepairExecutionErrorV1::StorageDurabilityUnavailable)?;
 
         let execution_context = NativeRepairExecutionContextV1 {
-            chain_id: transaction_context.chain_id.clone(),
+            network_id: transaction_context.network_id,
             finalized_cursor: transaction_context.finalized_cursor,
             task_id: task.task_id,
             ticket_id: task.ticket_id.clone(),
@@ -634,7 +634,7 @@ fn terminal_evidence_hasher(
 ) -> Result<blake3::Hasher, NativeRepairExecutionErrorV1> {
     let mut hasher = blake3::Hasher::new();
     hasher.update(TERMINAL_EVIDENCE_DIGEST_DOMAIN_V1);
-    hash_bytes(&mut hasher, context.chain_id.as_str().as_bytes())?;
+    hasher.update(context.network_id.as_bytes());
     hash_u64(&mut hasher, context.finalized_cursor.height);
     hasher.update(&context.finalized_cursor.block_hash);
     hasher.update(&context.task_id);
@@ -671,11 +671,13 @@ mod tests {
 
     use super::*;
 
-    fn evidence_context(chain_id: &str) -> NativeRepairExecutionContextV1 {
+    fn evidence_context(network_seed: u8) -> NativeRepairExecutionContextV1 {
+        let genesis_hash =
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([network_seed; iroha_crypto::Hash::LENGTH]),
+            );
         NativeRepairExecutionContextV1 {
-            chain_id: chain_id
-                .parse()
-                .expect("native repair fixture chain id must be canonical"),
+            network_id: NetworkId::from_genesis_hash(genesis_hash),
             finalized_cursor: RepairFinalizedCursorV1 {
                 height: 17,
                 block_hash: [0x44; 32],
@@ -692,20 +694,20 @@ mod tests {
 
     #[test]
     fn terminal_evidence_domain_binding_matches_fixed_vector() {
-        let context = evidence_context("repair-vector-chain");
+        let context = evidence_context(0xA1);
         let digest = terminal_evidence_hasher(&context)
             .expect("hash fixed terminal evidence context")
             .finalize();
 
         assert_eq!(
             hex::encode(digest.as_bytes()),
-            "b29face3fad6431d740fd32f14613384b6ef0c7ccefa5d0f141aa9566a9144b2"
+            "9868c77c8c987798fa4b20a7783687cf8838a1a4403c3f3da4c246de4dc36750"
         );
 
-        let foreign_chain = terminal_evidence_hasher(&evidence_context("foreign-repair-chain"))
-            .expect("hash foreign chain context")
+        let foreign_network = terminal_evidence_hasher(&evidence_context(0xA2))
+            .expect("hash foreign network context")
             .finalize();
-        assert_ne!(foreign_chain, digest);
+        assert_ne!(foreign_network, digest);
 
         let mut different_task = context.clone();
         different_task.task_id[0] ^= 1;

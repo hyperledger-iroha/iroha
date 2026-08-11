@@ -5,6 +5,7 @@ import java.util.Optional
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTag
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
@@ -32,7 +33,7 @@ internal enum class VerifyingKeyDraftOperation(
 internal object VerifyingKeyDraftBinding {
     fun validate(
         transactionPayload: ByteArray,
-        expectedChainId: String,
+        expectedNetworkId: NetworkId,
         request: Map<String, Any>,
         operation: VerifyingKeyDraftOperation,
     ) {
@@ -49,8 +50,8 @@ internal object VerifyingKeyDraftBinding {
                 ex,
             )
         }
-        require(payload.chainId == expectedChainId && payload.authority == authority) {
-            "verifying-key draft transaction payload changed the requested chain or authority"
+        require(payload.networkId == expectedNetworkId && payload.authority == authority) {
+            "verifying-key draft transaction payload changed the requested network or authority"
         }
         val executable = payload.executable as? Executable.Instructions
             ?: throw IllegalArgumentException(

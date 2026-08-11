@@ -8,10 +8,11 @@ use std::{
 };
 
 use clap::CommandFactory as _;
-use iroha::crypto::{Algorithm, KeyPair};
+use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::{AccountId, address::ChainDiscriminantGuard},
+    block::BlockHeader,
     musubi::{
         ArchiveId, MusubiAbiBindingV1, MusubiDescriptionV1, MusubiInvitationStateV1,
         MusubiKeywordV1, MusubiMaintainerInvitationV1, MusubiNamespaceBindingV1,
@@ -40,6 +41,28 @@ use crate::{
     output::{OUTPUT_SCHEMA, OUTPUT_VERSION},
     publish::{PublicationAmxSubmissionV1, PublicationFinalCheckpointV1},
 };
+
+fn test_network_id(byte: u8) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        [byte; Hash::LENGTH],
+    )))
+}
+
+#[test]
+fn resolver_search_limit_has_a_resource_corridor_diagnostic() {
+    let diagnostic = graph_diagnostic(GraphErrorV1::Resolver(ResolverError::SearchLimitExceeded {
+        limit: 16_384,
+    }));
+
+    assert_eq!(diagnostic.code(), ErrorCode::ResolutionConflict);
+    assert_eq!(
+        diagnostic
+            .context()
+            .get("candidate_branch_attempt_limit")
+            .map(String::as_str),
+        Some("16384")
+    );
+}
 
 fn command_names(command: &clap::Command) -> BTreeSet<String> {
     command
@@ -185,8 +208,7 @@ fn build_recovery_package(
 #[cfg(unix)]
 fn recovery_request(namespace: &str, package: &RecoveryPackageFixture) -> PublicationRequestV1 {
     let request = PublicationRequestV1 {
-        chain_id: "musubi-recovery-test".parse().expect("fixture chain id"),
-        genesis_block_hash: [0x31; 32],
+        network_id: test_network_id(0x31),
         publisher: test_account(20),
         ingress_broker: test_account(21),
         seed_provider: ProviderId::new([0x32; 32]),
@@ -459,8 +481,7 @@ fn publication_receipt_fixture() -> (MusubiNamespaceV1, PublicationResultV1) {
     };
     let final_checkpoint = PublicationFinalCheckpointV1 {
         operation_id,
-        chain_id: "token:dev".parse().expect("fixture chain id"),
-        genesis_block_hash: [0x11; 32],
+        network_id: test_network_id(0x11),
         snapshot: MusubiRegistrySnapshotV1 {
             finalized_height: u64::MAX,
             finalized_block_hash: [0x12; 32],
@@ -542,14 +563,13 @@ fn retention_snapshot() -> MusubiRegistrySnapshotV1 {
 }
 
 fn retention_page(
-    chain: &str,
+    network_byte: u8,
     archive_ids: &[iroha_data_model::musubi::ArchiveId],
     prunable: &BTreeSet<iroha_data_model::musubi::ArchiveId>,
 ) -> iroha_data_model::musubi::MusubiArchiveRetentionPageV1 {
     let snapshot = retention_snapshot();
     iroha_data_model::musubi::MusubiArchiveRetentionPageV1 {
-        chain_id: chain.parse::<ChainId>().expect("fixture chain id"),
-        genesis_hash: [0x81; 32],
+        network_id: test_network_id(network_byte),
         items: archive_ids
             .iter()
             .map(|archive_id| {
@@ -611,7 +631,7 @@ fn cache_prune_dry_run_reports_without_mutating() {
     let archive_id = iroha_data_model::musubi::ArchiveId::new([0x21; 32]);
     let archive_path = create_cache_archive_directory(&cache, archive_id);
     let prunable = BTreeSet::from([archive_id]);
-    let page = retention_page("musubi-prune-test", &[archive_id], &prunable);
+    let page = retention_page(0x81, &[archive_id], &prunable);
     let (torii_url, server) = serve_json_sequence(vec![
         norito::json::to_vec(&page).expect("retention response JSON"),
     ]);
@@ -647,16 +667,22 @@ fn cache_prune_dry_run_reports_without_mutating() {
 
 #[cfg(unix)]
 #[test]
-fn cache_prune_live_removes_only_explicit_finalized_candidates() {
+fn cache_prune_live_fails_closed_without_touching_any_candidate() {
     let temporary = TempDir::new().expect("temporary cache root");
     let cache = MusubiCache::open(temporary.path().join("cache")).expect("private cache");
     let pruned_id = iroha_data_model::musubi::ArchiveId::new([0x31; 32]);
     let retained_id = iroha_data_model::musubi::ArchiveId::new([0x32; 32]);
     let pruned_path = create_cache_archive_directory(&cache, pruned_id);
     let retained_path = create_cache_archive_directory(&cache, retained_id);
+    let pruned_sentinel = pruned_path.join("sentinel");
+    let retained_sentinel = retained_path.join("sentinel");
+    fs::write(&pruned_sentinel, b"prunable sentinel").expect("write prunable sentinel");
+    fs::write(&retained_sentinel, b"retained sentinel").expect("write retained sentinel");
+    let pruned_before = fs::symlink_metadata(&pruned_path).expect("prunable identity");
+    let retained_before = fs::symlink_metadata(&retained_path).expect("retained identity");
     let archive_ids = [pruned_id, retained_id];
     let prunable = BTreeSet::from([pruned_id]);
-    let page = retention_page("musubi-prune-test", &archive_ids, &prunable);
+    let page = retention_page(0x81, &archive_ids, &prunable);
     let (torii_url, server) = serve_json_sequence(vec![
         norito::json::to_vec(&page).expect("retention response JSON"),
     ]);
@@ -667,24 +693,43 @@ fn cache_prune_live_removes_only_explicit_finalized_candidates() {
     )
     .expect("signer-free registry client");
 
-    let result = prune_cache_targets(&cache, &archive_ids, &registry, false)
-        .expect("live finalized retention prune");
-    assert_eq!(result.message, "pruned 1 cached archive(s)");
+    let error = match prune_cache_targets(&cache, &archive_ids, &registry, false) {
+        Err(error) => error,
+        Ok(_) => panic!("non-empty live prune must fail closed"),
+    };
+    assert_eq!(error.code(), ErrorCode::Io);
     assert!(
-        !pruned_path.exists(),
-        "the exact prunable archive is removed"
+        error
+            .context()
+            .get("reason")
+            .is_some_and(|reason| reason.contains("atomic compare-and-delete"))
     );
-    assert!(
-        retained_path.exists(),
-        "an unknown fail-closed archive remains untouched"
+    let pruned_after = fs::symlink_metadata(&pruned_path).expect("prunable remains");
+    let retained_after = fs::symlink_metadata(&retained_path).expect("retained remains");
+    assert_eq!(
+        (pruned_before.dev(), pruned_before.ino()),
+        (pruned_after.dev(), pruned_after.ino())
     );
     assert_eq!(
-        result
-            .data
-            .get("removed")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(1)
+        (retained_before.dev(), retained_before.ino()),
+        (retained_after.dev(), retained_after.ino())
+    );
+    assert_eq!(
+        fs::read(&pruned_sentinel).expect("read prunable sentinel"),
+        b"prunable sentinel"
+    );
+    assert_eq!(
+        fs::read(&retained_sentinel).expect("read retained sentinel"),
+        b"retained sentinel"
+    );
+    assert!(
+        fs::read_dir(cache.root().join("registry-v1"))
+            .expect("read cache registry")
+            .all(|entry| !entry
+                .expect("read cache entry")
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".prune."))
     );
     server.join().expect("registry server");
 }
@@ -701,12 +746,12 @@ fn cache_prune_rejects_cross_batch_deployment_drift_before_mutation() {
     let archive_path = create_cache_archive_directory(&cache, candidate);
     let prunable = BTreeSet::from([candidate]);
     let first = retention_page(
-        "musubi-prune-test",
+        0x81,
         &archive_ids[..MUSUBI_MAX_ARCHIVE_RETENTION_BATCH_V1],
         &prunable,
     );
     let second = retention_page(
-        "different-chain",
+        0x83,
         &archive_ids[MUSUBI_MAX_ARCHIVE_RETENTION_BATCH_V1..],
         &BTreeSet::new(),
     );
@@ -775,8 +820,7 @@ fn write_test_lock_graph(
     nodes: Vec<MusubiVerificationNodeV1>,
 ) {
     let lock = LockfileV1::new(
-        "musubi-cli-test".parse().expect("chain id"),
-        [1; 32],
+        test_network_id(1),
         MusubiRegistrySnapshotV1 {
             finalized_height: 7,
             finalized_block_hash: [2; 32],
@@ -1026,6 +1070,10 @@ fn owner_roles_require_explicit_nonempty_maintainer_permissions() {
 #[test]
 fn workspace_test_failures_keep_their_stable_boundary_codes() {
     assert_eq!(
+        test_runner_diagnostic(&WorkspaceTestErrorV1::UnsupportedPlatform).code(),
+        ErrorCode::Io
+    );
+    assert_eq!(
         test_runner_diagnostic(&WorkspaceTestErrorV1::Workspace("invalid".to_owned())).code(),
         ErrorCode::WorkspaceInvalid
     );
@@ -1040,6 +1088,14 @@ fn workspace_test_failures_keep_their_stable_boundary_codes() {
     assert_eq!(
         test_runner_diagnostic(&WorkspaceTestErrorV1::Runner("failed".to_owned())).code(),
         ErrorCode::Compiler
+    );
+    assert_eq!(
+        package_diagnostic(&PackageError::UnsupportedPlatform).code(),
+        ErrorCode::Io
+    );
+    assert_eq!(
+        cache_maintenance_diagnostic(&CacheError::UnsupportedPlatform).code(),
+        ErrorCode::Io
     );
 }
 
@@ -1234,8 +1290,7 @@ fn owner_list_is_signer_free_and_includes_pending_invitations() {
                 cursor: None,
             },
         },
-        chain_id: ChainId::from("musubi-owner-list-test"),
-        genesis_hash: [8; 32],
+        network_id: test_network_id(9),
         namespace_binding: binding,
         items: vec![MusubiOrderedPackageEntryV1 {
             selector: selector.clone(),
@@ -1458,6 +1513,31 @@ fn local_new_add_metadata_tree_remove_roundtrip() {
 }
 
 #[test]
+fn add_rejects_a_hardlinked_manifest_without_mutation() {
+    let temp = TempDir::new().expect("temporary directory");
+    let (root, manifest_path) = create_test_package(&temp);
+    let alias = root.join("Musubi.manifest-alias.toml");
+    let before = fs::read(&manifest_path).expect("read original manifest");
+    fs::hard_link(&manifest_path, &alias).expect("create manifest hard link");
+
+    let add = invoke([
+        OsString::from("musubi"),
+        OsString::from("--manifest-path"),
+        manifest_path.as_os_str().to_owned(),
+        OsString::from("add"),
+        OsString::from("std/math"),
+        OsString::from("--version"),
+        OsString::from("^1.0.0"),
+    ]);
+
+    assert_ne!(add.output.exit_code(), 0);
+    assert_eq!(
+        fs::read(&manifest_path).expect("reread rejected manifest"),
+        before
+    );
+}
+
+#[test]
 fn metadata_and_tree_include_only_the_validated_exact_lock_graph() {
     let temp = TempDir::new().expect("temporary directory");
     let (root, manifest_path) = create_test_package(&temp);
@@ -1601,8 +1681,7 @@ fn empty_cache_maintenance_is_signer_and_network_free() {
 
     let graph = ResolvedWorkspaceGraphV1 {
         lock: LockfileV1::new(
-            "empty-cache-test".parse().expect("chain id"),
-            [1; 32],
+            test_network_id(1),
             MusubiRegistrySnapshotV1 {
                 finalized_height: 1,
                 finalized_block_hash: [2; 32],
@@ -2184,10 +2263,9 @@ fn completed_publication_json_is_one_origin_independent_exact_receipt() {
         BTreeSet::from([
             "amx_submission",
             "archive_id",
-            "chain_id",
             "checkpoint_digest",
-            "genesis_hash",
             "home_release_digest",
+            "network_id",
             "operation_id",
             "release",
             "release_digest",
@@ -2211,12 +2289,8 @@ fn completed_publication_json_is_one_origin_independent_exact_receipt() {
         Some(structural_release.as_str())
     );
     assert_eq!(
-        data.get("chain_id").and_then(Value::as_str),
-        Some("token:dev")
-    );
-    assert_eq!(
-        data.get("genesis_hash").and_then(Value::as_str),
-        Some(hex::encode([0x11; 32]).as_str())
+        data.get("network_id").and_then(Value::as_str),
+        Some(test_network_id(0x11).to_string().as_str())
     );
     assert_eq!(
         data.get("release_digest").and_then(Value::as_str),

@@ -784,7 +784,7 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
                 };
                 let instruction = Grant::account_permission(permission, alice_id.clone());
                 let transaction = TransactionBuilder::new(
-                    ChainId::from("00000000-0000-0000-0000-000000000000"),
+                    network.network_id(),
                     asset_id.account().clone(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )

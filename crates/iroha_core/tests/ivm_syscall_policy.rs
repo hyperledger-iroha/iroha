@@ -118,11 +118,12 @@ fn unknown_syscall_is_rejected_at_admission() {
     let chain: ChainId = "chain".parse().expect("chain id");
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
+    let network_id = *state.network_id_ref();
 
     // Program calls an unknown syscall number before halting.
     let prog = program_with_scall(unlisted_syscall_number());
     let tx = TransactionBuilder::new(
-        chain,
+        network_id,
         account_id.clone(),
         fee_payment_with_gas_limit(1_000_000),
     )

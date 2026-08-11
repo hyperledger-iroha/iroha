@@ -19,7 +19,7 @@ pub mod isi {
 
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::{
-        ChainId, IntoKeyValue,
+        IntoKeyValue, NetworkId,
         account::{
             AccountController,
             curve::{CurveId, CurveRegistryError},
@@ -72,6 +72,7 @@ pub mod isi {
             ProposalKind::DeployContract(_)
             | ProposalKind::RuntimeUpgrade(_)
             | ProposalKind::SccpRouteGovernance(_)
+            | ProposalKind::SorafsProviderGovernance(_)
             | ProposalKind::MusubiRegistryGovernance(_) => None,
         }
     }
@@ -701,10 +702,10 @@ pub mod isi {
 
     /// Derive the deterministic offline escrow account for an asset definition.
     pub(crate) fn offline_escrow_account_id(
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         definition_id: &AssetDefinitionId,
     ) -> AccountId {
-        iroha_data_model::offline::offline_escrow_account_id(chain_id, definition_id)
+        iroha_data_model::offline::offline_escrow_account_id(network_id, definition_id)
     }
 
     pub(crate) fn ensure_offline_escrow_account(
@@ -713,7 +714,7 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let definition_id = asset_definition.id();
-        let derived = offline_escrow_account_id(state_transaction.chain_id(), definition_id);
+        let derived = offline_escrow_account_id(state_transaction.network_id(), definition_id);
         let escrow_account = match state_transaction
             .settlement
             .offline
@@ -775,13 +776,6 @@ pub mod isi {
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::nexus::CanEnrollFeeSponsorProgram::try_from(
-                permission,
-            )
-        {
-            return account_subject_matches(&permission.program_id.sponsor, account_id);
-        }
-        if let Ok(permission) =
-            iroha_executor_data_model::permission::nexus::CanWithdrawFeeSponsorProgram::try_from(
                 permission,
             )
         {
@@ -934,6 +928,9 @@ pub mod isi {
             return &permission.asset_definition == asset_definition_id;
         }
         if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanModifyAssetDefinitionMetadata::try_from(permission) {
+            return &permission.asset_definition == asset_definition_id;
+        }
+        if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionConfidentialPolicy::try_from(permission) {
             return &permission.asset_definition == asset_definition_id;
         }
         if let Ok(permission) = iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionAlias::try_from(permission)
@@ -1137,6 +1134,30 @@ pub mod isi {
                 }
                 .into());
             }
+            if crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(
+                state_transaction,
+                &account_id,
+            ) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot register account {account_id}: its identity is reserved for deterministic SCCP route protocol escrow"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+            if crate::smartcontracts::isi::asset::isi::is_fx_corridor_escrow_account(
+                state_transaction,
+                &account_id,
+            )? {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot register account {account_id}: its identity is reserved for deterministic FX corridor protocol escrow"
+                    )
+                    .into(),
+                )
+                .into());
+            }
             if let Some(uaid) = account.uaid() {
                 if let Some(existing) = state_transaction.world.uaid_accounts.get(uaid) {
                     return Err(InstructionExecutionError::InvariantViolation(
@@ -1291,15 +1312,65 @@ pub mod isi {
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
 
+            if let Some((program_id, _)) =
+                state_transaction
+                    .world
+                    .fee_sponsor_programs
+                    .iter()
+                    .find(|(_, program)| {
+                        program.payout_account == account_id
+                            && program.lifecycle
+                                != iroha_data_model::nexus::FeeSponsorProgramLifecycle::Closed
+                    })
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is the immutable payout account for fee sponsor program {program_id}"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+
             if crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(
+                state_transaction,
+                &account_id,
+            ) || crate::smartcontracts::isi::asset::isi::is_sccp_custody_owner(
                 state_transaction,
                 &account_id,
             ) {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    format!("cannot unregister account {account_id}: it is governed SCCP custody")
-                        .into(),
+                    format!(
+                        "cannot unregister account {account_id}: it is retained SCCP protocol escrow or an immutable route custody owner"
+                    )
+                    .into(),
                 )
                 .into());
+            }
+            if crate::smartcontracts::isi::asset::isi::is_fx_corridor_escrow_account(
+                state_transaction,
+                &account_id,
+            )? {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is retained FX protocol escrow"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+
+            if crate::smartcontracts::isi::sorafs_reserve::is_reserve_custody_account(
+                state_transaction.world(),
+                &account_id,
+            )? {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it is active SoraFS reserve custody"
+                    )
+                    .into(),
+                )
+                    .into());
             }
 
             if crate::smartcontracts::isi::escrow::is_protocol_escrow_custody_account(
@@ -1579,13 +1650,13 @@ pub mod isi {
                 )
                 .into());
             }
-            let chain_id = state_transaction.chain_id().clone();
+            let network_id = *state_transaction.network_id();
             if let Some(definition_id) = state_transaction
                 .world
                 .assets_in_account_iter(&account_id)
                 .find_map(|asset| {
                     let definition_id = asset.id().definition();
-                    (offline_escrow_account_id(&chain_id, definition_id) == account_id)
+                    (offline_escrow_account_id(&network_id, definition_id) == account_id)
                         .then(|| definition_id.clone())
                 })
             {
@@ -2118,13 +2189,7 @@ pub mod isi {
                 .world
                 .da_pin_intents_by_ticket
                 .iter()
-                .find(|(_, record)| {
-                    record
-                        .intent
-                        .owner
-                        .as_ref()
-                        .is_some_and(|owner| owner == &account_id)
-                })
+                .find(|(_, record)| record.intent.authorization.owner == account_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -2382,6 +2447,31 @@ pub mod isi {
                     .into(),
                 )
                 .into());
+            }
+            if crate::smartcontracts::isi::asset::isi::is_fx_corridor_asset_definition(
+                state_transaction,
+                &asset_definition_id,
+            )? {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister asset definition {asset_definition_id}: it is retained native FX corridor backing"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+
+            if crate::smartcontracts::isi::sorafs_reserve::is_reserve_asset_definition(
+                state_transaction.world(),
+                &asset_definition_id,
+            )? {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister asset definition {asset_definition_id}: it backs active SoraFS reserve custody"
+                    )
+                    .into(),
+                )
+                    .into());
             }
 
             let orchard_pool_references =
@@ -3571,7 +3661,6 @@ mod tests {
             AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
             AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedAccountAliasV1,
         },
-        asset::definition::AssetConfidentialPolicy,
         asset::{
             Asset, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId, AssetId, Mintable,
             NewAssetDefinition, ResolvedAssetDefinitionAliasV1,
@@ -3599,8 +3688,8 @@ mod tests {
         permission::Permission,
         prelude::Domain,
         privacy::{
-            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
-            PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
+            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
+            PrivacyProtocolIdV1,
         },
         role::{Role, RoleId},
         smart_contract::ContractAddress,
@@ -3674,13 +3763,15 @@ mod tests {
                 pool_id: PrivacyPoolIdV1::new([0xD1; 32]),
             }),
         );
-        let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(
-            PrivacyOrchardPoolBootstrapDigestV1::new([0xD2; 32]),
+        let bootstrap = iroha_data_model::privacy::PrivacyOrchardPoolBootstrapV1::new(
+            PrivacyPoolIdV1::new([0xD1; 32]),
             asset_definition_id,
             iroha_data_model::asset::AssetBalanceScope::Global,
             reserve_account,
         )
-        .expect("canonical Orchard dependency-guard state");
+        .expect("canonical Orchard dependency-guard bootstrap");
+        let pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(bootstrap)
+            .expect("canonical Orchard dependency-guard state");
         let key = crate::privacy_state::PrivacyCommitmentKeyV1::orchard_pool_state(namespace)
             .expect("canonical Orchard dependency-guard key");
         let record = crate::privacy_state::PrivacyStateItemRecordV1::orchard_pool_state(pool_state)
@@ -3816,12 +3907,18 @@ mod tests {
         )
     }
 
+    fn validation_fee_guard_network_id() -> iroha_data_model::NetworkId {
+        "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical validation-fee guard network id")
+    }
+
     fn validation_fee_guard_payout_binding(
         rules: &ValidationFeePlainElectorateRulesV1,
     ) -> ValidationFeeTreasuryPayoutBindingV1 {
         let controller = fixture_account(0xA0);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &validation_fee_guard_network_id(),
             &controller,
             91,
             DataSpaceId::UNIVERSAL,
@@ -3864,8 +3961,7 @@ mod tests {
             ValidationFeeProposalFixtureKind::Policy => {
                 let policy = ValidationFeePolicyV1 {
                     schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-                    chain_id: ChainId::from("validation-fee-unregister-guard"),
-                    genesis_hash: [0x77; 32],
+                    network_id: validation_fee_guard_network_id(),
                     policy_version: 1,
                     previous_policy_hash: None,
                     ds_asset_id: validation_fee_guard_sbd_asset_id(),
@@ -8706,7 +8802,7 @@ mod tests {
             super::isi::ensure_offline_escrow_account(&asset_definition, &authority, &mut first_tx)
                 .expect("materialize deterministic offline escrow account");
             escrow_account_id =
-                super::isi::offline_escrow_account_id(first_tx.chain_id(), &asset_definition_id);
+                super::isi::offline_escrow_account_id(first_tx.network_id(), &asset_definition_id);
             escrow_asset_id = AssetId::new(asset_definition_id.clone(), escrow_account_id.clone());
             Mint::asset_quantity(5_u32, escrow_asset_id.clone())
                 .execute(&authority, &mut first_tx)
@@ -8745,7 +8841,12 @@ mod tests {
 
     #[test]
     fn ordinary_metadata_does_not_reserve_an_offline_escrow_account() {
-        let chain_id: ChainId = "offline-escrow-testnet".parse().expect("chain id");
+        let chain_id = ChainId::from("offline-escrow-testnet");
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(b"offline-escrow-test-network"),
+        ));
         let domain_id: DomainId = DomainId::try_new("offline", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         let asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -8753,7 +8854,7 @@ mod tests {
             "usd".parse().expect("asset definition name"),
         );
         let escrow_account_id =
-            iroha_data_model::offline::offline_escrow_account_id(&chain_id, &asset_definition_id);
+            iroha_data_model::offline::offline_escrow_account_id(&network_id, &asset_definition_id);
         let mut metadata = Metadata::default();
         metadata.insert(
             "offline.enabled".parse().expect("legacy metadata key"),
@@ -8776,7 +8877,9 @@ mod tests {
         );
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query, chain_id);
+        let state = State::new_with_chain_and_network_id_for_testing(
+            world, kura, query, chain_id, network_id,
+        );
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -9445,6 +9548,7 @@ mod tests {
                         },
                     ),
                 },
+                recorded_at_ms: 1,
                 evidence_hashes: Vec::new(),
             }],
         );
@@ -9751,6 +9855,7 @@ mod tests {
 
         let keypair = checked_keypair();
         let account_id = AccountId::new(keypair.public_key().clone());
+        let network_id = *state.network_id_ref();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
@@ -9771,7 +9876,14 @@ mod tests {
                         [0xE2; 32],
                     ),
                     alias: None,
-                    owner: Some(account_id.clone()),
+                    authorization: crate::da::signed_test_ingest_authorization(
+                        network_id,
+                        &keypair,
+                        LaneId::new(1),
+                        1,
+                        1,
+                        1,
+                    ),
                 },
                 location: iroha_data_model::da::commitment::DaCommitmentLocation {
                     block_height: 1,
@@ -10034,7 +10146,6 @@ mod tests {
             metadata,
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10075,7 +10186,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10118,7 +10228,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10191,7 +10300,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10231,7 +10339,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10275,7 +10382,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10319,7 +10425,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: Some(domain_id),
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10363,7 +10468,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
             owning_domain: Some(domain_id),
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10448,7 +10552,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
         let second = NewAssetDefinition {
             id: id2,
@@ -10461,7 +10564,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -10712,7 +10814,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -10770,7 +10871,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -10831,7 +10931,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -10874,7 +10973,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -10956,7 +11054,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -11047,7 +11144,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -11075,7 +11171,9 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11119,7 +11217,9 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let benefit_dataspace = DataSpaceId::new(42);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             benefit_dataspace,
@@ -11159,7 +11259,9 @@ mod tests {
         let dynamic_dataspace =
             crate::sns::dataspace_id_for_sns_alias("is").expect("dynamic dataspace id");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             dynamic_dataspace,
@@ -11200,7 +11302,9 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let dynamic_dataspace = DataSpaceId::new(4_242);
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             dynamic_dataspace,
@@ -11235,7 +11339,9 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11288,7 +11394,9 @@ mod tests {
         let dynamic_dataspace =
             crate::sns::dataspace_id_for_sns_alias("is").expect("dynamic dataspace id");
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             dynamic_dataspace,
@@ -11334,7 +11442,9 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::new(4_242),
@@ -11363,7 +11473,9 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::new(4_242),
@@ -11394,7 +11506,9 @@ mod tests {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11435,7 +11549,9 @@ mod tests {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11510,7 +11626,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -11580,7 +11695,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
@@ -11623,7 +11737,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -11682,7 +11795,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -11737,7 +11849,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -11794,7 +11905,6 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: iroha_data_model::asset::AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -12244,6 +12354,10 @@ mod tests {
             asset_definition: asset_definition_id.clone(),
         }
         .into();
+        let permission_with_confidential_policy: Permission = iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionConfidentialPolicy {
+            asset_definition: asset_definition_id.clone(),
+        }
+        .into();
         let permission_with_exact_alias: Permission = CanManageAssetDefinitionAlias {
             scope: AssetDefinitionAliasPermissionScope::Alias(ResolvedAssetDefinitionAliasV1::new(
                 alias,
@@ -12260,6 +12374,12 @@ mod tests {
         Grant::account_permission(permission_with_definition.clone(), holder_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant definition permission to holder");
+        Grant::account_permission(
+            permission_with_confidential_policy.clone(),
+            holder_id.clone(),
+        )
+        .execute(&authority, &mut tx)
+        .expect("grant confidential policy permission to holder");
         Grant::account_permission(permission_with_asset.clone(), holder_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant asset permission to holder");
@@ -12274,6 +12394,9 @@ mod tests {
         Grant::role_permission(permission_with_definition.clone(), role_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant definition permission to role");
+        Grant::role_permission(permission_with_confidential_policy.clone(), role_id.clone())
+            .execute(&authority, &mut tx)
+            .expect("grant confidential policy permission to role");
         Grant::role_permission(permission_with_asset.clone(), role_id.clone())
             .execute(&authority, &mut tx)
             .expect("grant asset permission to role");
@@ -12287,6 +12410,7 @@ mod tests {
                 .get(&holder_id)
                 .is_some_and(|perms| {
                     perms.contains(&permission_with_definition)
+                        && perms.contains(&permission_with_confidential_policy)
                         && perms.contains(&permission_with_asset)
                         && perms.contains(&permission_with_exact_alias)
                 }),
@@ -12297,6 +12421,11 @@ mod tests {
             role.permissions()
                 .any(|perm| perm == &permission_with_definition),
             "role should include definition permission before unregister"
+        );
+        assert!(
+            role.permissions()
+                .any(|perm| perm == &permission_with_confidential_policy),
+            "role should include confidential policy permission before unregister"
         );
         assert!(
             role.permissions()
@@ -12319,12 +12448,19 @@ mod tests {
                 .get(&holder_id)
                 .is_some_and(|perms| {
                     perms.contains(&permission_with_definition)
+                        || perms.contains(&permission_with_confidential_policy)
                         || perms.contains(&permission_with_asset)
                         || perms.contains(&permission_with_exact_alias)
                 }),
             "holder permissions should be removed"
         );
         let role = tx.world.roles.get(&role_id).expect("role should exist");
+        assert!(
+            !role
+                .permissions()
+                .any(|perm| perm == &permission_with_confidential_policy),
+            "role confidential policy permission should be removed"
+        );
         assert!(
             !role
                 .permissions()
@@ -12342,6 +12478,12 @@ mod tests {
                 .permissions()
                 .any(|perm| perm == &permission_with_exact_alias),
             "role exact alias permission should be removed"
+        );
+        assert!(
+            !role
+                .permission_epochs()
+                .contains_key(&permission_with_confidential_policy),
+            "confidential policy permission epoch should be pruned"
         );
         assert!(
             !role

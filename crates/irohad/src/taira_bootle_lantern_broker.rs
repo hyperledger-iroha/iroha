@@ -33,7 +33,7 @@ use iroha_core::privacy_engines::bootle_lantern::issuer::{
     taira_bootle_lantern_issuer_profile_contract_digest_v1,
 };
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     isi::{InstructionBox, privacy::RegisterPrivacyBootleLanternIssuerPolicyV1},
     privacy::{
         BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
@@ -111,6 +111,7 @@ impl std::error::Error for TairaBootleLanternBrokerErrorV1 {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TairaBootleLanternBrokerPublicConfigV1 {
     chain_id: ChainId,
+    network_id: NetworkId,
     handle: String,
     revision: u64,
     issuer_id: PrivacyIssuerIdV1,
@@ -127,6 +128,7 @@ impl TairaBootleLanternBrokerPublicConfigV1 {
     /// revision, and a lifetime outside the native first-release bound.
     pub fn try_new(
         chain_id: ChainId,
+        network_id: NetworkId,
         handle: impl Into<String>,
         revision: u64,
         issuer_id: PrivacyIssuerIdV1,
@@ -136,6 +138,7 @@ impl TairaBootleLanternBrokerPublicConfigV1 {
         let handle = handle.into();
         if validate_production_runtime_handle(&handle).is_err()
             || contains_forbidden_public_marker_v1(&handle)
+            || network_id.as_bytes().iter().all(|byte| *byte == 0)
             || revision == 0
             || !is_strong_public_digest_v1(issuer_id.as_bytes())
             || !is_strong_public_digest_v1(policy_id.as_bytes())
@@ -152,6 +155,7 @@ impl TairaBootleLanternBrokerPublicConfigV1 {
         .map_err(|_| TairaBootleLanternBrokerErrorV1::InvalidPublicBinding)?;
         Ok(Self {
             chain_id,
+            network_id,
             handle,
             revision,
             issuer_id,
@@ -160,10 +164,18 @@ impl TairaBootleLanternBrokerPublicConfigV1 {
         })
     }
 
-    /// Exact chain identity used by the authenticated broker handshake.
+    /// Human-readable chain label retained for catalog metadata and display.
+    ///
+    /// Security bindings use [`Self::network_id`] and never this label alone.
     #[must_use]
     pub fn chain_id(&self) -> &ChainId {
         &self.chain_id
+    }
+
+    /// Exact genesis-header-derived identity used by every security binding.
+    #[must_use]
+    pub const fn network_id(&self) -> NetworkId {
+        self.network_id
     }
 
     /// Exact production provider handle.
@@ -357,7 +369,7 @@ impl TairaBootleLanternIssuanceBrokerBackendV1 {
             let parameter_id = derive_nonzero_digest_v1(
                 PARAMETER_ID_DOMAIN_V1,
                 &[
-                    config.chain_id.as_str().as_bytes(),
+                    config.network_id.as_bytes(),
                     config.handle.as_bytes(),
                     &config.revision.to_be_bytes(),
                     config.issuer_id.as_bytes(),
@@ -393,7 +405,7 @@ impl TairaBootleLanternIssuanceBrokerBackendV1 {
         let principal_digest_result = derive_nonzero_digest_v1(
             PRINCIPAL_DIGEST_DOMAIN_V1,
             &[
-                config.chain_id.as_str().as_bytes(),
+                config.network_id.as_bytes(),
                 config.issuer_id.as_bytes(),
                 config.policy_id.as_bytes(),
                 credentials.principal_seed.as_bytes(),
@@ -409,7 +421,7 @@ impl TairaBootleLanternIssuanceBrokerBackendV1 {
         let bearer_token_digest = bearer_token_digest_result?;
         let qualification_digest = derive_taira_bootle_lantern_broker_qualification_digest_v1(
             &TairaBootleLanternBrokerQualificationInputsV1 {
-                chain_id: config.chain_id.as_str(),
+                network_id: config.network_id,
                 runtime_provider_handle: &config.handle,
                 runtime_provider_revision: config.revision,
                 issuer_id: config.issuer_id,
@@ -491,6 +503,10 @@ impl TairaBootleLanternIssuanceBrokerBackendV1 {
             norito::json::Value::from(self.config.chain_id.to_string()),
         );
         export.insert(
+            "network_id".into(),
+            norito::json::Value::from(self.config.network_id.to_string()),
+        );
+        export.insert(
             "runtime_provider_handle".into(),
             norito::json::Value::from(self.config.handle.clone()),
         );
@@ -560,7 +576,9 @@ impl TairaBootleLanternIssuanceBrokerBackendV1 {
         if policy != &self.policy {
             return Err(BootleLanternIssuanceBrokerBackendErrorV1::PolicyMismatch);
         }
-        if context.chain_id != self.config.chain_id || canonical_genesis_hash == [0; 32] {
+        if context.network_id != self.config.network_id
+            || context.network_id.as_bytes() != &canonical_genesis_hash
+        {
             return Err(BootleLanternIssuanceBrokerBackendErrorV1::InvalidRequest);
         }
         Ok(())
@@ -741,9 +759,12 @@ enum BrokerCommandV1 {
 
 #[derive(Clone, Args)]
 struct PublicArgsV1 {
-    /// Exact public chain identity used by validator configuration.
+    /// Human-readable chain name used only for configuration and display.
     #[arg(long)]
     chain_id: ChainId,
+    /// Exact genesis-header-derived network identity used for security bindings.
+    #[arg(long)]
+    network_id: NetworkId,
     /// Stable credential-free production provider handle.
     #[arg(long)]
     handle: String,
@@ -767,6 +788,7 @@ impl PublicArgsV1 {
     ) -> Result<TairaBootleLanternBrokerPublicConfigV1, TairaBootleLanternBrokerErrorV1> {
         TairaBootleLanternBrokerPublicConfigV1::try_new(
             self.chain_id,
+            self.network_id,
             self.handle,
             self.revision,
             PrivacyIssuerIdV1::new(self.issuer_id),
@@ -856,6 +878,7 @@ async fn execute_cli_v1(cli: BrokerCliV1) -> Result<(), TairaBootleLanternBroker
             let bindings =
                 IrohaRuntimeProviderBindingsV1::try_from_bootle_lantern_issuance_service(
                     backend.config.chain_id(),
+                    backend.config.network_id(),
                     backend.config.handle().to_owned(),
                     backend.config.revision(),
                     backend.qualification.policy_digest,
@@ -1462,6 +1485,14 @@ mod tests {
         digest
     }
 
+    fn network_id_v1(label: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed(strong_32_v1(label)),
+            ),
+        )
+    }
+
     fn issuer_seed_v1() -> [u8; 32] {
         strong_32_v1(b"issuer-seed-primary")
     }
@@ -1481,6 +1512,7 @@ mod tests {
             "fc56984b-2be7-431d-840e-21514d1883f0"
                 .parse()
                 .expect("canonical Taira chain id"),
+            network_id_v1(b"canonical-genesis"),
             "runtime://privacy/bootle-lantern/taira-primary",
             1,
             PrivacyIssuerIdV1::new(strong_32_v1(b"issuer-id-primary")),
@@ -1516,7 +1548,7 @@ mod tests {
 
     fn statement_context_v1() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
-            chain_id: public_config_v1().chain_id,
+            network_id: public_config_v1().network_id,
             action_index: 0,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(strong_32_v1(
                 b"transaction-intent",
@@ -1563,6 +1595,7 @@ mod tests {
             assert!(
                 TairaBootleLanternBrokerPublicConfigV1::try_new(
                     baseline.chain_id.clone(),
+                    baseline.network_id,
                     handle,
                     1,
                     baseline.issuer_id,
@@ -1589,6 +1622,7 @@ mod tests {
             assert!(
                 TairaBootleLanternBrokerPublicConfigV1::try_new(
                     baseline.chain_id.clone(),
+                    baseline.network_id,
                     baseline.handle.clone(),
                     revision,
                     issuer,
@@ -1631,7 +1665,7 @@ mod tests {
     fn qualification_binds_public_inputs_shared_profile_contract_and_not_bearer() {
         let backend = backend_v1();
         let inputs = TairaBootleLanternBrokerQualificationInputsV1 {
-            chain_id: backend.config.chain_id.as_str(),
+            network_id: backend.config.network_id,
             runtime_provider_handle: &backend.config.handle,
             runtime_provider_revision: backend.config.revision,
             issuer_id: backend.config.issuer_id,
@@ -1868,16 +1902,14 @@ mod tests {
     }
 
     #[test]
-    fn crypto_boundary_rejects_chain_genesis_policy_principal_lifetime_and_wire_substitution() {
+    fn crypto_boundary_rejects_network_genesis_policy_principal_lifetime_and_wire_substitution() {
         let backend = backend_v1();
         let context = statement_context_v1();
         let genesis = strong_32_v1(b"canonical-genesis");
         let authorization = authorization_v1(&backend);
 
         let mut wrong_context = context.clone();
-        wrong_context.chain_id = "substituted-chain"
-            .parse()
-            .expect("valid substituted chain");
+        wrong_context.network_id = network_id_v1(b"substituted-genesis");
         assert!(matches!(
             backend.prepare_authorization(
                 &wrong_context,
@@ -2097,6 +2129,8 @@ mod tests {
             "export-public",
             "--chain-id",
             "fc56984b-2be7-431d-840e-21514d1883f0",
+            "--network-id",
+            "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7",
             "--handle",
             "runtime://privacy/bootle-lantern/taira-primary",
             "--revision",

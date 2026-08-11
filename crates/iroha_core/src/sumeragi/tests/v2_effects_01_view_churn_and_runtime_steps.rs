@@ -28,7 +28,7 @@ fn tc_body_rebind_cancels_fetch_superseded_by_a_higher_different_qc() {
             vec![AdapterEffect::EnterView {
                 tag: consumer_tag(1),
                 certificate: first_timeout,
-                protected_body: Some((original.round, original.subject)),
+                protected_lock: Some(original.clone()),
             }],
             &mut services,
         )
@@ -56,7 +56,7 @@ fn tc_body_rebind_cancels_fetch_superseded_by_a_higher_different_qc() {
             vec![AdapterEffect::EnterView {
                 tag: consumer_tag(2),
                 certificate: replacement_timeout,
-                protected_body: Some((replacement.round, replacement.subject)),
+                protected_lock: Some(replacement.clone()),
             }],
             &mut services,
         )
@@ -122,7 +122,7 @@ fn certified_view_churn_cancels_stale_fetches_and_releases_capacity() {
                 vec![AdapterEffect::EnterView {
                     tag: EventTag::new(1, view + 1, Generation::new(8 + view)),
                     certificate: timeout_at_view(&fixture, view),
-                    protected_body: None,
+                    protected_lock: None,
                 }],
                 &mut services,
             )
@@ -168,7 +168,7 @@ fn certified_view_churn_cancels_stale_signing_and_releases_capacity() {
                 vec![AdapterEffect::EnterView {
                     tag: EventTag::new(1, view + 1, Generation::new(8 + view)),
                     certificate: timeout_at_view(&fixture, view),
-                    protected_body: None,
+                    protected_lock: None,
                 }],
                 &mut services,
             )
@@ -511,9 +511,7 @@ fn runtime_step_dispatches_entire_effect_batch_before_returning() {
         .push_back(Ok(RuntimeStep::Advanced(vec![
             AdapterEffect::Broadcast(message.clone()),
             AdapterEffect::ReportEquivocation {
-                offender: fixture.context.roster[1].validator.clone(),
-                round: fixture.manifest.round,
-                kind: EquivocationKind::Vote,
+                evidence: vote_equivocation_evidence(&fixture, 1),
             },
             AdapterEffect::ReportInvalidCertifiedBody {
                 subject: fixture.manifest.subject,
@@ -579,4 +577,291 @@ fn runtime_step_consumes_effect_batch_and_idle_publishes_status() {
     );
     assert_eq!(services.sign_tasks.len(), 1);
     assert_eq!(services.statuses.len(), 2);
+}
+
+#[test]
+fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
+    let mut fixture = ProductionTransportFixture::new_validator();
+    let started = Instant::now();
+    fixture
+        .executor
+        .arm_live_clocks(started)
+        .expect("arm the production serialized runtime");
+    let mut services = FakeServices::default();
+
+    let conflicting_body = b"delayed-GST equivocation payload".to_vec();
+    let conflicting_subject = wire::BlockSubject {
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"delayed-GST equivocation block")),
+        payload_hash: Hash::new(&conflicting_body),
+        ..fixture.subject
+    };
+    let conflicting_manifest = canonical_payload_manifest(
+        &fixture.context,
+        fixture.round,
+        conflicting_subject,
+        &conflicting_body,
+    );
+    let conflicting_durable = DurableBodyReceipt::for_test(
+        fixture.context.id(),
+        fixture.round,
+        conflicting_subject,
+        HashOf::new(&conflicting_manifest),
+    );
+    let conflicting_validated = ValidatedBodyReceipt::for_test(conflicting_durable);
+    let conflicting_vote_commitment = conflicting_validated.execution_commitment();
+    fixture
+        .executor
+        .runtime
+        .bind_validated_body(&conflicting_manifest, &conflicting_validated)
+        .expect("bind a second locally validated equivocation subject");
+
+    let signed_vote = |subject: wire::BlockSubject,
+                       execution_commitment: wire::ExecutionCommitment,
+                       signer: wire::ValidatorIndex| {
+        let mut vote = wire::Vote {
+            round: fixture.round,
+            proposal_round: fixture.round,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment,
+            signer,
+            signature: Vec::new(),
+        };
+        vote.signature = Signature::new(
+            fixture.validator_keys[usize::try_from(signer).expect("small fixture signer")]
+                .private_key(),
+            &vote.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote))
+    };
+    let canonical_share = signed_vote(fixture.subject, fixture.canonical_commitment, 3);
+    let wire::ConsensusMessageV2Payload::Vote(expected_first) = canonical_share.payload.clone()
+    else {
+        unreachable!("phase-vote fixture")
+    };
+    let conflicting_share = signed_vote(conflicting_subject, conflicting_vote_commitment, 3);
+    let wire::ConsensusMessageV2Payload::Vote(expected_second) = conflicting_share.payload.clone()
+    else {
+        unreachable!("phase-vote fixture")
+    };
+    fixture
+        .executor
+        .enqueue_network(canonical_share.clone())
+        .expect("authenticate the withheld validator's first Prepare share");
+    fixture
+        .executor
+        .enqueue_network(canonical_share)
+        .expect("an exact duplicate coalesces without another reducer owner");
+    fixture
+        .executor
+        .enqueue_network(conflicting_share)
+        .expect("authenticate conflicting signed evidence for reducer reporting");
+    for _ in 0..16 {
+        if matches!(
+            fixture
+                .executor
+                .step(started, &mut services)
+                .expect("drain duplicate/equivocation ingress"),
+            EffectExecutorStep::Idle
+        ) {
+            break;
+        }
+    }
+    assert_eq!(services.equivocations.len(), 1);
+    let wire::SumeragiV2Equivocation::PhaseVote { first, second } = &services.equivocations[0]
+    else {
+        panic!("expected exact phase-vote equivocation evidence")
+    };
+    assert_eq!(first, &expected_first);
+    assert_eq!(second, &expected_second);
+    assert!(
+        fixture
+            .executor
+            .runtime
+            .replayed_decision_key()
+            .expect("inspect durable decision before quorum")
+            .is_none()
+    );
+
+    let canonical_prepare =
+        fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.canonical_commitment);
+    assert_eq!(canonical_prepare.signers, vec![0, 1, 2]);
+    let invalid_certificates = {
+        let resign = |certificate: &mut wire::QuorumCertificate| {
+            let preimage = wire::Vote {
+                round: certificate.round,
+                proposal_round: certificate.proposal_round,
+                phase: certificate.phase,
+                subject: certificate.subject,
+                execution_commitment: certificate.execution_commitment,
+                signer: certificate.signers[0],
+                signature: Vec::new(),
+            }
+            .signature_preimage();
+            let shares = certificate
+                .signers
+                .iter()
+                .map(|signer| {
+                    Signature::new(
+                        fixture.validator_keys[usize::try_from(*signer).expect("small QC signer")]
+                            .private_key(),
+                        &preimage,
+                    )
+                    .payload()
+                    .to_vec()
+                })
+                .collect::<Vec<_>>();
+            let share_refs = shares.iter().map(Vec::as_slice).collect::<Vec<_>>();
+            certificate.aggregate_signature =
+                iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
+                    .expect("re-sign adversarial certificate");
+        };
+        let mut foreign_context = fixture.context.clone();
+        foreign_context.network_id =
+            crate::sumeragi::synthetic_network_id("delayed-gst-foreign-context");
+
+        let mut wrong_context = canonical_prepare.clone();
+        wrong_context.round.context_id = foreign_context.id();
+        wrong_context.proposal_round.context_id = foreign_context.id();
+        resign(&mut wrong_context);
+
+        let mut wrong_height = canonical_prepare.clone();
+        wrong_height.round.height += 1;
+        wrong_height.proposal_round.height += 1;
+        resign(&mut wrong_height);
+
+        let mut wrong_view = canonical_prepare.clone();
+        wrong_view.proposal_round.view += 1;
+        resign(&mut wrong_view);
+
+        let mut wrong_signature = canonical_prepare.clone();
+        wrong_signature.aggregate_signature[0] ^= 0x80;
+
+        let wrong_commitment =
+            fixture.quorum_certificate(wire::GlobalPhase::Prepare, fixture.conflicting_commitment);
+        [
+            ("context", wrong_context),
+            ("height", wrong_height),
+            ("view", wrong_view),
+            ("signature", wrong_signature),
+            ("commitment", wrong_commitment),
+        ]
+    };
+    for (kind, certificate) in invalid_certificates {
+        let result = fixture
+            .executor
+            .enqueue_network(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+            ));
+        assert!(result.is_err(), "wrong {kind} certificate was admitted");
+        assert!(fixture.executor.runtime.driver().ingress_ready());
+        assert!(
+            fixture
+                .executor
+                .runtime
+                .replayed_decision_key()
+                .expect("invalid input cannot corrupt durable decision inspection")
+                .is_none()
+        );
+        assert!(!fixture.executor.status().fail_closed);
+    }
+
+    let prepare_message = wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::QuorumCertificate(canonical_prepare.clone()),
+    );
+    fixture
+        .executor
+        .enqueue_network(prepare_message.clone())
+        .expect("the responsive 3-of-4 PrepareQC enters production ingress");
+    fixture
+        .executor
+        .enqueue_network(prepare_message)
+        .expect("the exact PrepareQC duplicate coalesces");
+    for _ in 0..16 {
+        if matches!(
+            fixture
+                .executor
+                .step(started, &mut services)
+                .expect("drain the responsive PrepareQC"),
+            EffectExecutorStep::Idle
+        ) {
+            break;
+        }
+    }
+    assert!(
+        fixture
+            .executor
+            .runtime
+            .replayed_decision_key()
+            .expect("PrepareQC is not a decision")
+            .is_none()
+    );
+
+    let canonical_commit =
+        fixture.quorum_certificate(wire::GlobalPhase::Commit, fixture.canonical_commitment);
+    assert_eq!(canonical_commit.signers, vec![0, 1, 2]);
+    let commit_message = wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::QuorumCertificate(canonical_commit.clone()),
+    );
+    fixture
+        .executor
+        .enqueue_network(commit_message.clone())
+        .expect("the responsive 3-of-4 CommitQC enters production ingress");
+    fixture
+        .executor
+        .enqueue_network(commit_message)
+        .expect("the exact CommitQC duplicate coalesces");
+    for _ in 0..32 {
+        let _ = fixture
+            .executor
+            .step(started, &mut services)
+            .expect("drive the 3-of-4 CommitQC to durable finality");
+        if fixture
+            .executor
+            .runtime
+            .replayed_decision_key()
+            .expect("inspect durable 3-of-4 decision")
+            .is_some()
+        {
+            break;
+        }
+    }
+    assert_eq!(
+        fixture
+            .executor
+            .runtime
+            .replayed_decision_key()
+            .expect("read durable finality key"),
+        Some((
+            canonical_commit.round,
+            canonical_commit.proposal_round,
+            canonical_commit.subject,
+            canonical_commit.execution_commitment,
+        ))
+    );
+    for _ in 0..16 {
+        if matches!(
+            fixture
+                .executor
+                .step(started, &mut services)
+                .expect("drain post-decision effects without duplicate application"),
+            EffectExecutorStep::Idle
+        ) {
+            break;
+        }
+    }
+    assert!(
+        services.apply_tasks.len() <= 1,
+        "an exact CommitQC duplicate must not transfer application twice"
+    );
+    assert!(
+        services
+            .apply_tasks
+            .iter()
+            .all(|task| task.subject() == fixture.subject)
+    );
+    assert!(!fixture.executor.status().fail_closed);
+    assert!(services.closed.is_empty());
 }

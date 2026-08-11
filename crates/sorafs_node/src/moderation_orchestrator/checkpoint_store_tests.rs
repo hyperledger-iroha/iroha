@@ -132,10 +132,6 @@ impl ModerationCheckpointStoreV1 for MockCheckpointStore {
         let Some(latest) = latest.as_ref() else {
             return Err(ModerationCheckpointStoreExternalErrorV1::Rejected);
         };
-        let expected_chain_id = statement
-            .chain_id
-            .parse::<iroha_data_model::ChainId>()
-            .map_err(|_| ModerationCheckpointStoreExternalErrorV1::Rejected)?;
         if statement.checkpoint_namespace_digest != latest.namespace_digest
             || statement.checkpoint_generation != latest.checkpoint_generation
             || statement.checkpoint_revision != latest.revision
@@ -146,7 +142,7 @@ impl ModerationCheckpointStoreV1 for MockCheckpointStore {
             || statement.attestor_public_key != self.attestation_public_key()
             || validate_moderation_panel_notification_source_attestation_for_broker_v1(
                 statement,
-                &expected_chain_id,
+                &statement.network_id,
                 CHECKPOINT_STORE_HANDLE,
                 CHECKPOINT_STORE_QUALIFICATION,
                 self.attestation_public_key(),

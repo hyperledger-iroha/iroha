@@ -96,9 +96,15 @@ signed transaction.
 
 Each program has isolated per-asset vault allocations backed by the configured
 `nexus.fees.sponsor_vault_custody_account_id`. Funding moves assets into
-custody and credits only the exact program vault. Withdrawals are authorized
-for the exact program and allowed only in safe lifecycle states. One program
-cannot consume another program's balance.
+custody and credits only the exact program vault. The program record contains
+one mandatory, immutable `payout_account`; creation rejects an account that is
+not registered, and that account cannot be unregistered while the program is
+not closed. `WithdrawFeeSponsorProgram` carries only the program, asset, and
+amount: it has no caller-selected destination. Only the exact sponsor account
+may authorize a withdrawal, never a program manager, role, or delegated
+withdrawal token, and Core releases value only to the recorded payout account
+in a paused or closing lifecycle state. One program cannot consume another
+program's balance.
 
 Sponsor-program vault assets must use the `Global` balance policy in the first
 release. Revision staging, vault funding, receipt-lease registration, and a

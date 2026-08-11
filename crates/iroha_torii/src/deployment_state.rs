@@ -597,7 +597,9 @@ mod tests {
         let app = fixture_app(&authority, None, NonceFixture::U64(7));
         let alias: ContractAlias = "deploy::universal".parse().expect("contract alias");
         let previous = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             6,
             DataSpaceId::UNIVERSAL,
@@ -629,7 +631,9 @@ mod tests {
         );
 
         let new_address = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             response.deploy_nonce.parse().expect("decimal deploy nonce"),
             DataSpaceId::new(response.dataspace_id.parse().expect("decimal dataspace id")),
@@ -647,7 +651,9 @@ mod tests {
         let authority = AccountId::new(authority_key.public_key().clone());
         let app = fixture_app(&authority, None, NonceFixture::U64(1));
         let previous = ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,

@@ -1983,8 +1983,7 @@ fn journal_rejects_archive_registration_receipt_replay_from_another_nonce() {
     let intent = registration_intent(request.operation_id(), &request, expected_receipt.clone());
     let registered = PublicationRegisteredArchiveV1 {
         finalized_transaction_hash: intent.transaction_hash,
-        chain_id: request.chain_id.clone(),
-        genesis_block_hash: request.genesis_block_hash,
+        network_id: request.network_id,
         snapshot: MusubiRegistrySnapshotV1 {
             finalized_height: 60,
             finalized_block_hash: [0x3C; 32],
@@ -2056,8 +2055,7 @@ fn journal_rejects_a_refreshed_receipt_after_archive_registration() {
     let intent = registration_intent(journal.operation_id, &journal.request, registered_receipt);
     journal.registered_archive = Some(PublicationRegisteredArchiveV1 {
         finalized_transaction_hash: intent.transaction_hash,
-        chain_id: journal.request.chain_id.clone(),
-        genesis_block_hash: journal.request.genesis_block_hash,
+        network_id: journal.request.network_id,
         snapshot: MusubiRegistrySnapshotV1 {
             finalized_height: 60,
             finalized_block_hash: [0x3C; 32],
@@ -2101,8 +2099,7 @@ fn replication_requires_three_exact_finalized_providers() {
     );
     let registered = PublicationRegisteredArchiveV1 {
         finalized_transaction_hash: intent.transaction_hash,
-        chain_id: request.chain_id.clone(),
-        genesis_block_hash: request.genesis_block_hash,
+        network_id: request.network_id,
         snapshot: MusubiRegistrySnapshotV1 {
             finalized_height: 60,
             finalized_block_hash: [0x3C; 32],
@@ -2211,8 +2208,7 @@ fn archive_location_checkpoints_reject_revision_and_snapshot_substitution() {
     );
     let registered = PublicationRegisteredArchiveV1 {
         finalized_transaction_hash: archive_intent.transaction_hash,
-        chain_id: request.chain_id.clone(),
-        genesis_block_hash: request.genesis_block_hash,
+        network_id: request.network_id,
         snapshot: registration.intent.prepared_page.snapshot,
         archive: registration.intent.prepared_page.archive.clone(),
     };
@@ -2507,17 +2503,12 @@ fn amx_and_final_index_evidence_bind_the_exact_release() {
             .validate_for(&request, &exact_submission)
             .is_err()
     );
-    let mut wrong_chain = exact_final.clone();
-    wrong_chain.chain_id = ChainId::from("another-musubi-chain");
+    let mut wrong_network = exact_final.clone();
+    // Another deployment may reuse the same human-facing ChainName, but its
+    // distinct genesis-derived identity is never valid evidence for this request.
+    wrong_network.network_id = publication_test_network_id(0x75);
     assert!(
-        wrong_chain
-            .validate_for(&request, &exact_submission)
-            .is_err()
-    );
-    let mut wrong_genesis = exact_final.clone();
-    wrong_genesis.genesis_block_hash = [0x74; 32];
-    assert!(
-        wrong_genesis
+        wrong_network
             .validate_for(&request, &exact_submission)
             .is_err()
     );
@@ -2542,9 +2533,4 @@ fn detached_operation_ids_are_canonical_nonzero_lowercase_hex() {
             .parse::<PublicationOperationIdV1>()
             .is_err()
     );
-}
-
-#[test]
-fn empty_chain_identity_is_rejected_before_publication_request_construction() {
-    assert!(ChainId::try_from(String::new()).is_err());
 }

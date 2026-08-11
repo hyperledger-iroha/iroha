@@ -290,7 +290,9 @@ fn alias_binding_rejects_incoherent_lease_windows() {
     let mut world = World::new();
 
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &ALICE_ID,
         6,
         DataSpaceId::UNIVERSAL,
@@ -338,7 +340,9 @@ fn alias_index_rebuild_rejects_incoherent_persisted_lease_windows() {
     assert!(error.contains("requires lease_expiry_ms"));
 
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &ALICE_ID,
         7,
         DataSpaceId::UNIVERSAL,
@@ -366,14 +370,18 @@ fn alias_index_rebuild_rejects_incoherent_persisted_lease_windows() {
 fn world_bind_contract_alias_keeps_indexes_consistent() {
     let mut world = World::new();
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &ALICE_ID,
         1,
         DataSpaceId::UNIVERSAL,
     )
     .expect("contract address");
     let other_contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &ALICE_ID,
         2,
         DataSpaceId::UNIVERSAL,
@@ -436,7 +444,9 @@ fn world_bind_contract_alias_keeps_indexes_consistent() {
 fn contract_alias_time_lookup_rejects_index_without_binding_record() {
     let mut world = World::new();
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &ALICE_ID,
         7,
         DataSpaceId::UNIVERSAL,

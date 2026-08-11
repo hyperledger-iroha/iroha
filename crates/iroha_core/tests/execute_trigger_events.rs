@@ -17,7 +17,7 @@ use iroha_data_model::prelude::*;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use mv::storage::StorageReadOnly;
 
-fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
+fn build_state_and_ids() -> (State, NetworkId, TriggerId, AssetId) {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -65,6 +65,7 @@ fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
     let query = LiveQueryStore::start_test();
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let state = State::new_with_chain_for_testing(world, kura.clone(), query, chain_id.clone());
+    let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
@@ -78,12 +79,12 @@ fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
         .asset_definition(asset_id.definition())
         .expect("seeded asset definition must be resolvable");
 
-    (state, chain_id, trigger_id, asset_id)
+    (state, network_id, trigger_id, asset_id)
 }
 
 fn register_trigger(
     state: &State,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     trigger_id: &TriggerId,
     asset_id: &AssetId,
 ) -> (iroha_core::block::CommittedBlock, usize) {
@@ -103,7 +104,7 @@ fn register_trigger(
         .expect("trigger action fixture satisfies validation invariants"),
     ));
     let register_tx = TransactionBuilder::new(
-        chain_id.clone(),
+        *network_id,
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -137,13 +138,13 @@ fn register_trigger(
 
 fn execute_trigger(
     state: &State,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     trigger_id: &TriggerId,
     asset_id: &AssetId,
     parent: &iroha_core::block::CommittedBlock,
 ) -> (Vec<EventBox>, usize, Option<String>) {
     let exec_tx = TransactionBuilder::new(
-        chain_id.clone(),
+        *network_id,
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

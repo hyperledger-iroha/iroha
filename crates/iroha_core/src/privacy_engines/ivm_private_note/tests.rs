@@ -1,6 +1,7 @@
 use std::str::FromStr as _;
 
 use iroha_data_model::{
+    NetworkId,
     asset::AssetDefinitionId,
     domain::DomainId,
     privacy::{
@@ -40,7 +41,11 @@ fn asset() -> AssetDefinitionId {
 
 fn context() -> PrivacyStatementContextV1 {
     PrivacyStatementContextV1 {
-        chain_id: "taira-private-note-test".parse().expect("chain id"),
+        network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0xC1; 32])
+        )),
         action_index: 0,
         transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(bytes(0x31)),
         parameter_id: PrivacyParameterIdV1::new(bytes(0x32)),
@@ -280,7 +285,11 @@ fn nullifier_is_stable_across_every_replay_context() {
     .expect("canonical nullifier");
 
     let mut replay = value.statement.clone();
-    replay.context.chain_id = "another-chain".parse().expect("chain id");
+    replay.context.network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+        iroha_data_model::block::BlockHeader,
+    >::from_untyped_unchecked(
+        iroha_crypto::Hash::prehashed([0xC2; 32]),
+    ));
     replay.context.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(bytes(0xa1));
     replay.context.action_index = 7;
     replay.root_epoch = 999;

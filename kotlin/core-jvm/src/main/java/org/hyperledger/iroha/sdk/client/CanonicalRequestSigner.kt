@@ -10,6 +10,7 @@ import java.security.SecureRandom
 import java.security.Signature
 import java.util.Base64
 import java.util.Locale
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 /** Builds canonical request signatures for Torii app endpoints. */
 object CanonicalRequestSigner {
@@ -22,9 +23,10 @@ object CanonicalRequestSigner {
     const val BODY_TIMESTAMP_MS = "timestamp_ms"
     const val BODY_NONCE = "nonce"
     const val BODY_SIGNATURE_BASE64 = "signature_base64"
-    const val BODY_WITNESS_BASE64 = "witness_base64"
+    private const val BODY_WITNESS_BASE64 = "witness_base64"
 
     private val NONCE_RANDOM = SecureRandom()
+    private val NETWORK_DOMAIN = "iroha.app.request.network.v1\u0000".toByteArray(StandardCharsets.UTF_8)
 
     /** Canonicalise a raw query string by decoding, sorting, and re-encoding. */
     @JvmStatic
@@ -57,9 +59,10 @@ object CanonicalRequestSigner {
         return rendered.toByteArray(StandardCharsets.UTF_8)
     }
 
-    /** Build canonical request bytes plus freshness metadata for signature verification. */
+    /** Build canonical request bytes bound to an exact network and freshness metadata. */
     @JvmStatic
     fun canonicalRequestSignatureMessage(
+        networkId: NetworkId,
         method: String,
         uri: URI,
         body: ByteArray?,
@@ -67,9 +70,9 @@ object CanonicalRequestSigner {
         nonce: String
     ): ByteArray {
         requireExactNonBlank(nonce, "nonce")
-        val rendered = String(canonicalRequestMessage(method, uri, body), StandardCharsets.UTF_8) +
-            "\n$timestampMs\n$nonce"
-        return rendered.toByteArray(StandardCharsets.UTF_8)
+        val base = canonicalRequestMessage(method, uri, body)
+        val suffix = "\n$timestampMs\n$nonce".toByteArray(StandardCharsets.UTF_8)
+        return NETWORK_DOMAIN + networkId.bytes() + base + suffix
     }
 
     /** Build unsigned canonical JSON bytes for body-auth endpoints. */
@@ -84,12 +87,14 @@ object CanonicalRequestSigner {
     /** Build body-auth canonical request bytes plus freshness metadata. */
     @JvmStatic
     fun canonicalBodyAuthSignatureMessage(
+        networkId: NetworkId,
         method: String,
         uri: URI,
         bodyFields: Map<String, Any?>,
         timestampMs: Long,
         nonce: String
     ): ByteArray = canonicalRequestSignatureMessage(
+        networkId,
         method,
         uri,
         unsignedBodyAuthJson(bodyFields),
@@ -100,17 +105,19 @@ object CanonicalRequestSigner {
     /** Build the top-level fields required for single-signature body auth. */
     @JvmStatic
     fun buildBodySignatureFields(
+        networkId: NetworkId,
         method: String,
         uri: URI,
         bodyFields: Map<String, Any?>,
         accountId: String,
         privateKey: PrivateKey
     ): Map<String, Any?> =
-        buildBodySignatureFields(method, uri, bodyFields, accountId, privateKey, System.currentTimeMillis(), randomNonce())
+        buildBodySignatureFields(networkId, method, uri, bodyFields, accountId, privateKey, System.currentTimeMillis(), randomNonce())
 
     /** Build the top-level fields required for single-signature body auth with explicit freshness metadata. */
     @JvmStatic
     fun buildBodySignatureFields(
+        networkId: NetworkId,
         method: String,
         uri: URI,
         bodyFields: Map<String, Any?>,
@@ -120,7 +127,7 @@ object CanonicalRequestSigner {
         nonce: String
     ): Map<String, Any?> {
         val unsigned = bodyWithBodyAuthFreshness(bodyFields, accountId, timestampMs, nonce)
-        val message = canonicalBodyAuthSignatureMessage(method, uri, unsigned, timestampMs, nonce)
+        val message = canonicalBodyAuthSignatureMessage(networkId, method, uri, unsigned, timestampMs, nonce)
         val signatureBytes = signEd25519(privateKey, message)
         return mapOf(
             BODY_ACCOUNT_ID to accountId,
@@ -133,6 +140,7 @@ object CanonicalRequestSigner {
     /** Return a copy of `bodyFields` carrying single-signature body auth. */
     @JvmStatic
     fun withBodySignature(
+        networkId: NetworkId,
         method: String,
         uri: URI,
         bodyFields: Map<String, Any?>,
@@ -143,39 +151,26 @@ object CanonicalRequestSigner {
     ): Map<String, Any?> {
         val body = LinkedHashMap<String, Any?>(bodyFields)
         body.remove(BODY_WITNESS_BASE64)
-        body.putAll(buildBodySignatureFields(method, uri, body, accountId, privateKey, timestampMs, nonce))
-        return body
-    }
-
-    /** Return a copy of `bodyFields` carrying a prebuilt multisig witness body auth proof. */
-    @JvmStatic
-    fun withBodyWitness(
-        bodyFields: Map<String, Any?>,
-        accountId: String,
-        timestampMs: Long,
-        nonce: String,
-        witnessBase64: String
-    ): Map<String, Any?> {
-        requireExactNonBlank(witnessBase64, "witnessBase64")
-        val body = bodyWithBodyAuthFreshness(bodyFields, accountId, timestampMs, nonce)
-        body[BODY_WITNESS_BASE64] = witnessBase64
+        body.putAll(buildBodySignatureFields(networkId, method, uri, body, accountId, privateKey, timestampMs, nonce))
         return body
     }
 
     /** Build canonical signing headers with generated freshness metadata. */
     @JvmStatic
     fun buildHeaders(
+        networkId: NetworkId,
         method: String,
         uri: URI,
         body: ByteArray?,
         accountId: String,
         privateKey: PrivateKey
     ): Map<String, String> =
-        buildHeaders(method, uri, body, accountId, privateKey, System.currentTimeMillis(), randomNonce())
+        buildHeaders(networkId, method, uri, body, accountId, privateKey, System.currentTimeMillis(), randomNonce())
 
     /** Build canonical signing headers with explicit freshness metadata. */
     @JvmStatic
     fun buildHeaders(
+        networkId: NetworkId,
         method: String,
         uri: URI,
         body: ByteArray?,
@@ -186,7 +181,7 @@ object CanonicalRequestSigner {
     ): Map<String, String> {
         requireExactNonBlank(accountId, "accountId")
         requireExactNonBlank(nonce, "nonce")
-        val message = canonicalRequestSignatureMessage(method, uri, body, timestampMs, nonce)
+        val message = canonicalRequestSignatureMessage(networkId, method, uri, body, timestampMs, nonce)
         val signatureBytes = signEd25519(privateKey, message)
         return mapOf(
             HEADER_ACCOUNT to accountId,

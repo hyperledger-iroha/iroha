@@ -62,7 +62,7 @@ fn structurally_oversized_account() -> AccountId {
     let policy = MultisigPolicy::new(1, members).expect("oversized-account fixture policy");
     let account = AccountId::new_multisig(policy);
     assert!(
-        norito::to_bytes(&account)
+        norito::encode_canonical(&account)
             .expect("oversized account has canonical Norito bytes")
             .len()
             > MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1
@@ -149,6 +149,12 @@ fn snapshot() -> MusubiRegistrySnapshotV1 {
     }
 }
 
+fn test_network_id(seed: u8) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
+        Hash::new([seed; Hash::LENGTH]),
+    ))
+}
+
 fn archive_commitment() -> MusubiArchiveCommitmentV1 {
     MusubiArchiveCommitmentV1 {
         root_cid: ManifestRootCid::from_blake3_digest([1; 32]).expect("root CID"),
@@ -175,8 +181,7 @@ fn archive_commitment() -> MusubiArchiveCommitmentV1 {
 fn seed_ingress_binding(broker: AccountId) -> MusubiSeedIngressReceiptBindingV1 {
     let commitment = archive_commitment();
     MusubiSeedIngressReceiptBindingV1 {
-        chain_id: ChainId::from("musubi-publish-test"),
-        genesis_block_hash: [0x15; 32],
+        network_id: test_network_id(0x15),
         publisher: account(20),
         ingress_broker: broker,
         seed_provider: ProviderId::new([0x16; 32]),
@@ -202,8 +207,7 @@ fn provider_completion_authority(owner: AccountId) -> ProviderIngestCompletionAu
 
 fn provider_bundle_binding(owner: AccountId) -> MusubiProviderBundleVerificationBindingV1 {
     MusubiProviderBundleVerificationBindingV1 {
-        chain_id: ChainId::from("musubi-publish-test"),
-        genesis_block_hash: [0x23; 32],
+        network_id: test_network_id(0x23),
         provider_id: ProviderId::new([0x24; 32]),
         completed_by: owner.clone(),
         completion_authority: provider_completion_authority(owner),
@@ -231,6 +235,85 @@ fn verification_lock(root: MusubiReleaseIdV1) -> MusubiVerificationLockV1 {
         root_dependencies: Vec::new(),
         nodes: Vec::new(),
     }
+}
+
+fn canonical_bundle_metadata() -> (
+    MusubiArtifactDescriptorV1,
+    MusubiSemanticReleaseManifestV1,
+    MusubiVerificationLockV1,
+) {
+    let manifest = release_manifest();
+    let semantic = manifest.semantic_manifest();
+    let lock = verification_lock(semantic.release.clone());
+    assert_eq!(semantic.verification_lock_digest, lock.digest());
+    let descriptor = MusubiArtifactDescriptorV1::new(
+        semantic.semantic_digest(),
+        MusubiContentDigestV1::new([0x44; 32]),
+        lock.digest(),
+        128,
+        1,
+    )
+    .expect("canonical descriptor");
+    (descriptor, semantic, lock)
+}
+
+fn dense_verification_lock(fanout: usize) -> MusubiVerificationLockV1 {
+    const LAYER_WIDTH: usize = MUSUBI_MAX_DEPENDENCIES_V1;
+    const LAYER_COUNT: usize = 4;
+
+    let releases = (0..LAYER_WIDTH * LAYER_COUNT)
+        .map(|index| release(&format!("node-{index:04}"), "1.0.0"))
+        .collect::<Vec<_>>();
+    let exact_edge = |alias: String, selected: MusubiReleaseIdV1| MusubiExactDependencyEdgeV1 {
+        alias: alias.parse().expect("dense-lock dependency alias"),
+        kind: MusubiDependencyKindV1::Normal,
+        package: selected.package.clone(),
+        requirement: "^1.0.0".parse().expect("dense-lock requirement"),
+        selected,
+    };
+    let root_dependencies = releases[..LAYER_WIDTH]
+        .iter()
+        .enumerate()
+        .map(|(index, selected)| exact_edge(format!("node-{index:04}"), selected.clone()))
+        .collect();
+    let nodes = releases
+        .iter()
+        .enumerate()
+        .map(|(index, release)| {
+            let layer = index / LAYER_WIDTH;
+            let column = index % LAYER_WIDTH;
+            let dependencies = if layer + 1 == LAYER_COUNT {
+                Vec::new()
+            } else {
+                (0..fanout)
+                    .map(|offset| {
+                        let target_column = (column + offset) % LAYER_WIDTH;
+                        let target = (layer + 1) * LAYER_WIDTH + target_column;
+                        exact_edge(format!("dep-{target:04}"), releases[target].clone())
+                    })
+                    .collect()
+            };
+            let fill = u8::try_from(index % 250 + 1).expect("bounded dense-lock fill");
+            MusubiVerificationNodeV1 {
+                release: release.clone(),
+                release_digest: MusubiReleaseDigestV1::new([fill; 32]),
+                archive_id: ArchiveId::new([fill.saturating_add(1); 32]),
+                source_digest: MusubiContentDigestV1::new([fill.saturating_add(2); 32]),
+                interface_digest: MusubiContentDigestV1::new([fill.saturating_add(3); 32]),
+                abi: MusubiAbiBindingV1::new([fill.saturating_add(4); 32]).expect("ABI"),
+                dependencies,
+            }
+        })
+        .collect();
+    let mut lock = MusubiVerificationLockV1 {
+        schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+        version: MUSUBI_REGISTRY_VERSION_V1,
+        root: release("dense-root", "1.0.0"),
+        root_dependencies,
+        nodes,
+    };
+    lock.canonicalize();
+    lock
 }
 
 fn release_manifest() -> MusubiReleaseManifestV1 {
@@ -376,6 +459,79 @@ fn account_identity_bound_is_exact_and_recursive() {
 }
 
 #[test]
+fn account_and_provider_attestation_admission_ignore_and_restore_ambient_flags() {
+    let account = account(39);
+    let provider_keypair = KeyPair::try_from_seed(vec![63; 32], Algorithm::Ed25519)
+        .expect("provider owner fixture keypair");
+    let binding = provider_bundle_binding(AccountId::new(provider_keypair.public_key().clone()));
+    let payload = MusubiProviderBundleVerificationPayloadV1 {
+        version: MUSUBI_REGISTRY_VERSION_V1,
+        binding,
+    };
+    let attestation = MusubiProviderBundleVerificationAttestationV1 {
+        approvals: vec![MusubiProviderBundleVerificationApprovalV1 {
+            public_key: provider_keypair.public_key().clone(),
+            signature: SignatureOf::try_from_hash(
+                provider_keypair.private_key(),
+                payload.signing_hash(),
+            )
+            .expect("provider approval"),
+        }],
+        payload,
+    };
+    let canonical_account =
+        norito::encode_canonical(&account).expect("encode canonical Musubi account");
+    let canonical_attestation = norito::encode_canonical(&attestation)
+        .expect("encode canonical Musubi provider attestation");
+    let alternate_flags =
+        norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+    let (alternate_account, alternate_attestation) = {
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        (
+            norito::to_bytes(&account).expect("encode alternate-layout Musubi account"),
+            norito::to_bytes(&attestation)
+                .expect("encode alternate-layout Musubi provider attestation"),
+        )
+    };
+    assert_ne!(alternate_account, canonical_account);
+    assert_ne!(alternate_attestation, canonical_attestation);
+
+    validate_musubi_account_id_v1(&account).expect("baseline account admission");
+    attestation
+        .validate()
+        .expect("baseline provider attestation admission");
+    {
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let before_account =
+            norito::to_bytes(&account).expect("encode account under caller ambient flags");
+        let before_attestation = norito::to_bytes(&attestation)
+            .expect("encode provider attestation under caller ambient flags");
+        validate_musubi_account_id_v1(&account).expect("ambient account admission");
+        attestation
+            .validate()
+            .expect("ambient provider attestation admission");
+        assert_eq!(
+            norito::encode_canonical(&account).expect("canonicalize ambient account"),
+            canonical_account
+        );
+        assert_eq!(
+            norito::encode_canonical(&attestation)
+                .expect("canonicalize ambient provider attestation"),
+            canonical_attestation
+        );
+        assert_eq!(
+            norito::to_bytes(&account).expect("re-encode account under caller ambient flags"),
+            before_account
+        );
+        assert_eq!(
+            norito::to_bytes(&attestation)
+                .expect("re-encode provider attestation under caller ambient flags"),
+            before_attestation
+        );
+    }
+}
+
+#[test]
 fn approval_sets_reject_wrong_signature_payload_lengths() {
     const WRONG_SIGNATURE_BYTES: [u8; 63] = [0xA8; 63];
     const LENGTH_ERROR: &str = "Musubi approval signature payload length is invalid";
@@ -501,7 +657,7 @@ fn namespace_delegation_authenticates_owner_generation_and_delegate() {
 }
 
 #[test]
-fn seed_ingress_receipt_rejects_expiry_replay_and_commitment_substitution() {
+fn seed_ingress_receipt_rejects_same_label_foreign_genesis_and_commitment_substitution() {
     let broker_keypair =
         KeyPair::try_from_seed(vec![51; 32], Algorithm::Ed25519).expect("broker fixture keypair");
     let broker = AccountId::new(broker_keypair.public_key().clone());
@@ -531,7 +687,9 @@ fn seed_ingress_receipt_rejects_expiry_replay_and_commitment_substitution() {
     assert!(receipt.verify(&binding, 2_001).is_err());
 
     let mut replayed = binding.clone();
-    replayed.chain_id = ChainId::from("musubi-other-chain");
+    // A deployment may reuse the same human-facing ChainName; the exact genesis-derived
+    // NetworkId still makes its receipt a different signing domain.
+    replayed.network_id = test_network_id(0x19);
     assert!(receipt.verify(&replayed, 1_500).is_err());
     let mut substituted = binding.clone();
     substituted.archive_id = ArchiveId::new([0xEE; 32]);
@@ -584,6 +742,24 @@ fn archive_registration_projection_excludes_mutable_location_state() {
     projection
         .validate()
         .expect("canonical immutable registration projection");
+
+    let page = MusubiArchiveLocationPageV1 {
+        network_id: test_network_id(0x15),
+        archive: archive.clone(),
+        items: Vec::new(),
+        next_cursor: None,
+        snapshot: snapshot(),
+    };
+    page.validate()
+        .expect("archive page binds its exact receipt network identity");
+    let mut wrong_network = page;
+    wrong_network
+        .archive
+        .staging_receipt
+        .payload
+        .binding
+        .network_id = test_network_id(0x19);
+    assert!(wrong_network.validate().is_err());
 
     archive.location_revision = 9;
     archive.location_ids = vec![MusubiArchiveLocationIdV1::new([0x31; 32])];
@@ -648,6 +824,10 @@ fn provider_bundle_attestation_requires_controller_quorum_and_exact_finalized_co
     let mut replayed_completion = binding.clone();
     replayed_completion.finalized_anchor.block_hash = [0xED; 32];
     assert!(attestation.verify(&replayed_completion).is_err());
+    let mut foreign_genesis = binding.clone();
+    // Reusing a display label does not make another genesis lineage authoritative.
+    foreign_genesis.network_id = test_network_id(0x29);
+    assert!(attestation.verify(&foreign_genesis).is_err());
     let mut substituted = binding.clone();
     substituted.verification_lock_digest = MusubiVerificationLockDigestV1::new([0xEC; 32]);
     assert!(attestation.verify(&substituted).is_err());
@@ -1202,6 +1382,357 @@ fn archive_commitment_roundtrips_through_norito() {
     assert!(cursor.is_empty());
     assert_eq!(decoded, archive);
     decoded.validate().expect("decoded archive validates");
+}
+
+#[test]
+fn canonical_bundle_file_decoders_accept_exact_valid_metadata() {
+    let (descriptor, semantic, lock) = canonical_bundle_metadata();
+
+    assert_eq!(
+        MusubiArtifactDescriptorV1::decode_canonical_bundle_file(&descriptor.encode())
+            .expect("exact canonical descriptor"),
+        descriptor
+    );
+    assert_eq!(
+        MusubiSemanticReleaseManifestV1::decode_canonical_bundle_file(&semantic.encode())
+            .expect("exact canonical semantic release"),
+        semantic
+    );
+    assert_eq!(
+        MusubiVerificationLockV1::decode_canonical_bundle_file(&lock.encode())
+            .expect("exact canonical verification lock"),
+        lock
+    );
+}
+
+#[test]
+fn canonical_bundle_file_size_gate_is_inclusive() {
+    let (descriptor, semantic, lock) = canonical_bundle_metadata();
+    let descriptor_bytes = descriptor.encode();
+    let semantic_bytes = semantic.encode();
+    let lock_bytes = lock.encode();
+
+    assert_eq!(
+        decode_canonical_bundle_file_v1(
+            &descriptor_bytes,
+            descriptor_bytes.len() as u64,
+            MUSUBI_ARTIFACT_DESCRIPTOR_DECODE_LIMITS_V1,
+            MusubiArtifactDescriptorV1::validate,
+            "descriptor boundary fixture",
+        )
+        .expect("descriptor exactly at a caller-supplied byte cap"),
+        descriptor
+    );
+    assert!(
+        decode_canonical_bundle_file_v1(
+            &descriptor_bytes,
+            descriptor_bytes.len() as u64 - 1,
+            MUSUBI_ARTIFACT_DESCRIPTOR_DECODE_LIMITS_V1,
+            MusubiArtifactDescriptorV1::validate,
+            "descriptor boundary fixture",
+        )
+        .is_err(),
+        "descriptor one byte above a caller-supplied cap must fail"
+    );
+
+    assert_eq!(
+        decode_canonical_bundle_file_v1(
+            &semantic_bytes,
+            semantic_bytes.len() as u64,
+            MUSUBI_SEMANTIC_RELEASE_DECODE_LIMITS_V1,
+            MusubiSemanticReleaseManifestV1::validate,
+            "semantic boundary fixture",
+        )
+        .expect("semantic release exactly at a caller-supplied byte cap"),
+        semantic
+    );
+    assert!(
+        decode_canonical_bundle_file_v1(
+            &semantic_bytes,
+            semantic_bytes.len() as u64 - 1,
+            MUSUBI_SEMANTIC_RELEASE_DECODE_LIMITS_V1,
+            MusubiSemanticReleaseManifestV1::validate,
+            "semantic boundary fixture",
+        )
+        .is_err(),
+        "semantic release one byte above a caller-supplied cap must fail"
+    );
+
+    assert_eq!(
+        decode_canonical_bundle_file_v1(
+            &lock_bytes,
+            lock_bytes.len() as u64,
+            MUSUBI_VERIFICATION_LOCK_DECODE_LIMITS_V1,
+            MusubiVerificationLockV1::validate,
+            "verification-lock boundary fixture",
+        )
+        .expect("verification lock exactly at a caller-supplied byte cap"),
+        lock
+    );
+    assert!(
+        decode_canonical_bundle_file_v1(
+            &lock_bytes,
+            lock_bytes.len() as u64 - 1,
+            MUSUBI_VERIFICATION_LOCK_DECODE_LIMITS_V1,
+            MusubiVerificationLockV1::validate,
+            "verification-lock boundary fixture",
+        )
+        .is_err(),
+        "verification lock one byte above a caller-supplied cap must fail"
+    );
+}
+
+#[test]
+fn canonical_lock_decoder_accepts_large_aligned_and_misaligned_metadata() {
+    let maximum = MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 as usize;
+    let mut lower_fanout = 1;
+    let mut upper_fanout = 64;
+    let mut largest = None;
+    while lower_fanout <= upper_fanout {
+        let fanout = lower_fanout + (upper_fanout - lower_fanout) / 2;
+        let lock = dense_verification_lock(fanout);
+        let bytes = lock.encode();
+        if bytes.len() <= maximum {
+            largest = Some((lock, bytes));
+            lower_fanout = fanout + 1;
+        } else {
+            upper_fanout = fanout - 1;
+        }
+    }
+    let (lock, bytes) = largest.expect("at least the one-edge dense lock fits the file cap");
+    assert_eq!(bytes.len(), 2_056_570, "pin the reviewed dense-lock shape");
+    assert!(
+        bytes.len() >= maximum * 3 / 4,
+        "dense producer-reachable fixture should exercise the actual 2 MiB corridor"
+    );
+    lock.validate().expect("large producer-reachable lock");
+    let alignment = norito::core::archived_payload_align::<MusubiVerificationLockV1>();
+    assert!(
+        alignment > 1,
+        "the lock type must have a testable alignment"
+    );
+    let mut aligned_storage = vec![0_u8; bytes.len() + alignment];
+    let aligned_offset = (0..alignment)
+        .find(|offset| (aligned_storage.as_ptr() as usize + offset) % alignment == 0)
+        .expect("one offset within an alignment span is aligned");
+    aligned_storage[aligned_offset..aligned_offset + bytes.len()].copy_from_slice(&bytes);
+    let aligned = &aligned_storage[aligned_offset..aligned_offset + bytes.len()];
+    assert_eq!(aligned.as_ptr() as usize % alignment, 0);
+    assert_eq!(
+        MusubiVerificationLockV1::decode_canonical_bundle_file(aligned)
+            .expect("decode large aligned lock"),
+        lock
+    );
+
+    let mut misaligned_storage = vec![0_u8; bytes.len() + alignment];
+    let misaligned_offset = (0..alignment)
+        .find(|offset| (misaligned_storage.as_ptr() as usize + offset) % alignment != 0)
+        .expect("one offset within an alignment span is misaligned");
+    misaligned_storage[misaligned_offset..misaligned_offset + bytes.len()].copy_from_slice(&bytes);
+    let misaligned = &misaligned_storage[misaligned_offset..misaligned_offset + bytes.len()];
+    assert_ne!(misaligned.as_ptr() as usize % alignment, 0);
+    let measured_minimum_limits =
+        norito::DecodeLimits::new(1_024, maximum, 8_000_000, 43 * 1024 * 1024, 64);
+    assert_eq!(
+        decode_canonical_bundle_file_v1(
+            misaligned,
+            MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
+            measured_minimum_limits,
+            MusubiVerificationLockV1::validate,
+            "dense-lock measured allocation fixture",
+        )
+        .expect("43 MiB decodes the same large lock from a misaligned slice"),
+        lock
+    );
+    let below_measured_minimum_limits =
+        norito::DecodeLimits::new(1_024, maximum, 8_000_000, 42 * 1024 * 1024, 64);
+    assert!(
+        decode_canonical_bundle_file_v1(
+            misaligned,
+            MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1,
+            below_measured_minimum_limits,
+            MusubiVerificationLockV1::validate,
+            "dense-lock measured allocation fixture",
+        )
+        .is_err(),
+        "42 MiB is below the measured misaligned dense-lock decode requirement"
+    );
+    assert_eq!(
+        MUSUBI_BUNDLE_METADATA_DECODE_MAX_ALLOCATED_BYTES_V1,
+        48 * 1024 * 1024,
+        "the production corridor retains 5 MiB above the measured minimum"
+    );
+    assert_eq!(
+        MusubiVerificationLockV1::decode_canonical_bundle_file(misaligned)
+            .expect("production corridor decodes the misaligned dense lock"),
+        lock
+    );
+}
+
+#[test]
+fn canonical_bundle_file_decoders_restore_ambient_norito_state() {
+    let (descriptor, semantic, lock) = canonical_bundle_metadata();
+    let descriptor_bytes = descriptor.encode();
+    let semantic_bytes = semantic.encode();
+    let lock_bytes = lock.encode();
+    let alternate_flags =
+        norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+    let alternate_semantic = {
+        let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let mut bytes = Vec::new();
+        norito::core::serialize_to_buffer(&semantic, &mut bytes)
+            .expect("encode alternate bare semantic fixture");
+        bytes
+    };
+    assert_ne!(alternate_semantic, semantic_bytes);
+
+    let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+    let ambient_payload = b"ambient Musubi bundle payload";
+    let _ambient_payload = norito::core::PayloadCtxGuard::enter(ambient_payload);
+    let flags_before = norito::core::effective_decode_flags();
+    let payload_context_before = norito::core::payload_ctx();
+    let ambient_probe = vec!["first".to_owned(), "second".to_owned()];
+    let mut encoding_before = Vec::new();
+    norito::core::serialize_to_buffer(&ambient_probe, &mut encoding_before)
+        .expect("encode bare ambient probe");
+
+    assert_eq!(
+        MusubiArtifactDescriptorV1::decode_canonical_bundle_file(&descriptor_bytes)
+            .expect("decode canonical descriptor under alternate ambient state"),
+        descriptor
+    );
+    assert_eq!(
+        MusubiSemanticReleaseManifestV1::decode_canonical_bundle_file(&semantic_bytes)
+            .expect("decode canonical semantic release under alternate ambient state"),
+        semantic
+    );
+    assert_eq!(
+        MusubiVerificationLockV1::decode_canonical_bundle_file(&lock_bytes)
+            .expect("decode canonical verification lock under alternate ambient state"),
+        lock
+    );
+    assert!(
+        MusubiSemanticReleaseManifestV1::decode_canonical_bundle_file(&alternate_semantic).is_err(),
+        "the caller's alternate flags must not make alternate-layout bytes canonical"
+    );
+    assert_eq!(norito::core::effective_decode_flags(), flags_before);
+    assert_eq!(norito::core::payload_ctx(), payload_context_before);
+    let mut encoding_after = Vec::new();
+    norito::core::serialize_to_buffer(&ambient_probe, &mut encoding_after)
+        .expect("re-encode bare ambient probe");
+    assert_eq!(encoding_after, encoding_before);
+}
+
+#[test]
+fn canonical_bundle_file_decoders_reject_empty_trailing_and_oversized_inputs() {
+    let (descriptor, semantic, lock) = canonical_bundle_metadata();
+    let cases = [
+        (
+            MusubiArtifactDescriptorV1::decode_canonical_bundle_file(&[])
+                .expect_err("empty descriptor must fail")
+                .reason(),
+            "Musubi artifact descriptor bundle file is invalid or out of bounds",
+        ),
+        (
+            MusubiSemanticReleaseManifestV1::decode_canonical_bundle_file(&[])
+                .expect_err("empty semantic release must fail")
+                .reason(),
+            "Musubi semantic release bundle file is invalid or out of bounds",
+        ),
+        (
+            MusubiVerificationLockV1::decode_canonical_bundle_file(&[])
+                .expect_err("empty verification lock must fail")
+                .reason(),
+            "Musubi verification lock bundle file is invalid or out of bounds",
+        ),
+    ];
+    for (actual, expected) in cases {
+        assert_eq!(actual, expected);
+    }
+
+    let mut trailing_descriptor = descriptor.encode();
+    trailing_descriptor.push(0);
+    assert!(
+        MusubiArtifactDescriptorV1::decode_canonical_bundle_file(&trailing_descriptor).is_err()
+    );
+    let mut trailing_semantic = semantic.encode();
+    trailing_semantic.push(0);
+    assert!(
+        MusubiSemanticReleaseManifestV1::decode_canonical_bundle_file(&trailing_semantic).is_err()
+    );
+    let mut trailing_lock = lock.encode();
+    trailing_lock.push(0);
+    assert!(MusubiVerificationLockV1::decode_canonical_bundle_file(&trailing_lock).is_err());
+
+    let oversized_descriptor =
+        vec![0; MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1 as usize + 1].into_boxed_slice();
+    assert!(
+        MusubiArtifactDescriptorV1::decode_canonical_bundle_file(&oversized_descriptor).is_err()
+    );
+    let oversized_metadata =
+        vec![0; MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 as usize + 1].into_boxed_slice();
+    assert!(
+        MusubiSemanticReleaseManifestV1::decode_canonical_bundle_file(&oversized_metadata).is_err()
+    );
+    assert!(MusubiVerificationLockV1::decode_canonical_bundle_file(&oversized_metadata).is_err());
+}
+
+#[test]
+fn canonical_bundle_file_decoders_reject_noncanonical_values_and_length_bombs() {
+    let (_, mut semantic, _) = canonical_bundle_metadata();
+    semantic.exports = vec![
+        "zeta".parse().expect("export"),
+        "alpha".parse().expect("export"),
+    ];
+    assert!(
+        MusubiSemanticReleaseManifestV1::decode_canonical_bundle_file(&semantic.encode()).is_err(),
+        "a structurally decoded but noncanonical semantic value must fail validation"
+    );
+
+    let first = release("alpha-dependency", "1.0.0");
+    let second = release("zeta-dependency", "1.0.0");
+    let edge = |alias: &str, selected: MusubiReleaseIdV1| MusubiExactDependencyEdgeV1 {
+        alias: alias.parse().expect("dependency alias"),
+        kind: MusubiDependencyKindV1::Normal,
+        package: selected.package.clone(),
+        requirement: "^1.0.0".parse().expect("dependency requirement"),
+        selected,
+    };
+    let node = |release: MusubiReleaseIdV1, fill: u8| MusubiVerificationNodeV1 {
+        release,
+        release_digest: MusubiReleaseDigestV1::new([fill; 32]),
+        archive_id: ArchiveId::new([fill.saturating_add(1); 32]),
+        source_digest: MusubiContentDigestV1::new([fill.saturating_add(2); 32]),
+        interface_digest: MusubiContentDigestV1::new([fill.saturating_add(3); 32]),
+        abi: MusubiAbiBindingV1::new([fill.saturating_add(4); 32]).expect("ABI"),
+        dependencies: Vec::new(),
+    };
+    let mut lock = MusubiVerificationLockV1 {
+        schema: MusubiVerificationLockV1::SCHEMA.to_owned(),
+        version: MUSUBI_REGISTRY_VERSION_V1,
+        root: release("root", "1.0.0"),
+        root_dependencies: vec![edge("alpha", first.clone()), edge("zeta", second.clone())],
+        nodes: vec![node(first, 10), node(second, 20)],
+    };
+    lock.canonicalize();
+    lock.validate().expect("canonical two-node lock");
+    lock.nodes.reverse();
+    assert!(
+        MusubiVerificationLockV1::decode_canonical_bundle_file(&lock.encode()).is_err(),
+        "a structurally decoded lock with noncanonical typed node order must fail validation"
+    );
+
+    // A tiny hostile payload consisting of maximal length words must be rejected under the
+    // payload-derived and schema-specific limits without honoring any declared allocation.
+    let declared_length_bomb = [u8::MAX; 32];
+    assert!(
+        MusubiArtifactDescriptorV1::decode_canonical_bundle_file(&declared_length_bomb).is_err()
+    );
+    assert!(
+        MusubiSemanticReleaseManifestV1::decode_canonical_bundle_file(&declared_length_bomb)
+            .is_err()
+    );
+    assert!(MusubiVerificationLockV1::decode_canonical_bundle_file(&declared_length_bomb).is_err());
 }
 
 #[test]

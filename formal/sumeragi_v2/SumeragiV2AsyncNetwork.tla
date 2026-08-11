@@ -2925,21 +2925,34 @@ AsyncTimeoutRecoveryEpisode(
      AsyncTimeoutRecoveryVoteOwnerUniverse(timeoutOwnerOrigin),
    admittedTimeoutVoteOwners |-> admittedTimeoutVoteOwners]
 
+\* Package the eight constructor inputs into one parameter record.  The
+\* resulting one-binder image is extensionally the same as the direct
+\* eight-binder constructor image, while remaining eliminable by TLAPS.
+AsyncTimeoutRecoveryEpisodeParameterSet ==
+  [node: ValidatorIds,
+   timeoutOwnerOrigin: AsyncCandidateCausalOriginSet,
+   generation: Generations,
+   timeoutOwnerOrdinal: Nat \ {0},
+   physicalCut: Nat \ {0},
+   preFrozenRetransmitOrdinal: Nat,
+   preFrozenRetransmitPhysicalCut: Nat,
+   admittedTimeoutVoteOwners:
+     SUBSET AsyncTimeoutRecoveryVoteOwnerSet]
+
+AsyncTimeoutRecoveryEpisodeFromParameters(parameters) ==
+  AsyncTimeoutRecoveryEpisode(
+    parameters.node,
+    parameters.timeoutOwnerOrigin,
+    parameters.generation,
+    parameters.timeoutOwnerOrdinal,
+    parameters.physicalCut,
+    parameters.preFrozenRetransmitOrdinal,
+    parameters.preFrozenRetransmitPhysicalCut,
+    parameters.admittedTimeoutVoteOwners)
+
 AsyncTimeoutRecoveryEpisodeSet ==
-  {AsyncTimeoutRecoveryEpisode(
-     node, timeoutOwnerOrigin, episodeGeneration,
-     timeoutOwnerOrdinal, physicalCut,
-     preFrozenRetransmitOrdinal, preFrozenRetransmitPhysicalCut,
-     admittedTimeoutVoteOwners):
-     node \in ValidatorIds,
-     timeoutOwnerOrigin \in AsyncCandidateCausalOriginSet,
-     episodeGeneration \in Generations,
-     timeoutOwnerOrdinal \in Nat \ {0},
-     physicalCut \in Nat \ {0},
-     preFrozenRetransmitOrdinal \in Nat,
-     preFrozenRetransmitPhysicalCut \in Nat,
-     admittedTimeoutVoteOwners \in
-       SUBSET AsyncTimeoutRecoveryVoteOwnerSet}
+  {AsyncTimeoutRecoveryEpisodeFromParameters(parameters):
+     parameters \in AsyncTimeoutRecoveryEpisodeParameterSet}
 
 AsyncTimeoutRecoveryEpisodesIn(state) ==
   state.timeoutRecoveryEpisodes
@@ -29522,11 +29535,11 @@ AsyncSchedulerTypeInvariant ==
   /\ AsyncTransportTypeInvariant
   /\ AsyncIngressTypeInvariant
   /\ AsyncHistoricalRecoveryTypeInvariant
-  /\ AsyncProducerTypeInvariant
 
 AsyncTypeInvariant ==
   /\ TypeInvariant
   /\ AsyncSchedulerTypeInvariant
+  /\ AsyncProducerTypeInvariant
   /\ AsyncServeProducerEpisodeTypeInvariant
   /\ AsyncServiceActivationPairInvariant
   /\ ReceivedTimeoutVotePoolInvariant
@@ -29567,6 +29580,7 @@ AsyncGstRecoveryPhaseInvariant ==
 AsyncStrongTypeInvariant ==
   /\ StrongInductiveInvariant
   /\ AsyncSchedulerTypeInvariant
+  /\ AsyncProducerTypeInvariant
   /\ AsyncServeProducerEpisodeTypeInvariant
   /\ AsyncServeProducerEpisodeOwnershipInvariant
   /\ AsyncServiceActivationPairInvariant

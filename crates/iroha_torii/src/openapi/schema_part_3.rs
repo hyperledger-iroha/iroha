@@ -2008,15 +2008,15 @@ fn axt_error_details_schema() -> Value {
                 "minimum": 0,
                 "description": "Lane id involved in the rejection."
             },
-            "next_min_handle_era": {
+            "active_handle_era": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Minimum handle era a client should use for retry."
+                "description": "Exact active handle era a client must use for retry."
             },
-            "next_min_sub_nonce": {
+            "next_handle_counter": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Minimum sub-nonce a client should use for retry."
+                "description": "Exact next handle counter a client must use for retry."
             }
         }
     })
@@ -2283,6 +2283,35 @@ fn privacy_capability_schemas(schemas: &mut Map) {
         "native-fcmp-plus-plus",
         "native-lantern-lnp22",
     ];
+    const OPERATION_SCHEMA_LABELS: [&str; 12] = [
+        "zk_ace_authorization_action_v1",
+        "anonymous_pgc_payment_action_v1",
+        "verange_range_proof_v1",
+        "zk_ams_admission_and_provisioning_v1",
+        "vega_credential_presentation_v1",
+        "zk_x509_identity_presentation_v1",
+        "jindo_polynomial_evaluation_v1",
+        "bootle_lantern_credential_presentation_v1",
+        "orchard_note_action_v1",
+        "fcmp_membership_payment_v1",
+        "ivm_private_note_action_v1",
+        "pq_masp_note_action_v1",
+    ];
+    const EXECUTION_MODE_LABELS: [&str; 12] = [
+        "authorization_action",
+        "payment_action",
+        "component",
+        "admission_action",
+        "presentation_action",
+        "presentation_action",
+        "component",
+        "presentation_action",
+        "note_action",
+        "payment_action",
+        "note_action",
+        "note_action",
+    ];
+    const PRIVACY_FEATURE_MASKS: [u8; 12] = [0, 6, 1, 2, 2, 2, 0, 2, 7, 2, 7, 31];
 
     schemas.insert(
         "PrivacyProtocolIdV1".to_owned(),
@@ -2714,17 +2743,113 @@ fn privacy_capability_schemas(schemas: &mut Map) {
         }),
     );
     schemas.insert(
-        "PrivacyCapabilityRowV1".to_owned(),
+        "PrivacyOperationSchemaV1".to_owned(),
+        privacy_closed_tagged_unit_schema("operation_schema", "value", &OPERATION_SCHEMA_LABELS),
+    );
+    schemas.insert(
+        "PrivacyExecutionModeV1".to_owned(),
+        privacy_closed_tagged_unit_schema(
+            "execution_mode",
+            "value",
+            &[
+                "authorization_action",
+                "payment_action",
+                "component",
+                "admission_action",
+                "presentation_action",
+                "note_action",
+            ],
+        ),
+    );
+    schemas.insert(
+        "PrivacyFeatureMaskV1".to_owned(),
+        norito::json!({
+            "type": "integer",
+            "format": "uint8",
+            "minimum": 0,
+            "maximum": 31,
+            "description": "Exact feature bits: hidden amount=1, sender=2, receiver=4, asset type=8, post-quantum=16."
+        }),
+    );
+    let readiness_variants = vec![
+        privacy_tagged_variant_schema(
+            "readiness",
+            "available",
+            "detail",
+            norito::json!({ "type": "null" }),
+        ),
+        privacy_tagged_variant_schema(
+            "readiness",
+            "available-experimental",
+            "detail",
+            norito::json!({ "type": "null" }),
+        ),
+        privacy_tagged_variant_schema(
+            "readiness",
+            "unavailable",
+            "detail",
+            privacy_schema_ref("PrivacyCompiledProfileUnavailableReasonV1"),
+        ),
+    ];
+    schemas.insert(
+        "PrivacyCapabilityReadinessV1".to_owned(),
+        norito::json!({ "oneOf": (readiness_variants) }),
+    );
+    schemas.insert(
+        "PrivacyCapabilityActivationStateV1".to_owned(),
+        privacy_closed_tagged_unit_schema(
+            "activation_state",
+            "detail",
+            &[
+                "not-registered",
+                "proposed",
+                "active",
+                "suspended",
+                "retired",
+            ],
+        ),
+    );
+    schemas.insert(
+        "PrivacyCapabilityLimitationV1".to_owned(),
+        privacy_closed_tagged_unit_schema(
+            "limitation",
+            "detail",
+            &["missing-distribution-wide-knowledge-soundness-evidence"],
+        ),
+    );
+    schemas.insert(
+        "PrivacyExact12CapabilityRowV1".to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["protocol_id", "compiled_profile", "activation"],
+            "required": [
+                "protocol_id",
+                "operation_schema",
+                "execution_mode",
+                "privacy_feature_mask",
+                "compiled_profile",
+                "readiness",
+                "activation_state",
+                "activation",
+                "limitation"
+            ],
             "properties": {
                 "protocol_id": { "$ref": "#/components/schemas/PrivacyProtocolIdV1" },
+                "operation_schema": { "$ref": "#/components/schemas/PrivacyOperationSchemaV1" },
+                "execution_mode": { "$ref": "#/components/schemas/PrivacyExecutionModeV1" },
+                "privacy_feature_mask": { "$ref": "#/components/schemas/PrivacyFeatureMaskV1" },
                 "compiled_profile": { "$ref": "#/components/schemas/PrivacyCompiledProfileResultV1" },
+                "readiness": { "$ref": "#/components/schemas/PrivacyCapabilityReadinessV1" },
+                "activation_state": { "$ref": "#/components/schemas/PrivacyCapabilityActivationStateV1" },
                 "activation": {
                     "oneOf": [
                         { "$ref": "#/components/schemas/PrivacyProtocolActivationRecordV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "limitation": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/PrivacyCapabilityLimitationV1" },
                         { "type": "null" }
                     ]
                 }
@@ -2734,14 +2859,48 @@ fn privacy_capability_schemas(schemas: &mut Map) {
 
     let ordered_protocol_rows = PROTOCOL_LABELS
         .into_iter()
-        .map(|label| {
+        .enumerate()
+        .map(|(index, label)| {
+            let operation_schema = privacy_tagged_variant_schema(
+                "operation_schema",
+                OPERATION_SCHEMA_LABELS[index],
+                "value",
+                norito::json!({ "type": "null" }),
+            );
+            let execution_mode = privacy_tagged_variant_schema(
+                "execution_mode",
+                EXECUTION_MODE_LABELS[index],
+                "value",
+                norito::json!({ "type": "null" }),
+            );
+            let limitation = if index == 6 {
+                privacy_tagged_variant_schema(
+                    "limitation",
+                    "missing-distribution-wide-knowledge-soundness-evidence",
+                    "detail",
+                    norito::json!({ "type": "null" }),
+                )
+            } else {
+                norito::json!({ "type": "null" })
+            };
             norito::json!({
                 "allOf": [
-                    { "$ref": "#/components/schemas/PrivacyCapabilityRowV1" },
+                    { "$ref": "#/components/schemas/PrivacyExact12CapabilityRowV1" },
                     {
                         "type": "object",
+                        "required": [
+                            "protocol_id",
+                            "operation_schema",
+                            "execution_mode",
+                            "privacy_feature_mask",
+                            "limitation"
+                        ],
                         "properties": {
-                            "protocol_id": (privacy_protocol_id_const_schema(label))
+                            "protocol_id": (privacy_protocol_id_const_schema(label)),
+                            "operation_schema": (operation_schema),
+                            "execution_mode": (execution_mode),
+                            "privacy_feature_mask": { "const": (PRIVACY_FEATURE_MASKS[index]) },
+                            "limitation": (limitation)
                         }
                     }
                 ]
@@ -2749,11 +2908,17 @@ fn privacy_capability_schemas(schemas: &mut Map) {
         })
         .collect::<Vec<_>>();
     schemas.insert(
-        "PrivacyCapabilitySnapshotV1".to_owned(),
+        "PrivacyExact12CapabilityManifestV1".to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "required": ["version", "committed_height", "consensus_policy", "protocols"],
+            "required": [
+                "version",
+                "committed_height",
+                "consensus_policy",
+                "protocols",
+                "manifest_digest"
+            ],
             "properties": {
                 "version": { "type": "integer", "format": "uint32", "const": 1 },
                 "committed_height": { "type": "integer", "format": "uint64", "minimum": 0 },
@@ -2764,7 +2929,8 @@ fn privacy_capability_schemas(schemas: &mut Map) {
                     "maxItems": 12,
                     "prefixItems": (ordered_protocol_rows),
                     "items": false
-                }
+                },
+                "manifest_digest": { "$ref": "#/components/schemas/PrivacyFixed32BytesV1" }
             }
         }),
     );

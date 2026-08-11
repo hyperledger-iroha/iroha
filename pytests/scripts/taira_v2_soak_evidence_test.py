@@ -51,19 +51,24 @@ def valid_status_snapshot(validator_index: int, blocker: str | None = None) -> d
     return snapshot
 
 
-def valid_summary(module, tmp_path: Path) -> tuple[dict, Path, Path]:
+def valid_summary(module, tmp_path: Path) -> tuple[dict, Path, Path, Path]:
+    (tmp_path / "repo").mkdir()
     build_root = tmp_path / "build"
-    build_root.mkdir()
+    program_release_root = build_root / "programs" / "invocation.fixture" / "release"
+    cargo_target_dir = tmp_path / "cargo-target"
+    test_release_root = cargo_target_dir / "release" / "deps"
     binaries = {}
-    for name in ("daemon", "kagami", "test"):
-        release_root = build_root / module.EXPECTED_BINARY_SUBDIRECTORIES[name]
-        release_root.mkdir(parents=True, exist_ok=True)
-        path = release_root / name
+    for name, path in {
+        "daemon": program_release_root / "irohad",
+        "kagami": program_release_root / "kagami",
+        "test": test_release_root / "consensus_and_da-fixture",
+    }.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(f"{name}-binary".encode())
         binaries[f"{name}_binary_path"] = str(path)
         binaries[f"{name}_binary_blake2b_256"] = module._file_digest(path)
 
-    artifact_root = tmp_path / "target" / "taira-localnet" / "localnet"
+    artifact_root = cargo_target_dir / "taira-localnet" / "invocation.fixture" / "localnet"
     artifact_root.mkdir(parents=True)
     (artifact_root / "peer0.toml").write_text("chain = 'taira'\n", encoding="utf-8")
     source_manifest = "a" * 64
@@ -105,7 +110,7 @@ def valid_summary(module, tmp_path: Path) -> tuple[dict, Path, Path]:
         "initial_status_snapshots": [valid_status_snapshot(index) for index in range(3)],
         "final_status_snapshots": [valid_status_snapshot(index) for index in range(3)],
     }
-    return summary, build_root, artifact_root
+    return summary, build_root, cargo_target_dir, artifact_root
 
 
 def stub_repository_identity(module, monkeypatch) -> None:
@@ -117,14 +122,31 @@ def stub_repository_identity(module, monkeypatch) -> None:
 
 def test_valid_evidence_is_source_and_artifact_bound(tmp_path: Path, monkeypatch) -> None:
     module = load_module()
-    summary, build_root, _ = valid_summary(module, tmp_path)
+    summary, build_root, cargo_target_dir, _ = valid_summary(module, tmp_path)
     stub_repository_identity(module, monkeypatch)
     module.validate_evidence(
         summary,
         source_manifest_sha256="a" * 64,
         build_root=build_root,
-        repo_root=tmp_path,
+        cargo_target_dir=cargo_target_dir,
+        repo_root=tmp_path / "repo",
     )
+
+    escaped_artifact = tmp_path / "escaped-localnet"
+    escaped_artifact.mkdir()
+    (escaped_artifact / "peer0.toml").write_text("chain = 'taira'\n", encoding="utf-8")
+    summary["localnet_artifact_path"] = str(escaped_artifact)
+    summary["generated_config_blake2b_256"] = module._generated_config_digest(
+        escaped_artifact
+    )
+    with pytest.raises(module.EvidenceError, match="Cargo target Taira artifact root"):
+        module.validate_evidence(
+            summary,
+            source_manifest_sha256="a" * 64,
+            build_root=build_root,
+            cargo_target_dir=cargo_target_dir,
+            repo_root=tmp_path / "repo",
+        )
 
 
 def test_duplicate_json_keys_are_rejected_recursively() -> None:
@@ -147,7 +169,7 @@ def test_checker_recomputes_the_canonical_workspace_manifest(
     tmp_path: Path, monkeypatch
 ) -> None:
     module = load_module()
-    summary, build_root, _ = valid_summary(module, tmp_path)
+    summary, build_root, cargo_target_dir, _ = valid_summary(module, tmp_path)
     stub_repository_identity(module, monkeypatch)
     monkeypatch.setattr(
         module, "_current_workspace_source_manifest", lambda _root: "b" * 64
@@ -157,7 +179,8 @@ def test_checker_recomputes_the_canonical_workspace_manifest(
             summary,
             source_manifest_sha256="a" * 64,
             build_root=build_root,
-            repo_root=tmp_path,
+            cargo_target_dir=cargo_target_dir,
+            repo_root=tmp_path / "repo",
         )
 
 
@@ -189,19 +212,54 @@ def test_manifest_recomputation_delegates_to_the_canonical_workspace_helper(
 
 def test_debug_profile_binary_is_rejected(tmp_path: Path, monkeypatch) -> None:
     module = load_module()
-    summary, build_root, _ = valid_summary(module, tmp_path)
-    debug_binary = build_root / "programs" / "debug" / "daemon"
+    summary, build_root, cargo_target_dir, _ = valid_summary(module, tmp_path)
+    valid_daemon = Path(summary["daemon_binary_path"])
+    valid_kagami = Path(summary["kagami_binary_path"])
+    debug_binary = build_root / "programs" / "invocation.fixture" / "debug" / "irohad"
     debug_binary.parent.mkdir(parents=True)
     debug_binary.write_bytes(b"daemon-binary")
     summary["daemon_binary_path"] = str(debug_binary)
     summary["daemon_binary_blake2b_256"] = module._file_digest(debug_binary)
     stub_repository_identity(module, monkeypatch)
-    with pytest.raises(module.EvidenceError, match="pinned release-profile"):
+    with pytest.raises(module.EvidenceError, match="pinned invocation release"):
         module.validate_evidence(
             summary,
             source_manifest_sha256="a" * 64,
             build_root=build_root,
-            repo_root=tmp_path,
+            cargo_target_dir=cargo_target_dir,
+            repo_root=tmp_path / "repo",
+        )
+
+    summary["daemon_binary_path"] = str(valid_daemon)
+    summary["daemon_binary_blake2b_256"] = module._file_digest(valid_daemon)
+    summary["kagami_binary_path"] = str(valid_kagami)
+    summary["kagami_binary_blake2b_256"] = module._file_digest(valid_kagami)
+    nested_test = cargo_target_dir / "release" / "incremental" / "fixture" / "test"
+    nested_test.parent.mkdir(parents=True)
+    nested_test.write_bytes(b"test-binary")
+    summary["test_binary_path"] = str(nested_test)
+    summary["test_binary_blake2b_256"] = module._file_digest(nested_test)
+    with pytest.raises(module.EvidenceError, match="direct release or release/deps"):
+        module.validate_evidence(
+            summary,
+            source_manifest_sha256="a" * 64,
+            build_root=build_root,
+            cargo_target_dir=cargo_target_dir,
+            repo_root=tmp_path / "repo",
+        )
+
+    other_kagami = build_root / "programs" / "invocation.other" / "release" / "kagami"
+    other_kagami.parent.mkdir(parents=True)
+    other_kagami.write_bytes(b"kagami-binary")
+    summary["kagami_binary_path"] = str(other_kagami)
+    summary["kagami_binary_blake2b_256"] = module._file_digest(other_kagami)
+    with pytest.raises(module.EvidenceError, match="share one source-bound invocation"):
+        module.validate_evidence(
+            summary,
+            source_manifest_sha256="a" * 64,
+            build_root=build_root,
+            cargo_target_dir=cargo_target_dir,
+            repo_root=tmp_path / "repo",
         )
 
 
@@ -213,7 +271,7 @@ def test_classified_interval_is_bound_to_authoritative_statuses(
     tmp_path: Path, monkeypatch, classification: str
 ) -> None:
     module = load_module()
-    summary, build_root, _ = valid_summary(module, tmp_path)
+    summary, build_root, cargo_target_dir, _ = valid_summary(module, tmp_path)
     summary["no_progress_intervals"] = [
         {
             "start_elapsed_ms": 1_000,
@@ -230,7 +288,8 @@ def test_classified_interval_is_bound_to_authoritative_statuses(
         summary,
         source_manifest_sha256="a" * 64,
         build_root=build_root,
-        repo_root=tmp_path,
+        cargo_target_dir=cargo_target_dir,
+        repo_root=tmp_path / "repo",
     )
 
 
@@ -266,7 +325,7 @@ def test_evidence_schema_matches_rust_summary_exactly() -> None:
 )
 def test_weakened_evidence_is_rejected(tmp_path: Path, monkeypatch, mutation, message) -> None:
     module = load_module()
-    summary, build_root, _ = valid_summary(module, tmp_path)
+    summary, build_root, cargo_target_dir, _ = valid_summary(module, tmp_path)
     mutation(summary)
     stub_repository_identity(module, monkeypatch)
     with pytest.raises(module.EvidenceError, match=message):
@@ -274,13 +333,14 @@ def test_weakened_evidence_is_rejected(tmp_path: Path, monkeypatch, mutation, me
             summary,
             source_manifest_sha256="a" * 64,
             build_root=build_root,
-            repo_root=tmp_path,
+            cargo_target_dir=cargo_target_dir,
+            repo_root=tmp_path / "repo",
         )
 
 
 def test_binary_or_config_tampering_is_rejected(tmp_path: Path, monkeypatch) -> None:
     module = load_module()
-    summary, build_root, artifact_root = valid_summary(module, tmp_path)
+    summary, build_root, cargo_target_dir, artifact_root = valid_summary(module, tmp_path)
     stub_repository_identity(module, monkeypatch)
     Path(summary["daemon_binary_path"]).write_bytes(b"tampered")
     with pytest.raises(module.EvidenceError, match="daemon binary digest mismatch"):
@@ -288,7 +348,8 @@ def test_binary_or_config_tampering_is_rejected(tmp_path: Path, monkeypatch) -> 
             summary,
             source_manifest_sha256="a" * 64,
             build_root=build_root,
-            repo_root=tmp_path,
+            cargo_target_dir=cargo_target_dir,
+            repo_root=tmp_path / "repo",
         )
 
     Path(summary["daemon_binary_path"]).write_bytes(b"daemon-binary")
@@ -298,7 +359,8 @@ def test_binary_or_config_tampering_is_rejected(tmp_path: Path, monkeypatch) -> 
             summary,
             source_manifest_sha256="a" * 64,
             build_root=build_root,
-            repo_root=tmp_path,
+            cargo_target_dir=cargo_target_dir,
+            repo_root=tmp_path / "repo",
         )
 
 
@@ -343,7 +405,7 @@ def test_internally_inconsistent_evidence_is_rejected(
     tmp_path: Path, monkeypatch, mutation, message
 ) -> None:
     module = load_module()
-    summary, build_root, _ = valid_summary(module, tmp_path)
+    summary, build_root, cargo_target_dir, _ = valid_summary(module, tmp_path)
     mutation(summary)
     stub_repository_identity(module, monkeypatch)
     with pytest.raises(module.EvidenceError, match=message):
@@ -351,7 +413,8 @@ def test_internally_inconsistent_evidence_is_rejected(
             summary,
             source_manifest_sha256="a" * 64,
             build_root=build_root,
-            repo_root=tmp_path,
+            cargo_target_dir=cargo_target_dir,
+            repo_root=tmp_path / "repo",
         )
 
 
@@ -394,7 +457,7 @@ def test_status_snapshot_evidence_is_authoritative(
     tmp_path: Path, monkeypatch, mutation, message
 ) -> None:
     module = load_module()
-    summary, build_root, _ = valid_summary(module, tmp_path)
+    summary, build_root, cargo_target_dir, _ = valid_summary(module, tmp_path)
     mutation(summary)
     stub_repository_identity(module, monkeypatch)
     with pytest.raises(module.EvidenceError, match=message):
@@ -402,7 +465,8 @@ def test_status_snapshot_evidence_is_authoritative(
             summary,
             source_manifest_sha256="a" * 64,
             build_root=build_root,
-            repo_root=tmp_path,
+            cargo_target_dir=cargo_target_dir,
+            repo_root=tmp_path / "repo",
         )
 
 
@@ -422,7 +486,7 @@ def test_no_progress_interval_cannot_forge_its_classification(
     tmp_path: Path, monkeypatch, classifications, blocker, message
 ) -> None:
     module = load_module()
-    summary, build_root, _ = valid_summary(module, tmp_path)
+    summary, build_root, cargo_target_dir, _ = valid_summary(module, tmp_path)
     summary["no_progress_intervals"] = [
         {
             "start_elapsed_ms": 1_000,
@@ -440,5 +504,6 @@ def test_no_progress_interval_cannot_forge_its_classification(
             summary,
             source_manifest_sha256="a" * 64,
             build_root=build_root,
-            repo_root=tmp_path,
+            cargo_target_dir=cargo_target_dir,
+            repo_root=tmp_path / "repo",
         )

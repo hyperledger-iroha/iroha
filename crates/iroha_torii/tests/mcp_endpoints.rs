@@ -45,6 +45,7 @@ fn build_router(cfg: iroha_config::parameters::actual::Root) -> axum::Router {
 
     let torii = Torii::new_with_handle(
         cfg.common.chain.clone(),
+        iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,

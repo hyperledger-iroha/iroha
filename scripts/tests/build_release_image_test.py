@@ -37,11 +37,12 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, str, Path, str, Path]:
     binaries = tmp_path / "binaries"
     binaries.mkdir()
     for name in (
-        "irohad",
+        "iroha3d",
         "sorafs_governance_dag",
         "iroha",
         "kagami",
         "attachment_sanitizer",
+        "sorafs_external_software_signer",
     ):
         _write_executable(
             binaries / name,
@@ -256,6 +257,13 @@ def test_image_replay_is_byte_identical_and_oci_archive_is_normalized(
     assert manifest["target"] == "x86_64-unknown-linux-gnu"
     assert manifest["source_context"]["kind"] == "closed-prebuilt"
     assert manifest["source_context"]["file_count"] > 0
+    assert manifest["external_software_signer"] == {
+        "backend": "software",
+        "binary": "/usr/local/bin/sorafs_external_software_signer",
+        "broker_alias": "/usr/local/libexec/iroha-runtime-provider-broker-v1",
+        "smoke": "native-build-stage",
+        "windows_supported": False,
+    }
     assert manifest["base_images"] == {
         "builder": BUILDER_BASE,
         "runtime": RUNTIME_BASE,
@@ -291,7 +299,10 @@ def test_image_replay_is_byte_identical_and_oci_archive_is_normalized(
         assert "tar=false" in output
         assert "rewrite-timestamp=true" in output
         assert "save" not in call
-        assert "BINARIES=irohad sorafs_governance_dag iroha kagami attachment_sanitizer" in call
+        assert (
+            "BINARIES=iroha3d sorafs_governance_dag iroha kagami "
+            "attachment_sanitizer sorafs_external_software_signer"
+        ) in call
 
 
 def test_image_refuses_stale_output_without_replacement(tmp_path: Path) -> None:
@@ -482,6 +493,10 @@ def test_image_source_has_no_nondeterministic_docker_archive_path() -> None:
     assert "--network none" in source
     assert "network default" not in source
     assert "IROHA_VALIDATOR_RELEASE_VERIFIED" not in source
+    assert "configs/sorafs/external_software_signer" in source
+    assert "configs/sorafs/runtime_provider_broker" in source
+    assert "sorafs_external_software_signer" in dockerfile
+    assert "/usr/local/libexec/iroha-runtime-provider-broker-v1" in dockerfile
     assert "ARG IROHA_RUST_BUILDER_IMAGE\n" in dockerfile
     assert "ARG IROHA_RUNTIME_IMAGE\n" in dockerfile
     assert "rust:slim-bookworm" not in dockerfile

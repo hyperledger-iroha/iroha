@@ -8,6 +8,7 @@ import java.util.Optional;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
@@ -52,9 +53,10 @@ final class VerifyingKeyDraftBinding {
 
   static void validate(
       final byte[] transactionPayload,
-      final String expectedChainId,
+      final NetworkId expectedNetworkId,
       final Map<String, Object> request,
       final Operation operation) {
+    java.util.Objects.requireNonNull(expectedNetworkId, "expectedNetworkId");
     final String authority = requiredString(request, "authority");
     final Integer discriminant = AccountAddress.detectI105Discriminant(authority);
     if (discriminant == null) {
@@ -69,9 +71,9 @@ final class VerifyingKeyDraftBinding {
       throw new IllegalArgumentException(
           "transaction_payload_b64 must contain one canonical transaction payload", ex);
     }
-    if (!expectedChainId.equals(payload.chainId()) || !authority.equals(payload.authority())) {
+    if (!expectedNetworkId.equals(payload.networkId()) || !authority.equals(payload.authority())) {
       throw new IllegalArgumentException(
-          "verifying-key draft transaction payload changed the requested chain or authority");
+          "verifying-key draft transaction payload changed the requested network or authority");
     }
     final Executable executable = payload.executable();
     if (!executable.isInstructions()) {

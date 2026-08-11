@@ -25,6 +25,7 @@ import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus;
 import org.hyperledger.iroha.android.consensus.SumeragiStatusModels.SumeragiV2Status;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
@@ -35,8 +36,9 @@ public interface IrohaClient {
   /**
    * Submits a signed transaction to the node.
    *
-   * <p>The returned future completes with a response summary. Implementations should ensure retries
-   * remain deterministic and avoid replaying signatures unless explicitly requested.
+   * <p>The signed bytes are dispatched at most once. A transport or ambiguous HTTP failure
+   * completes the future with {@link AmbiguousTransactionSubmissionException}; reconcile its
+   * transaction hash before constructing and signing any replacement.
    */
   CompletableFuture<ClientResponse> submitTransaction(SignedTransaction transaction);
 
@@ -197,6 +199,7 @@ public interface IrohaClient {
   default CompletableFuture<ClientResponse> submitAliasSetupPlan(
       final AliasSetupPlanRequestV1 request,
       final AliasTransactionPlanV1 plan,
+      final NetworkId networkId,
       final AliasPlanBodyNoritoEncoder bodyEncoder,
       final AliasEnsureInstructionFrameCodec frameCodec,
       final int chainDiscriminant,
@@ -210,6 +213,7 @@ public interface IrohaClient {
         this,
         request,
         plan,
+        networkId,
         bodyEncoder,
         frameCodec,
         chainDiscriminant,
@@ -225,6 +229,7 @@ public interface IrohaClient {
   default CompletableFuture<ClientResponse> submitAliasSetupPlan(
       final AliasSetupPlanRequestV1 request,
       final AliasTransactionPlanV1 plan,
+      final NetworkId networkId,
       final int chainDiscriminant,
       final TransactionBuilder transactionBuilder,
       final Signer signer,
@@ -236,6 +241,7 @@ public interface IrohaClient {
         this,
         request,
         plan,
+        networkId,
         chainDiscriminant,
         transactionBuilder,
         signer,
@@ -249,6 +255,7 @@ public interface IrohaClient {
   default CompletableFuture<ClientResponse> submitAliasLifecyclePlan(
       final AliasLifecyclePlanRequestV1 request,
       final AliasLifecycleTransactionPlanV1 plan,
+      final NetworkId networkId,
       final AliasLifecyclePlanBodyNoritoEncoder bodyEncoder,
       final AliasLifecycleInstructionFrameCodec frameCodec,
       final int chainDiscriminant,
@@ -262,6 +269,7 @@ public interface IrohaClient {
         this,
         request,
         plan,
+        networkId,
         bodyEncoder,
         frameCodec,
         chainDiscriminant,
@@ -277,6 +285,7 @@ public interface IrohaClient {
   default CompletableFuture<ClientResponse> submitAliasLifecyclePlan(
       final AliasLifecyclePlanRequestV1 request,
       final AliasLifecycleTransactionPlanV1 plan,
+      final NetworkId networkId,
       final int chainDiscriminant,
       final TransactionBuilder transactionBuilder,
       final Signer signer,
@@ -288,6 +297,7 @@ public interface IrohaClient {
         this,
         request,
         plan,
+        networkId,
         chainDiscriminant,
         transactionBuilder,
         signer,
@@ -342,7 +352,9 @@ public interface IrohaClient {
 
   /** Requests a stateless sponsored-onboarding receipt using a dedicated header token. */
   default CompletableFuture<AccountOnboardingPlanReceiptV1> planSponsoredAccountOnboarding(
-      final AccountOnboardingPlanRequestV1 request, final String onboardingToken) {
+      final AccountOnboardingPlanRequestV1 request,
+      final String onboardingToken,
+      final NetworkId expectedNetworkId) {
     final CompletableFuture<AccountOnboardingPlanReceiptV1> future = new CompletableFuture<>();
     future.completeExceptionally(
         new IllegalStateException(
@@ -354,7 +366,8 @@ public interface IrohaClient {
   default CompletableFuture<AccountOnboardingPlanReceiptV1> planSponsoredAccountOnboarding(
       final AccountOnboardingPlanRequestV1 request,
       final String onboardingToken,
-      final String expectedAuthority) {
+      final String expectedAuthority,
+      final NetworkId expectedNetworkId) {
     final CompletableFuture<AccountOnboardingPlanReceiptV1> future = new CompletableFuture<>();
     future.completeExceptionally(
         new IllegalStateException(
@@ -364,7 +377,9 @@ public interface IrohaClient {
 
   /** Revalidates and applies a stateless sponsored-onboarding receipt. */
   default CompletableFuture<AccountOnboardingResponseV1> applySponsoredAccountOnboarding(
-      final AccountOnboardingPlanReceiptV1 receipt, final String onboardingToken) {
+      final AccountOnboardingPlanReceiptV1 receipt,
+      final String onboardingToken,
+      final NetworkId expectedNetworkId) {
     final CompletableFuture<AccountOnboardingResponseV1> future = new CompletableFuture<>();
     future.completeExceptionally(
         new IllegalStateException(
@@ -376,7 +391,8 @@ public interface IrohaClient {
   default CompletableFuture<AccountOnboardingResponseV1> applySponsoredAccountOnboarding(
       final AccountOnboardingPlanReceiptV1 receipt,
       final String onboardingToken,
-      final String expectedAuthority) {
+      final String expectedAuthority,
+      final NetworkId expectedNetworkId) {
     final CompletableFuture<AccountOnboardingResponseV1> future = new CompletableFuture<>();
     future.completeExceptionally(
         new IllegalStateException(

@@ -2742,12 +2742,11 @@ mod measured_bytes_impls {
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
             ParliamentBodies, ParliamentBody, ParliamentRoster, ProposalKind,
-            RuntimeUpgradeProposal, SccpRouteGovernanceProposal,
+            RuntimeUpgradeProposal, SccpRouteGovernanceProposal, SorafsProviderGovernanceProposal,
             ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         },
         ipfs::IpfsPath,
         isi::governance::CouncilDerivationKind,
-        isi::zk::ZkAssetMode,
         metadata::Metadata,
         name::Name,
         nexus::{
@@ -2882,7 +2881,6 @@ mod measured_bytes_impls {
         PrivacyRootHeadRecordV1,
         PrivacyRootProvenanceV1,
         PrivacyStateItemRecordV1,
-        ZkAssetMode,
     );
 
     impl<T: MeasuredBytes, const N: usize> MeasuredBytes for [T; N] {
@@ -3850,9 +3848,6 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.tree_profile.measured_bytes_extra());
             total = total.saturating_add(self.tree_frontier.measured_bytes_extra());
             total = total.saturating_add(self.persisted_root.measured_bytes_extra());
-            total = total.saturating_add(self.mode.measured_bytes_extra());
-            total = total.saturating_add(self.allow_shield.measured_bytes_extra());
-            total = total.saturating_add(self.allow_unshield.measured_bytes_extra());
             total = total.saturating_add(self.commitments.measured_bytes_extra());
             total = total.saturating_add(self.root_history.measured_bytes_extra());
             total = total.saturating_add(self.nullifiers.measured_bytes_extra());
@@ -3906,8 +3901,15 @@ mod measured_bytes_impls {
     impl MeasuredBytes for SccpRouteGovernanceProposal {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<SccpRouteGovernanceProposal>();
-            total = total.saturating_add(norito::codec::Encode::encode(&self.action).len());
+            total = total.saturating_add(norito::codec::Encode::encode(&self.anchor).len());
             total
+        }
+    }
+
+    impl MeasuredBytes for SorafsProviderGovernanceProposal {
+        fn measured_bytes(&self) -> usize {
+            size_of::<SorafsProviderGovernanceProposal>()
+                .saturating_add(norito::codec::Encode::encode(&self.action).len())
         }
     }
 
@@ -3938,6 +3940,9 @@ mod measured_bytes_impls {
                     total = total.saturating_add(payload.measured_bytes_extra());
                 }
                 ProposalKind::SccpRouteGovernance(payload) => {
+                    total = total.saturating_add(payload.measured_bytes_extra());
+                }
+                ProposalKind::SorafsProviderGovernance(payload) => {
                     total = total.saturating_add(payload.measured_bytes_extra());
                 }
                 ProposalKind::ValidationFeePolicy(payload) => {
@@ -5725,7 +5730,9 @@ mod tests {
         .expect("fixture seed derives a valid keypair");
         let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             91,
             DataSpaceId::UNIVERSAL,

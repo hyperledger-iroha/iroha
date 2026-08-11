@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.model.NetworkId;
 
 /** Canonical compact-length bare-Norito models for the Sumeragi v2 wire protocol. */
 public final class SumeragiV2Wire {
@@ -98,28 +99,6 @@ public final class SumeragiV2Wire {
     @Override
     public int hashCode() {
       return Arrays.hashCode(value);
-    }
-  }
-
-  /** Canonical Norito representation of an Iroha chain identifier. */
-  public static final class ChainId extends WireValue {
-    public final String value;
-
-    public ChainId(String value) {
-      this.value = nonNull(value, "value");
-      requireWellFormedUtf16(value, "chain ID");
-    }
-
-    @Override
-    public byte[] encode() {
-      return struct(string(value));
-    }
-
-    static ChainId decode(byte[] bytes) {
-      Reader reader = new Reader(bytes);
-      ChainId value = new ChainId(reader.field("chain ID value", SumeragiV2Wire::decodeString));
-      reader.finish("chain ID");
-      return value;
     }
   }
 
@@ -1232,24 +1211,24 @@ public final class SumeragiV2Wire {
         "iroha:sumeragi:v2:commit-certificate-request".getBytes(StandardCharsets.UTF_8);
 
     public final int protocolVersion;
-    public final ChainId chainId;
+    public final NetworkId networkId;
     public final HeightContextId contextId;
     public final long height;
     public final PeerIdPayload requester;
     private final byte[] signature;
 
     public CommitCertificateRequest(
-        ChainId chainId,
+        NetworkId networkId,
         HeightContextId contextId,
         long height,
         PeerIdPayload requester,
         byte[] signature) {
-      this(PROTOCOL_VERSION, chainId, contextId, height, requester, signature);
+      this(PROTOCOL_VERSION, networkId, contextId, height, requester, signature);
     }
 
     public CommitCertificateRequest(
         int protocolVersion,
-        ChainId chainId,
+        NetworkId networkId,
         HeightContextId contextId,
         long height,
         PeerIdPayload requester,
@@ -1258,7 +1237,7 @@ public final class SumeragiV2Wire {
           protocolVersion == PROTOCOL_VERSION,
           "Unsupported commit-certificate request protocol version " + protocolVersion);
       this.protocolVersion = protocolVersion;
-      this.chainId = nonNull(chainId, "chainId");
+      this.networkId = nonNull(networkId, "networkId");
       this.contextId = nonNull(contextId, "contextId");
       this.height = height;
       this.requester = nonNull(requester, "requester");
@@ -1274,7 +1253,7 @@ public final class SumeragiV2Wire {
     public byte[] encode() {
       return struct(
           u16(protocolVersion),
-          chainId.encode(),
+          networkId.bytes(),
           contextId.encode(),
           u64(height),
           requester.bytes(),
@@ -1287,7 +1266,7 @@ public final class SumeragiV2Wire {
           SIGNATURE_DOMAIN,
           struct(
               u16(protocolVersion),
-              chainId.encode(),
+              networkId.bytes(),
               contextId.encode(),
               u64(height),
               requester.bytes(),
@@ -1304,7 +1283,8 @@ public final class SumeragiV2Wire {
       CommitCertificateRequest value =
           new CommitCertificateRequest(
               reader.field("commit request protocol", SumeragiV2Wire::decodeU16),
-              reader.field("commit request chain ID", ChainId::decode),
+              NetworkId.fromBytes(
+                  reader.field("commit request network ID", SumeragiV2Wire::decodeHash)),
               reader.field("commit request context", HeightContextId::decode),
               reader.field("commit request height", SumeragiV2Wire::decodeU64),
               new PeerIdPayload(reader.compactField("commit request requester")),

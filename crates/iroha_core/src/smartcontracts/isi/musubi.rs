@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::HashOf;
 use iroha_data_model::{
     asset::AssetId,
     block::BlockHeader,
@@ -262,6 +262,11 @@ impl Execute for RegisterMusubiProviderBundleAttestationV1 {
                     if existing.attestation_digest == self.attestation.digest()
                         && existing.attestation == self.attestation
                     {
+                        validate_provider_bundle_attestation(
+                            &archive,
+                            &existing.attestation,
+                            state_transaction,
+                        )?;
                         return Ok(());
                     }
                     return Err(invariant(
@@ -277,6 +282,18 @@ impl Execute for RegisterMusubiProviderBundleAttestationV1 {
                     rejection_reason,
                     MusubiGovernanceRejectionReasonV1::StaleRevision,
                 )?;
+                if matches!(
+                    validate_replication_order_archive_binding(
+                        &archive,
+                        &key.replication_order,
+                        state_transaction.world(),
+                    )?,
+                    MusubiReplicationOrderLocationLifecycleV1::Retired(_)
+                ) {
+                    return Err(invariant(
+                        "Musubi provider attestation replication-order binding is retired",
+                    ));
+                }
                 validate_provider_bundle_attestation(
                     &archive,
                     &self.attestation,
@@ -2736,12 +2753,49 @@ fn ensure_admitted(
     }
 }
 
+fn validate_replication_order_archive_binding(
+    archive: &MusubiArchiveRecordV1,
+    replication_order: &iroha_data_model::sorafs::pin_registry::ReplicationOrderId,
+    world: &impl WorldReadOnly,
+) -> Result<MusubiReplicationOrderLocationLifecycleV1, Error> {
+    archive
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    let reference = world
+        .musubi_locations_by_replication_order()
+        .get(replication_order)
+        .ok_or_else(|| invariant("Musubi replication order has no consensus archive binding"))?;
+    reference
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    if reference.binding.replication_order != *replication_order
+        || reference.binding.archive_id != archive.archive_id
+        || reference.binding.commitment != archive.commitment
+    {
+        return Err(invariant(
+            "Musubi replication-order binding does not match the authoritative archive commitment",
+        ));
+    }
+    Ok(reference.lifecycle.clone())
+}
+
 fn bind_location_reverse_indices(
     existing: Option<&MusubiArchiveLocationV1>,
     location: &MusubiArchiveLocationV1,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), Error> {
     let key = location.key();
+    let archive = state_transaction
+        .world
+        .musubi_archives
+        .get(&location.archive_id)
+        .cloned()
+        .ok_or_else(|| invariant("Musubi order binding references a missing archive"))?;
+    let new_order_lifecycle = validate_replication_order_archive_binding(
+        &archive,
+        &location.replication_order,
+        state_transaction.world(),
+    )?;
     match state_transaction
         .world
         .musubi_locations_by_pin
@@ -2758,19 +2812,12 @@ fn bind_location_reverse_indices(
             ));
         }
     }
-    match state_transaction
-        .world
-        .musubi_locations_by_replication_order
-        .get(&location.replication_order)
-    {
-        None => {}
-        Some(reference)
-            if reference.active
-                && reference.location == key
-                && existing.is_some_and(|record| {
-                    record.replication_order == location.replication_order
-                }) => {}
-        Some(_) => {
+    match new_order_lifecycle {
+        MusubiReplicationOrderLocationLifecycleV1::PreLocation => {}
+        MusubiReplicationOrderLocationLifecycleV1::Active(bound_location)
+            if bound_location == key && existing == Some(location) => {}
+        MusubiReplicationOrderLocationLifecycleV1::Active(_)
+        | MusubiReplicationOrderLocationLifecycleV1::Retired(_) => {
             return Err(invariant(
                 "Musubi SoraFS replication orders cannot be reused by another location or renewal",
             ));
@@ -2802,20 +2849,24 @@ fn bind_location_reverse_indices(
             .get(&existing.replication_order)
             .cloned()
             .ok_or_else(|| invariant("Musubi order reverse index is inconsistent"))?;
-        if !old_order.active || old_order.location != key {
+        old_order
+            .validate()
+            .map_err(|error| invariant(error.reason()))?;
+        if old_order.active_location() != Some(key)
+            || old_order.binding.archive_id != location.archive_id
+            || old_order.binding.commitment != archive.commitment
+        {
             return Err(invariant("Musubi order reverse index is inconsistent"));
         }
         if existing.replication_order != location.replication_order {
+            let mut retired = old_order;
+            retired.lifecycle = MusubiReplicationOrderLocationLifecycleV1::Retired(
+                MusubiRetiredReplicationOrderLocationV1::new(key, existing.providers.clone()),
+            );
             state_transaction
                 .world
                 .musubi_locations_by_replication_order
-                .insert(
-                    existing.replication_order,
-                    MusubiReplicationOrderLocationReferenceV1 {
-                        active: false,
-                        ..old_order
-                    },
-                );
+                .insert(existing.replication_order, retired);
         }
         for provider in &existing.providers {
             state_transaction
@@ -2833,17 +2884,20 @@ fn bind_location_reverse_indices(
             active: true,
         },
     );
+    let mut active_order = state_transaction
+        .world
+        .musubi_locations_by_replication_order
+        .get(&location.replication_order)
+        .cloned()
+        .ok_or_else(|| invariant("Musubi order reverse index is inconsistent"))?;
+    active_order.lifecycle = MusubiReplicationOrderLocationLifecycleV1::Active(key);
+    active_order
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
     state_transaction
         .world
         .musubi_locations_by_replication_order
-        .insert(
-            location.replication_order,
-            MusubiReplicationOrderLocationReferenceV1 {
-                replication_order: location.replication_order,
-                location: key,
-                active: true,
-            },
-        );
+        .insert(location.replication_order, active_order);
     for provider in &location.providers {
         state_transaction
             .world
@@ -2898,8 +2952,7 @@ fn load_location_provider_attestations(
             ));
         }
         let binding = &record.attestation.payload.binding;
-        if binding.chain_id != receipt.chain_id
-            || binding.genesis_block_hash != receipt.genesis_block_hash
+        if binding.network_id != receipt.network_id
             || binding.provider_id != *provider
             || binding.replication_order != location.replication_order
             || binding.archive_id != archive.archive_id
@@ -2993,9 +3046,10 @@ fn validate_exact_archive_location_replay(
     order_reference
         .validate()
         .map_err(|error| invariant(error.reason()))?;
-    if order_reference.replication_order != location.replication_order
-        || order_reference.location != key
-        || !order_reference.active
+    if order_reference.binding.replication_order != location.replication_order
+        || order_reference.binding.archive_id != archive.archive_id
+        || order_reference.binding.commitment != archive.commitment
+        || order_reference.active_location() != Some(key)
     {
         return Err(invariant("Musubi order reverse index is inconsistent"));
     }
@@ -3045,19 +3099,28 @@ fn retire_location_reverse_indices(
         .get(&location.replication_order)
         .cloned()
         .ok_or_else(|| invariant("Musubi order reverse index is inconsistent"))?;
-    if !order.active || order.location != key {
+    order
+        .validate()
+        .map_err(|error| invariant(error.reason()))?;
+    let archive = state_transaction
+        .world
+        .musubi_archives
+        .get(&location.archive_id)
+        .ok_or_else(|| invariant("Musubi order binding references a missing archive"))?;
+    if order.active_location() != Some(key)
+        || order.binding.archive_id != archive.archive_id
+        || order.binding.commitment != archive.commitment
+    {
         return Err(invariant("Musubi order reverse index is inconsistent"));
     }
+    let mut retired = order;
+    retired.lifecycle = MusubiReplicationOrderLocationLifecycleV1::Retired(
+        MusubiRetiredReplicationOrderLocationV1::new(key, location.providers.clone()),
+    );
     state_transaction
         .world
         .musubi_locations_by_replication_order
-        .insert(
-            location.replication_order,
-            MusubiReplicationOrderLocationReferenceV1 {
-                active: false,
-                ..order
-            },
-        );
+        .insert(location.replication_order, retired);
     for provider in &location.providers {
         state_transaction
             .world
@@ -3076,6 +3139,11 @@ fn validate_provider_bundle_attestation(
         .validate()
         .map_err(|error| invariant(error.reason()))?;
     let binding = &attestation.payload.binding;
+    validate_replication_order_archive_binding(
+        archive,
+        &binding.replication_order,
+        state_transaction.world(),
+    )?;
     let order = state_transaction
         .world
         .replication_orders
@@ -3100,8 +3168,7 @@ fn validate_provider_bundle_attestation(
             .get(index)
             .map(|hash| *hash.as_ref())
     });
-    if binding.chain_id != *state_transaction.chain_id()
-        || binding.genesis_block_hash != genesis_block_hash(state_transaction)?
+    if binding.network_id != *state_transaction.network_id()
         || order.order_id != binding.replication_order
         || order.manifest_root_cid != archive.commitment.root_cid
         || current_owner != &completion.completed_by
@@ -3143,6 +3210,18 @@ fn validate_sorafs_location(
     archive
         .validate()
         .map_err(|error| invariant(error.reason()))?;
+    if matches!(
+        validate_replication_order_archive_binding(
+            archive,
+            replication_order,
+            state_transaction.world(),
+        )?,
+        MusubiReplicationOrderLocationLifecycleV1::Retired(_)
+    ) {
+        return Err(invariant(
+            "Musubi archive replication-order binding is retired",
+        ));
+    }
     let commitment = &archive.commitment;
     let pin = state_transaction
         .world
@@ -3248,15 +3327,14 @@ fn validate_seed_ingress_receipt(
 ) -> Result<(), Error> {
     let binding = &receipt.payload.binding;
     let archive_id = commitment.archive_id();
-    if binding.chain_id != *state_transaction.chain_id()
-        || binding.genesis_block_hash != genesis_block_hash(state_transaction)?
+    if binding.network_id != *state_transaction.network_id()
         || binding.publisher != *authority
         || binding.archive_id != archive_id
         || binding.car_body_digest != commitment.car_digest
         || binding.car_body_length != commitment.car_size
     {
         return Err(invariant(
-            "Musubi seed-ingress receipt does not match the chain, publisher, or archive body",
+            "Musubi seed-ingress receipt does not match the network, publisher, or archive body",
         ));
     }
     let admitted_owner = state_transaction
@@ -3626,15 +3704,22 @@ pub(crate) fn current_location_providers(
         .musubi_locations_by_pin()
         .get(&location.pin_manifest)
         .is_some_and(|reference| reference.active && reference.location == key)
-        || !world
-            .musubi_locations_by_replication_order()
-            .get(&location.replication_order)
-            .is_some_and(|reference| reference.active && reference.location == key)
     {
         return None;
     }
     let archive = world.musubi_archives().get(&location.archive_id)?;
     archive.validate().ok()?;
+    if !matches!(
+        validate_replication_order_archive_binding(
+            archive,
+            &location.replication_order,
+            world,
+        ),
+        Ok(MusubiReplicationOrderLocationLifecycleV1::Active(bound_location))
+            if bound_location == key
+    ) {
+        return None;
+    }
     let pin = world.pin_manifests().get(&location.pin_manifest)?;
     if !pin.status.is_active()
         || pin.root_cid != archive.commitment.root_cid
@@ -4354,14 +4439,6 @@ fn execution_hash(state_transaction: &StateTransaction<'_, '_>) -> [u8; 32] {
 fn execution_time_ms(state_transaction: &StateTransaction<'_, '_>) -> Result<u64, Error> {
     u64::try_from(state_transaction._curr_block.creation_time().as_millis())
         .map_err(|_| invariant("Musubi block creation time overflows u64 milliseconds"))
-}
-
-fn genesis_block_hash(state_transaction: &StateTransaction<'_, '_>) -> Result<[u8; 32], Error> {
-    state_transaction
-        .block_hashes()
-        .first()
-        .map(|hash| *hash.as_ref())
-        .ok_or_else(|| invariant("Musubi publication requires a committed genesis block"))
 }
 
 fn ensure_revision(label: &str, actual: u64, expected: u64) -> Result<(), Error> {

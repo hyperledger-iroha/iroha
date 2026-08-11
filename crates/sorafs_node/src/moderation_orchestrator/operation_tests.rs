@@ -306,12 +306,12 @@ fn blocking_signer_claim_allows_concurrent_duplicate_worker_to_exit() {
 }
 
 #[test]
-fn generic_signed_envelope_contract_rejects_chain_ttl_nonce_metadata_and_action_substitution() {
-    let chain_id = ChainId::from("moderation-orchestrator-test");
+fn generic_signed_envelope_contract_rejects_network_ttl_nonce_metadata_and_action_substitution() {
+    let network_id = test_network_id();
     let authority = account(1);
     let action = policy_action(policy(1));
     let request = ModerationTransactionRequestV1::new(
-        chain_id.clone(),
+        network_id,
         1,
         authority.clone(),
         action.clone(),
@@ -320,8 +320,10 @@ fn generic_signed_envelope_contract_rejects_chain_ttl_nonce_metadata_and_action_
         [0x72; 32],
     )
     .expect("canonical generic request");
-    let other_chain_request = ModerationTransactionRequestV1::new(
-        ChainId::from("other-moderation-chain"),
+    let other_network_request = ModerationTransactionRequestV1::new(
+        iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"other-moderation-genesis")),
+        ),
         1,
         authority.clone(),
         action.clone(),
@@ -329,10 +331,10 @@ fn generic_signed_envelope_contract_rejects_chain_ttl_nonce_metadata_and_action_
         7,
         [0x72; 32],
     )
-    .expect("canonical cross-chain request");
-    assert_ne!(request.operation_id, other_chain_request.operation_id);
+    .expect("canonical cross-network request");
+    assert_ne!(request.operation_id, other_network_request.operation_id);
     let next_generation_request = ModerationTransactionRequestV1::new(
-        chain_id.clone(),
+        network_id,
         2,
         authority.clone(),
         action.clone(),
@@ -353,7 +355,7 @@ fn generic_signed_envelope_contract_rejects_chain_ttl_nonce_metadata_and_action_
 
     let exact_builder = || {
         TransactionBuilder::new(
-            chain_id.clone(),
+            request.network_id,
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -371,16 +373,20 @@ fn generic_signed_envelope_contract_rejects_chain_ttl_nonce_metadata_and_action_
     ModerationSignedTransactionV1::from_signed_transaction(&request, &exact)
         .expect("exact generic signed envelope");
 
-    let wrong_chain = sign_exact(
+    let wrong_network = sign_exact(
         TransactionBuilder::new(
-            ChainId::from("other-moderation-chain"),
+            iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                iroha_data_model::block::BlockHeader,
+            >::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"other-moderation-network"),
+            )),
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         ),
         action.instruction(),
     );
     assert_eq!(
-        ModerationSignedTransactionV1::from_signed_transaction(&request, &wrong_chain),
+        ModerationSignedTransactionV1::from_signed_transaction(&request, &wrong_network),
         Err(ModerationSubmissionFailureV1::PermanentRejection),
     );
 
@@ -1864,7 +1870,7 @@ fn finalized_panel_notifications_are_operation_bound_payload_free_and_byte_ident
             selection.jurors.clone(),
             selection.waitlist.clone(),
         ))
-        .operation_id(&ChainId::from("moderation-orchestrator-test"), &governance)
+        .operation_id(&test_network_id(), &governance)
         .expect("source operation");
     let first = ModerationOrchestratorV1::open(
         config(&temp, "panel-replica-a.norito"),
@@ -2009,7 +2015,7 @@ fn finalized_activation_notifies_only_the_authoritative_ballot_roster() {
             "round-1".to_owned(),
             selection.sortition_digest,
         ))
-        .operation_id(&ChainId::from("moderation-orchestrator-test"), &governance)
+        .operation_id(&test_network_id(), &governance)
         .expect("activation operation");
     let expected_recipients = snapshot.cases[0]
         .case
@@ -2079,9 +2085,47 @@ fn signed_native_redrive_preserves_incident_and_splits_a_new_unresolved_failure(
             1,
         )
         .expect("prepare exact native redrive");
+    let mut foreign = redrive.clone();
+    foreign.network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"same-label-foreign-moderation-resolution-genesis",
+        )),
+    );
+    let before_foreign = orchestrator
+        .state
+        .lock()
+        .expect("state before foreign")
+        .clone();
+    assert!(matches!(
+        orchestrator
+            .apply_dead_letter_resolution(foreign.clone(), sign_dead_letter_resolution(&foreign),),
+        Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid)
+    ));
+    assert_eq!(
+        *orchestrator.state.lock().expect("state after foreign"),
+        before_foreign,
+        "a foreign genesis must be rejected before durable mutation"
+    );
+
+    let redrive_signature = sign_dead_letter_resolution(&redrive);
     orchestrator
-        .apply_dead_letter_resolution(redrive.clone(), sign_dead_letter_resolution(&redrive))
+        .apply_dead_letter_resolution(redrive.clone(), redrive_signature)
         .expect("apply signed native redrive");
+    let after_redrive = orchestrator
+        .state
+        .lock()
+        .expect("state after redrive")
+        .clone();
+    assert!(
+        orchestrator
+            .apply_dead_letter_resolution(redrive.clone(), redrive_signature)
+            .is_err()
+    );
+    assert_eq!(
+        *orchestrator.state.lock().expect("state after replay"),
+        after_redrive,
+        "a consumed resolution must not mutate state on replay"
+    );
     {
         let mut state = orchestrator.state.lock().expect("orchestrator state");
         assert_eq!(state.outbox.len(), 1);

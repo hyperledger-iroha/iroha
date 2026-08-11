@@ -11,7 +11,7 @@ mod tests {
         kura::Kura, query::store::LiveQueryStore, state::World, sumeragi::status,
         telemetry::StateTelemetry,
     };
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf};
     use iroha_data_model::{
         block::{
             BlockHeader,
@@ -512,7 +512,7 @@ mod tests {
         let offline = OfflineStatus {
             mandatory: false,
             cash_handoff_capability: "cash_handoff_v1".to_owned(),
-            required_bridge_abi_version: 21,
+            required_bridge_abi_version: 22,
             max_hops: 8,
             ready: true,
             assets: Vec::new(),
@@ -549,7 +549,7 @@ mod tests {
             projected
                 .get("required_bridge_abi_version")
                 .and_then(norito::json::Value::as_u64),
-            Some(21)
+            Some(22)
         );
 
         let response = super::handle_status(
@@ -772,7 +772,7 @@ mod tests {
         let response = super::handle_v1_sumeragi_diagnostics(
             axum::extract::State(Arc::clone(&state)),
             None,
-            None,
+            Some(axum::http::HeaderValue::from_static("application/json")),
             false,
         )
         .await

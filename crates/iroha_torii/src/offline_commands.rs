@@ -184,7 +184,7 @@ pub(crate) async fn handle_top_up(
     }
     let instruction = TopUpKagemushaRecursiveV4::new(topup_request.clone());
     let mut transaction = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         issuer.authority.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -201,7 +201,6 @@ pub(crate) async fn handle_top_up(
     let tx = issuer.quote_and_sign_transaction(&app, transaction, "offline_top_up_transaction")?;
     let tx_hash = tx.hash();
     let admission = routing::handle_transaction_with_metrics(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         tx,
@@ -277,7 +276,7 @@ pub(crate) async fn handle_redeem(
     let authorization = redeem_request.authorization.clone();
     let instruction = RedeemKagemushaRecursiveV4::new(redeem_request.clone());
     let mut transaction = TransactionBuilder::new(
-        (*app.chain_id).clone(),
+        *app.state.network_id_ref(),
         issuer.authority.clone().into(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -291,7 +290,6 @@ pub(crate) async fn handle_redeem(
     let tx = issuer.quote_and_sign_transaction(&app, transaction, "offline_redeem_transaction")?;
     let tx_hash = tx.hash();
     let admission = routing::handle_transaction_with_metrics(
-        app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
         tx,
@@ -322,10 +320,10 @@ fn validate_kagemusha_v4_topup_snapshot(
     app: &SharedAppState,
     request: &OfflineTopUpRequest,
 ) -> Result<(), Error> {
-    if request.current_note.chain_id != *app.chain_id {
+    if request.current_note.network_id != *app.state.network_id_ref() {
         return Err(validation(
-            "offline_wrong_chain",
-            "Offline top-up request targets a different chain.",
+            "offline_wrong_network",
+            "Offline top-up request targets a different exact network.",
         ));
     }
     let state = app.state.view();
@@ -358,7 +356,7 @@ fn validate_kagemusha_v4_topup_snapshot(
             &request.artifact_binding,
             block_height,
             block_height,
-            app.chain_id.as_ref(),
+            app.state.network_id_ref(),
             request.asset.definition(),
             live_scale,
         ),
@@ -454,10 +452,10 @@ fn validate_kagemusha_v4_redeem_snapshot(
     app: &SharedAppState,
     request: &OfflineRedeemRequest,
 ) -> Result<(), Error> {
-    if request.bundle.statement.chain_id != *app.chain_id {
+    if request.bundle.statement.network_id != *app.state.network_id_ref() {
         return Err(validation(
-            "offline_wrong_chain",
-            "Offline redemption request targets a different chain.",
+            "offline_wrong_network",
+            "Offline redemption request targets a different exact network.",
         ));
     }
     let state = app.state.view();
@@ -490,7 +488,7 @@ fn validate_kagemusha_v4_redeem_snapshot(
             &request.bundle.statement.artifact_binding,
             request.block_height,
             block_height,
-            app.chain_id.as_ref(),
+            app.state.network_id_ref(),
             &request.bundle.statement.asset,
             live_scale,
         ),
@@ -504,7 +502,7 @@ fn validate_kagemusha_v4_redeem_snapshot(
                 &change.bundle.statement.artifact_binding,
                 request.block_height,
                 block_height,
-                &change.bundle.statement.chain_id,
+                &change.bundle.statement.network_id,
                 &change.bundle.statement.asset,
                 change.bundle.statement.asset_scale,
             ),
@@ -1757,7 +1755,7 @@ fn ensure_kagemusha_v4_topup_anchor_matches_request(
     anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
     request: &OfflineTopUpRequest,
 ) -> Result<(), Error> {
-    if anchor.chain_id != request.current_note.chain_id
+    if anchor.network_id != request.current_note.network_id
         || anchor.payer != request.authorization.authority
         || anchor.asset != request.asset
         || anchor.asset_scale != request.amount.scale
@@ -1999,9 +1997,9 @@ mod tests {
         },
     };
     use iroha_core::kura::Kura;
-    use iroha_crypto::{Algorithm, Hash, Signature, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, Signature, SignatureOf};
     use iroha_data_model::{
-        ChainId, Registrable as _,
+        ChainId, NetworkId, Registrable as _,
         account::Account,
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::{
@@ -2149,9 +2147,10 @@ mod tests {
         let key_pair = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519)
             .expect("derive offline submission request fixture key");
         let authority = AccountId::new(key_pair.public_key().clone());
-        let chain_id: ChainId = "offline-submission-coordinator"
-            .parse()
-            .expect("fixture chain id");
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"offline-submission-coordinator-network",
+            )));
         let domain_id = DomainId::try_new("offline", "universal").expect("fixture domain id");
         let definition = AssetDefinitionId::derive_from_components(
             domain_id,
@@ -2168,7 +2167,7 @@ mod tests {
             asset: AssetId::new(definition.clone(), authority.clone()),
             amount,
             current_note: KagemushaSpendableNoteDescriptorV2 {
-                chain_id: chain_id.clone(),
+                network_id,
                 asset: definition.clone(),
                 note_commitment: [0x61; 32],
                 spend_nullifier: [0x62; 32],
@@ -2246,6 +2245,31 @@ mod tests {
         request
     }
 
+    #[test]
+    fn topup_admission_rejects_same_label_foreign_genesis_before_state_work() {
+        let first_display_label = ChainId::from("shared-offline-display-label");
+        let second_display_label = ChainId::from("shared-offline-display-label");
+        assert_eq!(first_display_label, second_display_label);
+
+        let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        let mut request = submission_test_request(0x7B);
+        let foreign_network =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"same-label-foreign-torii-offline-genesis",
+            )));
+        assert_ne!(foreign_network, *app.state.network_id_ref());
+        request.current_note.network_id = foreign_network;
+        let error = validate_kagemusha_v4_topup_snapshot(&app, &request)
+            .expect_err("same-label foreign genesis must be rejected before asset lookup");
+        assert!(matches!(
+            error,
+            Error::AppQueryValidation {
+                code: "offline_wrong_network",
+                ..
+            }
+        ));
+    }
+
     fn claim_test_leader(
         issuer: &Arc<OfflineCommandRuntime>,
         request: &OfflineTopUpRequest,
@@ -2295,7 +2319,7 @@ mod tests {
             .map(InstructionBox::from)
             .collect::<Vec<_>>();
         let transaction = TransactionBuilder::new(
-            ChainId::from("offline-submission-coordinator"),
+            crate::signed_query_test_network_id(),
             issuer.authority.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2481,6 +2505,10 @@ mod tests {
         let settlement_hash =
             iroha_data_model::nexus::compute_settlement_hash(&settlement_commitment)
                 .expect("hash offline merge settlement fixture");
+        let autonomous_network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"offline-status-merge-genesis",
+            )));
         let execution = MergeLaneExecution {
             source_bundle: vec![0xA5],
             source_bundle_hash: Hash::new(b"offline-status-merge-source"),
@@ -2489,7 +2517,7 @@ mod tests {
             prepare_qc,
             commit_qc,
             signer_proofs: Vec::new(),
-            autonomous_chain_id_hash: Hash::new(b"offline-status-merge-chain"),
+            autonomous_network_id,
             autonomous_epoch: 1,
             autonomous_payload_hash: Hash::new(b"offline-status-merge-payload"),
             entrypoint_hashes,
@@ -2568,7 +2596,7 @@ mod tests {
                 1,
                 carrier_header.height().get(),
                 base_state_hash,
-                Hash::new(b"offline-status-merge-chain"),
+                autonomous_network_id,
                 VALIDATOR_SET_HASH_VERSION_V1,
                 HashOf::new(&validator_set),
                 validator_set.clone(),
@@ -2665,7 +2693,7 @@ mod tests {
         );
 
         let unrelated = TransactionBuilder::new(
-            ChainId::from("offline-submission-coordinator"),
+            crate::signed_query_test_network_id(),
             issuer.authority.clone().into(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2689,7 +2717,7 @@ mod tests {
         let front_runner = KeyPair::try_from_seed(vec![0x1D; 32], Algorithm::Ed25519)
             .expect("derive unauthorized offline front-run fixture key");
         let front_runner_transaction = TransactionBuilder::new(
-            ChainId::from("offline-submission-coordinator"),
+            crate::signed_query_test_network_id(),
             AccountId::new(front_runner.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

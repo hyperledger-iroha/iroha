@@ -14,6 +14,7 @@ import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.core.model.instructions.InstructionKind
@@ -24,6 +25,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.sccp.SccpV1
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
+import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -314,8 +316,7 @@ class MusubiInstructionsV1FixtureTest {
             it[0] = (it[0].toInt() xor 1).toByte()
         }
         val wrongBinding = MusubiSeedIngressReceiptBindingV1(
-            binding.chainId,
-            binding.genesisBlockHash(),
+            binding.networkId,
             binding.publisher,
             binding.ingressBroker,
             binding.seedProvider,
@@ -403,7 +404,7 @@ class MusubiInstructionsV1FixtureTest {
         val fixtureCases = cases(fixture())
         val mutations = fixtureCases.map(::mutation)
         val transaction = TransactionPayload(
-            chainId = "musubi-fixture",
+            networkId = TestNetworkIds.canonical(),
             authority = AccountAddress
                 .fromAccount(TestEd25519Keys.publicKey(0x5a), "ed25519")
                 .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1),
@@ -416,7 +417,7 @@ class MusubiInstructionsV1FixtureTest {
         val encoded = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
             .encodeTransaction(transaction)
         val transactionDecoder = canonicalDecoder(encoded)
-        readField(transactionDecoder, "chain_id")
+        readField(transactionDecoder, "domain")
         readField(transactionDecoder, "authority")
         readField(transactionDecoder, "creation_time_ms")
         val executablePayload = readField(transactionDecoder, "executable")
@@ -1196,8 +1197,7 @@ class MusubiInstructionsV1FixtureTest {
         assertEquals(BigInteger.ONE, payload.bigInteger("version"))
         val binding = payload.objectValue("binding")
         binding.requireKeys(
-            "chain_id",
-            "genesis_block_hash",
+            "network_id",
             "publisher",
             "ingress_broker",
             "seed_provider",
@@ -1208,8 +1208,7 @@ class MusubiInstructionsV1FixtureTest {
             "nonce",
         )
         val typedBinding = MusubiSeedIngressReceiptBindingV1(
-            binding.string("chain_id"),
-            fixedBytes32(binding["genesis_block_hash"]),
+            NetworkId.parse(binding.string("network_id")),
             binding.string("publisher"),
             binding.string("ingress_broker"),
             newtypeText(binding["seed_provider"]),
@@ -1245,8 +1244,7 @@ class MusubiInstructionsV1FixtureTest {
         assertEquals(BigInteger.ONE, payload.bigInteger("version"))
         val binding = payload.objectValue("binding")
         binding.requireKeys(
-            "chain_id",
-            "genesis_block_hash",
+            "network_id",
             "provider_id",
             "completed_by",
             "completion_authority",
@@ -1268,8 +1266,7 @@ class MusubiInstructionsV1FixtureTest {
         val anchor = binding.objectValue("finalized_anchor")
         anchor.requireKeys("height", "block_hash")
         val typedBinding = MusubiProviderBundleVerificationBindingV1(
-            binding.string("chain_id"),
-            fixedBytes32(binding["genesis_block_hash"]),
+            NetworkId.parse(binding.string("network_id")),
             newtypeText(binding["provider_id"]),
             binding.string("completed_by"),
             MusubiProviderIngestCompletionAuthorityV1(

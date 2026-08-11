@@ -1,4 +1,4 @@
-//! Host execution for delivery-versus-payment and payment-versus-payment settlements.
+//! Host execution for bilateral settlements and owner-funded native FX corridors.
 
 use std::collections::BTreeSet;
 
@@ -10,15 +10,17 @@ use iroha_data_model::{
     isi::{
         error::{InstructionExecutionError, InvalidParameterError},
         settlement::{
-            DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, FxCorridorSource, PvpIsi,
-            SetFxCorridorPolicy, SettleFxCorridor, SettlementAtomicity, SettlementExecutionOrder,
-            SettlementInstructionBox, SettlementLeg, SettlementPlan,
+            DvpIsi, FundFxCorridorEscrow, FxCorridorPolicy, FxCorridorPolicyRegistry,
+            FxCorridorUsage, PvpIsi, RefundFxCorridorEscrow, SetFxCorridorPolicy, SettleFxCorridor,
+            SettlementAtomicity, SettlementExecutionOrder, SettlementInstructionBox, SettlementLeg,
+            SettlementPlan,
         },
     },
+    oracle::FeedEventOutcome,
     prelude::*,
 };
 use iroha_executor_data_model::permission::settlement::{
-    CanExecuteSettlement, CanManageFxCorridors, CanSetFxCorridorPolicy, CanSettleFxCorridor,
+    CanExecuteSettlement, CanManageFxCorridors, CanSetFxCorridorPolicy,
 };
 use iroha_primitives::{
     json::Json,
@@ -40,7 +42,6 @@ pub(crate) const SETTLEMENT_KIND_DVP: &str = "dvp";
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
 pub(crate) const SETTLEMENT_KIND_PVP: &str = "pvp";
 pub(crate) const CAN_SET_FX_CORRIDOR_POLICY: &str = "CanSetFxCorridorPolicy";
-pub(crate) const CAN_SETTLE_FX_CORRIDOR: &str = "CanSettleFxCorridor";
 
 /// Non-reusable proof that bilateral consent selected two exact settlement legs.
 pub(in crate::smartcontracts::isi) struct VerifiedSettlementNumericPair {
@@ -84,6 +85,8 @@ impl Execute for SettlementInstructionBox {
             SettlementInstructionBox::Dvp(isi) => isi.execute(authority, stx),
             SettlementInstructionBox::Pvp(isi) => isi.execute(authority, stx),
             SettlementInstructionBox::SetFxCorridorPolicy(isi) => isi.execute(authority, stx),
+            SettlementInstructionBox::FundFxCorridorEscrow(isi) => isi.execute(authority, stx),
+            SettlementInstructionBox::RefundFxCorridorEscrow(isi) => isi.execute(authority, stx),
             SettlementInstructionBox::SettleFxCorridor(isi) => isi.execute(authority, stx),
         }
     }
@@ -252,18 +255,6 @@ fn can_set_fx_corridor_policy(
     can_manage_fx_corridors(stx, authority) || has_exact_permission(stx, authority, &exact)
 }
 
-fn can_settle_fx_corridor(
-    stx: &StateTransaction<'_, '_>,
-    authority: &AccountId,
-    policy_id: &Name,
-) -> bool {
-    let exact: Permission = CanSettleFxCorridor {
-        policy_id: policy_id.clone(),
-    }
-    .into();
-    can_manage_fx_corridors(stx, authority) || has_exact_permission(stx, authority, &exact)
-}
-
 fn invalid_fx_parameter(message: impl Into<String>) -> Error {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
         message.into(),
@@ -283,7 +274,10 @@ fn fx_policy_registry(stx: &StateTransaction<'_, '_>) -> Result<FxCorridorPolicy
         .ok_or_else(|| invalid_fx_parameter("FX corridor policy registry id mismatch"))
 }
 
-fn fx_policy(stx: &StateTransaction<'_, '_>, policy_id: &Name) -> Result<FxCorridorPolicy, Error> {
+pub(in crate::smartcontracts::isi) fn fx_policy(
+    stx: &StateTransaction<'_, '_>,
+    policy_id: &Name,
+) -> Result<FxCorridorPolicy, Error> {
     fx_policy_registry(stx)?
         .get(policy_id)
         .cloned()
@@ -298,12 +292,32 @@ fn validate_fx_policy_entities(
         return Err(invalid_fx_parameter(message));
     }
 
-    if let FxCorridorSource::FixedAccount(account) = &policy.source {
-        ensure_account_exists(stx, account)?;
+    ensure_account_exists(stx, &policy.owner)?;
+    let feed = stx
+        .world
+        .oracle_feeds
+        .get(&policy.oracle_feed_id)
+        .ok_or_else(|| {
+            invalid_fx_parameter(format!(
+                "FX corridor oracle feed `{}` is not registered",
+                policy.oracle_feed_id
+            ))
+        })?;
+    if feed.feed_id != policy.oracle_feed_id {
+        return Err(invalid_fx_parameter(
+            "FX corridor oracle feed key does not match its canonical feed identity",
+        ));
     }
-    ensure_account_exists(stx, &policy.source_sink)?;
-    ensure_account_exists(stx, &policy.destination_reserve)?;
 
+    stx.nexus
+        .dataspace_catalog
+        .by_id(policy.source_dataspace)
+        .ok_or_else(|| {
+            invalid_fx_parameter(format!(
+                "FX corridor source dataspace {} is absent from the active catalog",
+                policy.source_dataspace.as_u64()
+            ))
+        })?;
     let destination_dataspace = stx
         .nexus
         .dataspace_catalog
@@ -442,12 +456,17 @@ fn scoped_fx_leg_asset_ids(leg: &SettlementLeg, dataspace: DataSpaceId) -> (Asse
 fn exact_fx_destination_amount(
     source_amount: &Quantity,
     destination_spec: NumericSpec,
-    policy: &FxCorridorPolicy,
+    rate: iroha_data_model::oracle::ObservationValue,
 ) -> Result<Quantity, Error> {
+    if rate.mantissa <= 0 {
+        return Err(invalid_fx_parameter(
+            "FX corridor oracle rate must be positive",
+        ));
+    }
     let destination_amount = source_amount
         .try_mul_div_decimal_exact(
-            &Numeric::from(policy.rate_numerator),
-            &Numeric::from(policy.rate_denominator),
+            &Numeric::new(rate.mantissa, rate.scale),
+            &Numeric::from(1_u32),
         )
         .map_err(|err| {
             invalid_fx_parameter(format!(
@@ -461,6 +480,142 @@ fn exact_fx_destination_amount(
         ));
     }
     Ok(destination_amount)
+}
+
+fn fx_corridor_escrow_account(
+    stx: &StateTransaction<'_, '_>,
+    policy: &FxCorridorPolicy,
+) -> AccountId {
+    iroha_data_model::isi::settlement::fx_corridor_escrow_account_id_v1(
+        &stx.network_id,
+        &policy.corridor_id(),
+        &policy.destination_asset_definition_id,
+    )
+}
+
+fn persist_fx_policy_registry(
+    stx: &mut StateTransaction<'_, '_>,
+    registry: FxCorridorPolicyRegistry,
+) {
+    let next = registry.into_custom_parameter();
+    let previous = {
+        let parameters = stx.world.parameters.get_mut();
+        let previous = parameters.custom().get(next.id()).cloned();
+        parameters.set_parameter(Parameter::Custom(next.clone()));
+        previous.unwrap_or_else(|| next.clone())
+    };
+    stx.world
+        .emit_events(Some(ConfigurationEvent::Changed(ParameterChanged {
+            old_value: Parameter::Custom(previous),
+            new_value: Parameter::Custom(next),
+        })));
+}
+
+fn validate_fx_oracle_evidence(
+    stx: &StateTransaction<'_, '_>,
+    policy: &FxCorridorPolicy,
+    instruction: &SettleFxCorridor,
+) -> Result<(iroha_data_model::oracle::ObservationValue, u64), Error> {
+    let feed = stx
+        .world
+        .oracle_feeds
+        .get(&policy.oracle_feed_id)
+        .ok_or_else(|| invalid_fx_parameter("FX corridor oracle feed is not registered"))?;
+    let evidence = &instruction.oracle_evidence;
+    if evidence.feed_id != policy.oracle_feed_id
+        || evidence.feed_config_version != feed.feed_config_version
+    {
+        return Err(invalid_fx_parameter(
+            "FX settlement oracle evidence does not match the active corridor feed version",
+        ));
+    }
+    let record = stx
+        .world
+        .oracle_history
+        .get(&policy.oracle_feed_id)
+        .and_then(|history| history.last())
+        .ok_or_else(|| invalid_fx_parameter("FX corridor oracle feed has no retained event"))?;
+    let event = &record.event;
+    if event.feed_id != evidence.feed_id
+        || event.feed_config_version != evidence.feed_config_version
+        || event.slot != evidence.slot
+        || event.request_hash != evidence.request_hash
+        || iroha_crypto::HashOf::new(event) != evidence.event_hash
+    {
+        return Err(invalid_fx_parameter(
+            "FX settlement oracle evidence does not identify the latest retained event",
+        ));
+    }
+    let now_ms = stx.block_unix_timestamp_ms();
+    let age_ms = now_ms.checked_sub(record.recorded_at_ms).ok_or_else(|| {
+        invalid_fx_parameter("FX corridor oracle event is dated after consensus time")
+    })?;
+    if age_ms > policy.max_oracle_age_ms {
+        return Err(invalid_fx_parameter(format!(
+            "FX corridor oracle event is stale by {age_ms}ms"
+        )));
+    }
+    let FeedEventOutcome::Success(success) = &event.outcome else {
+        return Err(invalid_fx_parameter(
+            "FX corridor latest oracle event is not successful",
+        ));
+    };
+    if success.value.mantissa <= 0 {
+        return Err(invalid_fx_parameter(
+            "FX corridor oracle rate must be positive",
+        ));
+    }
+    Ok((success.value, record.recorded_at_ms))
+}
+
+fn next_fx_corridor_usage(
+    registry: &FxCorridorPolicyRegistry,
+    policy: &FxCorridorPolicy,
+    now_ms: u64,
+    source_amount: &Quantity,
+    destination_amount: &Quantity,
+) -> Result<FxCorridorUsage, Error> {
+    if source_amount > &policy.max_source_amount_per_settlement
+        || destination_amount > &policy.max_destination_amount_per_settlement
+    {
+        return Err(invalid_fx_parameter(
+            "FX corridor per-settlement exposure limit exceeded",
+        ));
+    }
+    let window_start_ms = now_ms - (now_ms % policy.velocity_window_ms);
+    let mut usage = registry
+        .usage(&policy.policy_id)
+        .filter(|usage| usage.window_start_ms == window_start_ms)
+        .cloned()
+        .unwrap_or_else(|| FxCorridorUsage {
+            window_start_ms,
+            settlements: 0,
+            source_amount: Quantity::zero(),
+            destination_amount: Quantity::zero(),
+        });
+    usage.settlements = usage
+        .settlements
+        .checked_add(1)
+        .ok_or_else(|| invalid_fx_parameter("FX corridor settlement counter overflow"))?;
+    usage.source_amount = usage
+        .source_amount
+        .checked_add(source_amount)
+        .map_err(|err| invalid_fx_parameter(format!("FX corridor source usage overflow: {err}")))?;
+    usage.destination_amount = usage
+        .destination_amount
+        .checked_add(destination_amount)
+        .map_err(|err| {
+            invalid_fx_parameter(format!("FX corridor destination usage overflow: {err}"))
+        })?;
+    if usage.settlements > policy.max_settlements_per_window
+        || usage.source_amount > policy.max_source_amount_per_window
+        || usage.destination_amount > policy.max_destination_amount_per_window
+    {
+        return Err(invalid_fx_parameter(
+            "FX corridor deterministic velocity limit exceeded",
+        ));
+    }
+    Ok(usage)
 }
 
 fn ensure_bilateral_settlement_id_unused(
@@ -657,11 +812,20 @@ fn validate_pvp_preconditions(
     Ok((primary_assets, counter_assets))
 }
 
+struct ValidatedFxSettlement {
+    policy: FxCorridorPolicy,
+    source_leg: SettlementLeg,
+    destination_leg: SettlementLeg,
+    oracle_rate: iroha_data_model::oracle::ObservationValue,
+    oracle_recorded_at_ms: u64,
+    next_usage: FxCorridorUsage,
+}
+
 fn validate_fx_settlement_preconditions(
     authority: &AccountId,
     stx: &mut StateTransaction<'_, '_>,
     instruction: &SettleFxCorridor,
-) -> Result<(FxCorridorPolicy, SettlementLeg, SettlementLeg), Error> {
+) -> Result<ValidatedFxSettlement, Error> {
     if stx
         .world
         .settlement_receipts
@@ -684,30 +848,9 @@ fn validate_fx_settlement_preconditions(
             format!("FX corridor policy `{}` is disabled", policy.policy_id).into(),
         ));
     }
-    let source_account = match &policy.source {
-        FxCorridorSource::FixedAccount(account) => {
-            if !can_settle_fx_corridor(stx, authority, &instruction.policy_id) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "not permitted: exact {CAN_SETTLE_FX_CORRIDOR} for policy `{}` is required",
-                        instruction.policy_id
-                    )
-                    .into(),
-                ));
-            }
-            if authority != account {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "FX corridor settlement must be authorised by the fixed policy source account"
-                        .into(),
-                ));
-            }
-            account.clone()
-        }
-        FxCorridorSource::TransactionAuthority => authority.clone(),
-    };
-    if source_account == policy.source_sink {
+    if authority == &policy.owner {
         return Err(invalid_fx_parameter(
-            "FX corridor settlement source account must differ from the source sink",
+            "FX corridor settlement source must differ from the corridor owner",
         ));
     }
     if instruction.expected_policy_revision != policy.revision {
@@ -723,11 +866,13 @@ fn validate_fx_settlement_preconditions(
             "FX corridor instruction assets do not match the active policy",
         ));
     }
-    if instruction.recipient == policy.destination_reserve {
+    let destination_escrow = fx_corridor_escrow_account(stx, &policy);
+    if instruction.recipient == destination_escrow {
         return Err(invalid_fx_parameter(
-            "FX corridor recipient must differ from the destination reserve",
+            "FX corridor recipient must differ from the protocol escrow",
         ));
     }
+    ensure_account_exists(stx, &destination_escrow)?;
     ensure_account_exists(stx, &instruction.recipient)?;
     let matched_domains = stx
         .world
@@ -779,19 +924,34 @@ fn validate_fx_settlement_preconditions(
         .numeric_spec_for(&policy.destination_asset_definition_id)
         .map_err(Error::from)?;
     assert_numeric_spec_with(instruction.source_amount.as_numeric(), source_spec)?;
+    let (oracle_rate, oracle_recorded_at_ms) =
+        validate_fx_oracle_evidence(stx, &policy, instruction)?;
     let destination_amount =
-        exact_fx_destination_amount(&instruction.source_amount, destination_spec, &policy)?;
+        exact_fx_destination_amount(&instruction.source_amount, destination_spec, oracle_rate)?;
+    if destination_amount != instruction.expected_destination_amount {
+        return Err(invalid_fx_parameter(
+            "FX corridor oracle output does not match the signed expected destination amount",
+        ));
+    }
+    let registry = fx_policy_registry(stx)?;
+    let next_usage = next_fx_corridor_usage(
+        &registry,
+        &policy,
+        stx.block_unix_timestamp_ms(),
+        &instruction.source_amount,
+        &destination_amount,
+    )?;
 
     let source_leg = SettlementLeg::new(
         policy.source_asset_definition_id.clone(),
         instruction.source_amount.clone(),
-        source_account,
-        policy.source_sink.clone(),
+        authority.clone(),
+        policy.owner.clone(),
     );
     let destination_leg = SettlementLeg::new(
         policy.destination_asset_definition_id.clone(),
         destination_amount,
-        policy.destination_reserve.clone(),
+        destination_escrow,
         instruction.recipient.clone(),
     );
     let (source_id, source_destination_id) =
@@ -807,9 +967,17 @@ fn validate_fx_settlement_preconditions(
         destination_source_id,
         destination_id,
         destination_leg.quantity().clone(),
+        &policy,
     )?;
 
-    Ok((policy, source_leg, destination_leg))
+    Ok(ValidatedFxSettlement {
+        policy,
+        source_leg,
+        destination_leg,
+        oracle_rate,
+        oracle_recorded_at_ms,
+        next_usage,
+    })
 }
 
 impl Execute for SetFxCorridorPolicy {
@@ -831,11 +999,28 @@ impl Execute for SetFxCorridorPolicy {
 
         let mut registry = fx_policy_registry(stx)?;
         let expected_revision = match registry.get(&self.policy.policy_id) {
-            Some(previous) => previous
-                .revision
-                .checked_add(1)
-                .ok_or_else(|| invalid_fx_parameter("FX corridor policy revision overflow"))?,
-            None => 1,
+            Some(previous) => {
+                if previous.owner != self.policy.owner
+                    || previous.corridor_id() != self.policy.corridor_id()
+                {
+                    return Err(invalid_fx_parameter(
+                        "FX corridor owner and canonical corridor identity are immutable",
+                    ));
+                }
+                previous
+                    .revision
+                    .checked_add(1)
+                    .ok_or_else(|| invalid_fx_parameter("FX corridor policy revision overflow"))?
+            }
+            None => {
+                let escrow = fx_corridor_escrow_account(stx, &self.policy);
+                if stx.world.account(&escrow).is_ok() {
+                    return Err(invalid_fx_parameter(
+                        "FX corridor registration requires its deterministic protocol escrow account to be absent",
+                    ));
+                }
+                1
+            }
         };
         if self.policy.revision != expected_revision {
             return Err(invalid_fx_parameter(format!(
@@ -843,19 +1028,107 @@ impl Execute for SetFxCorridorPolicy {
             )));
         }
         registry.upsert(self.policy);
-        let next = registry.into_custom_parameter();
-        let previous = {
-            let parameters = stx.world.parameters.get_mut();
-            let previous = parameters.custom().get(next.id()).cloned();
-            parameters.set_parameter(Parameter::Custom(next.clone()));
-            previous.unwrap_or_else(|| next.clone())
-        };
-        stx.world
-            .emit_events(Some(ConfigurationEvent::Changed(ParameterChanged {
-                old_value: Parameter::Custom(previous),
-                new_value: Parameter::Custom(next),
-            })));
+        persist_fx_policy_registry(stx, registry);
         Ok(())
+    }
+}
+
+fn validate_fx_escrow_instruction(
+    authority: &AccountId,
+    stx: &mut StateTransaction<'_, '_>,
+    policy_id: &Name,
+    expected_policy_revision: u64,
+    destination_asset_definition_id: &AssetDefinitionId,
+    amount: &Quantity,
+    require_disabled: bool,
+) -> Result<FxCorridorPolicy, Error> {
+    let policy = fx_policy(stx, policy_id)?;
+    validate_fx_policy_entities(stx, &policy)?;
+    if authority != &policy.owner {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "only the exact FX corridor owner may fund or refund its protocol escrow".into(),
+        ));
+    }
+    if policy.revision != expected_policy_revision
+        || &policy.destination_asset_definition_id != destination_asset_definition_id
+    {
+        return Err(invalid_fx_parameter(
+            "FX escrow instruction does not match the active policy revision and destination asset",
+        ));
+    }
+    if require_disabled && policy.enabled {
+        return Err(invalid_fx_parameter(
+            "FX corridor reserve may be refunded only while the policy is disabled",
+        ));
+    }
+    if amount.is_zero() {
+        return Err(invalid_fx_parameter(
+            "FX corridor escrow amount must be positive",
+        ));
+    }
+    let spec = stx
+        .numeric_spec_for(destination_asset_definition_id)
+        .map_err(Error::from)?;
+    assert_numeric_spec_with(amount.as_numeric(), spec)?;
+    Ok(policy)
+}
+
+impl Execute for FundFxCorridorEscrow {
+    fn execute(
+        self,
+        authority: &AccountId,
+        stx: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let policy = validate_fx_escrow_instruction(
+            authority,
+            stx,
+            &self.policy_id,
+            self.expected_policy_revision,
+            &self.destination_asset_definition_id,
+            &self.amount,
+            false,
+        )?;
+        let escrow = fx_corridor_escrow_account(stx, &policy);
+        crate::smartcontracts::isi::domain::isi::ensure_controller_capabilities(
+            escrow.controller(),
+            &stx.crypto.allowed_signing,
+            &stx.crypto.allowed_curve_ids,
+        )?;
+        if stx.world.account(&escrow).is_err() {
+            let account = Account::new(escrow.clone()).build(&escrow);
+            let (id, account) = iroha_data_model::IntoKeyValue::into_key_value(account);
+            stx.world.accounts.insert(id, account);
+        }
+        crate::smartcontracts::isi::asset::isi::execute_fx_corridor_owner_funding(
+            stx,
+            authority,
+            &policy,
+            self.amount,
+        )
+    }
+}
+
+impl Execute for RefundFxCorridorEscrow {
+    fn execute(
+        self,
+        authority: &AccountId,
+        stx: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let policy = validate_fx_escrow_instruction(
+            authority,
+            stx,
+            &self.policy_id,
+            self.expected_policy_revision,
+            &self.destination_asset_definition_id,
+            &self.amount,
+            true,
+        )?;
+        crate::smartcontracts::isi::asset::isi::execute_fx_corridor_owner_refund(
+            stx,
+            authority,
+            &policy,
+            self.amount,
+        )
     }
 }
 
@@ -874,8 +1147,15 @@ impl Execute for SettleFxCorridor {
         authority: &AccountId,
         stx: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let (policy, source_leg, destination_leg) =
-            validate_fx_settlement_preconditions(authority, stx, &self)?;
+        let validated = validate_fx_settlement_preconditions(authority, stx, &self)?;
+        let ValidatedFxSettlement {
+            policy,
+            source_leg,
+            destination_leg,
+            oracle_rate,
+            oracle_recorded_at_ms,
+            next_usage,
+        } = validated;
 
         let (source_id, source_destination_id) =
             scoped_fx_leg_asset_ids(&source_leg, policy.source_dataspace);
@@ -890,7 +1170,11 @@ impl Execute for SettleFxCorridor {
             destination_source_id,
             destination_id,
             destination_leg.quantity().clone(),
+            &policy,
         )?;
+        let mut registry = fx_policy_registry(stx)?;
+        registry.usage.insert(policy.policy_id.clone(), next_usage);
+        persist_fx_policy_registry(stx, registry);
         let plan = SettlementPlan::new(
             SettlementExecutionOrder::DeliveryThenPayment,
             SettlementAtomicity::AllOrNothing,
@@ -920,11 +1204,12 @@ impl Execute for SettleFxCorridor {
             policy_revision: policy.revision,
             source_dataspace: policy.source_dataspace,
             destination_dataspace: policy.destination_dataspace,
-            rate_numerator: policy.rate_numerator,
-            rate_denominator: policy.rate_denominator,
+            owner: policy.owner.clone(),
+            oracle_evidence: self.oracle_evidence.clone(),
+            oracle_recorded_at_ms,
+            oracle_rate,
             source_account: source_leg.from().clone(),
-            source_sink: policy.source_sink.clone(),
-            destination_reserve: policy.destination_reserve.clone(),
+            destination_escrow: destination_leg.from().clone(),
             recipient: self.recipient.clone(),
             source_asset_definition_id: policy.source_asset_definition_id.clone(),
             destination_asset_definition_id: policy.destination_asset_definition_id.clone(),
@@ -1280,10 +1565,12 @@ mod tests {
         block::BlockHeader,
         common::Owned,
         domain::{Domain, DomainId},
+        events::data::oracle::FeedEventRecord,
         events::data::prelude::{AssetEvent, DataEvent, DomainEvent},
         isi::SetAssetHoldingLimit,
         metadata::Metadata,
         nexus::{DataSpaceCatalog, DataSpaceMetadata},
+        oracle::{FeedEvent, FeedEventOutcome, FeedSuccess, ObservationValue},
         sns::{NameControllerV1, NameRecordV1},
     };
     use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
@@ -1467,8 +1754,7 @@ mod tests {
     fn fx_corridor_state(
         source_balance: u32,
         destination_balance: u32,
-        rate_numerator: u64,
-        rate_denominator: u64,
+        oracle_rate_mantissa: u64,
         enabled: bool,
     ) -> (State, FxCorridorPolicy) {
         let domain_id = DomainId::try_new("fx", "universal").expect("FX domain");
@@ -1538,14 +1824,9 @@ mod tests {
         );
         world.account_permissions.insert(
             ALICE_ID.clone(),
-            BTreeSet::from([
-                Permission::from(CanSetFxCorridorPolicy {
-                    policy_id: policy_id.clone(),
-                }),
-                Permission::from(CanSettleFxCorridor {
-                    policy_id: policy_id.clone(),
-                }),
-            ]),
+            BTreeSet::from([Permission::from(CanSetFxCorridorPolicy {
+                policy_id: policy_id.clone(),
+            })]),
         );
         let recipient_alias = AccountAlias::new(
             "retail_recipient".parse().expect("recipient alias"),
@@ -1563,21 +1844,50 @@ mod tests {
         let policy = FxCorridorPolicy {
             policy_id,
             revision: 1,
+            owner: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
             source_dataspace,
-            source: FxCorridorSource::FixedAccount(ALICE_ID.clone()),
             source_asset_definition_id,
-            source_sink: CARPENTER_ID.clone(),
             destination_dataspace,
-            destination_reserve: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
             destination_asset_definition_id,
             allowed_destination_alias_domains: BTreeSet::from([
                 DomainId::try_new("hbl", "sbp").expect("HBL domain"),
                 DomainId::try_new("ubl", "sbp").expect("UBL domain"),
             ]),
-            rate_numerator,
-            rate_denominator,
+            oracle_feed_id: iroha_data_model::oracle::kits::price_xor_usd()
+                .feed_config
+                .feed_id,
+            max_oracle_age_ms: 60_000,
+            max_source_amount_per_settlement: Quantity::from(1_000_000_u32),
+            max_destination_amount_per_settlement: Quantity::from(100_000_000_u32),
+            velocity_window_ms: 60_000,
+            max_settlements_per_window: 100,
+            max_source_amount_per_window: Quantity::from(10_000_000_u32),
+            max_destination_amount_per_window: Quantity::from(1_000_000_000_u32),
             enabled,
         };
+        let mut feed = iroha_data_model::oracle::kits::price_xor_usd().feed_config;
+        feed.feed_id = policy.oracle_feed_id.clone();
+        let event = FeedEvent {
+            feed_id: policy.oracle_feed_id.clone(),
+            feed_config_version: feed.feed_config_version,
+            slot: 1,
+            request_hash: Hash::new(b"fx-corridor-test-rate"),
+            outcome: FeedEventOutcome::Success(FeedSuccess {
+                value: ObservationValue::new(i128::from(oracle_rate_mantissa), 0),
+                entries: Vec::new(),
+            }),
+        };
+        world
+            .oracle_feeds
+            .insert(policy.oracle_feed_id.clone(), feed);
+        world.oracle_history.insert(
+            policy.oracle_feed_id.clone(),
+            vec![FeedEventRecord {
+                event,
+                recorded_at_ms: 0,
+                evidence_hashes: Vec::new(),
+            }],
+        );
         let catalog = fx_catalog(&policy);
         let selector = crate::sns::selector_for_account_alias(&recipient_alias, &catalog)
             .expect("canonical FX recipient alias selector");
@@ -1663,6 +1973,16 @@ mod tests {
     }
 
     fn fx_settlement(policy: &FxCorridorPolicy, id: &str, source_amount: u32) -> SettleFxCorridor {
+        let event = FeedEvent {
+            feed_id: policy.oracle_feed_id.clone(),
+            feed_config_version: iroha_data_model::oracle::FeedConfigVersion(1),
+            slot: 1,
+            request_hash: Hash::new(b"fx-corridor-test-rate"),
+            outcome: FeedEventOutcome::Success(FeedSuccess {
+                value: ObservationValue::new(76, 0),
+                entries: Vec::new(),
+            }),
+        };
         SettleFxCorridor {
             policy_id: policy.policy_id.clone(),
             expected_policy_revision: policy.revision,
@@ -1671,12 +1991,35 @@ mod tests {
             settlement_id: id.parse().expect("settlement id"),
             recipient: BOB_ID.clone(),
             source_amount: Quantity::from(source_amount),
+            expected_destination_amount: Quantity::from(source_amount * 76),
+            oracle_evidence: iroha_data_model::isi::settlement::FxCorridorOracleEvidence {
+                feed_id: event.feed_id.clone(),
+                feed_config_version: event.feed_config_version,
+                slot: event.slot,
+                request_hash: event.request_hash,
+                event_hash: iroha_crypto::HashOf::new(&event),
+            },
         }
+    }
+
+    fn fund_fx_corridor(
+        stx: &mut StateTransaction<'_, '_>,
+        policy: &FxCorridorPolicy,
+        amount: u32,
+    ) {
+        FundFxCorridorEscrow {
+            policy_id: policy.policy_id.clone(),
+            expected_policy_revision: policy.revision,
+            destination_asset_definition_id: policy.destination_asset_definition_id.clone(),
+            amount: Quantity::from(amount),
+        }
+        .execute(&policy.owner, stx)
+        .expect("FX corridor owner funding succeeds");
     }
 
     #[test]
     fn fx_corridor_settles_exact_rate_atomically_and_rejects_replay() {
-        let (state, policy) = fx_corridor_state(10, 1_000, 76, 1, true);
+        let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -1686,6 +2029,7 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut stx)
         .expect("policy registration succeeds");
+        fund_fx_corridor(&mut stx, &policy, 1_000);
         stx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
             [0xF1; iroha_crypto::Hash::LENGTH],
         ));
@@ -1704,7 +2048,7 @@ mod tests {
         assert_eq!(
             balance(AssetId::with_scope(
                 policy.source_asset_definition_id.clone(),
-                CARPENTER_ID.clone(),
+                policy.owner.clone(),
                 AssetBalanceScope::Dataspace(policy.source_dataspace),
             )),
             Quantity::from(10_u32)
@@ -1712,7 +2056,7 @@ mod tests {
         assert_eq!(
             balance(AssetId::with_scope(
                 policy.destination_asset_definition_id.clone(),
-                SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+                super::fx_corridor_escrow_account(&stx, &policy),
                 AssetBalanceScope::Dataspace(policy.destination_dataspace),
             )),
             Quantity::from(240_u32)
@@ -1757,9 +2101,8 @@ mod tests {
     }
 
     #[test]
-    fn fx_corridor_transaction_authority_self_debits_without_settle_permission() {
-        let (state, mut policy) = fx_corridor_state(10, 1_000, 76, 1, true);
-        policy.source = FxCorridorSource::TransactionAuthority;
+    fn fx_corridor_debits_only_the_signing_source_account() {
+        let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -1769,10 +2112,7 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut stx)
         .expect("policy registration succeeds");
-        assert!(
-            !can_settle_fx_corridor(&stx, &BOB_ID, &policy.policy_id),
-            "fixture authority must not have CanSettleFxCorridor",
-        );
+        fund_fx_corridor(&mut stx, &policy, 1_000);
         stx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
             [0xF2; iroha_crypto::Hash::LENGTH],
         ));
@@ -1781,7 +2121,7 @@ mod tests {
         instruction
             .clone()
             .execute(&BOB_ID, &mut stx)
-            .expect("transaction-authority policy self-debits without a grant");
+            .expect("the signed source account may spend only its own balance");
 
         let source_balance = |account: &AccountId| {
             stx.world
@@ -1813,7 +2153,7 @@ mod tests {
 
     #[test]
     fn fx_corridor_recipient_alias_domain_is_required_and_unambiguous() {
-        let (state, policy) = fx_corridor_state(10, 1_000, 76, 1, true);
+        let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -1823,6 +2163,7 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut stx)
         .expect("policy registration succeeds");
+        fund_fx_corridor(&mut stx, &policy, 1_000);
 
         stx.world.remove_account_alias_bindings_for_account(&BOB_ID);
         assert_smart_contract_parameter_contains(
@@ -1855,7 +2196,7 @@ mod tests {
 
     #[test]
     fn fx_corridor_rejects_recipient_bound_only_to_non_allowed_destination_domain() {
-        let (state, policy) = fx_corridor_state(10, 1_000, 76, 1, true);
+        let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -1865,6 +2206,7 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut stx)
         .expect("policy registration succeeds");
+        fund_fx_corridor(&mut stx, &policy, 1_000);
 
         stx.world.remove_account_alias_bindings_for_account(&BOB_ID);
         insert_active_fx_alias(
@@ -1889,7 +2231,7 @@ mod tests {
 
     #[test]
     fn fx_corridor_rejects_policy_and_signed_intent_mismatches() {
-        let (state, policy) = fx_corridor_state(10, 1_000, 76, 1, true);
+        let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -1899,6 +2241,7 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut stx)
         .expect("policy registration succeeds");
+        fund_fx_corridor(&mut stx, &policy, 1_000);
 
         let mut wrong_revision = fx_settlement(&policy, "fx_wrong_revision", 1);
         wrong_revision.expected_policy_revision = 2;
@@ -1919,7 +2262,7 @@ mod tests {
         );
 
         let mut reserve_recipient = fx_settlement(&policy, "fx_reserve_recipient", 1);
-        reserve_recipient.recipient = policy.destination_reserve.clone();
+        reserve_recipient.recipient = super::fx_corridor_escrow_account(&stx, &policy);
         assert_smart_contract_parameter_contains(
             reserve_recipient
                 .execute(&ALICE_ID, &mut stx)
@@ -1927,32 +2270,33 @@ mod tests {
             "recipient",
         );
 
-        stx.world.account_permissions.insert(
-            BOB_ID.clone(),
-            BTreeSet::from([Permission::from(CanSettleFxCorridor {
-                policy_id: policy.policy_id.clone(),
-            })]),
-        );
+        let delegated_funding = FundFxCorridorEscrow {
+            policy_id: policy.policy_id.clone(),
+            expected_policy_revision: policy.revision,
+            destination_asset_definition_id: policy.destination_asset_definition_id.clone(),
+            amount: Quantity::one(),
+        }
+        .execute(&BOB_ID, &mut stx)
+        .expect_err("a non-owner cannot fund corridor custody");
         assert!(
-            fx_settlement(&policy, "fx_wrong_authority", 1)
-                .execute(&BOB_ID, &mut stx)
-                .expect_err("misgranted permission must not bypass source ownership")
+            delegated_funding
                 .to_string()
-                .contains("policy source account")
+                .contains("exact FX corridor owner")
         );
 
-        stx.world.account_permissions.insert(
-            CARPENTER_ID.clone(),
-            BTreeSet::from([Permission::from(CanSettleFxCorridor {
-                policy_id: "another_corridor".parse().expect("other policy id"),
-            })]),
-        );
-        assert!(
-            fx_settlement(&policy, "fx_wrong_permission_scope", 1)
-                .execute(&CARPENTER_ID, &mut stx)
-                .expect_err("a permission for another corridor must fail closed")
-                .to_string()
-                .contains("exact CanSettleFxCorridor")
+        let mut wrong_oracle = fx_settlement(&policy, "fx_wrong_oracle", 1);
+        wrong_oracle.oracle_evidence.event_hash = iroha_crypto::HashOf::new(&FeedEvent {
+            feed_id: policy.oracle_feed_id.clone(),
+            feed_config_version: iroha_data_model::oracle::FeedConfigVersion(1),
+            slot: 99,
+            request_hash: Hash::new(b"wrong"),
+            outcome: FeedEventOutcome::Missing,
+        });
+        assert_smart_contract_parameter_contains(
+            wrong_oracle
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("wrong exact oracle event must fail"),
+            "latest retained event",
         );
 
         let mut revision_two = policy.clone();
@@ -1964,6 +2308,18 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect_err("policy revision must be monotonic"),
             "must be 2",
+        );
+
+        let mut redirected_owner = policy.clone();
+        redirected_owner.revision = 2;
+        redirected_owner.owner = ALICE_ID.clone();
+        assert_smart_contract_parameter_contains(
+            SetFxCorridorPolicy {
+                policy: redirected_owner,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("a policy revision cannot redirect corridor custody ownership"),
+            "immutable",
         );
 
         let mut disabled = policy.clone();
@@ -1981,11 +2337,161 @@ mod tests {
                 .to_string()
                 .contains("disabled")
         );
+        let refund = RefundFxCorridorEscrow {
+            policy_id: disabled.policy_id.clone(),
+            expected_policy_revision: disabled.revision,
+            destination_asset_definition_id: disabled.destination_asset_definition_id.clone(),
+            amount: Quantity::one(),
+        };
+        assert!(
+            refund
+                .clone()
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("a corridor manager cannot refund another owner's reserve")
+                .to_string()
+                .contains("exact FX corridor owner")
+        );
+        refund
+            .execute(&disabled.owner, &mut stx)
+            .expect("the exact owner may refund its disabled corridor reserve");
+    }
+
+    #[test]
+    fn fx_corridor_protocol_escrow_rejects_generic_manager_drain_and_supply_changes() {
+        let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        configure_fx_catalog(&mut stx, &policy);
+        SetFxCorridorPolicy {
+            policy: policy.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("policy registration succeeds");
+        let escrow_account = super::fx_corridor_escrow_account(&stx, &policy);
+        assert!(
+            Register::account(NewAccount::new(escrow_account.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("ordinary registration cannot claim the reserved escrow identity")
+                .to_string()
+                .contains("reserved for deterministic FX corridor protocol escrow")
+        );
+        fund_fx_corridor(&mut stx, &policy, 1_000);
+        stx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
+            [0xF3; iroha_crypto::Hash::LENGTH],
+        ));
+
+        let escrow_asset = AssetId::with_scope(
+            policy.destination_asset_definition_id.clone(),
+            escrow_account.clone(),
+            AssetBalanceScope::Dataspace(policy.destination_dataspace),
+        );
+        let exact_transfer: Permission =
+            iroha_executor_data_model::permission::asset::CanTransferAsset {
+                asset: escrow_asset.clone(),
+            }
+            .into();
+        let mut manager_permissions = stx
+            .world
+            .account_permissions
+            .get(&ALICE_ID)
+            .cloned()
+            .unwrap_or_default();
+        manager_permissions.insert(exact_transfer);
+        stx.world
+            .account_permissions
+            .insert(ALICE_ID.clone(), manager_permissions);
+
+        for error in [
+            Transfer::asset_quantity(escrow_asset.clone(), 1_u32, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("even an exact transfer grant cannot drain FX protocol escrow"),
+            Burn::asset_quantity(1_u32, escrow_asset.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("ordinary burn cannot destroy FX protocol escrow backing"),
+            Mint::asset_quantity(1_u32, escrow_asset.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("ordinary mint cannot inflate FX protocol escrow backing"),
+        ] {
+            assert!(
+                error.to_string().contains("FX corridor escrow"),
+                "unexpected escrow guard error: {error}"
+            );
+        }
+        assert!(
+            Unregister::account(escrow_account)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("ordinary unregister cannot remove FX protocol escrow")
+                .to_string()
+                .contains("retained FX protocol escrow")
+        );
+        assert_eq!(
+            **stx
+                .world
+                .assets
+                .get(&escrow_asset)
+                .expect("escrow balance remains present"),
+            Quantity::from(1_000_u32),
+        );
+    }
+
+    #[test]
+    fn fx_corridor_requires_fresh_oracle_evidence_and_enforces_exposure_velocity() {
+        let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 60_001, 60_001);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        configure_fx_catalog(&mut stx, &policy);
+        SetFxCorridorPolicy {
+            policy: policy.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("policy registration succeeds");
+        fund_fx_corridor(&mut stx, &policy, 1_000);
+        assert_smart_contract_parameter_contains(
+            fx_settlement(&policy, "fx_stale_oracle", 1)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("oracle evidence older than the governed maximum must fail"),
+            "stale",
+        );
+
+        let (state, mut policy) = fx_corridor_state(10, 1_000, 76, true);
+        policy.max_source_amount_per_settlement = Quantity::one();
+        policy.max_settlements_per_window = 1;
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        configure_fx_catalog(&mut stx, &policy);
+        SetFxCorridorPolicy {
+            policy: policy.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("limited policy registration succeeds");
+        fund_fx_corridor(&mut stx, &policy, 1_000);
+        assert_smart_contract_parameter_contains(
+            fx_settlement(&policy, "fx_exposure_limit", 2)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("per-settlement source exposure must be enforced"),
+            "per-settlement exposure",
+        );
+
+        stx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
+            [0xF4; iroha_crypto::Hash::LENGTH],
+        ));
+        fx_settlement(&policy, "fx_velocity_first", 1)
+            .execute(&ALICE_ID, &mut stx)
+            .expect("the first settlement in the window succeeds");
+        assert_smart_contract_parameter_contains(
+            fx_settlement(&policy, "fx_velocity_second", 1)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("the deterministic settlement-count velocity limit must hold"),
+            "velocity limit",
+        );
     }
 
     #[test]
     fn fx_corridor_policy_static_invariants_fail_closed() {
-        let (_, policy) = fx_corridor_state(1, 76, 76, 1, true);
+        let (_, policy) = fx_corridor_state(1, 76, 76, true);
         let mut cases = Vec::new();
         let mut zero_revision = policy.clone();
         zero_revision.revision = 0;
@@ -1996,18 +2502,12 @@ mod tests {
         let mut same_dataspace = policy.clone();
         same_dataspace.destination_dataspace = same_dataspace.source_dataspace;
         cases.push(same_dataspace);
-        let mut same_account = policy.clone();
-        let FxCorridorSource::FixedAccount(source_account) = &same_account.source else {
-            unreachable!("fixture uses a fixed source")
-        };
-        same_account.source_sink = source_account.clone();
-        cases.push(same_account);
         let mut same_asset = policy.clone();
         same_asset.destination_asset_definition_id = same_asset.source_asset_definition_id.clone();
         cases.push(same_asset);
-        let mut zero_rate = policy;
-        zero_rate.rate_denominator = 0;
-        cases.push(zero_rate);
+        let mut zero_oracle_age = policy;
+        zero_oracle_age.max_oracle_age_ms = 0;
+        cases.push(zero_oracle_age);
 
         assert!(
             cases
@@ -2018,7 +2518,7 @@ mod tests {
 
     #[test]
     fn fx_corridor_preflight_preserves_source_on_non_exact_or_unfunded_payout() {
-        let (state, policy) = fx_corridor_state(10, 1, 1, 3, true);
+        let (state, policy) = fx_corridor_state(10, 1, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -2028,11 +2528,14 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut stx)
         .expect("policy registration succeeds");
+        fund_fx_corridor(&mut stx, &policy, 1);
+        let mut wrong_output = fx_settlement(&policy, "fx_wrong_output", 1);
+        wrong_output.expected_destination_amount = Quantity::from(75_u32);
         assert_smart_contract_parameter_contains(
-            fx_settlement(&policy, "fx_fractional", 1)
+            wrong_output
                 .execute(&ALICE_ID, &mut stx)
-                .expect_err("non-exact integer payout must fail"),
-            "exact destination",
+                .expect_err("signed output mismatch must fail"),
+            "signed expected destination amount",
         );
 
         let source_id = AssetId::with_scope(
@@ -2047,8 +2550,6 @@ mod tests {
 
         let mut policy_two = policy.clone();
         policy_two.revision = 2;
-        policy_two.rate_numerator = 2;
-        policy_two.rate_denominator = 1;
         SetFxCorridorPolicy {
             policy: policy_two.clone(),
         }
@@ -2069,23 +2570,19 @@ mod tests {
 
     #[test]
     fn fx_corridor_rejects_wrong_dataspace_and_frozen_reserve_without_partial_effects() {
-        let (state, policy) = fx_corridor_state(10, 1_000, 76, 1, true);
+        let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         configure_fx_catalog(&mut stx, &policy);
         let mut wrong_scope = policy.clone();
         wrong_scope.source_dataspace = DataSpaceId::new(11);
-        SetFxCorridorPolicy {
+        let error = SetFxCorridorPolicy {
             policy: wrong_scope.clone(),
         }
         .execute(&ALICE_ID, &mut stx)
-        .expect("a well-formed policy may be published before its reserve is funded");
-        let wrong_scope_instruction = fx_settlement(&wrong_scope, "fx_wrong_scope", 1);
-        wrong_scope_instruction
-            .clone()
-            .execute(&ALICE_ID, &mut stx)
-            .expect_err("funds in another dataspace must not satisfy the signed policy scope");
+        .expect_err("a corridor cannot name a source dataspace absent from the active catalog");
+        assert_smart_contract_parameter_contains(error, "source dataspace");
         let actual_source_id = AssetId::with_scope(
             policy.source_asset_definition_id.clone(),
             ALICE_ID.clone(),
@@ -2099,15 +2596,7 @@ mod tests {
                 .expect("actual source remains funded"),
             Quantity::from(10_u32),
         );
-        assert!(
-            stx.world
-                .settlement_receipts
-                .get(&wrong_scope_instruction.settlement_id)
-                .is_none(),
-            "a rejected cross-dataspace attempt must not emit a success receipt",
-        );
-
-        let (state, policy) = fx_corridor_state(10, 1_000, 76, 1, true);
+        let (state, policy) = fx_corridor_state(10, 1_000, 76, true);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
@@ -2117,8 +2606,9 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut stx)
         .expect("policy registration succeeds");
+        fund_fx_corridor(&mut stx, &policy, 1_000);
         SetAssetTransferAvailability::new(
-            policy.destination_reserve.clone(),
+            super::fx_corridor_escrow_account(&stx, &policy),
             policy.destination_asset_definition_id.clone(),
             0,
             AssetTransferAvailability::Enabled,
@@ -2140,7 +2630,7 @@ mod tests {
         );
         let reserve_id = AssetId::with_scope(
             policy.destination_asset_definition_id.clone(),
-            policy.destination_reserve.clone(),
+            super::fx_corridor_escrow_account(&stx, &policy),
             AssetBalanceScope::Dataspace(policy.destination_dataspace),
         );
         let recipient_id = AssetId::with_scope(

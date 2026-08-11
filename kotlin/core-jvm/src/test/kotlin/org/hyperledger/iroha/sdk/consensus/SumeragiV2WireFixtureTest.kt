@@ -11,6 +11,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 class SumeragiV2WireFixtureTest {
     @Test
@@ -372,28 +373,33 @@ class SumeragiV2WireFixtureTest {
                 as SumeragiV2Wire.ConsensusPayload.CommitCertificateRequestMessage
             ).value
         assertEquals(SumeragiV2Wire.PROTOCOL_VERSION, request.protocolVersion)
-        assertEquals("sumeragi-v2-test", request.chainId.value)
+        assertContentEquals(ByteArray(32) { 0x71 }, request.networkId.bytes())
         assertEquals(1L, request.height)
         assertEquals(48, request.signature().size)
         assertContentEquals(requestPreimage.hex.hexBytes(), request.signaturePreimage())
         val reSignedRequest = SumeragiV2Wire.CommitCertificateRequest(
             request.protocolVersion,
-            request.chainId,
+            request.networkId,
             request.contextId,
             request.height,
             request.requester,
             byteArrayOf(1),
         )
         assertContentEquals(request.signaturePreimage(), reSignedRequest.signaturePreimage())
-        val crossChainRequest = SumeragiV2Wire.CommitCertificateRequest(
+        val otherNetworkBytes = request.networkId.bytes().also {
+            it[0] = (it[0].toInt() xor 1).toByte()
+        }
+        val crossNetworkRequest = SumeragiV2Wire.CommitCertificateRequest(
             request.protocolVersion,
-            SumeragiV2Wire.ChainId("other-chain"),
+            NetworkId.fromBytes(otherNetworkBytes),
             request.contextId,
             request.height,
             request.requester,
             byteArrayOf(1),
         )
-        assertFalse(request.signaturePreimage().contentEquals(crossChainRequest.signaturePreimage()))
+        assertFalse(
+            request.signaturePreimage().contentEquals(crossNetworkRequest.signaturePreimage()),
+        )
 
         val response = (
             SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(responseMessage.hex.hexBytes()).payload
@@ -426,7 +432,7 @@ class SumeragiV2WireFixtureTest {
         changedContextBytes[0] = (changedContextBytes[0].toInt() xor 1).toByte()
         val changedContextRequest = SumeragiV2Wire.CommitCertificateRequest(
             request.protocolVersion,
-            request.chainId,
+            request.networkId,
             SumeragiV2Wire.HeightContextId(SumeragiV2Wire.Hash32(changedContextBytes)),
             request.height,
             request.requester,
@@ -444,7 +450,7 @@ class SumeragiV2WireFixtureTest {
 
         val changedHeightRequest = SumeragiV2Wire.CommitCertificateRequest(
             request.protocolVersion,
-            request.chainId,
+            request.networkId,
             request.contextId,
             request.height + 1,
             request.requester,

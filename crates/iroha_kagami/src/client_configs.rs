@@ -11,6 +11,7 @@ use std::{
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
+use iroha_data_model::NetworkId;
 use zeroize::Zeroizing;
 
 use crate::{Outcome, RunArgs, tui};
@@ -21,6 +22,7 @@ const DEFAULT_STATUS_TIMEOUT_MS: u64 = 120_000;
 #[derive(Debug, Clone)]
 struct BaseConfig {
     chain: String,
+    network_id: NetworkId,
     torii_url: String,
     basic_auth: Option<BasicAuth>,
 }
@@ -123,6 +125,12 @@ fn load_base_config(path: &Path) -> Result<BaseConfig> {
         .and_then(toml::Value::as_str)
         .ok_or_else(|| eyre!("base config is missing `chain`"))?
         .to_owned();
+    let network_id = value
+        .get("network_id")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| eyre!("base config is missing `network_id`"))?
+        .parse::<NetworkId>()
+        .wrap_err("base config `network_id` is not an exact genesis hash")?;
     let torii_url = value
         .get("torii_url")
         .and_then(toml::Value::as_str)
@@ -151,6 +159,7 @@ fn load_base_config(path: &Path) -> Result<BaseConfig> {
 
     Ok(BaseConfig {
         chain,
+        network_id,
         torii_url,
         basic_auth,
     })
@@ -197,10 +206,13 @@ fn normalize_names(raw: Vec<String>) -> Result<Vec<String>> {
 fn render_client_config(base: &BaseConfig, domain: &str, key_pair: &KeyPair) -> Zeroizing<String> {
     let public_key = key_pair.public_key().to_string();
     let private_key = Zeroizing::new(ExposedPrivateKey(key_pair.private_key().clone()).to_string());
+    let network_id =
+        norito::literal::format("hash", &base.network_id.to_string().to_ascii_uppercase());
 
     let mut rendered = Zeroizing::new(format!(
         concat!(
             "chain = \"{chain}\"\n",
+            "network_id = \"{network_id}\"\n",
             "torii_url = \"{torii_url}\"\n",
             "\n",
             "[transaction]\n",
@@ -214,6 +226,7 @@ fn render_client_config(base: &BaseConfig, domain: &str, key_pair: &KeyPair) -> 
             "public_key  = \"{public_key}\"\n",
         ),
         chain = base.chain,
+        network_id = network_id,
         torii_url = base.torii_url,
         ttl = DEFAULT_TTL_MS,
         status = DEFAULT_STATUS_TIMEOUT_MS,
@@ -240,6 +253,7 @@ mod tests {
     fn write_base_config(path: &Path) {
         let payload = r#"
 chain = "demo-chain"
+network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
 torii_url = "http://127.0.0.1:8080/"
 
 [basic_auth]
@@ -257,6 +271,10 @@ web_login = "demo"
 
         let base = load_base_config(&path).expect("load base config");
         assert_eq!(base.chain, "demo-chain");
+        assert_eq!(
+            base.network_id.to_string(),
+            "32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149"
+        );
         assert_eq!(base.torii_url, "http://127.0.0.1:8080/");
         let auth = base.basic_auth.expect("basic auth present");
         assert_eq!(auth.web_login, "demo");
@@ -300,6 +318,10 @@ web_login = "demo"
     fn render_client_config_contains_expected_fields() {
         let base = BaseConfig {
             chain: "demo-chain".to_owned(),
+            network_id:
+                "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                    .parse()
+                    .expect("network id"),
             torii_url: "http://127.0.0.1:8080/".to_owned(),
             basic_auth: Some(BasicAuth {
                 web_login: "demo".to_owned(),
@@ -314,6 +336,10 @@ web_login = "demo"
         assert_eq!(
             value.get("chain").and_then(toml::Value::as_str),
             Some("demo-chain")
+        );
+        assert_eq!(
+            value.get("network_id").and_then(toml::Value::as_str),
+            Some("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0")
         );
         assert_eq!(
             value.get("torii_url").and_then(toml::Value::as_str),
@@ -381,6 +407,10 @@ web_login = "demo"
     fn render_client_config_accepts_dataspace_account_scope() {
         let base = BaseConfig {
             chain: "demo-chain".to_owned(),
+            network_id:
+                "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                    .parse()
+                    .expect("network id"),
             torii_url: "http://127.0.0.1:8080/".to_owned(),
             basic_auth: None,
         };

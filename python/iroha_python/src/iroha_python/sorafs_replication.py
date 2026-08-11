@@ -277,6 +277,7 @@ class IssueReplicationOrderInstruction:
     order_payload: str
     issued_epoch: int
     deadline_epoch: int
+    musubi_archive: str | None = None
 
     def __post_init__(self) -> None:
         order_id = _canonical_identifier(self.order_id, "order_id")
@@ -284,6 +285,12 @@ class IssueReplicationOrderInstruction:
         deadline_epoch = _epoch(self.deadline_epoch, "deadline_epoch")
         if deadline_epoch <= issued_epoch:
             raise ValueError("deadline_epoch must be greater than issued_epoch")
+        if self.musubi_archive is not None:
+            object.__setattr__(
+                self,
+                "musubi_archive",
+                _canonical_identifier(self.musubi_archive, "musubi_archive"),
+            )
         object.__setattr__(
             self,
             "order_payload",
@@ -291,7 +298,7 @@ class IssueReplicationOrderInstruction:
         )
 
     def to_payload(self) -> dict[str, dict[str, Any]]:
-        """Return the exact Rust/Norito JSON instruction representation."""
+        """Return the schema-closed SDK JSON instruction representation."""
 
         return {
             "IssueReplicationOrder": {
@@ -299,6 +306,7 @@ class IssueReplicationOrderInstruction:
                 "order_payload": self.order_payload,
                 "issued_epoch": self.issued_epoch,
                 "deadline_epoch": self.deadline_epoch,
+                "musubi_archive": self.musubi_archive,
             }
         }
 
@@ -312,6 +320,7 @@ class IssueReplicationOrderInstruction:
             self.order_payload,
             self.issued_epoch,
             self.deadline_epoch,
+            self.musubi_archive,
         )
 
     @classmethod
@@ -326,7 +335,13 @@ class IssueReplicationOrderInstruction:
         body = _exact_mapping(
             outer["IssueReplicationOrder"],
             frozenset(
-                {"order_id", "order_payload", "issued_epoch", "deadline_epoch"}
+                {
+                    "order_id",
+                    "order_payload",
+                    "issued_epoch",
+                    "deadline_epoch",
+                    "musubi_archive",
+                }
             ),
             "IssueReplicationOrder",
         )
@@ -335,6 +350,7 @@ class IssueReplicationOrderInstruction:
             order_payload=body["order_payload"],
             issued_epoch=body["issued_epoch"],
             deadline_epoch=body["deadline_epoch"],
+            musubi_archive=body["musubi_archive"],
         )
 
 
@@ -704,6 +720,7 @@ def build_issue_replication_order_instruction(
     order_payload: str,
     issued_epoch: int,
     deadline_epoch: int,
+    musubi_archive: str | None = None,
 ) -> Any:
     """Build a native `IssueReplicationOrder` instruction."""
 
@@ -712,6 +729,7 @@ def build_issue_replication_order_instruction(
         order_payload,
         issued_epoch,
         deadline_epoch,
+        musubi_archive,
     ).to_instruction()
 
 

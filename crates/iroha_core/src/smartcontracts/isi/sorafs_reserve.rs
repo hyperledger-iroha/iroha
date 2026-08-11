@@ -28,6 +28,7 @@ use iroha_data_model::{
     },
     sorafs::{
         capacity::ProviderId,
+        pricing::ProviderCreditRecord,
         reserve::{
             RESERVE_COMMITTED_EVENT_MAX_BYTES_V1, RESERVE_MAX_REASON_BYTES_V1,
             RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1, RESERVE_QUERY_MAX_ITEMS_V1,
@@ -42,7 +43,7 @@ use iroha_data_model::{
     },
     state_path::StatePath,
 };
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_from_bytes_with_limits};
 use sorafs_manifest::deal::XorQuantity;
@@ -79,6 +80,68 @@ struct ReserveEventJournalHeadV1 {
 struct ReserveStateV1 {
     policy: ReserveAuthorityPolicyRecordV1,
     journal_head: ReserveEventJournalHeadV1,
+}
+
+/// Non-reusable proof that the reserve state machine approved one exact
+/// provider withdrawal from protocol custody.
+pub(in crate::smartcontracts::isi) struct VerifiedSorafsReserveWithdrawal {
+    provider_id: ProviderId,
+    movement_id: [u8; 32],
+    policy_digest: [u8; 32],
+    expected_provider_revision: u64,
+    decision_authority: AccountId,
+    source_id: AssetId,
+    destination_id: AssetId,
+    amount: Quantity,
+}
+
+impl VerifiedSorafsReserveWithdrawal {
+    fn new(
+        provider_id: ProviderId,
+        movement_id: [u8; 32],
+        policy_digest: [u8; 32],
+        expected_provider_revision: u64,
+        decision_authority: AccountId,
+        source_id: AssetId,
+        destination_id: AssetId,
+        amount: Quantity,
+    ) -> Self {
+        Self {
+            provider_id,
+            movement_id,
+            policy_digest,
+            expected_provider_revision,
+            decision_authority,
+            source_id,
+            destination_id,
+            amount,
+        }
+    }
+
+    /// Consume the proof into the exact retained-state and balance binding.
+    pub(in crate::smartcontracts::isi) fn into_parts(
+        self,
+    ) -> (
+        ProviderId,
+        [u8; 32],
+        [u8; 32],
+        u64,
+        AccountId,
+        AssetId,
+        AssetId,
+        Quantity,
+    ) {
+        (
+            self.provider_id,
+            self.movement_id,
+            self.policy_digest,
+            self.expected_provider_revision,
+            self.decision_authority,
+            self.source_id,
+            self.destination_id,
+            self.amount,
+        )
+    }
 }
 
 fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
@@ -617,6 +680,85 @@ fn read_policy(
     Ok(read_reserve_state(world)?.map(|state| state.policy))
 }
 
+/// Return whether `asset_id` is the exact asset held by active SoraFS reserve
+/// custody.
+pub(super) fn is_reserve_custody_asset(
+    world: &impl WorldReadOnly,
+    asset_id: &AssetId,
+) -> Result<bool, InstructionExecutionError> {
+    Ok(read_policy(world)?.is_some_and(|record| {
+        record.policy.asset_definition == *asset_id.definition()
+            && record.policy.custody_account == *asset_id.account()
+    }))
+}
+
+/// Return whether `account_id` is the active SoraFS reserve custody account.
+pub(super) fn is_reserve_custody_account(
+    world: &impl WorldReadOnly,
+    account_id: &AccountId,
+) -> Result<bool, InstructionExecutionError> {
+    Ok(read_policy(world)?.is_some_and(|record| record.policy.custody_account == *account_id))
+}
+
+/// Return whether `definition_id` backs the active SoraFS reserve ledger.
+pub(super) fn is_reserve_asset_definition(
+    world: &impl WorldReadOnly,
+    definition_id: &iroha_data_model::asset::AssetDefinitionId,
+) -> Result<bool, InstructionExecutionError> {
+    Ok(read_policy(world)?.is_some_and(|record| record.policy.asset_definition == *definition_id))
+}
+
+/// Revalidate a sealed withdrawal against the still-pending authoritative
+/// movement and provider records immediately before custody is debited.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn validate_verified_reserve_withdrawal(
+    world: &impl WorldReadOnly,
+    provider_id: ProviderId,
+    movement_id: [u8; 32],
+    policy_digest: [u8; 32],
+    expected_provider_revision: u64,
+    decision_authority: &AccountId,
+    source_id: &AssetId,
+    destination_id: &AssetId,
+    amount: &Quantity,
+) -> Result<(), InstructionExecutionError> {
+    let policy = read_policy(world)?
+        .ok_or_else(|| corrupt_state("verified reserve withdrawal has no active policy"))?;
+    if policy.policy_digest != policy_digest
+        || policy.policy.decision_authority != *decision_authority
+        || policy.policy.asset_definition != *source_id.definition()
+        || policy.policy.custody_account != *source_id.account()
+    {
+        return Err(corrupt_state(
+            "verified reserve withdrawal does not match active policy custody",
+        ));
+    }
+    let account = read_provider(world, provider_id)?
+        .ok_or_else(|| corrupt_state("verified reserve withdrawal has no provider account"))?;
+    if account.policy_digest != policy_digest
+        || account.revision != expected_provider_revision
+        || destination_id.definition() != source_id.definition()
+        || account.terms.provider_account != *destination_id.account()
+    {
+        return Err(corrupt_state(
+            "verified reserve withdrawal does not match the provider revision and owner",
+        ));
+    }
+    let movement = read_movement(world, movement_id)?
+        .ok_or_else(|| corrupt_state("verified reserve withdrawal has no retained movement"))?;
+    if movement.provider_id != provider_id
+        || movement.policy_digest != policy_digest
+        || movement.kind != ReserveMovementKindV1::Withdrawal
+        || movement.status != ReserveMovementStatusV1::Pending
+        || movement.amount.as_quantity() != amount
+    {
+        return Err(corrupt_state(
+            "verified reserve withdrawal does not match the pending retained movement",
+        ));
+    }
+    Ok(())
+}
+
 fn read_reserve_state(
     world: &impl WorldReadOnly,
 ) -> Result<Option<ReserveStateV1>, InstructionExecutionError> {
@@ -745,6 +887,269 @@ pub(super) fn read_provider(
         return Ok(None);
     };
     decode_provider_record(bytes, provider_id).map(Some)
+}
+
+fn total_reserved_custody(
+    world: &impl WorldReadOnly,
+) -> Result<XorQuantity, InstructionExecutionError> {
+    let start =
+        StatePath::from_str(PROVIDER_STATE_KEY_PREFIX).expect("static provider prefix is valid");
+    let mut total = XorQuantity::zero();
+    for (key, payload) in world.smart_contract_state().range(start..) {
+        if !key.to_string().starts_with(PROVIDER_STATE_KEY_PREFIX) {
+            break;
+        }
+        let candidate: ReserveProviderAccountV1 =
+            decode_state(payload, "reserve provider account")?;
+        let provider_id = candidate.terms.provider_id;
+        if provider_key(provider_id) != *key {
+            return Err(corrupt_state(
+                "authoritative reserve provider key does not match its account",
+            ));
+        }
+        let account = decode_provider_record(payload, provider_id)?;
+        total = total
+            .checked_add(&account.reserve_balance)
+            .map_err(|error| corrupt_state(format!("reserve custody total overflow: {error}")))?;
+    }
+    Ok(total)
+}
+
+/// Resolve collateral that is backed by the native owner-funded reserve flow.
+///
+/// The returned balance is not an administrator-authored credit projection.
+/// It is the provider's reserve partition minus any outstanding treasury-funded
+/// credit principal. Native custody must also cover the sum of every provider
+/// partition, preventing the same custody balance from backing multiple bonds.
+pub(super) fn verified_provider_bond(
+    world: &impl WorldReadOnly,
+    provider_id: ProviderId,
+    expected_owner: &AccountId,
+    committed_capacity_gib: u64,
+) -> Result<XorQuantity, InstructionExecutionError> {
+    let policy = read_policy(world)?
+        .ok_or_else(|| invalid_parameter("SoraFS reserve policy is not configured"))?;
+    let account = read_provider(world, provider_id)?.ok_or_else(|| {
+        invalid_parameter(format!(
+            "provider {provider_id} has no owner-funded reserve account"
+        ))
+    })?;
+    if account.terms.provider_account != *expected_owner {
+        return Err(invalid_parameter(format!(
+            "provider {provider_id} reserve account is bound to {}, not the governed owner {expected_owner}",
+            account.terms.provider_account
+        )));
+    }
+    if account.terms.capacity_gib < committed_capacity_gib {
+        return Err(invalid_parameter(format!(
+            "provider {provider_id} reserve account covers {} GiB, below the declared {committed_capacity_gib} GiB",
+            account.terms.capacity_gib
+        )));
+    }
+    let custody_balance =
+        provider_spendable_balance(world, &policy.policy, &policy.policy.custody_account)?;
+    let reserved_custody = total_reserved_custody(world)?;
+    if custody_balance < reserved_custody {
+        return Err(corrupt_state(format!(
+            "aggregate provider reserve partitions exceed the native custody asset balance while verifying provider {provider_id}"
+        )));
+    }
+    account
+        .reserve_balance
+        .checked_sub(&account.debt_principal)
+        .map_err(|error| {
+            corrupt_state(format!(
+                "provider {provider_id} owner-funded reserve underflow: {error}"
+            ))
+        })
+}
+
+fn credit_after_verified_reserve_withdrawal(
+    world: &impl WorldReadOnly,
+    provider_id: ProviderId,
+    current_reserve: &XorQuantity,
+    remaining_reserve: &XorQuantity,
+    debt_principal: &XorQuantity,
+) -> Result<Option<ProviderCreditRecord>, InstructionExecutionError> {
+    let Some(mut credit) = world.provider_credit_ledger().get(&provider_id).cloned() else {
+        return Ok(None);
+    };
+    let current_owner_funded = current_reserve
+        .checked_sub(debt_principal)
+        .map_err(|error| {
+            corrupt_state(format!(
+                "provider {provider_id} owner-funded reserve underflow before withdrawal: {error}"
+            ))
+        })?;
+    let bonded = XorQuantity::try_from_quantity(credit.bonded.clone()).map_err(|error| {
+        corrupt_state(format!(
+            "provider {provider_id} bonded credit projection is invalid: {error}"
+        ))
+    })?;
+    let slashed = XorQuantity::try_from_quantity(credit.slashed.clone()).map_err(|error| {
+        corrupt_state(format!(
+            "provider {provider_id} slash-lien projection is invalid: {error}"
+        ))
+    })?;
+    let committed = bonded.checked_add(&slashed).map_err(|error| {
+        corrupt_state(format!(
+            "provider {provider_id} custody commitment overflow: {error}"
+        ))
+    })?;
+    if committed > current_owner_funded {
+        return Err(corrupt_state(format!(
+            "provider {provider_id} bonded-plus-slashed credit commitment exceeds native reserve custody"
+        )));
+    }
+
+    let remaining_owner_funded = remaining_reserve.checked_sub(debt_principal).map_err(
+        |error| {
+            invalid_parameter(format!(
+                "provider {provider_id} withdrawal would consume treasury-funded principal: {error}"
+            ))
+        },
+    )?;
+    let next_bonded = remaining_owner_funded.checked_sub(&slashed).map_err(|_| {
+        invalid_parameter(format!(
+            "provider {provider_id} withdrawal would release custody subject to a slash lien"
+        ))
+    })?;
+    if next_bonded.as_quantity() < &credit.required_bond {
+        return Err(invalid_parameter(format!(
+            "provider {provider_id} withdrawal would reduce unslashed bond {} below required {}",
+            next_bonded.as_quantity(),
+            credit.required_bond
+        )));
+    }
+    if let Some(record) = world.capacity_declarations().get(&provider_id) {
+        let declaration = super::sorafs::decode_capacity_declaration_payload(&record.declaration)
+            .map_err(|error| {
+            corrupt_state(format!(
+                "provider {provider_id} capacity declaration payload is invalid: {error}"
+            ))
+        })?;
+        let declared_stake = declaration.stake.stake_amount.as_quantity();
+        if next_bonded.as_quantity() < declared_stake {
+            return Err(invalid_parameter(format!(
+                "provider {provider_id} withdrawal would reduce unslashed bond {} below declared stake {declared_stake}",
+                next_bonded.as_quantity(),
+            )));
+        }
+    }
+    credit.bonded = next_bonded.into_quantity();
+    Ok(Some(credit))
+}
+
+#[cfg(test)]
+pub(super) fn seed_verified_provider_bond_for_test(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    provider_id: ProviderId,
+    owner: &AccountId,
+    capacity_gib: u64,
+    bonded: iroha_primitives::numeric::Quantity,
+) -> Result<(), InstructionExecutionError> {
+    use iroha_data_model::{IntoKeyValue, account::Account, asset::Asset};
+
+    let policy = if let Some(policy) = read_policy(state_transaction.world())? {
+        policy
+    } else {
+        let custody_account = AccountId::new(iroha_crypto::derive_non_signing_ed25519_public_key(
+            b"iroha:sorafs:test-reserve-custody:v1",
+            &[],
+        ));
+        if state_transaction
+            .world
+            .accounts()
+            .get(&custody_account)
+            .is_none()
+        {
+            let account = Account::new(custody_account.clone()).build(&custody_account);
+            let (account_id, account) = account.into_key_value();
+            state_transaction.world.accounts.insert(account_id, account);
+        }
+        let treasury_account = owner.clone();
+        let policy = ReserveAuthorityPolicyV1 {
+            version: iroha_data_model::sorafs::reserve::RESERVE_AUTHORITY_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            economics: iroha_data_model::sorafs::reserve::ReservePolicyV1::default(),
+            asset_definition: state_transaction.gov.sorafs_pin_fee_asset_id.clone(),
+            custody_account,
+            treasury_account,
+            operations_authority: owner.clone(),
+            decision_authority: owner.clone(),
+            grace_period_days: 7,
+            default_after_days: 30,
+            max_provider_debt: XorQuantity::try_from_micro(1_000_000_000)
+                .expect("bounded test reserve debt"),
+            max_pending_movements_per_provider: 4,
+            max_open_appeals_per_provider: 2,
+        };
+        let policy_digest = policy.digest().map_err(|error| {
+            corrupt_state(format!("test reserve policy digest failed: {error}"))
+        })?;
+        let record = ReserveAuthorityPolicyRecordV1 {
+            policy,
+            policy_digest,
+            activated_by: owner.clone(),
+            activated_at_unix: 1,
+        };
+        emit_reserve_policy_activation(state_transaction, record.clone(), owner, 1)?;
+        record
+    };
+    if policy.policy.custody_account == *owner {
+        return Err(corrupt_state(
+            "test reserve provider owner must differ from protocol custody",
+        ));
+    }
+
+    let reserve_balance = XorQuantity::try_from_quantity(bonded)
+        .map_err(|error| corrupt_state(format!("test reserve bond is invalid: {error}")))?;
+    let account = ReserveProviderAccountV1 {
+        terms: iroha_data_model::sorafs::reserve::ReserveProviderTermsV1 {
+            provider_id,
+            provider_account: owner.clone(),
+            tier: ReserveTier::TierA,
+            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Hot,
+            duration: iroha_data_model::sorafs::reserve::ReserveDuration::Monthly,
+            capacity_gib,
+        },
+        policy_digest: policy.policy_digest,
+        revision: 1,
+        reserve_balance: reserve_balance.clone(),
+        debt_principal: XorQuantity::zero(),
+        accrued_interest: XorQuantity::zero(),
+        credit_cap: XorQuantity::zero(),
+        lifecycle_stage: ReserveLifecycleStage::Active,
+        days_past_due: 0,
+        pending_movements: 0,
+        open_appeals: 0,
+        rent_charged_through_unix: 1,
+        interest_accrued_at_unix: 1,
+        updated_at_unix: 1,
+    };
+    state_transaction.world.smart_contract_state.insert(
+        provider_key(provider_id),
+        encode_state(&account, "test reserve provider account")?,
+    );
+
+    let custody_asset_id = AssetId::of(
+        policy.policy.asset_definition,
+        policy.policy.custody_account,
+    );
+    let current = state_transaction
+        .world
+        .assets
+        .get(&custody_asset_id)
+        .map_or_else(iroha_primitives::numeric::Quantity::zero, |value| {
+            value.as_ref().clone()
+        });
+    let next = current
+        .checked_add(reserve_balance.as_quantity())
+        .map_err(|error| corrupt_state(format!("test reserve custody overflow: {error}")))?;
+    let (asset_id, asset) = Asset::new(custody_asset_id, next).into_key_value();
+    state_transaction.world.assets.insert(asset_id, asset);
+    Ok(())
 }
 
 fn decode_provider_record(
@@ -1108,6 +1513,11 @@ impl Execute for RegisterSorafsReserveAccount {
                 "reserve account capacity must be non-zero",
             ));
         }
+        if self.terms.provider_account == policy.policy.custody_account {
+            return Err(invalid_parameter(
+                "reserve provider account must differ from protocol custody",
+            ));
+        }
         let owner = registered_provider_owner(state_transaction.world(), self.terms.provider_id)?;
         if owner.subject_id() != self.terms.provider_account.subject_id() {
             return Err(invalid_parameter(
@@ -1252,6 +1662,7 @@ impl Execute for DecideSorafsReserveMovement {
             .checked_sub(1)
             .ok_or_else(|| corrupt_state("reserve pending-movement counter underflow"))?;
 
+        let mut updated_credit = None;
         if self.approve {
             match movement.kind {
                 ReserveMovementKindV1::TopUp => {
@@ -1306,6 +1717,13 @@ impl Execute for DecideSorafsReserveMovement {
                             "reserve withdrawal would breach underwriting",
                         ));
                     }
+                    updated_credit = credit_after_verified_reserve_withdrawal(
+                        state_transaction.world(),
+                        movement.provider_id,
+                        &account.reserve_balance,
+                        &remaining,
+                        &account.debt_principal,
+                    )?;
                     account.reserve_balance = remaining;
                 }
             }
@@ -1331,13 +1749,30 @@ impl Execute for DecideSorafsReserveMovement {
                     &policy.policy.custody_account,
                     &movement.amount,
                 )?,
-                ReserveMovementKindV1::Withdrawal => transfer(
-                    state_transaction,
-                    &policy.policy,
-                    &policy.policy.custody_account,
-                    &account.terms.provider_account,
-                    &movement.amount,
-                )?,
+                ReserveMovementKindV1::Withdrawal => {
+                    let source_id = AssetId::of(
+                        policy.policy.asset_definition.clone(),
+                        policy.policy.custody_account.clone(),
+                    );
+                    let destination_id = AssetId::of(
+                        policy.policy.asset_definition.clone(),
+                        account.terms.provider_account.clone(),
+                    );
+                    let authorization = VerifiedSorafsReserveWithdrawal::new(
+                        movement.provider_id,
+                        movement.movement_id,
+                        policy.policy_digest,
+                        self.expected_provider_revision,
+                        authority.clone(),
+                        source_id,
+                        destination_id,
+                        movement.amount.clone().into_quantity(),
+                    );
+                    super::asset::isi::execute_verified_sorafs_reserve_withdrawal(
+                        state_transaction,
+                        authorization,
+                    )?;
+                }
             }
         }
         state_transaction
@@ -1348,6 +1783,12 @@ impl Execute for DecideSorafsReserveMovement {
             .world
             .smart_contract_state
             .insert(movement_key(movement.movement_id), encoded_movement);
+        if let Some(credit) = updated_credit {
+            state_transaction
+                .world
+                .provider_credit_ledger
+                .insert(movement.provider_id, credit);
+        }
         emit_reserve_event(
             state_transaction,
             if movement.status == ReserveMovementStatusV1::Approved {
@@ -2570,2200 +3011,4 @@ impl ValidSingularQuery for FindSorafsReserveEvents {
 }
 
 #[cfg(test)]
-mod tests {
-    use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey};
-    use iroha_data_model::{
-        account::{Account, AccountId},
-        asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
-        block::BlockHeader,
-        domain::{Domain, DomainId},
-        permission::{Permission, Permissions},
-        sorafs::{
-            pin_registry::StorageClass,
-            reserve::{
-                ClassRentRate, RESERVE_AUTHORITY_POLICY_VERSION_V1, ReserveDuration,
-                ReservePolicyV1, ReserveProviderTermsV1, ReserveTier,
-            },
-        },
-    };
-    use iroha_primitives::{json::Json, numeric::Quantity};
-    use nonzero_ext::nonzero;
-
-    use super::*;
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
-
-    const NOW: u64 = 20_000;
-    const PROVIDER_ID: ProviderId = ProviderId::new([0x61; 32]);
-
-    fn keypair(seed: u8) -> KeyPair {
-        let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
-            .expect("valid deterministic Ed25519 seed");
-        KeyPair::from_private_key(private).expect("derive deterministic keypair")
-    }
-
-    fn account(keypair: &KeyPair) -> AccountId {
-        AccountId::new(keypair.public_key().clone())
-    }
-
-    fn asset_definition() -> AssetDefinitionId {
-        AssetDefinitionId::derive_from_components(
-            DomainId::try_new("reserve", "universal").expect("reserve domain"),
-            "xor".parse().expect("reserve asset"),
-        )
-    }
-
-    fn quantity_micro(micro: u128) -> Quantity {
-        XorQuantity::try_from_micro(micro)
-            .expect("micro-XOR fixture")
-            .into_quantity()
-    }
-
-    fn xor_micro(micro: u128) -> XorQuantity {
-        XorQuantity::try_from_micro(micro).expect("micro-XOR reserve fixture")
-    }
-
-    fn policy(
-        revision: u64,
-        predecessor_policy_digest: Option<[u8; 32]>,
-        custody_account: AccountId,
-        treasury_account: AccountId,
-        service_authority: &AccountId,
-    ) -> ReserveAuthorityPolicyV1 {
-        ReserveAuthorityPolicyV1 {
-            version: RESERVE_AUTHORITY_POLICY_VERSION_V1,
-            revision,
-            predecessor_policy_digest,
-            economics: ReservePolicyV1::default(),
-            asset_definition: asset_definition(),
-            custody_account,
-            treasury_account,
-            operations_authority: service_authority.clone(),
-            decision_authority: service_authority.clone(),
-            grace_period_days: 7,
-            default_after_days: 30,
-            max_provider_debt: xor_micro(1_000_000_000),
-            max_pending_movements_per_provider: 4,
-            max_open_appeals_per_provider: 2,
-        }
-    }
-
-    fn state_fixture(
-        governance: &AccountId,
-        provider: &AccountId,
-        custody: &AccountId,
-        treasury: &AccountId,
-    ) -> State {
-        state_fixture_with_provider_balance(
-            governance,
-            provider,
-            custody,
-            treasury,
-            quantity_micro(100_000_000),
-        )
-    }
-
-    fn state_fixture_with_provider_balance(
-        governance: &AccountId,
-        provider: &AccountId,
-        custody: &AccountId,
-        treasury: &AccountId,
-        provider_balance: Quantity,
-    ) -> State {
-        let definition_id = asset_definition();
-        let domain =
-            Domain::new(DomainId::try_new("reserve", "universal").expect("reserve domain"))
-                .build(governance);
-        let definition = AssetDefinition::numeric(
-            definition_id.clone(),
-            "XOR".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .build(governance);
-        let provider_asset = Asset::new(
-            AssetId::of(definition_id.clone(), provider.clone()),
-            provider_balance,
-        );
-        let treasury_asset = Asset::new(
-            AssetId::of(definition_id, treasury.clone()),
-            quantity_micro(100_000_000),
-        );
-        let mut world = World::with_assets(
-            [domain],
-            [
-                Account::new(governance.clone()).build(governance),
-                Account::new(provider.clone()).build(provider),
-                Account::new(custody.clone()).build(custody),
-                Account::new(treasury.clone()).build(treasury),
-            ],
-            [definition],
-            [provider_asset, treasury_asset],
-            [],
-        );
-        let mut permissions = Permissions::new();
-        permissions.insert(Permission::new(
-            "CanSetSorafsReservePolicy".to_owned(),
-            Json::new(()),
-        ));
-        world
-            .account_permissions
-            .insert(governance.clone(), permissions);
-        world.provider_owners.insert(PROVIDER_ID, provider.clone());
-        State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        )
-    }
-
-    fn terms(provider_account: AccountId) -> ReserveProviderTermsV1 {
-        terms_for(PROVIDER_ID, provider_account)
-    }
-
-    fn terms_for(provider_id: ProviderId, provider_account: AccountId) -> ReserveProviderTermsV1 {
-        ReserveProviderTermsV1 {
-            provider_id,
-            provider_account,
-            tier: ReserveTier::TierA,
-            storage_class: StorageClass::Hot,
-            duration: ReserveDuration::Monthly,
-            capacity_gib: 10,
-        }
-    }
-
-    fn block_header_at(height: u64, now_unix: u64) -> BlockHeader {
-        BlockHeader::new(
-            height.try_into().expect("nonzero fixture block height"),
-            None,
-            None,
-            None,
-            now_unix * 1_000,
-            0,
-        )
-    }
-
-    fn transact(
-        state: &mut State,
-        height: u64,
-        now_unix: u64,
-        operation: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<(), InstructionExecutionError>,
-    ) -> Result<(), InstructionExecutionError> {
-        let header = block_header_at(height, now_unix);
-        let mut block = state.block(header.clone());
-        let mut transaction = block.transaction();
-        operation(&mut transaction)?;
-        transaction.apply();
-        block.commit().expect("commit reserve test block");
-        state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
-        Ok(())
-    }
-
-    fn reserve_asset_balance(state: &State, owner: &AccountId) -> XorQuantity {
-        let view = state.view();
-        let asset_id = AssetId::of(asset_definition(), owner.clone());
-        view.world()
-            .assets()
-            .get(&asset_id)
-            .map_or_else(XorQuantity::zero, |value| {
-                XorQuantity::try_from_quantity(value.as_ref().clone())
-                    .expect("stored reserve asset is canonical")
-            })
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn pending_operations_survive_concurrency_and_policy_rotation() {
-        let governance = account(&keypair(0x71));
-        let provider = account(&keypair(0x72));
-        let custody = account(&keypair(0x73));
-        let treasury = account(&keypair(0x74));
-        let state = state_fixture(&governance, &provider, &custody, &treasury);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, NOW * 1_000, 0);
-        let mut block = state.block(header);
-        let mut stx = block.transaction();
-        stx.tx_call_hash = Some(Hash::prehashed([0x91; Hash::LENGTH]));
-
-        let first = policy(1, None, custody.clone(), treasury.clone(), &governance);
-        let first_digest = first.digest().expect("first policy digest");
-        assert!(
-            SetSorafsReservePolicy::new(first.clone())
-                .execute(&provider, &mut stx)
-                .is_err(),
-            "provider cannot activate reserve governance policy"
-        );
-        SetSorafsReservePolicy::new(first)
-            .execute(&governance, &mut stx)
-            .expect("activate first policy");
-        RegisterSorafsReserveAccount::new(terms(provider.clone()), first_digest)
-            .execute(&governance, &mut stx)
-            .expect("register reserve account");
-        stx.world.provider_owners.remove(PROVIDER_ID);
-        assert!(
-            read_provider(stx.world(), PROVIDER_ID)
-                .expect("read provider after registry withdrawal")
-                .is_some(),
-            "registered reserve state remains authoritative after provider registry withdrawal"
-        );
-
-        for (id, revision) in [(0x81, 1), (0x82, 2)] {
-            RequestSorafsReserveMovement::new(
-                [id; 32],
-                PROVIDER_ID,
-                ReserveMovementKindV1::TopUp,
-                xor_micro(10_000_000),
-                revision,
-                first_digest,
-            )
-            .execute(&provider, &mut stx)
-            .expect("request concurrent top-up");
-        }
-        let pending = read_provider(stx.world(), PROVIDER_ID)
-            .expect("read provider")
-            .expect("provider");
-        assert_eq!((pending.revision, pending.pending_movements), (3, 2));
-        assert!(
-            RequestSorafsReserveMovement::new(
-                [0x83; 32],
-                PROVIDER_ID,
-                ReserveMovementKindV1::TopUp,
-                xor_micro(1_000_000),
-                1,
-                first_digest,
-            )
-            .execute(&provider, &mut stx)
-            .is_err(),
-            "stale provider revision must fail closed"
-        );
-        assert_eq!(
-            read_provider(stx.world(), PROVIDER_ID)
-                .expect("read provider")
-                .expect("provider"),
-            pending
-        );
-        for (id, revision) in [(0x81, 3), (0x82, 4)] {
-            DecideSorafsReserveMovement::new(
-                [id; 32],
-                revision,
-                first_digest,
-                true,
-                "approved".to_owned(),
-            )
-            .execute(&governance, &mut stx)
-            .expect("decide concurrent top-up");
-        }
-
-        RequestSorafsReserveMovement::new(
-            [0x84; 32],
-            PROVIDER_ID,
-            ReserveMovementKindV1::TopUp,
-            xor_micro(10_000_000),
-            5,
-            first_digest,
-        )
-        .execute(&provider, &mut stx)
-        .expect("request before policy rotation");
-        let second = policy(
-            2,
-            Some(first_digest),
-            custody.clone(),
-            treasury.clone(),
-            &governance,
-        );
-        let second_digest = second.digest().expect("second policy digest");
-        SetSorafsReservePolicy::new(second)
-            .execute(&governance, &mut stx)
-            .expect("rotate reserve policy");
-        DecideSorafsReserveMovement::new(
-            [0x84; 32],
-            6,
-            second_digest,
-            true,
-            "approved after rotation".to_owned(),
-        )
-        .execute(&governance, &mut stx)
-        .expect("pending movement remains decidable after rotation");
-
-        for (id, revision) in [(0x91_u8, 7), (0x92, 8)] {
-            SubmitSorafsReserveAppeal::new(
-                [id; 32],
-                PROVIDER_ID,
-                revision,
-                ReserveLifecycleStage::Warning,
-                "review lifecycle evidence".to_owned(),
-                Some([id.wrapping_add(1); 32]),
-                second_digest,
-            )
-            .execute(&provider, &mut stx)
-            .expect("submit concurrent appeal");
-        }
-        for (id, revision) in [(0x91, 9), (0x92, 10)] {
-            DecideSorafsReserveAppeal::new(
-                [id; 32],
-                revision,
-                second_digest,
-                false,
-                "not substantiated".to_owned(),
-            )
-            .execute(&governance, &mut stx)
-            .expect("decide concurrent appeal");
-        }
-
-        let before_cap_reduction = FindSorafsReserveProviderById::new(PROVIDER_ID)
-            .execute(&stx)
-            .expect("query provider");
-        assert_eq!(before_cap_reduction.revision, 11);
-        assert_eq!(before_cap_reduction.policy_digest, second_digest);
-        assert_eq!(before_cap_reduction.reserve_balance, xor_micro(30_000_000));
-        assert_eq!(before_cap_reduction.open_appeals, 0);
-        assert_eq!(
-            FindSorafsReserveAppealById::new([0x91; 32])
-                .execute(&stx)
-                .expect("query appeal")
-                .status,
-            ReserveAppealStatusV1::Rejected
-        );
-
-        DrawSorafsReserveCredit::new(PROVIDER_ID, 11, xor_micro(10_000_000), second_digest)
-            .execute(&governance, &mut stx)
-            .expect("draw credit before cap reduction");
-        let mut unsafe_apr_change = policy(
-            3,
-            Some(second_digest),
-            custody.clone(),
-            treasury.clone(),
-            &governance,
-        );
-        unsafe_apr_change
-            .economics
-            .tiers
-            .iter_mut()
-            .find(|tier| tier.tier == ReserveTier::TierA)
-            .expect("tier A fixture")
-            .interest_apr_bps += 1;
-        assert!(
-            SetSorafsReservePolicy::new(unsafe_apr_change)
-                .execute(&governance, &mut stx)
-                .is_err(),
-            "APR rotation with outstanding debt must fail rather than reprice it retroactively"
-        );
-        assert_eq!(
-            read_policy(stx.world())
-                .expect("read policy")
-                .expect("active policy")
-                .policy_digest,
-            second_digest
-        );
-        let mut third = policy(
-            3,
-            Some(second_digest),
-            custody.clone(),
-            treasury.clone(),
-            &governance,
-        );
-        third.max_provider_debt = xor_micro(1_000_000);
-        let third_digest = third.digest().expect("third policy digest");
-        SetSorafsReservePolicy::new(third)
-            .execute(&governance, &mut stx)
-            .expect("reduce credit cap below grandfathered principal");
-        RepaySorafsReserveCredit::new(PROVIDER_ID, 12, xor_micro(10_000_000), third_digest)
-            .execute(&provider, &mut stx)
-            .expect("cap reduction must not brick repayment");
-        let final_account = FindSorafsReserveProviderById::new(PROVIDER_ID)
-            .execute(&stx)
-            .expect("query final provider");
-        assert_eq!(final_account.revision, 13);
-        assert_eq!(final_account.policy_digest, third_digest);
-        assert_eq!(final_account.reserve_balance, xor_micro(40_000_000));
-        assert_eq!(final_account.debt_principal, XorQuantity::zero());
-        assert_eq!(final_account.credit_cap, xor_micro(1_000_000));
-
-        let provider_balance = stx
-            .world
-            .assets
-            .get(&AssetId::of(asset_definition(), provider))
-            .expect("provider asset")
-            .as_ref()
-            .clone();
-        let custody_balance = stx
-            .world
-            .assets
-            .get(&AssetId::of(asset_definition(), custody))
-            .expect("custody asset")
-            .as_ref()
-            .clone();
-        assert_eq!(provider_balance, quantity_micro(60_000_000));
-        assert_eq!(custody_balance, quantity_micro(40_000_000));
-    }
-
-    #[test]
-    fn committed_record_queries_are_finalized_exclusive_and_deterministic() {
-        let governance = account(&keypair(0x81));
-        let provider = account(&keypair(0x82));
-        let custody = account(&keypair(0x83));
-        let treasury = account(&keypair(0x84));
-        let mut state = state_fixture(&governance, &provider, &custody, &treasury);
-        let mut first = policy(1, None, custody, treasury, &governance);
-        first.max_open_appeals_per_provider = 4;
-        let first_digest = first.digest().expect("reserve policy digest");
-        transact(&mut state, 1, NOW, |transaction| {
-            SetSorafsReservePolicy::new(first).execute(&governance, transaction)
-        })
-        .expect("commit reserve policy");
-
-        let provider_ids = [
-            ProviderId::new([0x61; 32]),
-            ProviderId::new([0x62; 32]),
-            ProviderId::new([0x63; 32]),
-        ];
-        transact(&mut state, 2, NOW + 1, |transaction| {
-            for provider_id in provider_ids {
-                transaction
-                    .world
-                    .provider_owners
-                    .insert(provider_id, provider.clone());
-            }
-            for provider_id in [provider_ids[2], provider_ids[0], provider_ids[1]] {
-                RegisterSorafsReserveAccount::new(
-                    terms_for(provider_id, provider.clone()),
-                    first_digest,
-                )
-                .execute(&governance, transaction)?;
-            }
-            for (movement_id, revision) in [([0xB3; 32], 1_u64), ([0xB1; 32], 2), ([0xB2; 32], 3)] {
-                RequestSorafsReserveMovement::new(
-                    movement_id,
-                    provider_ids[0],
-                    ReserveMovementKindV1::TopUp,
-                    xor_micro(1_000_000),
-                    revision,
-                    first_digest,
-                )
-                .execute(&provider, transaction)?;
-            }
-            for (appeal_id, revision) in [([0xC3; 32], 4_u64), ([0xC1; 32], 5), ([0xC2; 32], 6)] {
-                SubmitSorafsReserveAppeal::new(
-                    appeal_id,
-                    provider_ids[0],
-                    revision,
-                    ReserveLifecycleStage::Active,
-                    "review deterministic reserve evidence".to_owned(),
-                    Some([appeal_id[0].wrapping_add(1); 32]),
-                    first_digest,
-                )
-                .execute(&provider, transaction)?;
-            }
-            Ok(())
-        })
-        .expect("commit authoritative reserve records");
-
-        let view = state.view();
-        let provider_first = FindSorafsReserveProviders::new(None, None, 2)
-            .execute(&view)
-            .expect("query first provider page");
-        assert_eq!(provider_first.finalized_cursor.height, 2);
-        assert_eq!(
-            provider_first
-                .accounts
-                .iter()
-                .map(|account| account.terms.provider_id)
-                .collect::<Vec<_>>(),
-            provider_ids[..2]
-        );
-        assert!(provider_first.has_more);
-        assert_eq!(provider_first.next_after, Some(provider_ids[1]));
-        let provider_second = FindSorafsReserveProviders::new(
-            Some(provider_first.finalized_cursor),
-            provider_first.next_after,
-            2,
-        )
-        .execute(&view)
-        .expect("query second provider page");
-        assert_eq!(
-            provider_second
-                .accounts
-                .iter()
-                .map(|account| account.terms.provider_id)
-                .collect::<Vec<_>>(),
-            vec![provider_ids[2]]
-        );
-        assert!(!provider_second.has_more);
-        assert!(provider_second.next_after.is_none());
-
-        let movement_first = FindSorafsReserveMovements::new(None, None, 2)
-            .execute(&view)
-            .expect("query first movement page");
-        assert_eq!(
-            movement_first
-                .movements
-                .iter()
-                .map(|movement| movement.movement_id)
-                .collect::<Vec<_>>(),
-            vec![[0xB1; 32], [0xB2; 32]]
-        );
-        assert!(movement_first.has_more);
-        assert_eq!(movement_first.next_after, Some([0xB2; 32]));
-        let movement_second = FindSorafsReserveMovements::new(
-            Some(movement_first.finalized_cursor),
-            movement_first.next_after,
-            2,
-        )
-        .execute(&view)
-        .expect("query second movement page");
-        assert_eq!(
-            movement_second
-                .movements
-                .iter()
-                .map(|movement| movement.movement_id)
-                .collect::<Vec<_>>(),
-            vec![[0xB3; 32]]
-        );
-        assert!(!movement_second.has_more);
-        assert!(movement_second.next_after.is_none());
-
-        let appeal_first = FindSorafsReserveAppeals::new(None, None, 2)
-            .execute(&view)
-            .expect("query first appeal page");
-        assert_eq!(
-            appeal_first
-                .appeals
-                .iter()
-                .map(|appeal| appeal.appeal_id)
-                .collect::<Vec<_>>(),
-            vec![[0xC1; 32], [0xC2; 32]]
-        );
-        assert!(appeal_first.has_more);
-        assert_eq!(appeal_first.next_after, Some([0xC2; 32]));
-        let appeal_second = FindSorafsReserveAppeals::new(
-            Some(appeal_first.finalized_cursor),
-            appeal_first.next_after,
-            2,
-        )
-        .execute(&view)
-        .expect("query second appeal page");
-        assert_eq!(
-            appeal_second
-                .appeals
-                .iter()
-                .map(|appeal| appeal.appeal_id)
-                .collect::<Vec<_>>(),
-            vec![[0xC3; 32]]
-        );
-        assert!(!appeal_second.has_more);
-        assert!(appeal_second.next_after.is_none());
-
-        let mut stale_anchor = provider_first.finalized_cursor;
-        stale_anchor.block_hash[0] ^= 0xFF;
-        assert_eq!(
-            FindSorafsReserveProviders::new(Some(stale_anchor), None, 1).execute(&view),
-            Err(QueryExecutionFail::Expired)
-        );
-        assert_eq!(
-            FindSorafsReserveMovements::new(Some(stale_anchor), None, 1).execute(&view),
-            Err(QueryExecutionFail::Expired)
-        );
-        assert_eq!(
-            FindSorafsReserveAppeals::new(Some(stale_anchor), None, 1).execute(&view),
-            Err(QueryExecutionFail::Expired)
-        );
-    }
-
-    #[test]
-    fn committed_record_queries_enforce_limits_budgets_and_corruption_checks() {
-        let governance = account(&keypair(0x85));
-        let provider = account(&keypair(0x86));
-        let custody = account(&keypair(0x87));
-        let treasury = account(&keypair(0x88));
-
-        let build_policy_state = || {
-            let mut state = state_fixture(&governance, &provider, &custody, &treasury);
-            let first = policy(1, None, custody.clone(), treasury.clone(), &governance);
-            transact(&mut state, 1, NOW, |transaction| {
-                SetSorafsReservePolicy::new(first).execute(&governance, transaction)
-            })
-            .expect("commit reserve policy fixture");
-            state
-        };
-
-        let state = build_policy_state();
-        let view = state.view();
-        for invalid_limit in [0, RESERVE_QUERY_MAX_ITEMS_V1 + 1] {
-            assert!(matches!(
-                FindSorafsReserveProviders::new(None, None, invalid_limit).execute(&view),
-                Err(QueryExecutionFail::Conversion(_))
-            ));
-            assert!(matches!(
-                FindSorafsReserveMovements::new(None, None, invalid_limit).execute(&view),
-                Err(QueryExecutionFail::Conversion(_))
-            ));
-            assert!(matches!(
-                FindSorafsReserveAppeals::new(None, None, invalid_limit).execute(&view),
-                Err(QueryExecutionFail::Conversion(_))
-            ));
-        }
-
-        let mut maximum_page = build_policy_state();
-        {
-            let header = block_header_at(2, NOW + 1);
-            let mut block = maximum_page.block(header.clone());
-            let mut transaction = block.transaction();
-            for marker in 1_u8..=129 {
-                let provider_id = ProviderId::new([marker; 32]);
-                let account = ReserveProviderAccountV1 {
-                    terms: terms_for(provider_id, provider.clone()),
-                    policy_digest: read_policy(transaction.world())
-                        .expect("read active policy")
-                        .expect("active policy")
-                        .policy_digest,
-                    revision: 1,
-                    reserve_balance: XorQuantity::zero(),
-                    debt_principal: XorQuantity::zero(),
-                    accrued_interest: XorQuantity::zero(),
-                    credit_cap: xor_micro(1_000_000_000),
-                    lifecycle_stage: ReserveLifecycleStage::Warning,
-                    days_past_due: 0,
-                    pending_movements: 0,
-                    open_appeals: 0,
-                    rent_charged_through_unix: NOW + 1,
-                    interest_accrued_at_unix: NOW + 1,
-                    updated_at_unix: NOW + 1,
-                };
-                transaction.world.smart_contract_state.insert(
-                    provider_key(provider_id),
-                    encode_state(&account, "maximum reserve provider page")
-                        .expect("encode provider account"),
-                );
-            }
-            transaction.apply();
-            block.commit().expect("commit maximum provider page");
-            maximum_page.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
-        }
-        let maximum = FindSorafsReserveProviders::new(None, None, RESERVE_QUERY_MAX_ITEMS_V1)
-            .execute(&maximum_page.view())
-            .expect("maximum provider page remains within query budgets");
-        assert_eq!(
-            maximum.accounts.len(),
-            usize::try_from(RESERVE_QUERY_MAX_ITEMS_V1).expect("query maximum fits usize")
-        );
-        assert_eq!(
-            maximum.accounts[0].terms.provider_id,
-            ProviderId::new([1; 32])
-        );
-        assert_eq!(
-            maximum
-                .accounts
-                .last()
-                .expect("terminal provider")
-                .terms
-                .provider_id,
-            ProviderId::new([128; 32])
-        );
-        assert!(maximum.has_more);
-        assert_eq!(maximum.next_after, Some(ProviderId::new([128; 32])));
-
-        let mut mismatched_key = build_policy_state();
-        {
-            let header = block_header_at(2, NOW + 1);
-            let mut block = mismatched_key.block(header.clone());
-            let mut transaction = block.transaction();
-            let mut account = ReserveProviderAccountV1 {
-                terms: terms_for(ProviderId::new([0x21; 32]), provider.clone()),
-                policy_digest: read_policy(transaction.world())
-                    .expect("read active policy")
-                    .expect("active policy")
-                    .policy_digest,
-                revision: 1,
-                reserve_balance: XorQuantity::zero(),
-                debt_principal: XorQuantity::zero(),
-                accrued_interest: XorQuantity::zero(),
-                credit_cap: xor_micro(1_000_000),
-                lifecycle_stage: ReserveLifecycleStage::Warning,
-                days_past_due: 0,
-                pending_movements: 0,
-                open_appeals: 0,
-                rent_charged_through_unix: NOW + 1,
-                interest_accrued_at_unix: NOW + 1,
-                updated_at_unix: NOW + 1,
-            };
-            account.terms.provider_id = ProviderId::new([0x22; 32]);
-            transaction.world.smart_contract_state.insert(
-                provider_key(ProviderId::new([0x21; 32])),
-                encode_state(&account, "mismatched reserve provider")
-                    .expect("encode mismatched provider"),
-            );
-            transaction.apply();
-            block.commit().expect("commit mismatched provider key");
-            mismatched_key.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
-        }
-        assert!(matches!(
-            FindSorafsReserveProviders::new(None, None, 1).execute(&mismatched_key.view()),
-            Err(QueryExecutionFail::Conversion(message)) if message.contains("key does not match")
-        ));
-
-        let mut oversized_record = build_policy_state();
-        {
-            let header = block_header_at(2, NOW + 1);
-            let mut block = oversized_record.block(header.clone());
-            let mut transaction = block.transaction();
-            transaction.world.smart_contract_state.insert(
-                provider_key(ProviderId::new([0x31; 32])),
-                vec![0xFF; RESERVE_QUERY_MAX_RECORD_BYTES_V1 + 1],
-            );
-            transaction.apply();
-            block.commit().expect("commit oversized provider record");
-            oversized_record.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
-        }
-        assert!(matches!(
-            FindSorafsReserveProviders::new(None, None, 1).execute(&oversized_record.view()),
-            Err(QueryExecutionFail::Conversion(message)) if message.contains("record exceeds")
-        ));
-
-        validate_encoded_record_page(&vec![0_u8; RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1 - 64])
-            .expect("record page below the response-byte ceiling is accepted");
-        assert!(matches!(
-            validate_encoded_record_page(&vec![
-                0_u8;
-                RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1
-            ]),
-            Err(QueryExecutionFail::Conversion(message)) if message.contains("record page encodes")
-        ));
-
-        let mut read_budget = ReserveEventQueryBudgetV1::default();
-        read_budget
-            .inspect_storage_probe(1, None, RESERVE_QUERY_MAX_EVENT_READ_BYTES_V1)
-            .expect("exact reserve query read-byte ceiling is accepted");
-        assert!(matches!(
-            read_budget.inspect_storage_probe(1, None, 1),
-            Err(QueryExecutionFail::Conversion(message)) if message.contains("read bytes")
-        ));
-        let mut probe_budget = ReserveEventQueryBudgetV1::default();
-        for _ in 0..RESERVE_QUERY_MAX_EVENT_STORAGE_PROBES_V1 {
-            probe_budget
-                .inspect_storage_probe(1, None, 0)
-                .expect("exact reserve query storage-probe ceiling is accepted");
-        }
-        assert!(matches!(
-            probe_budget.inspect_storage_probe(1, None, 0),
-            Err(QueryExecutionFail::Conversion(message)) if message.contains("storage probes")
-        ));
-        let mut key_budget = ReserveEventQueryBudgetV1::default();
-        for _ in 0..128 {
-            key_budget
-                .inspect_storage_probe(RESERVE_QUERY_MAX_EVENT_PROBE_KEY_BYTES_V1, None, 0)
-                .expect("exact reserve query key-byte ceiling is accepted");
-        }
-        assert!(matches!(
-            key_budget.inspect_storage_probe(1, None, 0),
-            Err(QueryExecutionFail::Conversion(message)) if message.contains("probed key bytes")
-        ));
-    }
-
-    #[test]
-    fn persisted_reserve_event_requires_exact_lifecycle_projection_shape() {
-        let authority = account(&keypair(0x89));
-        let event_record =
-            |kind, provider_id, operation_id, provider_revision, resulting_lifecycle_stage| {
-                ReservePersistedEventV1 {
-                    sequence: 1,
-                    target_block_height: 1,
-                    event_index: 0,
-                    event: SorafsReserveLedgerEvent {
-                        kind,
-                        provider_id,
-                        operation_id,
-                        policy_digest: [0x8A; 32],
-                        provider_revision,
-                        resulting_lifecycle_stage,
-                        authority: authority.clone(),
-                        occurred_at_unix_ms: 1,
-                    },
-                }
-            };
-
-        let policy_activation = event_record(
-            SorafsReserveLedgerEventKind::PolicyActivated,
-            None,
-            None,
-            0,
-            None,
-        );
-        validate_persisted_event(&policy_activation, 1)
-            .expect("policy activation without provider lifecycle is valid");
-        let mut policy_with_provider_stage = policy_activation;
-        policy_with_provider_stage.event.resulting_lifecycle_stage =
-            Some(ReserveLifecycleStage::Active);
-        assert!(matches!(
-            validate_persisted_event(&policy_with_provider_stage, 1),
-            Err(InstructionExecutionError::InvariantViolation(_))
-        ));
-
-        for (kind, operation_id, provider_revision) in [
-            (SorafsReserveLedgerEventKind::ProviderRegistered, None, 1),
-            (
-                SorafsReserveLedgerEventKind::MovementRequested,
-                Some([0x81; 32]),
-                2,
-            ),
-            (
-                SorafsReserveLedgerEventKind::MovementApproved,
-                Some([0x82; 32]),
-                2,
-            ),
-            (
-                SorafsReserveLedgerEventKind::MovementRejected,
-                Some([0x83; 32]),
-                2,
-            ),
-            (SorafsReserveLedgerEventKind::RentCharged, None, 2),
-            (SorafsReserveLedgerEventKind::LifecycleAdvanced, None, 2),
-            (SorafsReserveLedgerEventKind::CreditDrawn, None, 2),
-            (SorafsReserveLedgerEventKind::CreditRepaid, None, 2),
-            (
-                SorafsReserveLedgerEventKind::AppealSubmitted,
-                Some([0x84; 32]),
-                2,
-            ),
-            (
-                SorafsReserveLedgerEventKind::AppealAccepted,
-                Some([0x85; 32]),
-                2,
-            ),
-            (
-                SorafsReserveLedgerEventKind::AppealRejected,
-                Some([0x86; 32]),
-                2,
-            ),
-        ] {
-            let projected = event_record(
-                kind,
-                Some(PROVIDER_ID),
-                operation_id,
-                provider_revision,
-                Some(ReserveLifecycleStage::Warning),
-            );
-            validate_persisted_event(&projected, 1)
-                .expect("provider event with resulting lifecycle is valid");
-            let mut missing_projection = projected;
-            missing_projection.event.resulting_lifecycle_stage = None;
-            assert!(matches!(
-                validate_persisted_event(&missing_projection, 1),
-                Err(InstructionExecutionError::InvariantViolation(_))
-            ));
-        }
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn provider_event_projection_uses_exact_authoritative_after_state() {
-        let governance = account(&keypair(0x8B));
-        let provider = account(&keypair(0x8C));
-        let custody = account(&keypair(0x8D));
-        let treasury = account(&keypair(0x8E));
-        let mut state = state_fixture(&governance, &provider, &custody, &treasury);
-        let first = policy(1, None, custody, treasury, &governance);
-        let first_digest = first.digest().expect("reserve policy digest");
-        transact(&mut state, 1, NOW, |transaction| {
-            SetSorafsReservePolicy::new(first).execute(&governance, transaction)?;
-            RegisterSorafsReserveAccount::new(terms(provider.clone()), first_digest)
-                .execute(&governance, transaction)
-        })
-        .expect("activate policy and register reserve provider");
-
-        let lifecycle_at = NOW + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1 + 31 * 86_400;
-        let header = block_header_at(2, lifecycle_at);
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
-        AdvanceSorafsReserveLifecycle::new(PROVIDER_ID, 1, 31, first_digest)
-            .execute(&governance, &mut transaction)
-            .expect("advance provider to default");
-        SubmitSorafsReserveAppeal::new(
-            [0x8F; 32],
-            PROVIDER_ID,
-            2,
-            ReserveLifecycleStage::Active,
-            "restore active lifecycle".to_owned(),
-            Some([0x90; 32]),
-            first_digest,
-        )
-        .execute(&provider, &mut transaction)
-        .expect("submit lifecycle appeal");
-        DecideSorafsReserveAppeal::new(
-            [0x8F; 32],
-            3,
-            first_digest,
-            true,
-            "appeal accepted".to_owned(),
-        )
-        .execute(&governance, &mut transaction)
-        .expect("accept lifecycle appeal");
-
-        assert_eq!(
-            (1..=5)
-                .map(|sequence| {
-                    read_persisted_event(transaction.world(), sequence)
-                        .expect("read reserve event")
-                        .expect("reserve event exists")
-                        .event
-                        .resulting_lifecycle_stage
-                })
-                .collect::<Vec<_>>(),
-            vec![
-                None,
-                Some(ReserveLifecycleStage::Warning),
-                Some(ReserveLifecycleStage::Default),
-                Some(ReserveLifecycleStage::Default),
-                Some(ReserveLifecycleStage::Active),
-            ]
-        );
-
-        let account = read_provider(transaction.world(), PROVIDER_ID)
-            .expect("read provider after appeal")
-            .expect("provider exists");
-        assert_eq!(account.lifecycle_stage, ReserveLifecycleStage::Active);
-        let journal_head = read_reserve_state(transaction.world())
-            .expect("read reserve state")
-            .expect("reserve state exists")
-            .journal_head;
-        let next_sequence = journal_head
-            .last_sequence
-            .checked_add(1)
-            .expect("fixture journal sequence has room");
-        let mismatched_revision = account
-            .revision
-            .checked_add(1)
-            .expect("fixture provider revision has room");
-        let mismatched_updated_at = NOW.checked_add(1).expect("fixture timestamp has room");
-
-        for rejected in [
-            emit_reserve_event(
-                &mut transaction,
-                SorafsReserveLedgerEventKind::RentCharged,
-                PROVIDER_ID,
-                None,
-                [0x91; 32],
-                account.revision,
-                &governance,
-                NOW,
-            ),
-            emit_reserve_event(
-                &mut transaction,
-                SorafsReserveLedgerEventKind::RentCharged,
-                PROVIDER_ID,
-                None,
-                account.policy_digest,
-                mismatched_revision,
-                &governance,
-                NOW,
-            ),
-            emit_reserve_event(
-                &mut transaction,
-                SorafsReserveLedgerEventKind::RentCharged,
-                PROVIDER_ID,
-                None,
-                account.policy_digest,
-                account.revision,
-                &governance,
-                mismatched_updated_at,
-            ),
-            emit_reserve_event(
-                &mut transaction,
-                SorafsReserveLedgerEventKind::PolicyActivated,
-                PROVIDER_ID,
-                None,
-                account.policy_digest,
-                account.revision,
-                &governance,
-                NOW,
-            ),
-        ] {
-            assert!(matches!(
-                rejected,
-                Err(InstructionExecutionError::InvariantViolation(_))
-            ));
-        }
-        assert_eq!(
-            read_reserve_state(transaction.world())
-                .expect("read reserve state after rejected events")
-                .expect("reserve state exists")
-                .journal_head,
-            journal_head
-        );
-        assert!(
-            transaction
-                .world
-                .smart_contract_state
-                .get(&event_key(next_sequence))
-                .is_none()
-        );
-
-        transaction
-            .world
-            .smart_contract_state
-            .remove(provider_key(PROVIDER_ID));
-        assert!(matches!(
-            emit_reserve_event(
-                &mut transaction,
-                SorafsReserveLedgerEventKind::RentCharged,
-                PROVIDER_ID,
-                None,
-                account.policy_digest,
-                account.revision,
-                &governance,
-                NOW,
-            ),
-            Err(InstructionExecutionError::InvariantViolation(_))
-        ));
-        assert_eq!(
-            read_reserve_state(transaction.world())
-                .expect("read reserve state after missing provider")
-                .expect("reserve state exists")
-                .journal_head,
-            journal_head
-        );
-        assert!(
-            transaction
-                .world
-                .smart_contract_state
-                .get(&event_key(next_sequence))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn committed_event_query_is_finalized_cursor_bounded_and_deterministic() {
-        let governance = account(&keypair(0x75));
-        let provider = account(&keypair(0x76));
-        let custody = account(&keypair(0x77));
-        let treasury = account(&keypair(0x78));
-        let mut state = state_fixture(&governance, &provider, &custody, &treasury);
-        let first = policy(1, None, custody, treasury, &governance);
-        let first_digest = first.digest().expect("reserve policy digest");
-        transact(&mut state, 1, NOW, |transaction| {
-            SetSorafsReservePolicy::new(first).execute(&governance, transaction)
-        })
-        .expect("commit reserve policy");
-        transact(&mut state, 2, NOW + 1, |transaction| {
-            RegisterSorafsReserveAccount::new(terms(provider.clone()), first_digest)
-                .execute(&governance, transaction)?;
-            RequestSorafsReserveMovement::new(
-                [0x81; 32],
-                PROVIDER_ID,
-                ReserveMovementKindV1::TopUp,
-                xor_micro(10_000_000),
-                1,
-                first_digest,
-            )
-            .execute(&provider, transaction)
-        })
-        .expect("commit provider registration and movement request");
-        transact(&mut state, 3, NOW + 2, |transaction| {
-            DecideSorafsReserveMovement::new(
-                [0x81; 32],
-                2,
-                first_digest,
-                false,
-                "declined".to_owned(),
-            )
-            .execute(&governance, transaction)
-        })
-        .expect("commit reserve movement decision");
-
-        let view = state.view();
-        let first_page = FindSorafsReserveEvents::new(None, None, 2)
-            .execute(&view)
-            .expect("query first committed reserve event page");
-        assert_eq!(first_page.finalized_cursor.height, 3);
-        assert_eq!(first_page.events.len(), 2);
-        assert!(first_page.has_more);
-        assert_eq!(
-            first_page
-                .events
-                .iter()
-                .map(|event| (event.sequence, event.block_height, event.event_index))
-                .collect::<Vec<_>>(),
-            vec![(1, 1, 0), (2, 2, 0)]
-        );
-        let anchor = first_page.finalized_cursor;
-        let cursor = first_page.next_after.expect("event continuation");
-        let second_page = FindSorafsReserveEvents::new(Some(anchor), Some(cursor), 2)
-            .execute(&view)
-            .expect("query second committed reserve event page");
-        assert_eq!(
-            second_page
-                .events
-                .iter()
-                .map(|event| (event.sequence, event.block_height, event.event_index))
-                .collect::<Vec<_>>(),
-            vec![(3, 2, 1), (4, 3, 0)]
-        );
-        assert!(!second_page.has_more);
-        assert!(second_page.next_after.is_none());
-        assert_eq!(
-            first_page.events[0].event.kind,
-            SorafsReserveLedgerEventKind::PolicyActivated
-        );
-        assert_eq!(
-            second_page.events[1].event.kind,
-            SorafsReserveLedgerEventKind::MovementRejected
-        );
-        assert_eq!(
-            first_page
-                .events
-                .iter()
-                .chain(&second_page.events)
-                .map(|event| event.event.resulting_lifecycle_stage)
-                .collect::<Vec<_>>(),
-            vec![
-                None,
-                Some(ReserveLifecycleStage::Warning),
-                Some(ReserveLifecycleStage::Warning),
-                Some(ReserveLifecycleStage::Warning),
-            ]
-        );
-
-        let expected_hashes = [
-            *iroha_crypto::HashOf::new(&block_header_at(1, NOW)).as_ref(),
-            *iroha_crypto::HashOf::new(&block_header_at(2, NOW + 1)).as_ref(),
-            *iroha_crypto::HashOf::new(&block_header_at(3, NOW + 2)).as_ref(),
-        ];
-        assert_eq!(first_page.events[0].block_hash, expected_hashes[0]);
-        assert_eq!(first_page.events[1].block_hash, expected_hashes[1]);
-        assert_eq!(second_page.events[0].block_hash, expected_hashes[1]);
-        assert_eq!(second_page.events[1].block_hash, expected_hashes[2]);
-        assert_eq!(anchor.block_hash, expected_hashes[2]);
-
-        let mut stale_anchor = anchor;
-        stale_anchor.block_hash[0] ^= 0xFF;
-        assert_eq!(
-            FindSorafsReserveEvents::new(Some(stale_anchor), None, 1).execute(&view),
-            Err(QueryExecutionFail::Expired)
-        );
-        let mut tampered_cursor = cursor;
-        tampered_cursor.event_index += 1;
-        assert_eq!(
-            FindSorafsReserveEvents::new(Some(anchor), Some(tampered_cursor), 1).execute(&view),
-            Err(QueryExecutionFail::Expired)
-        );
-        for invalid_limit in [0, RESERVE_QUERY_MAX_ITEMS_V1 + 1] {
-            assert!(matches!(
-                FindSorafsReserveEvents::new(Some(anchor), None, invalid_limit).execute(&view),
-                Err(QueryExecutionFail::Conversion(_))
-            ));
-        }
-    }
-
-    #[test]
-    fn committed_event_query_accepts_maximum_page_with_full_metering() {
-        let governance = account(&keypair(0x7D));
-        let provider = account(&keypair(0x7E));
-        let custody = account(&keypair(0x7F));
-        let treasury = account(&keypair(0x80));
-        let mut state = state_fixture(&governance, &provider, &custody, &treasury);
-        let first = policy(1, None, custody, treasury, &governance);
-        transact(&mut state, 1, NOW, |transaction| {
-            SetSorafsReservePolicy::new(first).execute(&governance, transaction)
-        })
-        .expect("commit reserve policy");
-
-        let header = block_header_at(2, NOW + 1);
-        let mut block = state.block(header.clone());
-        let mut transaction = block.transaction();
-        let template = read_persisted_event(transaction.world(), 1)
-            .expect("read initial reserve event")
-            .expect("initial reserve event exists");
-        let terminal_sequence = u64::from(RESERVE_QUERY_MAX_ITEMS_V1) + 2;
-        for sequence in 2..=terminal_sequence {
-            let mut record = template.clone();
-            record.sequence = sequence;
-            record.event_index = u32::try_from(sequence - 1).expect("event index fits into u32");
-            transaction.world.smart_contract_state.insert(
-                event_key(sequence),
-                encode_state(&record, "maximum-page reserve event")
-                    .expect("encode maximum-page reserve event"),
-            );
-        }
-        let head = ReserveEventJournalHeadV1 {
-            last_sequence: terminal_sequence,
-            last_target_block_height: 1,
-            last_event_index: u32::try_from(terminal_sequence - 1)
-                .expect("terminal event index fits into u32"),
-        };
-        let mut reserve_state = read_reserve_state(transaction.world())
-            .expect("read maximum-page reserve state")
-            .expect("reserve state exists");
-        reserve_state.journal_head = head;
-        transaction.world.smart_contract_state.insert(
-            reserve_state_key().clone(),
-            encode_state(&reserve_state, "maximum-page reserve state")
-                .expect("encode maximum-page reserve state"),
-        );
-        transaction.apply();
-        block.commit().expect("commit maximum-page fixture");
-        state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
-
-        let view = state.view();
-        let prefix = FindSorafsReserveEvents::new(None, None, 2)
-            .execute(&view)
-            .expect("query reserve event prefix");
-        let after = prefix.events[1].cursor();
-        let page = FindSorafsReserveEvents::new(
-            Some(prefix.finalized_cursor),
-            Some(after),
-            RESERVE_QUERY_MAX_ITEMS_V1,
-        )
-        .execute(&view)
-        .expect("maximum reserve event page remains within every budget");
-        assert_eq!(
-            page.events.len(),
-            usize::try_from(RESERVE_QUERY_MAX_ITEMS_V1).expect("query maximum fits into usize")
-        );
-        assert_eq!(page.events[0].sequence, 3);
-        assert_eq!(page.events.last().expect("terminal event").sequence, 130);
-        assert!(!page.has_more);
-        assert!(page.next_after.is_none());
-    }
-
-    #[test]
-    fn committed_event_queries_fail_closed_on_corruption_and_resource_exhaustion() {
-        let governance = account(&keypair(0x79));
-        let provider = account(&keypair(0x7A));
-        let custody = account(&keypair(0x7B));
-        let treasury = account(&keypair(0x7C));
-
-        let build_policy_state = || {
-            let mut state = state_fixture(&governance, &provider, &custody, &treasury);
-            let first = policy(1, None, custody.clone(), treasury.clone(), &governance);
-            transact(&mut state, 1, NOW, |transaction| {
-                SetSorafsReservePolicy::new(first).execute(&governance, transaction)
-            })
-            .expect("commit reserve policy fixture");
-            state
-        };
-
-        let mut missing_head = build_policy_state();
-        {
-            let header = block_header_at(2, NOW + 1);
-            let mut block = missing_head.block(header.clone());
-            let mut transaction = block.transaction();
-            let mut reserve_state = read_reserve_state(transaction.world())
-                .expect("read reserve state")
-                .expect("reserve state exists");
-            reserve_state.journal_head.last_sequence = 0;
-            transaction.world.smart_contract_state.insert(
-                reserve_state_key().clone(),
-                encode_state(&reserve_state, "corrupt reserve state")
-                    .expect("encode corrupt reserve state"),
-            );
-            transaction.apply();
-            block.commit().expect("commit missing-head corruption");
-            missing_head.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
-        }
-        assert!(matches!(
-            FindSorafsReserveEvents::new(None, None, 10).execute(&missing_head.view()),
-            Err(QueryExecutionFail::Conversion(_))
-        ));
-
-        let mut oversized = build_policy_state();
-        {
-            let header = block_header_at(2, NOW + 1);
-            let mut block = oversized.block(header.clone());
-            let mut transaction = block.transaction();
-            transaction.world.smart_contract_state.insert(
-                event_key(1),
-                vec![0xFF; RESERVE_COMMITTED_EVENT_MAX_BYTES_V1 + 1],
-            );
-            transaction.apply();
-            block.commit().expect("commit oversized-event corruption");
-            oversized.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
-        }
-        assert!(matches!(
-            FindSorafsReserveEvents::new(None, None, 10).execute(&oversized.view()),
-            Err(QueryExecutionFail::Conversion(_))
-        ));
-
-        let mut orphan = build_policy_state();
-        {
-            let header = block_header_at(2, NOW + 1);
-            let mut block = orphan.block(header.clone());
-            let mut transaction = block.transaction();
-            let mut record = read_persisted_event(transaction.world(), 1)
-                .expect("read policy event")
-                .expect("policy event exists");
-            record.sequence = 2;
-            record.target_block_height = 2;
-            record.event_index = 0;
-            transaction.world.smart_contract_state.insert(
-                event_key(2),
-                encode_state(&record, "orphan event").expect("encode orphan reserve event"),
-            );
-            transaction.apply();
-            block.commit().expect("commit orphan-event corruption");
-            orphan.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
-        }
-        assert!(matches!(
-            FindSorafsReserveEvents::new(None, None, 10).execute(&orphan.view()),
-            Err(QueryExecutionFail::Conversion(_))
-        ));
-
-        let mut read_budget = ReserveEventQueryBudgetV1::default();
-        read_budget
-            .inspect_storage_probe(1, None, RESERVE_QUERY_MAX_EVENT_READ_BYTES_V1)
-            .expect("exact reserve query read-byte ceiling is accepted");
-        assert!(matches!(
-            read_budget.inspect_storage_probe(1, None, 1),
-            Err(QueryExecutionFail::Conversion(_))
-        ));
-
-        let mut probe_budget = ReserveEventQueryBudgetV1::default();
-        for _ in 0..RESERVE_QUERY_MAX_EVENT_STORAGE_PROBES_V1 {
-            probe_budget
-                .inspect_storage_probe(1, None, 0)
-                .expect("exact reserve query storage-probe ceiling is accepted");
-        }
-        assert!(matches!(
-            probe_budget.inspect_storage_probe(1, None, 0),
-            Err(QueryExecutionFail::Conversion(message)) if message.contains("storage probes")
-        ));
-
-        let mut key_budget = ReserveEventQueryBudgetV1::default();
-        for _ in 0..128 {
-            key_budget
-                .inspect_storage_probe(RESERVE_QUERY_MAX_EVENT_PROBE_KEY_BYTES_V1, None, 0)
-                .expect("exact reserve query total key-byte ceiling is accepted");
-        }
-        assert!(matches!(
-            key_budget.inspect_storage_probe(1, None, 0),
-            Err(QueryExecutionFail::Conversion(message)) if message.contains("probed key bytes")
-        ));
-        assert!(matches!(
-            ReserveEventQueryBudgetV1::default().inspect_storage_probe(
-                RESERVE_QUERY_MAX_EVENT_PROBE_KEY_BYTES_V1 + 1,
-                None,
-                0,
-            ),
-            Err(QueryExecutionFail::Conversion(message)) if message.contains("probe key")
-        ));
-    }
-
-    #[test]
-    fn initial_policy_activation_rejects_a_nonempty_reserve_namespace_atomically() {
-        let governance = account(&keypair(0x91));
-        let provider = account(&keypair(0x92));
-        let custody = account(&keypair(0x93));
-        let treasury = account(&keypair(0x94));
-        let mut state = state_fixture(&governance, &provider, &custody, &treasury);
-        let legacy_key =
-            StatePath::from_str("sorafs_reserve_policy_v1").expect("legacy fixture key is valid");
-        state
-            .world
-            .smart_contract_state
-            .insert(legacy_key.clone(), vec![0xA5]);
-
-        let result = transact(&mut state, 1, NOW, |transaction| {
-            SetSorafsReservePolicy::new(policy(1, None, custody, treasury, &governance))
-                .execute(&governance, transaction)
-        });
-
-        assert!(matches!(
-            result,
-            Err(InstructionExecutionError::InvariantViolation(_))
-        ));
-        let view = state.view();
-        assert_eq!(
-            view.world().smart_contract_state().get(&legacy_key),
-            Some(&vec![0xA5])
-        );
-        assert!(
-            view.world()
-                .smart_contract_state()
-                .get(reserve_state_key())
-                .is_none()
-        );
-        assert!(
-            view.world()
-                .smart_contract_state()
-                .get(&event_key(1))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn rent_charge_advances_only_due_periods_in_bounded_catchup_batches() {
-        let governance = account(&keypair(0xC1));
-        let provider = account(&keypair(0xC2));
-        let custody = account(&keypair(0xC3));
-        let treasury = account(&keypair(0xC4));
-        let mut state = state_fixture_with_provider_balance(
-            &governance,
-            &provider,
-            &custody,
-            &treasury,
-            quantity_micro(2_000_000_000),
-        );
-        let configured = policy(1, None, custody.clone(), treasury.clone(), &governance);
-        let policy_digest = configured.digest().expect("reserve policy digest");
-        transact(&mut state, 1, NOW, |transaction| {
-            SetSorafsReservePolicy::new(configured).execute(&governance, transaction)?;
-            RegisterSorafsReserveAccount::new(terms(provider), policy_digest)
-                .execute(&governance, transaction)
-        })
-        .expect("activate policy and register provider");
-
-        let catchup_at = NOW + 13 * RESERVE_RENT_BILLING_PERIOD_SECONDS_V1;
-        transact(&mut state, 2, catchup_at, |transaction| {
-            ChargeSorafsReserveRent::new(
-                PROVIDER_ID,
-                1,
-                RESERVE_RENT_MAX_BILLING_PERIODS_V1,
-                policy_digest,
-            )
-            .execute(&governance, transaction)
-        })
-        .expect("settle the native maximum catchup batch");
-        let after_first = read_provider(state.view().world(), PROVIDER_ID)
-            .expect("read provider after first catchup batch")
-            .expect("provider remains");
-        assert_eq!(after_first.revision, 2);
-        assert_eq!(
-            after_first.rent_charged_through_unix,
-            NOW + 12 * RESERVE_RENT_BILLING_PERIOD_SECONDS_V1
-        );
-        assert_eq!(
-            after_first
-                .rent_periods_due_at(catchup_at)
-                .expect("one period remains due"),
-            1
-        );
-
-        assert!(
-            transact(&mut state, 3, catchup_at, |transaction| {
-                ChargeSorafsReserveRent::new(PROVIDER_ID, 2, 2, policy_digest)
-                    .execute(&governance, transaction)
-            })
-            .is_err(),
-            "a charge cannot move the rent anchor beyond the finalized block time"
-        );
-        assert_eq!(
-            read_provider(state.view().world(), PROVIDER_ID)
-                .expect("read provider after rejected overcharge")
-                .expect("provider remains"),
-            after_first
-        );
-
-        transact(&mut state, 3, catchup_at, |transaction| {
-            ChargeSorafsReserveRent::new(PROVIDER_ID, 2, 1, policy_digest)
-                .execute(&governance, transaction)
-        })
-        .expect("settle the final due period");
-        let caught_up = read_provider(state.view().world(), PROVIDER_ID)
-            .expect("read fully caught-up provider")
-            .expect("provider remains");
-        assert_eq!(caught_up.revision, 3);
-        assert_eq!(caught_up.rent_charged_through_unix, catchup_at);
-        assert_eq!(
-            caught_up
-                .rent_periods_due_at(catchup_at)
-                .expect("provider is current"),
-            0
-        );
-    }
-
-    #[test]
-    fn exact_balance_charge_succeeds_and_stale_revision_cannot_double_settle() {
-        let governance = account(&keypair(0xC5));
-        let provider = account(&keypair(0xC6));
-        let custody = account(&keypair(0xC7));
-        let treasury = account(&keypair(0xC8));
-        let configured = policy(1, None, custody, treasury, &governance);
-        let rent = configured
-            .economics
-            .quote(
-                StorageClass::Hot,
-                10,
-                ReserveDuration::Monthly,
-                ReserveTier::TierA,
-                XorQuantity::zero(),
-            )
-            .expect("rent quote")
-            .effective_rent;
-        let mut state = state_fixture_with_provider_balance(
-            &governance,
-            &provider,
-            &configured.custody_account,
-            &configured.treasury_account,
-            rent.clone().into_quantity(),
-        );
-        let policy_digest = configured.digest().expect("reserve policy digest");
-        transact(&mut state, 1, NOW, |transaction| {
-            SetSorafsReservePolicy::new(configured).execute(&governance, transaction)?;
-            RegisterSorafsReserveAccount::new(terms(provider.clone()), policy_digest)
-                .execute(&governance, transaction)
-        })
-        .expect("activate policy and register exact-balance provider");
-
-        let due_at = NOW + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1;
-        transact(&mut state, 2, due_at, |transaction| {
-            ChargeSorafsReserveRent::new(PROVIDER_ID, 1, 1, policy_digest)
-                .execute(&governance, transaction)
-        })
-        .expect("an exact spendable balance settles rent");
-        let settled = read_provider(state.view().world(), PROVIDER_ID)
-            .expect("read settled provider")
-            .expect("provider remains");
-        assert_eq!(settled.revision, 2);
-        assert_eq!(settled.rent_charged_through_unix, due_at);
-        assert!(reserve_asset_balance(&state, &provider).is_zero());
-
-        assert!(
-            transact(&mut state, 3, due_at, |transaction| {
-                ChargeSorafsReserveRent::new(PROVIDER_ID, 1, 1, policy_digest)
-                    .execute(&governance, transaction)
-            })
-            .is_err(),
-            "the stale compare-and-set revision cannot settle rent twice"
-        );
-        assert_eq!(
-            read_provider(state.view().world(), PROVIDER_ID)
-                .expect("read provider after stale replay")
-                .expect("provider remains"),
-            settled
-        );
-    }
-
-    #[test]
-    fn lifecycle_uses_exact_anchor_age_and_rejects_noop_or_timestamp_regression() {
-        let governance = account(&keypair(0xD1));
-        let provider = account(&keypair(0xD2));
-        let custody = account(&keypair(0xD3));
-        let treasury = account(&keypair(0xD4));
-        let mut state = state_fixture(&governance, &provider, &custody, &treasury);
-        let configured = policy(1, None, custody, treasury, &governance);
-        let policy_digest = configured.digest().expect("reserve policy digest");
-        transact(&mut state, 1, NOW, |transaction| {
-            SetSorafsReservePolicy::new(configured).execute(&governance, transaction)?;
-            RegisterSorafsReserveAccount::new(terms(provider), policy_digest)
-                .execute(&governance, transaction)
-        })
-        .expect("activate policy and register provider");
-        let baseline = read_provider(state.view().world(), PROVIDER_ID)
-            .expect("read provider baseline")
-            .expect("provider exists");
-        let exact_boundary = NOW + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1;
-
-        assert!(
-            transact(&mut state, 2, exact_boundary, |transaction| {
-                AdvanceSorafsReserveLifecycle::new(PROVIDER_ID, 1, 1, policy_digest)
-                    .execute(&governance, transaction)
-            })
-            .is_err(),
-            "the exact due boundary is day zero, never day one"
-        );
-        assert!(
-            transact(&mut state, 2, exact_boundary, |transaction| {
-                AdvanceSorafsReserveLifecycle::new(PROVIDER_ID, 1, 0, policy_digest)
-                    .execute(&governance, transaction)
-            })
-            .is_err(),
-            "an exact-day lifecycle no-op cannot churn the provider revision"
-        );
-        assert_eq!(
-            read_provider(state.view().world(), PROVIDER_ID)
-                .expect("read provider after rejected boundary transitions")
-                .expect("provider remains"),
-            baseline
-        );
-
-        let one_day_overdue = exact_boundary + 86_400;
-        transact(&mut state, 2, one_day_overdue, |transaction| {
-            AdvanceSorafsReserveLifecycle::new(PROVIDER_ID, 1, 1, policy_digest)
-                .execute(&governance, transaction)
-        })
-        .expect("the exact derived lifecycle transition succeeds");
-        let overdue = read_provider(state.view().world(), PROVIDER_ID)
-            .expect("read overdue provider")
-            .expect("provider remains");
-        assert_eq!(overdue.days_past_due, 1);
-        assert_eq!(overdue.lifecycle_stage, ReserveLifecycleStage::Grace);
-
-        assert!(
-            transact(&mut state, 3, exact_boundary, |transaction| {
-                AdvanceSorafsReserveLifecycle::new(PROVIDER_ID, 2, 0, policy_digest)
-                    .execute(&governance, transaction)
-            })
-            .is_err(),
-            "a later height cannot regress the provider timestamp or overdue age"
-        );
-        assert_eq!(
-            read_provider(state.view().world(), PROVIDER_ID)
-                .expect("read provider after timestamp regression")
-                .expect("provider remains"),
-            overdue
-        );
-    }
-
-    #[test]
-    fn lifecycle_requires_anchor_advancement_for_zero_or_funded_rent_periods() {
-        let governance = account(&keypair(0xD5));
-        let provider = account(&keypair(0xD6));
-        let custody = account(&keypair(0xD7));
-        let treasury = account(&keypair(0xD8));
-        let mut state = state_fixture_with_provider_balance(
-            &governance,
-            &provider,
-            &custody,
-            &treasury,
-            quantity_micro(1_000_000_000),
-        );
-        let first = policy(1, None, custody.clone(), treasury.clone(), &governance);
-        let first_digest = first.digest().expect("first reserve policy digest");
-        let reserve_requirement = first
-            .economics
-            .quote(
-                StorageClass::Hot,
-                10,
-                ReserveDuration::Monthly,
-                ReserveTier::TierA,
-                XorQuantity::zero(),
-            )
-            .expect("first reserve quote")
-            .reserve_requirement;
-        transact(&mut state, 1, NOW, |transaction| {
-            SetSorafsReservePolicy::new(first).execute(&governance, transaction)?;
-            RegisterSorafsReserveAccount::new(terms(provider.clone()), first_digest)
-                .execute(&governance, transaction)?;
-            RequestSorafsReserveMovement::new(
-                [0xD9; 32],
-                PROVIDER_ID,
-                ReserveMovementKindV1::TopUp,
-                reserve_requirement,
-                1,
-                first_digest,
-            )
-            .execute(&provider, transaction)?;
-            DecideSorafsReserveMovement::new(
-                [0xD9; 32],
-                2,
-                first_digest,
-                true,
-                "fund exact underwriting requirement".to_owned(),
-            )
-            .execute(&governance, transaction)?;
-            AdvanceSorafsReserveLifecycle::new(PROVIDER_ID, 3, 0, first_digest)
-                .execute(&governance, transaction)
-        })
-        .expect("establish an active zero-rent provider");
-        let active = read_provider(state.view().world(), PROVIDER_ID)
-            .expect("read active provider")
-            .expect("provider remains");
-        assert_eq!(active.revision, 4);
-        assert_eq!(active.lifecycle_stage, ReserveLifecycleStage::Active);
-
-        let first_due = NOW + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1;
-        assert!(
-            transact(&mut state, 2, first_due, |transaction| {
-                AdvanceSorafsReserveLifecycle::new(PROVIDER_ID, 4, 0, first_digest)
-                    .execute(&governance, transaction)
-            })
-            .is_err(),
-            "a zero-rent period must advance through ChargeRent, not lifecycle aging"
-        );
-        assert_eq!(
-            read_provider(state.view().world(), PROVIDER_ID)
-                .expect("read provider after rejected zero-rent aging")
-                .expect("provider remains"),
-            active
-        );
-
-        let mut second = policy(2, Some(first_digest), custody, treasury, &governance);
-        second
-            .economics
-            .rent_rates
-            .retain(|rate| rate.storage_class != StorageClass::Hot);
-        second.economics.rent_rates.push(ClassRentRate::new(
-            StorageClass::Hot,
-            "24".parse().expect("rotated hot rent"),
-        ));
-        let second_digest = second.digest().expect("second reserve policy digest");
-        transact(&mut state, 2, first_due, |transaction| {
-            ChargeSorafsReserveRent::new(PROVIDER_ID, 4, 1, first_digest)
-                .execute(&governance, transaction)?;
-            SetSorafsReservePolicy::new(second).execute(&governance, transaction)
-        })
-        .expect("advance the zero-rent anchor and rotate pricing");
-        let after_zero_rent = read_provider(state.view().world(), PROVIDER_ID)
-            .expect("read provider after zero-rent charge")
-            .expect("provider remains");
-        assert_eq!(after_zero_rent.revision, 5);
-        assert_eq!(after_zero_rent.rent_charged_through_unix, first_due);
-
-        let second_due = first_due + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1;
-        assert!(
-            transact(&mut state, 3, second_due, |transaction| {
-                AdvanceSorafsReserveLifecycle::new(PROVIDER_ID, 5, 0, second_digest)
-                    .execute(&governance, transaction)
-            })
-            .is_err(),
-            "one exactly affordable positive-rent period must be charged, never aged"
-        );
-        assert_eq!(
-            read_provider(state.view().world(), PROVIDER_ID)
-                .expect("read provider after rejected funded aging")
-                .expect("provider remains"),
-            after_zero_rent
-        );
-        transact(&mut state, 3, second_due, |transaction| {
-            ChargeSorafsReserveRent::new(PROVIDER_ID, 5, 1, second_digest)
-                .execute(&governance, transaction)
-        })
-        .expect("the funded period advances through ChargeRent");
-        let settled = read_provider(state.view().world(), PROVIDER_ID)
-            .expect("read settled rotated provider")
-            .expect("provider remains");
-        assert_eq!(settled.revision, 6);
-        assert_eq!(settled.rent_charged_through_unix, second_due);
-        assert_eq!(settled.policy_digest, second_digest);
-    }
-
-    #[test]
-    fn failed_transfer_and_finalized_timestamp_rollback_preserve_rent_anchor() {
-        let governance = account(&keypair(0xC9));
-        let provider = account(&keypair(0xCA));
-        let custody = account(&keypair(0xCB));
-        let treasury = account(&keypair(0xCC));
-        let mut state = state_fixture(&governance, &provider, &custody, &treasury);
-        let configured = policy(1, None, custody.clone(), treasury.clone(), &governance);
-        let policy_digest = configured.digest().expect("reserve policy digest");
-        transact(&mut state, 1, NOW - 100, |transaction| {
-            SetSorafsReservePolicy::new(configured).execute(&governance, transaction)
-        })
-        .expect("activate reserve policy");
-        transact(&mut state, 2, NOW, |transaction| {
-            RegisterSorafsReserveAccount::new(terms(provider.clone()), policy_digest)
-                .execute(&governance, transaction)
-        })
-        .expect("register provider at its rent anchor");
-        let baseline = read_provider(state.view().world(), PROVIDER_ID)
-            .expect("read provider baseline")
-            .expect("provider exists");
-        let provider_balance = reserve_asset_balance(&state, &provider);
-        let treasury_balance = reserve_asset_balance(&state, &treasury);
-
-        let due_at = NOW + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1;
-        assert!(
-            transact(&mut state, 3, due_at, |transaction| {
-                ChargeSorafsReserveRent::new(PROVIDER_ID, 1, 1, policy_digest)
-                    .execute(&governance, transaction)
-            })
-            .is_err(),
-            "the fixture provider cannot cover one whole rent period"
-        );
-        assert_eq!(
-            read_provider(state.view().world(), PROVIDER_ID)
-                .expect("read provider after failed transfer")
-                .expect("provider remains"),
-            baseline,
-            "a failed custody transfer cannot advance revision, lifecycle, or rent anchor"
-        );
-        assert_eq!(reserve_asset_balance(&state, &provider), provider_balance);
-        assert_eq!(reserve_asset_balance(&state, &treasury), treasury_balance);
-
-        assert!(
-            transact(&mut state, 3, NOW - 1, |transaction| {
-                ChargeSorafsReserveRent::new(PROVIDER_ID, 1, 1, policy_digest)
-                    .execute(&governance, transaction)
-            })
-            .is_err(),
-            "a later height cannot supply a timestamp before the ledger rent anchor"
-        );
-        assert_eq!(
-            read_provider(state.view().world(), PROVIDER_ID)
-                .expect("read provider after timestamp rollback")
-                .expect("provider remains"),
-            baseline
-        );
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn every_provider_mutation_rejects_regressed_block_time() {
-        let governance = account(&keypair(0xE1));
-        let provider = account(&keypair(0xE2));
-        let custody = account(&keypair(0xE3));
-        let treasury = account(&keypair(0xE4));
-        let mut state = state_fixture(&governance, &provider, &custody, &treasury);
-        let configured = policy(1, None, custody, treasury, &governance);
-        let policy_digest = configured.digest().expect("reserve policy digest");
-        transact(&mut state, 1, NOW, |transaction| {
-            SetSorafsReservePolicy::new(configured).execute(&governance, transaction)?;
-            RegisterSorafsReserveAccount::new(terms(provider.clone()), policy_digest)
-                .execute(&governance, transaction)
-        })
-        .expect("activate policy and register provider");
-
-        let updated_at = NOW + 100;
-        transact(&mut state, 2, updated_at, |transaction| {
-            RequestSorafsReserveMovement::new(
-                [0xE5; 32],
-                PROVIDER_ID,
-                ReserveMovementKindV1::TopUp,
-                xor_micro(1_000_000),
-                1,
-                policy_digest,
-            )
-            .execute(&provider, transaction)?;
-            RequestSorafsReserveMovement::new(
-                [0xE6; 32],
-                PROVIDER_ID,
-                ReserveMovementKindV1::Withdrawal,
-                xor_micro(1),
-                2,
-                policy_digest,
-            )
-            .execute(&provider, transaction)?;
-            SubmitSorafsReserveAppeal::new(
-                [0xE7; 32],
-                PROVIDER_ID,
-                3,
-                ReserveLifecycleStage::Active,
-                "review provider lifecycle".to_owned(),
-                Some([0xE8; 32]),
-                policy_digest,
-            )
-            .execute(&provider, transaction)?;
-            DrawSorafsReserveCredit::new(PROVIDER_ID, 4, xor_micro(1_000_000), policy_digest)
-                .execute(&governance, transaction)
-        })
-        .expect("establish pending records and a later provider timestamp");
-
-        let baseline_provider = read_provider(state.view().world(), PROVIDER_ID)
-            .expect("read provider baseline")
-            .expect("provider exists");
-        assert_eq!(baseline_provider.updated_at_unix, updated_at);
-        assert_eq!(baseline_provider.revision, 5);
-        let baseline_top_up = read_movement(state.view().world(), [0xE5; 32])
-            .expect("read pending top-up")
-            .expect("top-up exists");
-        let baseline_withdrawal = read_movement(state.view().world(), [0xE6; 32])
-            .expect("read pending withdrawal")
-            .expect("withdrawal exists");
-        let baseline_appeal = read_appeal(state.view().world(), [0xE7; 32])
-            .expect("read pending appeal")
-            .expect("appeal exists");
-        let baseline_reserve_state = read_reserve_state(state.view().world())
-            .expect("read reserve state")
-            .expect("reserve state exists");
-
-        let regressed_at = updated_at - 1;
-        let header = block_header_at(3, regressed_at);
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
-        let assert_regression = |result: Result<(), InstructionExecutionError>, operation: &str| {
-            let error = result.expect_err(operation);
-            assert!(
-                error.to_string().contains("predates provider update"),
-                "{operation} failed for the wrong reason: {error}"
-            );
-        };
-
-        assert_regression(
-            RequestSorafsReserveMovement::new(
-                [0xE9; 32],
-                PROVIDER_ID,
-                ReserveMovementKindV1::TopUp,
-                xor_micro(1),
-                5,
-                policy_digest,
-            )
-            .execute(&provider, &mut transaction),
-            "regressed top-up request",
-        );
-        assert_regression(
-            RequestSorafsReserveMovement::new(
-                [0xEA; 32],
-                PROVIDER_ID,
-                ReserveMovementKindV1::Withdrawal,
-                xor_micro(1),
-                5,
-                policy_digest,
-            )
-            .execute(&provider, &mut transaction),
-            "regressed withdrawal request",
-        );
-        assert_regression(
-            DecideSorafsReserveMovement::new(
-                [0xE5; 32],
-                5,
-                policy_digest,
-                true,
-                "approve top-up".to_owned(),
-            )
-            .execute(&governance, &mut transaction),
-            "regressed top-up decision",
-        );
-        assert_regression(
-            DecideSorafsReserveMovement::new(
-                [0xE6; 32],
-                5,
-                policy_digest,
-                false,
-                "reject withdrawal".to_owned(),
-            )
-            .execute(&governance, &mut transaction),
-            "regressed withdrawal decision",
-        );
-        assert_regression(
-            DrawSorafsReserveCredit::new(PROVIDER_ID, 5, xor_micro(1), policy_digest)
-                .execute(&governance, &mut transaction),
-            "regressed credit draw",
-        );
-        assert_regression(
-            RepaySorafsReserveCredit::new(PROVIDER_ID, 5, xor_micro(1), policy_digest)
-                .execute(&provider, &mut transaction),
-            "regressed credit repayment",
-        );
-        assert_regression(
-            SubmitSorafsReserveAppeal::new(
-                [0xEB; 32],
-                PROVIDER_ID,
-                5,
-                ReserveLifecycleStage::Warning,
-                "review timestamp regression".to_owned(),
-                Some([0xEC; 32]),
-                policy_digest,
-            )
-            .execute(&provider, &mut transaction),
-            "regressed appeal submission",
-        );
-        assert_regression(
-            DecideSorafsReserveAppeal::new(
-                [0xE7; 32],
-                5,
-                policy_digest,
-                true,
-                "accept appeal".to_owned(),
-            )
-            .execute(&governance, &mut transaction),
-            "regressed appeal decision",
-        );
-
-        assert_eq!(
-            read_provider(transaction.world(), PROVIDER_ID)
-                .expect("read provider after rejected mutations")
-                .expect("provider remains"),
-            baseline_provider
-        );
-        assert_eq!(
-            read_movement(transaction.world(), [0xE5; 32])
-                .expect("read top-up after rejected mutations")
-                .expect("top-up remains"),
-            baseline_top_up
-        );
-        assert_eq!(
-            read_movement(transaction.world(), [0xE6; 32])
-                .expect("read withdrawal after rejected mutations")
-                .expect("withdrawal remains"),
-            baseline_withdrawal
-        );
-        assert_eq!(
-            read_appeal(transaction.world(), [0xE7; 32])
-                .expect("read appeal after rejected mutations")
-                .expect("appeal remains"),
-            baseline_appeal
-        );
-        assert!(
-            read_movement(transaction.world(), [0xE9; 32])
-                .expect("read rejected top-up request")
-                .is_none()
-        );
-        assert!(
-            read_movement(transaction.world(), [0xEA; 32])
-                .expect("read rejected withdrawal request")
-                .is_none()
-        );
-        assert!(
-            read_appeal(transaction.world(), [0xEB; 32])
-                .expect("read rejected appeal")
-                .is_none()
-        );
-        assert_eq!(
-            read_reserve_state(transaction.world())
-                .expect("read reserve state after rejected mutations")
-                .expect("reserve state remains"),
-            baseline_reserve_state
-        );
-    }
-
-    #[test]
-    fn policy_rotation_rejects_regressed_activation_time() {
-        let governance = account(&keypair(0xED));
-        let provider = account(&keypair(0xEE));
-        let custody = account(&keypair(0xEF));
-        let treasury = account(&keypair(0xF0));
-        let mut state = state_fixture(&governance, &provider, &custody, &treasury);
-        let activated_at = NOW + 100;
-        let first = policy(1, None, custody.clone(), treasury.clone(), &governance);
-        let first_digest = first.digest().expect("first reserve policy digest");
-        transact(&mut state, 1, activated_at, |transaction| {
-            SetSorafsReservePolicy::new(first).execute(&governance, transaction)
-        })
-        .expect("activate first reserve policy");
-        let baseline = read_reserve_state(state.view().world())
-            .expect("read baseline reserve state")
-            .expect("reserve state exists");
-        let second = policy(2, Some(first_digest), custody, treasury, &governance);
-
-        let header = block_header_at(2, activated_at - 1);
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
-        let error = SetSorafsReservePolicy::new(second)
-            .execute(&governance, &mut transaction)
-            .expect_err("regressed reserve policy activation must fail");
-        assert!(
-            error
-                .to_string()
-                .contains("predates active policy activation"),
-            "policy rotation failed for the wrong reason: {error}"
-        );
-        assert_eq!(
-            read_reserve_state(transaction.world())
-                .expect("read reserve state after rejected policy")
-                .expect("reserve state remains"),
-            baseline
-        );
-        assert!(
-            read_persisted_event(transaction.world(), 2)
-                .expect("read absent policy event")
-                .is_none(),
-            "rejected policy rotation cannot append an event"
-        );
-    }
-
-    #[test]
-    fn exact_service_authorities_and_decision_cas_fail_without_mutation() {
-        let governance = account(&keypair(0xA1));
-        let provider = account(&keypair(0xA2));
-        let decision = account(&keypair(0xA3));
-        let operations = account(&keypair(0xA4));
-        let state = state_fixture(&governance, &provider, &decision, &operations);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, NOW * 1_000, 0);
-        let mut block = state.block(header);
-        let mut transaction = block.transaction();
-        transaction.tx_call_hash = Some(Hash::prehashed([0xA5; Hash::LENGTH]));
-
-        let mut first = policy(1, None, decision.clone(), operations.clone(), &governance);
-        first.operations_authority = operations.clone();
-        first.decision_authority = decision.clone();
-        let first_digest = first.digest().expect("first policy digest");
-        SetSorafsReservePolicy::new(first)
-            .execute(&governance, &mut transaction)
-            .expect("activate first policy");
-
-        let registration = RegisterSorafsReserveAccount::new(terms(provider.clone()), first_digest);
-        assert!(
-            registration
-                .clone()
-                .execute(&governance, &mut transaction)
-                .is_err(),
-            "broad reserve-governance permission must not substitute for the operations account"
-        );
-        assert!(
-            read_provider(transaction.world(), PROVIDER_ID)
-                .expect("read provider after rejected registration")
-                .is_none()
-        );
-        registration
-            .execute(&operations, &mut transaction)
-            .expect("exact operations account registers provider");
-
-        RequestSorafsReserveMovement::new(
-            [0xA6; 32],
-            PROVIDER_ID,
-            ReserveMovementKindV1::TopUp,
-            xor_micro(10_000_000),
-            1,
-            first_digest,
-        )
-        .execute(&provider, &mut transaction)
-        .expect("provider requests top-up");
-        let provider_before = read_provider(transaction.world(), PROVIDER_ID)
-            .expect("read provider before rotation")
-            .expect("registered provider");
-        let movement_before = read_movement(transaction.world(), [0xA6; 32])
-            .expect("read movement before rotation")
-            .expect("pending movement");
-
-        let mut second = policy(
-            2,
-            Some(first_digest),
-            decision.clone(),
-            operations.clone(),
-            &governance,
-        );
-        second.operations_authority = operations.clone();
-        second.decision_authority = decision.clone();
-        let second_digest = second.digest().expect("second policy digest");
-        SetSorafsReservePolicy::new(second)
-            .execute(&governance, &mut transaction)
-            .expect("rotate reserve policy");
-
-        for (authority, revision, digest) in [
-            (&governance, 2, second_digest),
-            (&decision, 1, second_digest),
-            (&decision, 2, first_digest),
-        ] {
-            assert!(
-                DecideSorafsReserveMovement::new(
-                    [0xA6; 32],
-                    revision,
-                    digest,
-                    true,
-                    "approve top-up".to_owned(),
-                )
-                .execute(authority, &mut transaction)
-                .is_err()
-            );
-            assert_eq!(
-                read_provider(transaction.world(), PROVIDER_ID)
-                    .expect("read provider after rejected decision")
-                    .expect("provider remains"),
-                provider_before
-            );
-            assert_eq!(
-                read_movement(transaction.world(), [0xA6; 32])
-                    .expect("read movement after rejected decision")
-                    .expect("movement remains"),
-                movement_before
-            );
-        }
-
-        DecideSorafsReserveMovement::new(
-            [0xA6; 32],
-            2,
-            second_digest,
-            true,
-            "approve top-up".to_owned(),
-        )
-        .execute(&decision, &mut transaction)
-        .expect("exact decision account and CAS apply top-up");
-        let after_decision = read_provider(transaction.world(), PROVIDER_ID)
-            .expect("read provider after decision")
-            .expect("provider remains");
-        assert_eq!(after_decision.revision, 3);
-
-        assert!(
-            ChargeSorafsReserveRent::new(PROVIDER_ID, 3, 1, second_digest)
-                .execute(&governance, &mut transaction)
-                .is_err(),
-            "broad governance permission must not substitute for operations"
-        );
-        assert_eq!(
-            read_provider(transaction.world(), PROVIDER_ID)
-                .expect("read provider after rejected charge")
-                .expect("provider remains"),
-            after_decision
-        );
-    }
-}
+mod tests;

@@ -1,13 +1,17 @@
 package org.hyperledger.iroha.android.model;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Locale;
 import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.client.LocalSigningContext;
+import org.hyperledger.iroha.android.client.VerifyingKeyTransactionDraft;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sccp.SccpV1;
@@ -18,27 +22,28 @@ import org.junit.Test;
 public final class TransactionPayloadTests {
   private static final String CONTRACT_ADDRESS =
       "irohac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjq3qexfh";
-  private static final String TAIRA_CHAIN_ID =
-      "fc56984b-2be7-431d-840e-21514d1883f0";
+  private static final String TEST_NETWORK_ID_LITERAL =
+      "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+  private static final NetworkId TEST_NETWORK_ID = NetworkId.parse(TEST_NETWORK_ID_LITERAL);
   private static final String AUTHORITY = sampleAuthority();
 
   @Test
-  public void chainIdMustBeSetExplicitlyForAuthoredAndDecodedPayloads() {
-    final TransactionPayload.Builder missingChainId =
+  public void networkIdMustBeSetExplicitlyForAuthoredAndDecodedPayloads() {
+    final TransactionPayload.Builder missingNetworkId =
         TransactionPayload.builder()
             .setAuthority(AUTHORITY)
             .setInstructions(Collections.emptyList())
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()));
-    assertIllegalState(missingChainId::build, "chainId must be set explicitly");
+    assertIllegalState(missingNetworkId::build, "networkId must be set explicitly");
     assertIllegalState(
-        missingChainId::buildDecodedForCodec, "chainId must be set explicitly");
+        missingNetworkId::buildDecodedForCodec, "networkId must be set explicitly");
   }
 
   @Test
   public void authorityMustBeSetExplicitlyForAuthoredAndDecodedPayloads() {
     final TransactionPayload.Builder missingAuthority =
         TransactionPayload.builder()
-            .setChainId(TAIRA_CHAIN_ID)
+            .setNetworkId(TEST_NETWORK_ID)
             .setInstructions(Collections.emptyList())
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()));
     assertIllegalState(missingAuthority::build, "authority must be set explicitly");
@@ -61,7 +66,7 @@ public final class TransactionPayloadTests {
       assertIllegalState(
           () ->
               TransactionPayload.builder()
-                  .setChainId(TAIRA_CHAIN_ID)
+                  .setNetworkId(TEST_NETWORK_ID)
                   .setAuthority(AUTHORITY)
                   .setExecutable(executable)
                   .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
@@ -69,7 +74,7 @@ public final class TransactionPayloadTests {
           "feePayment.gasLimit is required");
       assertNotNull(
           TransactionPayload.builder()
-              .setChainId(TAIRA_CHAIN_ID)
+              .setNetworkId(TEST_NETWORK_ID)
               .setAuthority(AUTHORITY)
               .setExecutable(executable)
               .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
@@ -81,7 +86,7 @@ public final class TransactionPayloadTests {
   public void nativeInstructionsDoNotRequireGas() {
     final TransactionPayload payload =
         TransactionPayload.builder()
-            .setChainId(TAIRA_CHAIN_ID)
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(AUTHORITY)
             .setInstructions(
                 Collections.singletonList(
@@ -93,20 +98,19 @@ public final class TransactionPayloadTests {
   }
 
   @Test
-  public void chainIdUsesCanonicalBoundedAsciiGrammar() {
+  public void transactionPayloadRequiresNominalNetworkId() {
     for (final String invalid :
         Arrays.asList(
-            "-leading",
-            "trailing_",
-            "contains space",
+            TEST_NETWORK_ID_LITERAL.toLowerCase(Locale.ROOT),
+            TEST_NETWORK_ID_LITERAL.substring(0, TEST_NETWORK_ID_LITERAL.length() - 1) + "1",
+            TEST_NETWORK_ID_LITERAL.substring(0, TEST_NETWORK_ID_LITERAL.indexOf('#')),
             "unicode-\u00e9",
-            repeatText("x", 129))) {
-      assertIllegalArgument(
-          () -> TransactionPayload.builder().setChainId(invalid), "chainId");
+            "network-label")) {
+      assertIllegalArgument(() -> NetworkId.parse(invalid), "NetworkId");
     }
     assertNotNull(
         TransactionPayload.builder()
-            .setChainId("iroha.mainnet:v1-alpha_2")
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(AUTHORITY)
             .setInstructions(Collections.emptyList())
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
@@ -114,10 +118,43 @@ public final class TransactionPayloadTests {
   }
 
   @Test
+  public void publicTransactionApiDoesNotExposeLegacyChainNames() {
+    for (final Class<?> type :
+        Arrays.asList(
+            NetworkId.class,
+            TransactionPayload.class,
+            TransactionPayload.Builder.class,
+            LocalSigningContext.class,
+            VerifyingKeyTransactionDraft.class)) {
+      Arrays.stream(type.getDeclaredMethods())
+          .filter(method -> java.lang.reflect.Modifier.isPublic(method.getModifiers()))
+          .forEach(
+              method ->
+                  assertFalse(
+                      type.getName() + "." + method.getName(),
+                      method.getName().toLowerCase(Locale.ROOT).contains("chain")));
+      Arrays.stream(type.getDeclaredFields())
+          .filter(field -> java.lang.reflect.Modifier.isPublic(field.getModifiers()))
+          .forEach(
+              field ->
+                  assertFalse(
+                      type.getName() + "." + field.getName(),
+                      field.getName().toLowerCase(Locale.ROOT).contains("chain")));
+      Arrays.stream(type.getDeclaredConstructors())
+          .flatMap(constructor -> Arrays.stream(constructor.getParameterTypes()))
+          .forEach(
+              parameter ->
+                  assertFalse(
+                      type.getName() + " constructor " + parameter.getName(),
+                      parameter.getSimpleName().toLowerCase(Locale.ROOT).contains("chain")));
+    }
+  }
+
+  @Test
   public void nonceSupportsTheFullNonzeroU32Range() throws NoritoException {
     final TransactionPayload payload =
         TransactionPayload.builder()
-            .setChainId(TAIRA_CHAIN_ID)
+            .setNetworkId(TEST_NETWORK_ID)
             .setAuthority(AUTHORITY)
             .setInstructions(Collections.emptyList())
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
@@ -138,14 +175,6 @@ public final class TransactionPayloadTests {
     final byte[] bytes = new byte[length];
     Arrays.fill(bytes, (byte) value);
     return bytes;
-  }
-
-  private static String repeatText(final String value, final int count) {
-    final StringBuilder result = new StringBuilder(value.length() * count);
-    for (int i = 0; i < count; i++) {
-      result.append(value);
-    }
-    return result.toString();
   }
 
   private static String sampleAuthority() {

@@ -1,4 +1,3 @@
-
 #[test]
 fn direct_close_ack_retains_reply_route_from_lane_through_worker() {
     let super::super::v2_lane_work::tests::CertifiedSidecarServerFixture {

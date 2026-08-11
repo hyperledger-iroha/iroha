@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
@@ -30,12 +31,12 @@ public final class PrivacyConfidentialWitness {
   private static final byte[] TRANSFER_PUBLIC_INPUTS_SCHEMA =
       ("{\"schema\":\"confidential_transfer_v2\",\"public_inputs\":[\"input_commitment_0\","
               + "\"input_commitment_1\",\"nullifier_0\",\"nullifier_1\",\"output_commitment_0\","
-              + "\"output_commitment_1\",\"root\",\"asset_tag\",\"chain_tag\"]}")
+              + "\"output_commitment_1\",\"root\",\"asset_tag\",\"network_tag\"]}")
           .getBytes(StandardCharsets.UTF_8);
   private static final byte[] UNSHIELD_PUBLIC_INPUTS_SCHEMA =
       ("{\"schema\":\"confidential_unshield_v3\",\"public_inputs\":[\"input_commitment_0\","
               + "\"input_commitment_1\",\"nullifier_0\",\"nullifier_1\",\"change_commitment_0\","
-              + "\"root\",\"public_amount\",\"asset_tag\",\"chain_tag\"]}")
+              + "\"root\",\"public_amount\",\"asset_tag\",\"network_tag\"]}")
           .getBytes(StandardCharsets.UTF_8);
 
   private PrivacyConfidentialWitness() {}
@@ -185,7 +186,7 @@ public final class PrivacyConfidentialWitness {
 
   /** Native {@code PrivacyConfidentialWitnessV1} payload accepted by the bridge. */
   public static final class WitnessV1 {
-    private final String chainId;
+    private final NetworkId networkId;
     private final String assetDefinitionId;
     private final byte[] spendKey;
     private final List<byte[]> treeCommitments;
@@ -196,7 +197,7 @@ public final class PrivacyConfidentialWitness {
     private final byte[] rootHint;
 
     public WitnessV1(
-        final String chainId,
+        final NetworkId networkId,
         final String assetDefinitionId,
         final byte[] spendKey,
         final List<byte[]> treeCommitments,
@@ -205,7 +206,7 @@ public final class PrivacyConfidentialWitness {
         final List<UnshieldChangeWitnessV1> unshieldChange,
         final String publicAmount,
         final byte[] rootHint) {
-      this.chainId = canonicalText(chainId, "chainId");
+      this.networkId = Objects.requireNonNull(networkId, "networkId");
       this.assetDefinitionId = canonicalText(assetDefinitionId, "assetDefinitionId");
       this.spendKey = fixed32(spendKey, "spendKey");
       this.treeCommitments = copyFixed32List(treeCommitments, "treeCommitments");
@@ -250,8 +251,8 @@ public final class PrivacyConfidentialWitness {
       }
     }
 
-    public String chainId() {
-      return chainId;
+    public NetworkId networkId() {
+      return networkId;
     }
 
     public String assetDefinitionId() {
@@ -291,15 +292,25 @@ public final class PrivacyConfidentialWitness {
       new TypeAdapter<>() {
         @Override
         public void encode(final NoritoEncoder encoder, final WitnessV1 value) {
-          writeField(encoder, child -> writeString(child, value.chainId()));
+          writeField(encoder, child -> child.writeBytes(value.networkId().bytes()));
           writeField(encoder, child -> writeString(child, value.assetDefinitionId()));
           writeField(encoder, child -> writeBytesVec(child, value.spendKey()));
           writeField(
               encoder,
-              child -> writeSequence(child, value.treeCommitments(), PrivacyConfidentialWitness::writeBytesVec));
+              child ->
+                  writeSequence(
+                      child,
+                      value.treeCommitments(),
+                      PrivacyConfidentialWitness::writeBytesVec));
           writeField(encoder, child -> writeSequence(child, value.inputs(), NOTE_ADAPTER::encode));
-          writeField(encoder, child -> writeSequence(child, value.transferOutputs(), TRANSFER_OUTPUT_ADAPTER::encode));
-          writeField(encoder, child -> writeSequence(child, value.unshieldChange(), UNSHIELD_CHANGE_ADAPTER::encode));
+          writeField(
+              encoder,
+              child ->
+                  writeSequence(child, value.transferOutputs(), TRANSFER_OUTPUT_ADAPTER::encode));
+          writeField(
+              encoder,
+              child ->
+                  writeSequence(child, value.unshieldChange(), UNSHIELD_CHANGE_ADAPTER::encode));
           writeField(encoder, child -> writeU128(child, value.publicAmount()));
           writeField(encoder, child -> writeBytesVec(child, value.rootHint()));
         }

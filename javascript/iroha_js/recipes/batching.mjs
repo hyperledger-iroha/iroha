@@ -4,6 +4,7 @@ import { Buffer } from "node:buffer";
 import { ed25519 } from "@noble/curves/ed25519";
 import {
   AccountAddress,
+  NetworkId,
   buildMintAssetInstruction,
   buildBurnAssetInstruction,
   buildTransferAssetInstruction,
@@ -14,7 +15,9 @@ import {
   noritoDecodeInstruction,
 } from "../src/index.js";
 
-const chainId = "batching-sample-chain";
+const networkId = NetworkId.parse(
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
 const privateKey = Buffer.from(
   "CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53",
   "hex",
@@ -55,7 +58,7 @@ inspectInstruction("Transfer", transferInstruction);
 inspectInstruction("Burn", burnInstruction);
 
 const manualBatch = buildTransaction({
-  chainId,
+  networkId,
   authority,
   feePayment,
   instructions: [mintInstruction, transferInstruction, burnInstruction],
@@ -67,7 +70,7 @@ const manualBatch = buildTransaction({
 console.log(`\\nManual batch hash: ${manualBatch.hash.toString("hex")}`);
 
 const mintAndTransfer = buildMintAndTransferTransaction({
-  chainId,
+  networkId,
   authority,
   feePayment,
   mint: { assetId, quantity: "10" },
@@ -86,7 +89,7 @@ console.log(
 
 const registerMintTransfer = buildRegisterAssetDefinitionMintAndTransferTransaction(
   {
-    chainId,
+    networkId,
     authority,
     feePayment,
     assetDefinition: {

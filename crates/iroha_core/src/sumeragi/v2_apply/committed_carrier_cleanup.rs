@@ -5,7 +5,7 @@ fn finalize_startup_committed_canonical_carriers(
     state: &State,
     queue: &Queue,
     kura: &Kura,
-    chain_hash: Hash,
+    network_id: NetworkId,
     authorized_commit_groups: Vec<(
         Vec<crate::queue::LaneQueueReservationKeyV2>,
         AutonomousLaneQueueCarrierCleanupAuthorization,
@@ -15,10 +15,9 @@ fn finalize_startup_committed_canonical_carriers(
         return Ok(0);
     }
     let anchored_carrier_bound = authorized_commit_groups.len();
-    let invalid =
-        |detail: &str| V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
-            detail: detail.to_owned(),
-        };
+    let invalid = |detail: &str| V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
+        detail: detail.to_owned(),
+    };
     let mut planned_authorizations = BTreeMap::new();
     let mut carrier_publications = BTreeMap::new();
     for (ordered_keys, carrier_authorization) in authorized_commit_groups {
@@ -52,7 +51,7 @@ fn finalize_startup_committed_canonical_carriers(
             invalid("startup source-outcome publication lost its committed merge entry")
         })?;
         let authenticated =
-            authenticate_committed_canonical_carrier(state, kura, &entry, chain_hash)?;
+            authenticate_committed_canonical_carrier(state, kura, &entry, network_id)?;
         if authenticated.reference.entry_hash != entry_hash
             || carrier_heights
                 .insert(authenticated.carrier_height, entry_hash)
@@ -121,8 +120,7 @@ fn finalize_startup_committed_canonical_carriers(
             "startup committed Queue group is absent from its reconstructed carrier",
         ));
     }
-    source_authorized_carriers
-        .sort_by_key(|(height, entry_hash, _, _, _)| (*height, *entry_hash));
+    source_authorized_carriers.sort_by_key(|(height, entry_hash, _, _, _)| (*height, *entry_hash));
     let mut carrier_releases = Vec::with_capacity(source_authorized_carriers.len());
     for (height, _, entry, carrier_block_hash, _) in &source_authorized_carriers {
         carrier_releases.push((

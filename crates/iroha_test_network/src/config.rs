@@ -1088,12 +1088,6 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     }
     install_preexec_lane_manifests(&state, runtime_config)?;
     let core_topology = CoreTopology::new(topology.to_vec());
-    let chain = block
-        .0
-        .transactions_vec()
-        .first()
-        .map(|tx| tx.chain().clone())
-        .unwrap_or_else(chain_id);
 
     let mut voting_block = None;
     let time_source = TimeSource::new_system();
@@ -1101,7 +1095,6 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     let validation = ValidBlock::validate_signed_genesis_keep_voting_block(
         block.0.clone(),
         &core_topology,
-        &chain,
         &effective_genesis_account,
         &time_source,
         &state,
@@ -1479,12 +1472,8 @@ mod tests {
 
         let block = genesis(vec![instructions], topology, vec![entry]);
         let genesis_account = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
-        check_genesis_block(
-            &block.0,
-            &genesis_account,
-            &ChainId::from("00000000-0000-0000-0000-000000000000"),
-        )
-        .expect("genesis authority should be permitted to seed wonderland assets");
+        check_genesis_block(&block.0, &genesis_account)
+            .expect("genesis authority should be permitted to seed wonderland assets");
     }
 
     #[test]

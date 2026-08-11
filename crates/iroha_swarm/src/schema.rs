@@ -4,7 +4,7 @@ use norito::json::{self, Map, Value};
 
 use crate::{
     GenesisArtifactSettings, ImageSettings, PeerSettings, PreparedRuntimeConfig,
-    PreparedRuntimeSource, path, peer,
+    PreparedRuntimeSource, base64_standard, path, peer,
 };
 
 fn peer_env_to_value(env: &PeerEnv<'_>) -> norito::json::Value {
@@ -722,7 +722,7 @@ fn prepared_compose_configs(
         for file in &runtime.files {
             let name = prepared_runtime_file_name(file);
             let mut runtime_file = Map::new();
-            let rendered_content = BASE64_STANDARD.encode(&file.content);
+            let rendered_content = base64_standard::encode(&file.content);
             runtime_file.insert("content".into(), Value::String(rendered_content.clone()));
             match configs.insert(name.clone(), Value::Object(runtime_file)) {
                 Some(Value::Object(existing))
@@ -776,12 +776,12 @@ fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> Strin
             format!(
                 "{materialize}exec env -i PATH=/usr/local/bin:/usr/bin:/bin \
                  HOME=/opt/iroha USER=iroha \
-                 IROHA_BUILD_LINE={} irohad{sora} --config /config/peer.toml \
+                 IROHA_BUILD_LINE={} iroha3d{sora} --config /config/peer.toml \
                  --config-blake3 {config_blake3}",
                 runtime.build_line.as_str()
             )
         }
-        None => "export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH && exec irohad".to_owned(),
+        None => "export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH && exec iroha3d".to_owned(),
     };
     format!(
         r#"/bin/sh -eu -c "
@@ -1234,7 +1234,8 @@ mod tests {
         map.insert(
             "GENESIS_EXPECTED_HASH".into(),
             Value::String(
-                "0000000000000000000000000000000000000000000000000000000000000001".to_owned(),
+                "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .to_owned(),
             ),
         );
         let mock_env = mock_env_from_value(value);

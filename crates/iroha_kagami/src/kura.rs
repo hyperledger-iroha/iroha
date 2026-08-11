@@ -320,11 +320,14 @@ mod tests {
     use super::*;
 
     fn append_block(store: &mut BlockStore, prev: Option<&SignedBlock>) -> Arc<SignedBlock> {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"kagami-kura-fixture-network",
+            )));
         let authority = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
         // A simple instruction is enough; validity is not exercised here.
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
-            chain_id,
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

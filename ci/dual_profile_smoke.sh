@@ -34,12 +34,12 @@ for bundle in "$@"; do
         exit 5
     fi
 
-    if [[ ! -x "$profile_dir/bin/irohad" ]]; then
-        printf '[dual-smoke] irohad binary missing/executable bit unset in %s\n' "$bundle" >&2
+    if [[ ! -x "$profile_dir/bin/iroha3d" ]]; then
+        printf '[dual-smoke] iroha3d binary missing/executable bit unset in %s\n' "$bundle" >&2
         exit 6
     fi
 
-    "$profile_dir/bin/irohad" --version >/dev/null
+    "$profile_dir/bin/iroha3d" --version >/dev/null
     "$profile_dir/bin/kagami" --help >/dev/null
 
     case "$profile_name" in

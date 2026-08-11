@@ -43,7 +43,9 @@ fn finalize_referendum_rejects_unfinalized_zk_election() {
         mode: GovernanceReferendumMode::Zk,
     };
     let contract_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &ALICE_ID,
         0,
         DataSpaceId::UNIVERSAL,

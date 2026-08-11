@@ -27,7 +27,7 @@ mod wallet;
 mod wire;
 
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     privacy::{
         PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
         PrivacyStatementDigestV1, PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
@@ -114,10 +114,8 @@ pub const FCMP_SOURCE_PROFILE_V1: &[u8] = b"iroha-native-rust:clean-room:full-ch
 /// Complete consensus fields bound into every native FCMP++ transcript.
 #[derive(Clone, Copy, Debug)]
 pub struct FcmpRuntimeContextBindingV1<'a> {
-    /// Exact signed chain identifier.
-    pub chain_id: &'a ChainId,
-    /// Canonical genesis hash selected by the verifier.
-    pub genesis_hash: [u8; 32],
+    /// Exact genesis-header-derived network identity.
+    pub network_id: &'a NetworkId,
     /// Zero-based action index in the direct privacy transaction.
     pub action_index: u32,
     /// Digest of the complete typed public statement.
@@ -143,14 +141,9 @@ pub struct FcmpRuntimeContextBindingV1<'a> {
 pub fn derive_fcmp_runtime_context_hash_v1(binding: &FcmpRuntimeContextBindingV1<'_>) -> [u8; 32] {
     const DOMAIN: &[u8] = b"iroha.privacy.fcmp-plus-plus.runtime-context.v1";
 
-    let chain_id = binding.chain_id.as_str().as_bytes();
-    let chain_id_len =
-        u64::try_from(chain_id.len()).expect("canonical ChainId length always fits u64");
     let mut hash = Sha256::new();
     hash.update(DOMAIN);
-    hash.update(chain_id_len.to_be_bytes());
-    hash.update(chain_id);
-    hash.update(binding.genesis_hash);
+    hash.update(binding.network_id.as_bytes());
     hash.update(binding.action_index.to_be_bytes());
     hash.update(binding.statement_digest.as_bytes());
     hash.update(binding.parameter_id.as_bytes());

@@ -1512,7 +1512,8 @@ public struct AliasTransactionPlanBodyV1: Codable, Equatable, Sendable {
 
     public let version: UInt8
     public let authority: String
-    public let chainId: String
+    /// Exact genesis-derived identity of the network that produced this plan.
+    public let networkId: NetworkId
     public let anchor: AliasPlanAnchorV1
     public let resources: [AliasPlanResourceV1]
     public let instructions: [AliasFramedInstructionV1]
@@ -1524,7 +1525,7 @@ public struct AliasTransactionPlanBodyV1: Codable, Equatable, Sendable {
     public init(
         version: UInt8 = Self.version,
         authority: String,
-        chainId: String,
+        networkId: NetworkId,
         anchor: AliasPlanAnchorV1,
         resources: [AliasPlanResourceV1],
         instructions: [AliasFramedInstructionV1],
@@ -1535,7 +1536,7 @@ public struct AliasTransactionPlanBodyV1: Codable, Equatable, Sendable {
     ) throws {
         self.version = version
         self.authority = try canonicalAliasAccountId(authority, field: "authority")
-        self.chainId = try canonicalAliasText(chainId, field: "chain_id", allowWhitespace: true)
+        self.networkId = networkId
         self.anchor = anchor
         self.resources = resources
         self.instructions = instructions
@@ -1546,11 +1547,19 @@ public struct AliasTransactionPlanBodyV1: Codable, Equatable, Sendable {
     }
 
     public init(from decoder: Decoder) throws {
+        let retired = try decoder.container(keyedBy: RetiredCodingKeys.self)
+        if let retiredKey = retired.allKeys.first {
+            throw DecodingError.dataCorruptedError(
+                forKey: retiredKey,
+                in: retired,
+                debugDescription: "retired chain identity is forbidden; alias transaction plans require network_id"
+            )
+        }
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
             version: container.decode(UInt8.self, forKey: .version),
             authority: container.decode(String.self, forKey: .authority),
-            chainId: container.decode(String.self, forKey: .chainId),
+            networkId: container.decode(NetworkId.self, forKey: .networkId),
             anchor: container.decode(AliasPlanAnchorV1.self, forKey: .anchor),
             resources: container.decode([AliasPlanResourceV1].self, forKey: .resources),
             instructions: container.decode([AliasFramedInstructionV1].self, forKey: .instructions),
@@ -1563,11 +1572,17 @@ public struct AliasTransactionPlanBodyV1: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case version, authority
-        case chainId = "chain_id"
+        case networkId = "network_id"
         case anchor, resources, instructions
         case totalsByAsset = "totals_by_asset"
         case warnings, blockers
         case validUntilMs = "valid_until_ms"
+    }
+
+    private enum RetiredCodingKeys: String, CodingKey {
+        case chain
+        case chainId
+        case chainIdSnake = "chain_id"
     }
 }
 
@@ -1603,7 +1618,8 @@ public struct AliasLifecycleTransactionPlanBodyV1: Codable, Equatable, Sendable 
 
     public let version: UInt8
     public let authority: String
-    public let chainId: String
+    /// Exact genesis-derived identity of the network that produced this plan.
+    public let networkId: NetworkId
     public let anchor: AliasPlanAnchorV1
     public let operation: AliasLifecycleOperationV1
     public let disposition: AliasLifecyclePlanDispositionV1
@@ -1617,7 +1633,7 @@ public struct AliasLifecycleTransactionPlanBodyV1: Codable, Equatable, Sendable 
     public init(
         version: UInt8 = Self.version,
         authority: String,
-        chainId: String,
+        networkId: NetworkId,
         anchor: AliasPlanAnchorV1,
         operation: AliasLifecycleOperationV1,
         disposition: AliasLifecyclePlanDispositionV1,
@@ -1633,7 +1649,7 @@ public struct AliasLifecycleTransactionPlanBodyV1: Codable, Equatable, Sendable 
         }
         self.version = version
         self.authority = try canonicalAliasAccountId(authority, field: "authority")
-        self.chainId = try canonicalAliasText(chainId, field: "chain_id", allowWhitespace: true)
+        self.networkId = networkId
         self.anchor = anchor
         self.operation = operation
         self.disposition = disposition
@@ -1646,11 +1662,19 @@ public struct AliasLifecycleTransactionPlanBodyV1: Codable, Equatable, Sendable 
     }
 
     public init(from decoder: Decoder) throws {
+        let retired = try decoder.container(keyedBy: RetiredCodingKeys.self)
+        if let retiredKey = retired.allKeys.first {
+            throw DecodingError.dataCorruptedError(
+                forKey: retiredKey,
+                in: retired,
+                debugDescription: "retired chain identity is forbidden; alias lifecycle plans require network_id"
+            )
+        }
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
             version: container.decode(UInt8.self, forKey: .version),
             authority: container.decode(String.self, forKey: .authority),
-            chainId: container.decode(String.self, forKey: .chainId),
+            networkId: container.decode(NetworkId.self, forKey: .networkId),
             anchor: container.decode(AliasPlanAnchorV1.self, forKey: .anchor),
             operation: container.decode(AliasLifecycleOperationV1.self, forKey: .operation),
             disposition: container.decode(AliasLifecyclePlanDispositionV1.self, forKey: .disposition),
@@ -1665,11 +1689,16 @@ public struct AliasLifecycleTransactionPlanBodyV1: Codable, Equatable, Sendable 
 
     private enum CodingKeys: String, CodingKey {
         case version, authority
-        case chainId = "chain_id"
+        case networkId = "network_id"
         case anchor, operation, disposition, instruction, quote
         case totalsByAsset = "totals_by_asset"
         case warnings, blockers
         case validUntilMs = "valid_until_ms"
+    }
+    private enum RetiredCodingKeys: String, CodingKey {
+        case chain
+        case chainId
+        case chainIdSnake = "chain_id"
     }
 }
 

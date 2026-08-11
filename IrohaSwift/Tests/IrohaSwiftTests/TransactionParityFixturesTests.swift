@@ -140,7 +140,7 @@ final class TransactionParityFixturesTests: XCTestCase {
                 destination,
                 field: "Transfer.TransferAsset.destination"
             )
-            let request = TransferRequest(chainId: fixture.payload.chain,
+            let request = TransferRequest(networkId: fixture.payload.networkId,
                                           authority: authority,
                                           assetDefinitionId: assetDefinitionId,
                                           quantity: quantity,
@@ -170,7 +170,7 @@ final class TransactionParityFixturesTests: XCTestCase {
                 destination,
                 field: "Mint.MintAsset.destination"
             )
-            let request = MintRequest(chainId: fixture.payload.chain,
+            let request = MintRequest(networkId: fixture.payload.networkId,
                                       authority: authority,
                                       assetDefinitionId: assetDefinitionId,
                                       quantity: quantity,
@@ -199,7 +199,7 @@ final class TransactionParityFixturesTests: XCTestCase {
                 destination,
                 field: "Burn.BurnAsset.destination"
             )
-            let request = BurnRequest(chainId: fixture.payload.chain,
+            let request = BurnRequest(networkId: fixture.payload.networkId,
                                       authority: authority,
                                       assetDefinitionId: assetDefinitionId,
                                       quantity: quantity,
@@ -1181,7 +1181,7 @@ private struct CombinedTransactionFixture {
 }
 
 private struct TransactionPayloadSpec: Decodable {
-    let chain: String
+    let networkId: NetworkId
     let authority: String
     let creationTimeMs: UInt64
     let executable: TransactionExecutable
@@ -1191,7 +1191,7 @@ private struct TransactionPayloadSpec: Decodable {
     let metadata: [String: ToriiJSONValue]
 
     private enum CodingKeys: String, CodingKey {
-        case chain
+        case networkId = "network_id"
         case authority
         case creationTimeMs = "creation_time_ms"
         case executable
@@ -1205,13 +1205,13 @@ private struct TransactionPayloadSpec: Decodable {
         try requireExactFixtureKeys(
             decoder,
             [
-                "authority", "chain", "creation_time_ms", "executable", "fee_payment",
+                "authority", "network_id", "creation_time_ms", "executable", "fee_payment",
                 "metadata", "nonce", "time_to_live_ms",
             ],
             context: "Swift parity transaction payload"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        chain = try container.decode(String.self, forKey: .chain)
+        networkId = try container.decode(NetworkId.self, forKey: .networkId)
         authority = try container.decode(String.self, forKey: .authority)
         creationTimeMs = try container.decode(UInt64.self, forKey: .creationTimeMs)
         executable = try container.decode(TransactionExecutable.self, forKey: .executable)

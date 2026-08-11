@@ -136,23 +136,16 @@ pub const PQ_MASP_MAX_INPUTS_V1: u32 = 2;
 pub const PQ_MASP_MAX_OUTPUTS_V1: u32 = 2;
 /// Maximum genesis commitments in one typed proof-managed pool bootstrap.
 pub const PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1: usize = 4_096;
-/// Maximum UTF-8 byte length admitted for a privacy transcript chain id.
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "MAX_CHAIN_ID_BYTES is the compile-time constant 128 and therefore fits u32"
-)]
-pub const PRIVACY_MAX_CHAIN_ID_BYTES_V1: u32 = crate::id::MAX_CHAIN_ID_BYTES as u32;
-
-/// Explicit chain and governed-artifact binding shared by every statement.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+/// Explicit network and governed-artifact binding shared by every statement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyStatementContextV1 {
-    /// Exact chain identifier.
-    pub chain_id: ChainId,
+    /// Exact genesis-header-derived network identity.
+    pub network_id: NetworkId,
     /// Zero-based privacy action index within the transaction.
     pub action_index: u32,
     /// Digest of the canonical transaction projection with derived privacy
@@ -175,19 +168,14 @@ impl PrivacyStatementContextV1 {
     ///
     /// # Errors
     ///
-    /// Returns [`PrivacyStatementValidationError`] for an invalid chain id,
+    /// Returns [`PrivacyStatementValidationError`] for an invalid network identity,
     /// action index, or fixed artifact binding.
     pub fn validate(
         &self,
         limits: &PrivacyConsensusLimitsV1,
     ) -> Result<(), PrivacyStatementValidationError> {
-        let chain_id_bytes = u32::try_from(self.chain_id.as_str().len())
-            .map_err(|_| PrivacyStatementValidationError::PayloadLengthOverflow)?;
-        if chain_id_bytes == 0 || chain_id_bytes > PRIVACY_MAX_CHAIN_ID_BYTES_V1 {
-            return Err(PrivacyStatementValidationError::InvalidChainIdLength {
-                bytes: chain_id_bytes,
-                max: PRIVACY_MAX_CHAIN_ID_BYTES_V1,
-            });
+        if self.network_id.as_bytes().iter().all(|byte| *byte == 0) {
+            return Err(PrivacyStatementValidationError::ZeroNetworkId);
         }
         if self.action_index >= limits.max_actions_per_transaction {
             return Err(PrivacyStatementValidationError::ActionIndexOutOfBounds {
@@ -217,13 +205,13 @@ impl PrivacyStatementContextV1 {
     }
 }
 
-/// Exact chain, genesis, action, and governed-artifact binding shared by native engines.
+/// Exact network, genesis, action, and governed-artifact binding shared by native engines.
 ///
 /// The binding owns every consensus-selected byte that a native proof
 /// transcript must commit. It is constructed from a validated
-/// [`PrivacyStatementContextV1`] plus the trusted chain genesis hash; there is
+/// [`PrivacyStatementContextV1`] plus the trusted committed genesis hash; there is
 /// no optional field, default, alias, or legacy wire shape.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(schema_name = "iroha.privacy.native-consensus-binding.v1")]
 #[cfg_attr(
     feature = "json",
@@ -231,9 +219,9 @@ impl PrivacyStatementContextV1 {
 )]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyNativeConsensusBindingV1 {
-    /// Exact chain identifier.
-    pub chain_id: ChainId,
-    /// Trusted committed genesis-block hash for this chain.
+    /// Exact genesis-header-derived network identity.
+    pub network_id: NetworkId,
+    /// Trusted committed genesis-block hash for this network.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub genesis_hash: [u8; 32],
     /// Zero-based privacy action index within the transaction.
@@ -265,7 +253,7 @@ impl PrivacyNativeConsensusBindingV1 {
         limits: &PrivacyConsensusLimitsV1,
     ) -> Result<Self, PrivacyNativeConsensusBindingValidationErrorV1> {
         let binding = Self {
-            chain_id: context.chain_id.clone(),
+            network_id: context.network_id,
             genesis_hash,
             action_index: context.action_index,
             transaction_intent_digest: context.transaction_intent_digest,
@@ -295,6 +283,9 @@ impl PrivacyNativeConsensusBindingV1 {
         if self.genesis_hash.iter().all(|byte| *byte == 0) {
             return Err(PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash);
         }
+        if self.network_id.as_bytes() != &self.genesis_hash {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::NetworkGenesisMismatch);
+        }
         self.as_statement_context()
             .validate(limits)
             .map_err(PrivacyNativeConsensusBindingValidationErrorV1::InvalidContext)
@@ -317,8 +308,11 @@ impl PrivacyNativeConsensusBindingV1 {
         if self.genesis_hash.iter().all(|byte| *byte == 0) {
             return Err(PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash);
         }
-        if self.chain_id != context.chain_id {
-            return Err(PrivacyNativeConsensusBindingValidationErrorV1::ChainIdMismatch);
+        if self.network_id.as_bytes() != &self.genesis_hash {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::NetworkGenesisMismatch);
+        }
+        if self.network_id != context.network_id {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::NetworkIdMismatch);
         }
         if self.action_index != context.action_index {
             return Err(PrivacyNativeConsensusBindingValidationErrorV1::ActionIndexMismatch);
@@ -381,7 +375,7 @@ impl PrivacyNativeConsensusBindingV1 {
 
     fn as_statement_context(&self) -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
-            chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
             action_index: self.action_index,
             transaction_intent_digest: self.transaction_intent_digest,
             parameter_id: self.parameter_id,
@@ -405,9 +399,12 @@ pub enum PrivacyNativeConsensusBindingValidationErrorV1 {
     /// The trusted committed genesis hash is the reserved all-zero value.
     #[error("native privacy consensus-binding genesis hash must be non-zero")]
     ZeroGenesisHash,
-    /// Chain identifiers differ.
-    #[error("native privacy consensus-binding chain id differs from statement context")]
-    ChainIdMismatch,
+    /// Network identities differ.
+    #[error("native privacy consensus-binding network id differs from statement context")]
+    NetworkIdMismatch,
+    /// The typed network identity and explicit genesis hash differ.
+    #[error("native privacy consensus-binding network id differs from its genesis hash")]
+    NetworkGenesisMismatch,
     /// Privacy action indexes differ.
     #[error("native privacy consensus-binding action index differs from statement context")]
     ActionIndexMismatch,

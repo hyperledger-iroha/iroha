@@ -5,9 +5,10 @@ use std::{num::NonZeroU64, str::FromStr as _, time::Duration};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     asset::AssetDefinitionId,
+    block::BlockHeader,
     metadata::Metadata,
     smart_contract::ContractAddress,
     transaction::{
@@ -69,7 +70,9 @@ fn main() {
         ),
     };
     let mut builder = TransactionBuilder::new(
-        ChainId::from("swift-detached-contract-fixture"),
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"swift-detached-contract-fixture",
+        ))),
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

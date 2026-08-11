@@ -50,6 +50,9 @@ use sorafs_manifest::{
 };
 use tempfile::TempDir;
 
+const TEST_NETWORK_ID_LITERAL: &str =
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+
 fn sorafs_cli_cmd() -> AssertCommand {
     cargo_bin_cmd!("sorafs_cli")
 }
@@ -211,6 +214,7 @@ fn write_deploy_client_config(dir: &Path, torii_url: &str) -> (PathBuf, String) 
         format!(
             r#"
 torii_url = "{torii_url}"
+network_id = "{TEST_NETWORK_ID_LITERAL}"
 
 [account]
 public_key = "{public_key}"
@@ -242,6 +246,7 @@ fn write_deploy_client_config_with_chain(
             r#"
 chain = "{chain}"
 torii_url = "{torii_url}"
+network_id = "{TEST_NETWORK_ID_LITERAL}"
 
 [account]
 public_key = "{public_key}"
@@ -1347,7 +1352,7 @@ fn manifest_submit_posts_payload() {
         .arg(format!("--manifest={}", manifest_path.display()))
         .arg(format!("--chunk-plan={}", plan_path.display()))
         .arg(format!("--torii-url={}", server.base_url()))
-        .arg("--submitted-epoch=7")
+        .arg(format!("--network-id={TEST_NETWORK_ID_LITERAL}"))
         .arg(format!("--authority={authority}"))
         .arg(format!("--private-key={private_key}"))
         .arg(format!("--summary-out={}", submit_summary_path.display()))
@@ -1374,6 +1379,10 @@ fn manifest_submit_posts_payload() {
     assert_eq!(
         summary_stdout.get("torii_endpoint").and_then(Value::as_str),
         Some(expected_endpoint.as_str())
+    );
+    assert!(
+        summary_stdout.get("submitted_epoch").is_none(),
+        "client-supplied event epochs must not re-enter the signed pin request"
     );
 
     let expected_digest = compute_chunk_digest_hex(&plan_path);
@@ -1617,7 +1626,6 @@ fn deploy_accepts_known_chain_client_config_without_account_chain_discriminant()
         .arg("deploy")
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
-        .arg("--submitted-epoch=8")
         .arg("--no-peer-discovery")
         .arg(format!(
             "--out-dir={}",
@@ -1670,7 +1678,6 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
         .arg("deploy")
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
-        .arg("--submitted-epoch=8")
         .arg(format!(
             "--out-dir={}",
             tempdir.path().join("out").display()
@@ -1695,7 +1702,7 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
 }
 
 #[test]
-fn deploy_uses_transaction_fallback_when_pin_register_route_unavailable() {
+fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
     let payload = b"fallback transaction deploy".to_vec();
@@ -1734,33 +1741,41 @@ fn deploy_uses_transaction_fallback_when_pin_register_route_unavailable() {
         then.status(200).body(payload.clone());
     });
 
-    let assert = sorafs_cli_cmd()
+    let output = sorafs_cli_cmd()
         .arg("deploy")
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
-        .arg("--submitted-epoch=7")
         .arg(format!(
             "--out-dir={}",
             tempdir.path().join("fallback-out").display()
         ))
-        .assert()
-        .success();
+        .output()
+        .expect("command executes");
 
+    assert!(!output.status.success());
     register.assert_calls(1);
-    registry.assert_calls(1);
-    transaction.assert_calls(1);
-    pipeline.assert_calls(1);
+    registry.assert_calls(0);
+    transaction.assert_calls(0);
+    pipeline.assert_calls(0);
 
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
     let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
-    assert_eq!(summary.get("success").and_then(Value::as_bool), Some(true));
+    assert_eq!(summary.get("success").and_then(Value::as_bool), Some(false));
     assert_eq!(
         summary
             .get("registration")
             .and_then(Value::as_object)
-            .and_then(|registration| registration.get("submission_mode"))
-            .and_then(Value::as_str),
-        Some("transaction_fallback")
+            .and_then(|registration| registration.get("success"))
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+    assert!(
+        summary
+            .get("registration")
+            .and_then(Value::as_object)
+            .and_then(|registration| registration.get("error"))
+            .and_then(Value::as_str)
+            .is_some_and(|error| error.contains("generic transaction fallback is not supported"))
     );
 }
 
@@ -1789,7 +1804,6 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
         .arg("deploy")
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
-        .arg("--submitted-epoch=10")
         .arg("--no-peer-discovery")
         .arg(format!(
             "--out-dir={}",
@@ -1835,7 +1849,7 @@ fn manifest_submit_rejects_chunk_digest_mismatch() {
         .arg(format!("--chunk-plan={}", plan_path.display()))
         .arg(format!("--chunk-digest-sha3={wrong_digest}"))
         .arg(format!("--torii-url={}", server.base_url()))
-        .arg("--submitted-epoch=7")
+        .arg(format!("--network-id={TEST_NETWORK_ID_LITERAL}"))
         .arg(format!("--authority={authority}"))
         .arg(format!("--private-key={private_key}"))
         .output()
@@ -1854,146 +1868,44 @@ fn manifest_submit_rejects_chunk_digest_mismatch() {
 }
 
 #[test]
-fn manifest_submit_resolves_submitted_epoch_from_status_endpoint() {
-    let tempdir = tempdir().expect("tempdir");
-    let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
-    let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
+fn manifest_submit_rejects_retired_client_epoch_flags() {
+    for retired in ["--submitted-epoch=7", "--resolve-submitted-epoch=true"] {
+        let output = sorafs_cli_cmd()
+            .arg("manifest")
+            .arg("submit")
+            .arg(retired)
+            .output()
+            .expect("command executes");
+        assert!(
+            !output.status.success(),
+            "retired client epoch flag unexpectedly succeeded: {retired}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("unrecognised option"),
+            "retired client epoch flag produced an unexpected error: {stderr}"
+        );
+    }
 
-    let server = MockServer::start();
-    let status_mock = server.mock(|when, then| {
-        when.method(GET).path("/status");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(r#"{"blocks": 14401, "sumeragi": {"epoch": {"height": 77}, "epoch_length_blocks": 3600}}"#);
-    });
-    let submit_mock = server.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/pin/register");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body("{\"status\":\"ok\"}");
-    });
-
-    let submit_summary_path = tempdir.path().join("submit_summary.auto_epoch.json");
-
-    let assert = sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("submit")
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--chunk-plan={}", plan_path.display()))
-        .arg(format!("--torii-url={}", server.base_url()))
-        .arg("--resolve-submitted-epoch=true")
-        .arg(format!("--authority={authority}"))
-        .arg(format!("--private-key={private_key}"))
-        .arg(format!("--summary-out={}", submit_summary_path.display()))
-        .assert()
-        .success();
-
-    status_mock.assert_calls(1);
-    submit_mock.assert_calls(1);
-
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
-    let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("submit summary json");
-    assert_eq!(
-        summary_stdout
-            .get("submitted_epoch")
-            .and_then(Value::as_u64),
-        Some(77)
-    );
+    for args in [
+        ["deploy", "--submitted-epoch=7", ""],
+        ["manifest", "proposal", "--submitted-epoch=7"],
+    ] {
+        let output = sorafs_cli_cmd()
+            .args(args.into_iter().filter(|arg| !arg.is_empty()))
+            .output()
+            .expect("command executes");
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("option"),
+            "retired client epoch flag produced an unexpected error: {stderr}"
+        );
+    }
 }
 
 #[test]
-fn manifest_submit_falls_back_to_blocks_over_epoch_length() {
-    let tempdir = tempdir().expect("tempdir");
-    let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
-    let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
-
-    let server = MockServer::start();
-    let status_mock = server.mock(|when, then| {
-        when.method(GET).path("/status");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(r#"{"blocks": 10801, "sumeragi": {"epoch_length_blocks": 3600}}"#);
-    });
-    let submit_mock = server.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/pin/register");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body("{\"status\":\"ok\"}");
-    });
-
-    let output = sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("submit")
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--chunk-plan={}", plan_path.display()))
-        .arg(format!("--torii-url={}", server.base_url()))
-        .arg("--resolve-submitted-epoch=true")
-        .arg(format!("--authority={authority}"))
-        .arg(format!("--private-key={private_key}"))
-        .output()
-        .expect("command executes");
-
-    assert!(
-        output.status.success(),
-        "CLI must succeed with fallback epoch resolution"
-    );
-    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
-    let summary: Value = norito::json::from_str(stdout.trim()).expect("submit summary json");
-    assert_eq!(
-        summary.get("submitted_epoch").and_then(Value::as_u64),
-        Some(3)
-    );
-    status_mock.assert_calls(1);
-    submit_mock.assert_calls(1);
-}
-
-#[test]
-fn manifest_submit_errors_when_status_lacks_epoch_inputs() {
-    let tempdir = tempdir().expect("tempdir");
-    let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
-    let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
-
-    let server = MockServer::start();
-    let status_mock = server.mock(|when, then| {
-        when.method(GET).path("/status");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(r#"{"sumeragi": {}}"#);
-    });
-    let submit_mock = server.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/pin/register");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body("{\"status\":\"ok\"}");
-    });
-
-    let output = sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("submit")
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--chunk-plan={}", plan_path.display()))
-        .arg(format!("--torii-url={}", server.base_url()))
-        .arg("--resolve-submitted-epoch=true")
-        .arg(format!("--authority={authority}"))
-        .arg(format!("--private-key={private_key}"))
-        .output()
-        .expect("command executes");
-
-    assert!(
-        !output.status.success(),
-        "CLI must fail when status JSON cannot resolve an epoch"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("failed to resolve submitted epoch"),
-        "stderr should mention epoch resolution failure, got: {stderr}"
-    );
-    status_mock.assert_calls(1);
-    submit_mock.assert_calls(0);
-}
-
-#[test]
-fn manifest_submit_transaction_fallback_waits_for_commit() {
+fn manifest_submit_does_not_fallback_or_replay_the_signed_body() {
     let tempdir = tempdir().expect("tempdir");
     let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
     let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
@@ -2020,157 +1932,65 @@ fn manifest_submit_transaction_fallback_waits_for_commit() {
             .body(r#"{"content":{"status":{"kind":"Committed","block_height":16}}}"#);
     });
 
-    let submit_summary_path = tempdir.path().join("submit_summary.fallback.json");
-    let response_path = tempdir.path().join("torii_response.fallback.json");
-
-    let assert = sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("submit")
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--chunk-plan={}", plan_path.display()))
-        .arg(format!("--torii-url={}", server.base_url()))
-        .arg("--submitted-epoch=7")
-        .arg(format!("--authority={authority}"))
-        .arg(format!("--private-key={private_key}"))
-        .arg(format!("--summary-out={}", submit_summary_path.display()))
-        .arg(format!("--response-out={}", response_path.display()))
-        .assert()
-        .success();
-
-    register_mock.assert_calls(1);
-    registry_mock.assert_calls(1);
-    tx_mock.assert_calls(1);
-    status_mock.assert_calls(1);
-
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
-    let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("submit summary json");
-    assert_eq!(
-        summary_stdout
-            .get("submission_mode")
-            .and_then(Value::as_str),
-        Some("transaction_fallback")
-    );
-    assert_eq!(
-        summary_stdout
-            .get("torii_response")
-            .and_then(|value| value.get("status"))
-            .and_then(Value::as_str),
-        Some("COMMITTED")
-    );
-    assert_eq!(
-        summary_stdout
-            .get("torii_response")
-            .and_then(|value| value.get("block_height"))
-            .and_then(Value::as_u64),
-        Some(16)
-    );
-
-    let response_bytes = fs::read(&response_path).expect("read fallback response body");
-    let response_value: Value = from_slice(&response_bytes).expect("fallback response json");
-    assert_eq!(
-        response_value.get("status").and_then(Value::as_str),
-        Some("COMMITTED")
-    );
-}
-
-#[test]
-fn manifest_submit_transaction_fallback_surfaces_rejection() {
-    let tempdir = tempdir().expect("tempdir");
-    let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
-    let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
-
-    let server = MockServer::start();
-    let register_mock = server.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/pin/register");
-        then.status(405).body("method not allowed");
-    });
-    let registry_mock = server.mock(|when, then| {
-        when.method(GET).path("/v1/sorafs/pin");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(r#"{"attestation":{"chain_id":"fc56984b-2be7-431d-840e-21514d1883f0"}}"#);
-    });
-    let tx_mock = server.mock(|when, then| {
-        when.method(POST).path("/transaction");
-        then.status(202).body("");
-    });
-    let status_mock = server.mock(|when, then| {
-        when.method(GET).path("/v1/pipeline/transactions/status");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(
-                r#"{"content":{"status":{"kind":"Rejected","block_height":16,"content":"TlJUMAAAFbOLmVWS1wsVs4uZVZLXCwB1AAAAAAAAANOVv28cFhPAAAIAAABpAAAAAAAAAAIAAABdAAAAAAAAAAcAAABRAAAAAAAAAAAAAABFAAAAAAAAAD0AAAAAAAAAcGVybWlzc2lvbiBDYW5SZWdpc3RlclNvcmFmc1BpbiByZXF1aXJlZCBmb3IgU29yYUZTIG9wZXJhdGlvbg=="}}}"#,
-            );
-    });
-    let explorer_mock = server.mock(|when, then| {
-        when.method(GET).path_matches(r"/v1/explorer/transactions/.*");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(
-                r#"{"status":"Rejected","rejection_reason":{"message":"Validation failed: Instruction execution failed: Invalid instruction parameter"}}"#,
-            );
-    });
-
-    let submit_summary_path = tempdir.path().join("submit_summary.rejected.json");
-    let response_path = tempdir.path().join("torii_response.rejected.json");
-
     let output = sorafs_cli_cmd()
         .arg("manifest")
         .arg("submit")
         .arg(format!("--manifest={}", manifest_path.display()))
         .arg(format!("--chunk-plan={}", plan_path.display()))
         .arg(format!("--torii-url={}", server.base_url()))
-        .arg("--submitted-epoch=7")
+        .arg(format!("--network-id={TEST_NETWORK_ID_LITERAL}"))
         .arg(format!("--authority={authority}"))
         .arg(format!("--private-key={private_key}"))
-        .arg(format!("--summary-out={}", submit_summary_path.display()))
-        .arg(format!("--response-out={}", response_path.display()))
         .output()
         .expect("command executes");
 
-    assert!(
-        !output.status.success(),
-        "CLI must fail when the fallback transaction is rejected"
-    );
+    assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("CanRegisterSorafsPin"),
-        "stderr should surface the rejection reason, got: {stderr}"
+        stderr.contains("generic transaction fallback is not supported"),
+        "signed one-shot rejection produced an unexpected error: {stderr}"
     );
-
     register_mock.assert_calls(1);
-    registry_mock.assert_calls(1);
-    tx_mock.assert_calls(1);
-    status_mock.assert_calls(1);
-    explorer_mock.assert_calls(1);
+    registry_mock.assert_calls(0);
+    tx_mock.assert_calls(0);
+    status_mock.assert_calls(0);
+}
 
-    let summary_bytes = fs::read(&submit_summary_path).expect("read rejected submit summary");
-    let summary: Value = from_slice(&summary_bytes).expect("rejected summary json");
-    assert_eq!(
-        summary.get("submission_mode").and_then(Value::as_str),
-        Some("transaction_fallback")
-    );
-    assert_eq!(
-        summary
-            .get("torii_response")
-            .and_then(|value| value.get("status"))
-            .and_then(Value::as_str),
-        Some("REJECTED")
-    );
-    assert_eq!(
-        summary
-            .get("torii_response")
-            .and_then(|value| value.get("rejection_message"))
-            .and_then(Value::as_str),
-        Some("permission CanRegisterSorafsPin required for SoraFS operation")
-    );
+#[test]
+fn manifest_submit_does_not_follow_307_or_308_with_the_signed_body() {
+    let tempdir = tempdir().expect("tempdir");
+    let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
+    let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
 
-    let response_bytes = fs::read(&response_path).expect("read rejected response");
-    let response_value: Value = from_slice(&response_bytes).expect("rejected response json");
-    assert_eq!(
-        response_value.get("status").and_then(Value::as_str),
-        Some("REJECTED")
-    );
+    for status in [307_u16, 308_u16] {
+        let server = MockServer::start();
+        let register_mock = server.mock(|when, then| {
+            when.method(POST).path("/v1/sorafs/pin/register");
+            then.status(status)
+                .header("Location", "/replayed-signed-pin")
+                .body("redirect forbidden");
+        });
+        let replay_mock = server.mock(|when, then| {
+            when.method(POST).path("/replayed-signed-pin");
+            then.status(200).body("unexpected replay");
+        });
+
+        let output = sorafs_cli_cmd()
+            .arg("manifest")
+            .arg("submit")
+            .arg(format!("--manifest={}", manifest_path.display()))
+            .arg(format!("--chunk-plan={}", plan_path.display()))
+            .arg(format!("--torii-url={}", server.base_url()))
+            .arg(format!("--network-id={TEST_NETWORK_ID_LITERAL}"))
+            .arg(format!("--authority={authority}"))
+            .arg(format!("--private-key={private_key}"))
+            .output()
+            .expect("command executes");
+
+        assert!(!output.status.success(), "HTTP {status} must be terminal");
+        register_mock.assert_calls(1);
+        replay_mock.assert_calls(0);
+    }
 }
 
 #[test]

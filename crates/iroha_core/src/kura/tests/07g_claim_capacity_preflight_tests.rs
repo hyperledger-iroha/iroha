@@ -65,7 +65,7 @@ fn autonomous_claim_initial_staging_preflights_the_whole_named_temp_set() {
         .map(|entrypoint_hash| {
             Kura::autonomous_lane_entrypoint_claim_path(
                 temp_dir.path(),
-                &payload.chain_id_hash,
+                &payload.network_id,
                 entrypoint_hash,
             )
         })
@@ -92,7 +92,8 @@ fn autonomous_claim_initial_staging_preflights_the_whole_named_temp_set() {
         );
     }
     assert_eq!(
-        kura.kura_disk_usage_bytes().expect("measure rejected staging"),
+        kura.kura_disk_usage_bytes()
+            .expect("measure rejected staging"),
         used,
         "whole-set capacity rejection must precede the first shard or claim mutation",
     );
@@ -105,7 +106,7 @@ fn autonomous_claim_release_cas_preflights_promotions_removals_and_atomic_peak()
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) = two_reservation_autonomous_lane_payload_for_kura(
+    let (network_id, epoch, payload) = two_reservation_autonomous_lane_payload_for_kura(
         lane.lane_id,
         lane.dataspace_id,
         1,
@@ -113,7 +114,7 @@ fn autonomous_claim_release_cas_preflights_promotions_removals_and_atomic_peak()
     );
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("claim release Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist release payload");
     let retirement = AutonomousLaneSlotRetirementV1::from_payload(&payload);
     let retirement_hash = retirement.digest().expect("retirement digest");
@@ -123,7 +124,7 @@ fn autonomous_claim_release_cas_preflights_promotions_removals_and_atomic_peak()
         .map(|entrypoint_hash| {
             Kura::autonomous_lane_entrypoint_claim_path(
                 temp_dir.path(),
-                &chain_id_hash,
+                &network_id,
                 entrypoint_hash,
             )
         })
@@ -156,9 +157,9 @@ fn autonomous_claim_release_cas_preflights_promotions_removals_and_atomic_peak()
         .enumerate()
     {
         let named_temp_len = u64::try_from(temp_before[index].len()).expect("temp length fits");
-        let main_len = main_before[index]
-            .as_ref()
-            .map_or(0, |bytes| u64::try_from(bytes.len()).expect("main length fits"));
+        let main_len = main_before[index].as_ref().map_or(0, |bytes| {
+            u64::try_from(bytes.len()).expect("main length fits")
+        });
         if index == 0 {
             current_delta -= i128::from(main_len);
         } else {

@@ -61,6 +61,18 @@ def main() -> int:
     )
     _must_reject(
         source,
+        'workspace_source_manifest_sha256="${IROHA_RELEASE_SOURCE_MANIFEST_SHA256:-}"',
+        'workspace_source_manifest_sha256="${UNAUTHENTICATED_MANIFEST:-}"',
+        "workspace source-manifest authority substitution",
+    )
+    _must_reject(
+        source,
+        'if [[ ! "$workspace_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then',
+        'if [[ -z "$workspace_source_manifest_sha256" ]]; then',
+        "workspace source-manifest digest-grammar weakening",
+    )
+    _must_reject(
+        source,
         "multilane_autoscale_lifecycle_fixed.cfg \\\n  8 \\",
         "multilane_autoscale_lifecycle_fixed.cfg \\\n  7 \\",
         "autoscale bound reduction",
@@ -119,12 +131,36 @@ def main() -> int:
         'grep -Fc "The outcome is:"',
         "weakened outcome marker",
     )
+    _must_reject(
+        source,
+        "  printf 'workspace_source_manifest_sha256\\t%s\\n' \"$workspace_source_manifest_sha256\"\n",
+        "",
+        "workspace source-manifest evidence omission",
+    )
+    _must_reject(
+        source,
+        "  printf 'multilane_source_manifest_sha256\\t%s\\n' \"$multilane_source_manifest_sha256\"\n",
+        "",
+        "multilane source-manifest evidence omission",
+    )
+    _must_reject(
+        source,
+        '"$workspace_source_manifest_sha256"\n  printf \'multilane_source_manifest_sha256',
+        '"$multilane_source_manifest_sha256"\n  printf \'multilane_source_manifest_sha256',
+        "source-manifest evidence authority substitution",
+    )
+    _must_reject(
+        source,
+        '"$final_multilane_source_manifest_sha256" != "$multilane_source_manifest_sha256"',
+        '"$final_multilane_source_manifest_sha256" != "$final_multilane_source_manifest_sha256"',
+        "multilane source-manifest drift self-comparison",
+    )
     override_mutation = source + "\nAPALACHE_LENGTH=${APALACHE_LENGTH:-1}\n"
     if not _apalache_runner_source_errors(override_mutation):
         raise AssertionError("runner contract accepted a length override")
 
     print(
-        "Sumeragi v2 multilane Apalache runner contract passed 15 "
+        "Sumeragi v2 multilane Apalache runner contract passed 21 "
         "fail-closed negative controls"
     )
     return 0

@@ -1,6 +1,5 @@
 use iroha_crypto::SignatureOf;
 use iroha_data_model::{
-    ChainId,
     account::AccountId,
     block::{BlockHeader, BlockPayload, BlockResult, BlockSignature},
     transaction::{
@@ -31,10 +30,9 @@ fn block_proof_fixture() -> (
     HashOf<TransactionEntrypoint>,
 ) {
     let keypair = crate::state::checked_keypair();
-    let chain: ChainId = "block-proof-tests".parse().expect("chain id");
     let authority = AccountId::new(keypair.public_key().clone());
     let tx = TransactionBuilder::new(
-        chain,
+        *DEFAULT_TEST_NETWORK_ID,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

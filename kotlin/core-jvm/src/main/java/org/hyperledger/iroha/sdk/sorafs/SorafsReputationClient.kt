@@ -12,6 +12,7 @@ import org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamOptions
 import org.hyperledger.iroha.sdk.client.transport.StreamingTransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import java.math.BigInteger
 import java.net.URI
 import java.time.Duration
@@ -28,14 +29,17 @@ import java.util.function.Function
  */
 class SorafsReputationClient(
     @JvmField val baseUri: URI,
+    @JvmField val networkId: NetworkId,
     private val transport: TransportExecutor,
     @JvmField val timeout: Duration?,
 ) {
     /** Creates a client with executor defaults for request timeouts. */
-    constructor(baseUri: URI, transport: TransportExecutor) : this(baseUri, transport, null)
+    constructor(baseUri: URI, networkId: NetworkId, transport: TransportExecutor) :
+        this(baseUri, networkId, transport, null)
 
     /** Creates a client backed by the canonical platform transport. */
-    constructor(baseUri: URI) : this(baseUri, PlatformHttpTransportExecutor.createDefault(), null)
+    constructor(baseUri: URI, networkId: NetworkId) :
+        this(baseUri, networkId, PlatformHttpTransportExecutor.createDefault(), null)
 
     init {
         require(baseUri.isAbsolute && baseUri.rawQuery == null && baseUri.rawFragment == null) {
@@ -309,6 +313,7 @@ class SorafsReputationClient(
         }
         return if (timestampMs == null) {
             CanonicalRequestSigner.buildHeaders(
+                networkId,
                 "GET",
                 target,
                 EMPTY_BODY,
@@ -318,6 +323,7 @@ class SorafsReputationClient(
         } else {
             require(timestampMs >= 0) { "timestampMs must be non-negative" }
             CanonicalRequestSigner.buildHeaders(
+                networkId,
                 "GET",
                 target,
                 EMPTY_BODY,

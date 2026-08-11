@@ -3,15 +3,13 @@
 use std::{env, fs, path::PathBuf, process};
 
 use color_eyre::{Result, eyre::eyre};
-use iroha_config::{base::toml::TomlSource, parameters::actual};
-use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair, PublicKey};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
 use iroha_data_model::parameter::system::SumeragiConsensusMode;
-use iroha_genesis::RawGenesisTransaction;
+use mochi_core::sign_kagami_stub_genesis_from_config;
 use mochi_integration::kagami_default_manifest_json;
 
 const DEFAULT_CHAIN_ID: &str = "mochi-mock-chain";
 const VERSION_OUTPUT: &str = "kagami_mock iroha3 test-stub";
-const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
 
 fn main() {
     if let Err(err) = run() {
@@ -49,6 +47,7 @@ struct SignArgs {
     expected_hash_out: PathBuf,
     private_key_file: PathBuf,
     config_file: PathBuf,
+    consensus_mode: Option<SumeragiConsensusMode>,
 }
 
 fn sign(args: Vec<String>) -> Result<()> {
@@ -80,60 +79,18 @@ fn sign(args: Vec<String>) -> Result<()> {
         return Err(eyre!("private key record is not canonical"));
     }
     let key_pair = KeyPair::from_private_key(private_key.0)?;
-    let manifest = RawGenesisTransaction::from_path(&parsed.manifest_path)?;
-    let config = load_peer_config(&parsed.config_file)?;
-    if config.common.chain != *manifest.chain_id()
-        || *config.common.chain_discriminant.value() != manifest.chain_discriminant()
-    {
-        return Err(eyre!(
-            "peer config chain or discriminant differs from the genesis manifest"
-        ));
-    }
-    if config.genesis.public_key != *key_pair.public_key() {
-        return Err(eyre!(
-            "genesis signing key does not match the public key pinned by --config"
-        ));
-    }
-    let da_proof_policies = iroha_core::da::proof_policy_bundle(&config.nexus.lane_config);
-    let confidential_policy_hash =
-        iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk);
-    let block = manifest
-        .clone()
-        .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
-            &key_pair,
-            Some(da_proof_policies),
-            Some(confidential_policy_hash),
-        )?
-        .0;
+    let block = sign_kagami_stub_genesis_from_config(
+        &parsed.manifest_path,
+        &parsed.config_file,
+        &key_pair,
+        parsed.consensus_mode,
+    )?;
     fs::write(&parsed.out_file, block.encode_wire()?)?;
     if parsed.bound_manifest_out != parsed.manifest_path {
         fs::copy(&parsed.manifest_path, &parsed.bound_manifest_out)?;
     }
     fs::write(&parsed.expected_hash_out, format!("{}\n", block.hash()))?;
     Ok(())
-}
-
-fn load_peer_config(path: &std::path::Path) -> Result<actual::Root> {
-    let mut source = TomlSource::from_file(path)
-        .map_err(|error| eyre!("failed to read peer config at {}: {error}", path.display()))?;
-    if let Some(expected_hash) = source
-        .table_mut()
-        .get_mut("genesis")
-        .and_then(toml::Value::as_table_mut)
-        .and_then(|genesis| genesis.get_mut("expected_hash"))
-        && expected_hash.as_str() == Some(GENESIS_EXPECTED_HASH_PLACEHOLDER)
-    {
-        let hash_body = Hash::new(b"Mochi mock unresolved genesis hash for policy derivation")
-            .to_string()
-            .to_ascii_uppercase();
-        *expected_hash = toml::Value::String(norito::literal::format("hash", hash_body.as_str()));
-    }
-    actual::Root::from_toml_source(source).map_err(|error| {
-        eyre!(
-            "failed to parse peer config at {}: {error:?}",
-            path.display()
-        )
-    })
 }
 
 fn parse_sign_args(args: &[String]) -> Result<SignArgs> {
@@ -147,6 +104,7 @@ fn parse_sign_args(args: &[String]) -> Result<SignArgs> {
     let mut expected_hash_out = None;
     let mut private_key_file = None;
     let mut config_file = None;
+    let mut consensus_mode = None;
 
     let mut index = 1;
     while index < args.len() {
@@ -184,7 +142,7 @@ fn parse_sign_args(args: &[String]) -> Result<SignArgs> {
             }
             "--consensus-mode" => {
                 let value = next_arg_value(args, &mut index, "--consensus-mode")?;
-                let _ = parse_consensus_mode(value)?;
+                consensus_mode = Some(parse_consensus_mode(value)?);
             }
             other => return Err(eyre!("unsupported argument `{other}`")),
         }
@@ -201,6 +159,7 @@ fn parse_sign_args(args: &[String]) -> Result<SignArgs> {
         private_key_file: private_key_file
             .ok_or_else(|| eyre!("missing `--private-key-file` argument"))?,
         config_file: config_file.ok_or_else(|| eyre!("missing `--config` argument"))?,
+        consensus_mode,
     })
 }
 
@@ -344,7 +303,10 @@ mod tests {
     use super::*;
     use iroha_crypto::KeyPair;
     use iroha_data_model::block::decode_framed_signed_block;
+    use mochi_core::kagami_stub_genesis_policies_from_config;
     use norito::json::Value;
+
+    const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_HASH";
 
     fn peer_config(
         chain_id: &str,
@@ -482,6 +444,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 expected_hash_out: PathBuf::from("/tmp/genesis.expected_hash"),
                 private_key_file: PathBuf::from("/tmp/genesis.key"),
                 config_file: PathBuf::from("/tmp/peer.toml"),
+                consensus_mode: Some(SumeragiConsensusMode::Permissioned),
             }
         );
     }
@@ -542,21 +505,27 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             fs::read_to_string(expected_hash).expect("read exact hash"),
             format!("{}\n", block.hash())
         );
-        let parsed_config = load_peer_config(&config).expect("parse signing config");
+        let hash_body = block.hash().to_string().to_ascii_uppercase();
+        let exact_hash = norito::literal::format("hash", hash_body.as_str());
+        let exact_config =
+            peer_config("mock-sign-chain", key_pair.public_key(), &manifest, &signed)
+                .replace(GENESIS_EXPECTED_HASH_PLACEHOLDER, &exact_hash);
+        fs::write(&config, exact_config).expect("bind exact genesis hash in config");
+        let (expected_da_policies, expected_confidential_policy) =
+            kagami_stub_genesis_policies_from_config(&config)
+                .expect("derive exact signing policies from config");
         assert_eq!(
             block.da_proof_policies(),
-            Some(&iroha_core::da::proof_policy_bundle(
-                &parsed_config.nexus.lane_config
-            ))
+            Some(&expected_da_policies),
+            "decoded signed output must carry the config-derived DA policy"
         );
         assert_eq!(
             block
                 .header()
                 .confidential_features()
                 .and_then(|digest| digest.zk_policy_hash),
-            Some(iroha_core::state::compute_genesis_confidential_policy_hash(
-                &parsed_config.zk
-            ))
+            Some(expected_confidential_policy),
+            "decoded signed output must carry the config-derived confidential policy"
         );
     }
 
@@ -618,6 +587,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             fs::read(bound).expect("read bound sentinel"),
             b"sentinel",
             "bound manifest must only publish after signed output succeeds"
+        );
+        assert!(
+            !expected_hash.exists(),
+            "expected hash must only publish after the block and bound manifest"
         );
     }
 

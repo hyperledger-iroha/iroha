@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { blake3 } from "@noble/hashes/blake3";
+import { ed25519 } from "@noble/curves/ed25519";
 
 import {
   buildDaIngestRequest,
@@ -10,16 +12,24 @@ import {
   emitDaProofSummaryArtifact,
   generateDaProofSummary,
 } from "../src/dataAvailability.js";
+import { AccountAddress } from "../src/address.js";
 import { signEd25519 } from "../src/crypto.js";
+import { NetworkId } from "../src/networkId.js";
 
 const PRIVATE_KEY = Buffer.alloc(32, 0x24);
 const CLIENT_BLOB_ID = "11".repeat(32);
 const PAYLOAD = Buffer.from("payload-for-da");
+const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xA5));
+const OWNER = AccountAddress.fromAccount({
+  publicKey: Buffer.from(ed25519.getPublicKey(PRIVATE_KEY)),
+}).toI105();
 
 test("buildDaIngestRequest signs the complete canonical intent and encodes DA fields", () => {
   const chunkSize = 1024;
   const { request, artifacts } = buildDaIngestRequest({
     payload: PAYLOAD,
+    networkId: NETWORK_ID,
+    owner: OWNER,
     clientBlobId: CLIENT_BLOB_ID,
     privateKey: PRIVATE_KEY,
     chunkSize,
@@ -51,10 +61,12 @@ test("buildDaIngestRequest signs the complete canonical intent and encodes DA fi
     .toUpperCase();
   const expectedBlobId = Buffer.from(CLIENT_BLOB_ID, "hex");
 
-  assert.equal(request.signature, expectedSignatureHex);
-  assert.equal(request.signature, artifacts.signatureHex);
+  assert.equal(request.signatures[0].signature, expectedSignatureHex);
+  assert.equal(request.signatures[0].signature, artifacts.signatureHex);
   assert.equal(artifacts.signingDigestHex, signingDigest.toString("hex").toUpperCase());
-  assert.equal(request.submitter, artifacts.submitterPublicKey);
+  assert.equal(request.signatures[0].signer, artifacts.signerPublicKey);
+  assert.equal(request.network_id, NETWORK_ID.toString());
+  assert.equal(request.owner, OWNER);
   assert.deepEqual(request.client_blob_id, [Array.from(expectedBlobId.values())]);
   assert.equal(request.payload, PAYLOAD.toString("base64"));
   assert.equal(request.total_size, PAYLOAD.length);
@@ -98,7 +110,14 @@ test("buildDaIngestRequest signs the complete canonical intent and encodes DA fi
 });
 
 test("DA intent digest matches the shared Rust protocol vector", () => {
+  const vectorPrivateKey = Buffer.alloc(32, 0x19);
+  const vectorOwner = AccountAddress.fromAccount({
+    publicKey: Buffer.from(ed25519.getPublicKey(vectorPrivateKey)),
+  }).toI105();
+  const vectorPayload = Buffer.from("hello data availability");
   const digest = computeDaIngestSigningDigest({
+    network_id: NETWORK_ID.toString(),
+    owner: vectorOwner,
     client_blob_id: [
       Array.from({ length: 32 }, (_, index) => (0x11 + index) & 0xff),
     ],
@@ -123,9 +142,10 @@ test("DA intent digest matches the shared Rust protocol vector", () => {
     },
     chunk_size: 1 << 20,
     total_size: 23,
+    payload_hash: [Array.from(blake3(vectorPayload))],
     compression: "Identity",
     norito_manifest: Buffer.from([0xaa, 0xbb, 0xcc]).toString("base64"),
-    payload: Buffer.from("hello data availability").toString("base64"),
+    payload: vectorPayload.toString("base64"),
     metadata: {
       items: [
         {
@@ -140,7 +160,7 @@ test("DA intent digest matches the shared Rust protocol vector", () => {
 
   assert.equal(
     digest.toString("hex").toUpperCase(),
-    "F73B79FFD1DB5BF28EE57E42AA42F10BA4AF865BA1E466471167818BBBC896E8",
+    "B97871DB051776138277C9000393FDC259910663A8C751D37BD054A0DA369DDA",
   );
 });
 

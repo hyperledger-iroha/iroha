@@ -1,4 +1,4 @@
-------------------------- MODULE SumeragiV2Revision4 -------------------------
+---- MODULE SumeragiV2Revision4 ----
 \* Compact executable model of the authoritative Sumeragi v2 revision-4
 \* committee, routing, safety, and conditional post-GST progress contract.
 \* Signatures, storage, execution, and Reed-Solomon shards are represented by

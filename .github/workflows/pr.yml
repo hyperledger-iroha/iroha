@@ -29,12 +29,12 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"
-      - name: Build binaries (irohad, iroha, kagami, koto) (release)
+      - name: Build binaries (iroha3d, iroha, kagami, koto) (release)
         run: |
-          cargo build --locked --release --bin irohad --bin iroha --bin kagami
+          cargo build --locked --release --bin iroha3d --bin iroha --bin kagami
           cargo build --locked --release -p ivm --bin koto
           mkdir target/release/pre_build
-          mv target/release/irohad target/release/iroha target/release/kagami target/release/koto target/release/pre_build
+          mv target/release/iroha3d target/release/iroha target/release/kagami target/release/koto target/release/pre_build
       - name: Upload binaries
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -190,13 +190,16 @@ jobs:
             pytests/scripts/check_cargo_feature_hygiene_test.py \
             pytests/scripts/check_workspace_target_inventory_test.py \
             scripts/tests/profile_build_test.py \
+            scripts/tests/check_musubi_fixture_owner_test.py \
             scripts/tests/check_source_file_budget_test.py \
             scripts/tests/check_compile_unit_budget_test.py \
-            scripts/tests/check_generated_artifacts_test.py
+            scripts/tests/check_generated_artifacts_test.py \
+            scripts/tests/check_nexus_provisioning_templates_test.py
           python3 scripts/check_cargo_feature_hygiene.py
           python3 scripts/check_workspace_target_inventory.py
           python3 scripts/check_source_file_budget.py
           python3 scripts/check_generated_artifacts.py
+          python3 scripts/check_nexus_provisioning_templates.py
       - name: Classify the PR reverse-dependency closure
         id: classify
         env:
@@ -236,7 +239,7 @@ jobs:
       matrix: ${{ fromJSON(needs.rust_changes.outputs.matrix) }}
     env:
       IROHA_TEST_REQUIRE_NETWORK: "1"
-      TEST_NETWORK_BIN_IROHAD: bins/irohad
+      TEST_NETWORK_BIN_IROHAD: bins/iroha3d
       TEST_NETWORK_BIN_IROHA: bins/iroha
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -312,7 +315,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       IROHA_CONTAINER: "defaults-irohad0-1"
-      BIN_IROHAD: bins/irohad
+      BIN_IROHAD: bins/iroha3d
       BIN_IROHA: bins/iroha
       BIN_KAGAMI: bins/kagami
     steps:

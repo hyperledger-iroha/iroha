@@ -176,6 +176,25 @@ impl fmt::Display for SetTransactionResultsError {
 
 impl std::error::Error for SetTransactionResultsError {}
 
+/// Error returned when lane-finality statements are attached before execution results exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetLaneFinalityStatementsError {
+    /// The block does not yet carry transaction results and therefore has no final header hash.
+    MissingTransactionResults,
+}
+
+impl fmt::Display for SetLaneFinalityStatementsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingTransactionResults => {
+                f.write_str("cannot attach lane-finality statements before transaction results")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SetLaneFinalityStatementsError {}
+
 /// Error returned when independent-batch receipts cannot be attached to result leaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetBatchTransferOutcomesError {
@@ -341,6 +360,29 @@ impl SignedBlock {
         axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
         axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
     ) -> Result<(), SetTransactionResultsError> {
+        self.set_transaction_results_with_transcripts_phase_one(
+            time_triggers,
+            hashes,
+            results,
+            fastpq_transcripts,
+            axt_envelopes,
+            axt_policy_snapshot,
+        )
+    }
+
+    // Phase one fixes the result-bearing header while keeping the required
+    // lane-finality field explicitly empty. Phase two attaches statements that
+    // bind that final header via `set_lane_finality_statements`.
+    #[cfg(feature = "transparent_api")]
+    fn set_transaction_results_with_transcripts_phase_one(
+        &mut self,
+        time_triggers: Vec<TimeTriggerEntrypoint>,
+        hashes: &[HashOf<TransactionEntrypoint>],
+        results: Vec<TransactionResultInner>,
+        fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
+        axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
+        axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
+    ) -> Result<(), SetTransactionResultsError> {
         axt_policy_snapshot
             .validate()
             .map_err(SetTransactionResultsError::InvalidAxtPolicySnapshot)?;
@@ -426,6 +468,7 @@ impl SignedBlock {
             committed_fragment_count,
             fastpq_transcripts,
             axt_envelopes,
+            lane_finality_statements: Vec::new(),
             trigger_completions,
             axt_policy_snapshot,
         });
@@ -441,6 +484,30 @@ impl SignedBlock {
         if let Some(result) = self.result.as_mut() {
             result.trigger_completions = trigger_completions;
         }
+    }
+
+    /// Finalize the canonical post-execution lane effects after the result Merkle root is fixed.
+    ///
+    /// Lane-finality statements bind [`Self::hash`], so production construction must call this
+    /// only after transaction results, every result-leaf mutation, and result metadata such as
+    /// the committed-fragment count have been finalized. The executed block wire and its
+    /// execution commitment must be derived only after this method returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SetLaneFinalityStatementsError::MissingTransactionResults`] when the block does
+    /// not yet carry a [`BlockResult`].
+    #[cfg(feature = "transparent_api")]
+    pub fn set_lane_finality_statements(
+        &mut self,
+        lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
+    ) -> Result<(), SetLaneFinalityStatementsError> {
+        let result = self
+            .result
+            .as_mut()
+            .ok_or(SetLaneFinalityStatementsError::MissingTransactionResults)?;
+        result.lane_finality_statements = lane_finality_statements;
+        Ok(())
     }
 
     /// Replace the embedded AXT policy snapshot for adversarial validation fixtures.
@@ -516,6 +583,14 @@ impl SignedBlock {
         self.result
             .as_ref()
             .map(|result| result.committed_fragment_count)
+    }
+
+    /// Borrow canonical post-execution lane-finality statements.
+    #[must_use]
+    pub fn lane_finality_statements(&self) -> &[crate::nexus::LaneFinalityStatement] {
+        self.result
+            .as_ref()
+            .map_or(&[], |result| result.lane_finality_statements.as_slice())
     }
 
     /// Set the number of successful execution fragments recorded with this block result.
@@ -931,6 +1006,7 @@ impl SignedBlock {
             committed_fragment_count: 0,
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
+            lane_finality_statements: Vec::new(),
             trigger_completions: Vec::new(),
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),
         };
@@ -1732,10 +1808,10 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     use crate::trigger::TimeTriggerEntrypoint;
     use crate::{
-        ChainId,
         block::consensus::SumeragiLanePayloadOwnership,
         da::{
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme},
+            ingest::{DaIngestAuthorizationV1, DaIngestSignatureV1},
             pin_intent::{DaPinIntent, DaPinIntentBundle},
             types::{BlobDigest, RetentionPolicy, StorageTicketId},
         },
@@ -1762,6 +1838,37 @@ mod tests {
 
     fn checked_bls_keypair() -> KeyPair {
         checked_random_keypair_with_algorithm(Algorithm::BlsNormal)
+    }
+
+    fn test_network_id() -> crate::NetworkId {
+        crate::NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x15; Hash::LENGTH]),
+        ))
+    }
+
+    fn test_pin_authorization(lane: LaneId, epoch: u64, sequence: u64) -> DaIngestAuthorizationV1 {
+        let key_pair = KeyPair::try_from_seed(vec![0xDE; 32], Algorithm::Ed25519)
+            .expect("valid deterministic block pin-intent key");
+        let mut authorization = DaIngestAuthorizationV1 {
+            network_id: test_network_id(),
+            owner: crate::account::AccountId::new(key_pair.public_key().clone()),
+            lane_id: lane,
+            epoch,
+            sequence,
+            payload_hash: BlobDigest::new([0xDF; 32]),
+            payload_bytes: 1,
+            request_content_hash: Hash::prehashed([0xE0; 32]),
+            signatures: Vec::new(),
+        };
+        authorization.signatures.push(DaIngestSignatureV1 {
+            signer: key_pair.public_key().clone(),
+            signature: Signature::try_new(
+                key_pair.private_key(),
+                &authorization.signing_digest(),
+            )
+            .expect("sign deterministic block pin-intent authorization"),
+        });
+        authorization
     }
 
     fn sample_da_bundle() -> DaCommitmentBundle {
@@ -1888,7 +1995,7 @@ mod tests {
                 1,
                 1,
                 HashOf::from_untyped_unchecked(Hash::new(b"merge-only-parent")),
-                Hash::new(b"merge-only-chain"),
+                test_network_id(),
                 1,
                 HashOf::new(&validators),
                 validators,
@@ -1933,7 +2040,9 @@ mod tests {
         );
         let envelope = AutonomousLanePayloadEnvelopeV1 {
             version: AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1,
-            chain_id_hash: Hash::new(b"autonomous-only-chain"),
+            network_id: crate::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                Hash::new(b"autonomous-only-genesis"),
+            )),
             epoch: 4,
             lane_id: LaneId::new(2),
             dataspace_id: DataSpaceId::new(9),
@@ -2024,9 +2133,7 @@ mod tests {
     fn signed_block_wire_skips_runtime_transaction_caches() {
         let key_pair = checked_random_keypair();
         let authority = crate::account::AccountId::new(key_pair.public_key().clone());
-        let chain: ChainId = "cache-test-chain".parse().expect("chain id");
-        let tx = TransactionBuilder::new(
-            chain,
+        let tx = TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2124,6 +2231,7 @@ mod tests {
             committed_fragment_count: u64,
             fastpq_transcripts: BTreeMap<Hash, Vec<crate::fastpq::TransferTranscript>>,
             axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
+            lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
             trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
         }
 
@@ -2135,6 +2243,7 @@ mod tests {
             committed_fragment_count: 0,
             fastpq_transcripts: BTreeMap::new(),
             axt_envelopes: Vec::new(),
+            lane_finality_statements: Vec::new(),
             trigger_completions: Vec::new(),
         };
         let bytes = omitted_snapshot.encode();
@@ -2143,6 +2252,41 @@ mod tests {
         assert!(
             BlockResult::decode_all(&mut cursor).is_err(),
             "the AXT policy snapshot is a required V1 BlockResult wire field"
+        );
+    }
+
+    #[test]
+    fn block_result_rejects_wire_omitting_required_lane_finality_statements() {
+        #[derive(norito::codec::Encode)]
+        struct BlockResultWithoutLaneFinalityStatements {
+            time_triggers: Vec<crate::trigger::TimeTriggerEntrypoint>,
+            merkle: MerkleTree<TransactionEntrypoint>,
+            result_merkle: MerkleTree<crate::transaction::signed::TransactionResult>,
+            transaction_results: Vec<crate::transaction::signed::TransactionResult>,
+            committed_fragment_count: u64,
+            fastpq_transcripts: BTreeMap<Hash, Vec<crate::fastpq::TransferTranscript>>,
+            axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
+            trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
+            axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
+        }
+
+        let omitted_lane_finality = BlockResultWithoutLaneFinalityStatements {
+            time_triggers: Vec::new(),
+            merkle: MerkleTree::default(),
+            result_merkle: MerkleTree::default(),
+            transaction_results: Vec::new(),
+            committed_fragment_count: 0,
+            fastpq_transcripts: BTreeMap::new(),
+            axt_envelopes: Vec::new(),
+            trigger_completions: Vec::new(),
+            axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),
+        };
+        let bytes = omitted_lane_finality.encode();
+        let mut cursor = bytes.as_slice();
+
+        assert!(
+            BlockResult::decode_all(&mut cursor).is_err(),
+            "lane-finality statements are a required V1 BlockResult wire field"
         );
     }
 
@@ -2210,9 +2354,7 @@ mod tests {
     fn presigned_with_payload_does_not_hydrate_transactions_from_entrypoints() {
         let key_pair = checked_random_keypair();
         let authority = crate::account::AccountId::new(key_pair.public_key().clone());
-        let chain: ChainId = "payload-cache-test-chain".parse().expect("chain id");
-        let tx = TransactionBuilder::new(
-            chain,
+        let tx = TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2242,9 +2384,7 @@ mod tests {
     fn explicit_payload_hydration_populates_legacy_transaction_cache() {
         let key_pair = checked_random_keypair();
         let authority = crate::account::AccountId::new(key_pair.public_key().clone());
-        let chain: ChainId = "payload-cache-test-chain".parse().expect("chain id");
-        let tx = TransactionBuilder::new(
-            chain,
+        let tx = TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2306,6 +2446,7 @@ mod tests {
             committed_fragment_count: 1,
             fastpq_transcripts: std::collections::BTreeMap::new(),
             axt_envelopes: Vec::new(),
+            lane_finality_statements: Vec::new(),
             trigger_completions: Vec::new(),
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),
         };
@@ -2378,6 +2519,7 @@ mod tests {
             11,
             StorageTicketId::new([0xAB; 32]),
             ManifestDigest::new([0xCD; 32]),
+            test_pin_authorization(LaneId::new(7), 9, 11),
         );
         let bundle = DaPinIntentBundle::new(vec![intent]);
         block.set_da_pin_intents(Some(bundle));
@@ -2459,8 +2601,7 @@ mod tests {
     fn adversarial_fixture_header_replacement_preserves_body() {
         let keypair = checked_random_keypair();
         let authority = crate::account::AccountId::new(keypair.public_key().clone());
-        let transaction = TransactionBuilder::new(
-            ChainId::from("header-replacement-test"),
+        let transaction = TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2486,8 +2627,7 @@ mod tests {
     fn adversarial_fixture_da_sidecar_replacement_preserves_noncanonical_empty_bundles() {
         let keypair = checked_random_keypair();
         let authority = crate::account::AccountId::new(keypair.public_key().clone());
-        let transaction = TransactionBuilder::new(
-            ChainId::from("da-sidecar-replacement-test"),
+        let transaction = TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2516,15 +2656,13 @@ mod tests {
     #[test]
     fn genesis_defaults_confidential_digest() {
         use crate::{
-            ChainId, account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
+            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
         };
 
-        let chain: ChainId = "genesis-default-conf-digest".parse().expect("chain id");
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            chain,
+        let tx = TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2569,7 +2707,6 @@ mod tests {
     #[test]
     fn versioned_block_roundtrip_preserves_instruction_order() {
         use crate::{
-            ChainId,
             account::AccountId,
             parameter::{Parameter, system::SumeragiParameter},
             transaction::{Executable, signed::TransactionBuilder},
@@ -2577,7 +2714,6 @@ mod tests {
 
         let key_pair = checked_random_keypair();
         let authority = AccountId::new(key_pair.public_key().clone());
-        let chain: ChainId = "test-chain".parse().expect("chain id");
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
 
         let ordered = vec![
@@ -2599,8 +2735,7 @@ mod tests {
             ))),
         ];
 
-        let tx = TransactionBuilder::new(
-            chain,
+        let tx = TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2808,15 +2943,13 @@ mod tests {
     #[test]
     fn canonical_wire_roundtrips_genesis_block() {
         use crate::{
-            ChainId, account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
+            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
         };
 
         let keypair = checked_random_keypair();
-        let chain: ChainId = "genesis-canonical-wire".parse().expect("chain id");
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            chain,
+        let tx = TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2891,26 +3024,21 @@ mod tests {
     #[test]
     fn decode_versioned_signed_block_handles_genesis_like_payload() {
         use crate::{
-            ChainId, account::AccountId, domain::DomainId, isi::InstructionBox,
+            account::AccountId, domain::DomainId, isi::InstructionBox,
             transaction::signed::TransactionBuilder,
         };
 
         let keypair = checked_random_keypair();
-        let chain: ChainId = "genesis-versioned-roundtrip"
-            .parse()
-            .expect("chain id must parse");
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let tx1 = TransactionBuilder::new(
-            chain.clone(),
+        let tx1 = TransactionBuilder::new_genesis(
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(core::iter::empty::<InstructionBox>())
         .sign(keypair.private_key());
-        let tx2 = TransactionBuilder::new(
-            chain,
+        let tx2 = TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3069,6 +3197,7 @@ mod tests {
             11,
             StorageTicketId::new([0xAB; 32]),
             ManifestDigest::new([0xCD; 32]),
+            test_pin_authorization(LaneId::new(7), 9, 11),
         );
         let bundle = DaPinIntentBundle::new(vec![intent]);
         let expected = bundle
@@ -3165,18 +3294,14 @@ mod tests {
     #[test]
     fn genesis_can_embed_da_commitments() {
         use crate::{
-            ChainId, account::AccountId, domain::DomainId, isi::InstructionBox,
+            account::AccountId, domain::DomainId, isi::InstructionBox,
             transaction::signed::TransactionBuilder,
         };
 
         let keypair = checked_random_keypair();
-        let chain: ChainId = "genesis-da-commitments"
-            .parse()
-            .expect("chain id must parse");
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            chain,
+        let tx = TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3207,7 +3332,6 @@ mod tests {
     #[test]
     fn genesis_can_override_da_proof_policies() {
         use crate::{
-            ChainId,
             account::AccountId,
             da::commitment::{DaProofPolicy, DaProofPolicyBundle, DaProofScheme},
             domain::DomainId,
@@ -3217,13 +3341,9 @@ mod tests {
         };
 
         let keypair = checked_random_keypair();
-        let chain: ChainId = "genesis-da-proof-policies"
-            .parse()
-            .expect("chain id must parse");
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            chain,
+        let tx = TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3252,7 +3372,6 @@ mod tests {
     #[test]
     fn try_genesis_with_da_proof_policies_matches_compatibility_signature_and_rejects_empty() {
         use crate::{
-            ChainId,
             account::AccountId,
             da::commitment::{DaProofPolicy, DaProofPolicyBundle, DaProofScheme},
             isi::InstructionBox,
@@ -3263,8 +3382,7 @@ mod tests {
         let keypair = KeyPair::try_from_seed(vec![0x53; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            ChainId::from("genesis-checked-signing"),
+        let tx = TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3454,6 +3572,35 @@ mod tests {
 
     #[cfg(feature = "transparent_api")]
     #[test]
+    fn lane_finality_can_only_be_attached_after_results_fix_the_header() {
+        use std::num::NonZeroU64;
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let keypair = checked_random_keypair();
+        let signature = checked_block_signature(0, &keypair, &header);
+        let mut block = SignedBlock::presigned(signature, header, Vec::new());
+
+        assert_eq!(
+            block.set_lane_finality_statements(Vec::new()),
+            Err(SetLaneFinalityStatementsError::MissingTransactionResults)
+        );
+        block
+            .set_transaction_results_with_transcripts(
+                Vec::new(),
+                &[],
+                Vec::new(),
+                BTreeMap::new(),
+                Vec::new(),
+                crate::nexus::AxtPolicySnapshot::default(),
+            )
+            .expect("empty result set fixes the result-bearing header");
+        block
+            .set_lane_finality_statements(Vec::new())
+            .expect("lane-finality finalization follows result construction");
+    }
+
+    #[cfg(feature = "transparent_api")]
+    #[test]
     fn set_transaction_results_records_committed_fragment_count() {
         use std::num::NonZeroU64;
 
@@ -3501,8 +3648,8 @@ mod tests {
             policy: crate::nexus::AxtPolicyEntry {
                 manifest_root: [0x42; 32],
                 target_lane: crate::nexus::LaneId::new(0),
-                min_handle_era: 1,
-                min_sub_nonce: 1,
+                active_handle_era: 1,
+                next_handle_counter: 1,
                 current_slot: 1,
             },
         };
@@ -3544,7 +3691,6 @@ mod tests {
         use iroha_primitives::numeric::Quantity;
 
         use crate::{
-            ChainId,
             account::AccountId,
             asset::id::AssetDefinitionId,
             domain::DomainId,
@@ -3553,12 +3699,10 @@ mod tests {
         };
 
         let keypair = checked_random_keypair();
-        let chain: ChainId = "chain".parse().expect("chain id");
         let _authority_domain: DomainId =
             DomainId::try_new("chain", "universal").expect("chain domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let tx = TransactionBuilder::new(
-            chain.clone(),
+        let tx = TransactionBuilder::new_genesis(
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3615,8 +3759,8 @@ mod tests {
                 policy: crate::nexus::AxtPolicyEntry {
                     manifest_root: [0xAA; 32],
                     target_lane: crate::nexus::LaneId::new(2),
-                    min_handle_era: 10,
-                    min_sub_nonce: 5,
+                    active_handle_era: 10,
+                    next_handle_counter: 5,
                     current_slot: 7,
                 },
             }],
@@ -3664,7 +3808,6 @@ mod tests {
         use iroha_primitives::const_vec::ConstVec;
 
         use crate::{
-            ChainId,
             account::AccountId,
             domain::DomainId,
             transaction::{
@@ -3675,12 +3818,11 @@ mod tests {
         };
 
         let keypair = checked_random_keypair();
-        let chain: ChainId = "test-chain".parse().expect("chain id");
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3738,14 +3880,14 @@ mod tests {
         use std::num::NonZeroU64;
 
         use crate::{
-            ChainId, account::AccountId, transaction::signed::TransactionBuilder,
+            account::AccountId, transaction::signed::TransactionBuilder,
             trigger::DataTriggerSequence,
         };
 
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
-            ChainId::from("set-results-too-short"),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3777,7 +3919,6 @@ mod tests {
         use std::num::NonZeroU64;
 
         use crate::{
-            ChainId,
             account::AccountId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
             trigger::DataTriggerSequence,
@@ -3786,7 +3927,7 @@ mod tests {
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
-            ChainId::from("set-results-count"),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3836,14 +3977,14 @@ mod tests {
         use iroha_crypto::Hash;
 
         use crate::{
-            ChainId, account::AccountId, transaction::signed::TransactionBuilder,
+            account::AccountId, transaction::signed::TransactionBuilder,
             trigger::DataTriggerSequence,
         };
 
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
-            ChainId::from("set-results-mismatch"),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3880,14 +4021,14 @@ mod tests {
         use iroha_crypto::{Hash, MerkleTree};
 
         use crate::{
-            ChainId, account::AccountId, transaction::signed::TransactionBuilder,
+            account::AccountId, transaction::signed::TransactionBuilder,
             trigger::DataTriggerSequence,
         };
 
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
-            ChainId::from("set-results-header-mismatch"),
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3923,19 +4064,17 @@ mod tests {
         use iroha_crypto::MerkleTree;
 
         use crate::{
-            ChainId,
             account::AccountId,
             domain::DomainId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
         };
 
         let keypair = checked_random_keypair();
-        let chain: ChainId = "proof-block".parse().expect("chain id");
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4009,7 +4148,6 @@ mod tests {
         use iroha_primitives::const_vec::ConstVec;
 
         use crate::{
-            ChainId,
             account::AccountId,
             transaction::{
                 ExecutionStep,
@@ -4019,11 +4157,10 @@ mod tests {
         };
 
         let keypair = checked_random_keypair();
-        let chain: ChainId = "external-proof-block".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4085,7 +4222,6 @@ mod tests {
         use iroha_primitives::const_vec::ConstVec;
 
         use crate::{
-            ChainId,
             account::AccountId,
             domain::DomainId,
             transaction::{
@@ -4096,12 +4232,11 @@ mod tests {
         };
 
         let keypair = checked_random_keypair();
-        let chain: ChainId = "time-proof-block".parse().expect("chain id");
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4172,19 +4307,17 @@ mod tests {
         use iroha_crypto::Hash;
 
         use crate::{
-            ChainId,
             account::AccountId,
             domain::DomainId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
         };
 
         let keypair = checked_random_keypair();
-        let chain: ChainId = "proof-miss".parse().expect("chain id");
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            test_network_id(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4213,17 +4346,15 @@ mod tests {
     #[test]
     fn canonical_wire_and_deframe_preserve_layout_flags() {
         use crate::{
-            ChainId, account::AccountId, block::deframe_versioned_signed_block_bytes,
-            domain::DomainId, transaction::signed::TransactionBuilder,
+            account::AccountId, block::deframe_versioned_signed_block_bytes, domain::DomainId,
+            transaction::signed::TransactionBuilder,
         };
 
         let keypair = checked_random_keypair();
-        let chain: ChainId = "test-chain".parse().expect("chain id");
         let _domain_id: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let transaction = TransactionBuilder::new(
-            chain.clone(),
+        let transaction = TransactionBuilder::new_genesis(
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -4250,16 +4381,14 @@ mod tests {
     #[test]
     fn framing_derives_flags_instead_of_reusing_tls_state() {
         use crate::{
-            ChainId, account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
+            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
         };
 
         let keypair = checked_random_keypair();
-        let chain: ChainId = "stale-flags".parse().expect("chain id");
         let _domain_id: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let transaction = TransactionBuilder::new(
-            chain.clone(),
+        let transaction = TransactionBuilder::new_genesis(
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

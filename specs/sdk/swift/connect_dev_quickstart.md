@@ -11,7 +11,7 @@ This guide shows how to wire the Swift SDK into an iOS/macOS app, enable the Nor
 
 ## Prerequisites
 - Platforms: iOS 15+ / macOS 12+ (Swift 5.9 toolchain).
-- Norito bridge: bundle `NoritoBridge.xcframework` alongside the app (SPM binary target or CocoaPods vendored framework). SwiftPM enables the bridge automatically when present and falls back to Swift-only mode with a warning when absent; production should ship the signed bundle.
+- Norito bridge: bundle `NoritoBridge.xcframework` alongside the app (SPM binary target or CocoaPods vendored framework). Connect frame and native crypto operations fail closed when the required bridge is absent.
 
 ## Install the SDK
 **Swift Package Manager**
@@ -27,7 +27,7 @@ Ensure the `NoritoBridge` binary target is present under `dist/` or provided by 
 ```ruby
 pod 'IrohaSwift', :path => '../IrohaSwift' # or your internal mirror
 ```
-Bundle `NoritoBridge.xcframework` under the repository `dist/` directory or add it to your app’s `Frameworks` folder; the pod guard rails fall back to stubs if the bridge is missing and the same bridge-path hint will surface in runtime errors.
+Bundle `NoritoBridge.xcframework` under the repository `dist/` directory or add it to your app’s `Frameworks` folder; a missing bridge is an installation error, not a codec fallback.
 
 ## Sample projects
 - `examples/ios/ConnectMinimalApp/` — SwiftPM executable harness that opens a Connect session, logs events, and exports diagnostics/bundles. Use it to validate bridge bundling and queue exports locally.
@@ -37,21 +37,40 @@ Bundle `NoritoBridge.xcframework` under the repository `dist/` directory or add 
 ```swift
 import IrohaSwift
 
-// 1. Prepare identifiers and keys.
-let sid = ConnectSid.generate(chainId: "sora", appPublicKey: appPk, nonce16: nonce)
-let connectKeys = ConnectCrypto.deriveDirectionKeys(sharedSecret: sharedSecret, sid: sid)
-
-// 2. Create the session with flow control + diagnostics.
-let diagnosticsRoot = ConnectSessionDiagnostics.defaultRootDirectory()
-let session = ConnectSession(
-    baseURL: URL(string: "https://torii.example")!,
-    sessionID: sid.rawBytes,
-    flowControl: ConnectFlowControlWindow(defaultTokens: 8),
-    diagnosticsRoot: diagnosticsRoot
+// 1. Prepare one exact launch identity and let Torii echo-verify it.
+let networkID = try NetworkId(literal: canonicalNetworkID)
+let appKeys = try ConnectCrypto.generateKeyPair()
+let nonce = try secureRandomBytes(count: 16)
+let torii = ToriiClient(baseURL: URL(string: "https://torii.example")!)
+let created = try await torii.createConnectSession(
+    networkID: networkID,
+    appPublicKey: appKeys.publicKey,
+    nonce: nonce
 )
-session.setDirectionKeys(connectKeys)
+let request = try ConnectClient.makeWebSocketRequest(
+    baseURL: torii.baseURL,
+    sid: created.sid,
+    role: .app,
+    token: created.tokenApp
+)
+let client = ConnectClient(request: request)
+let session = try ConnectSession(
+    networkID: networkID,
+    appPublicKey: appKeys.publicKey,
+    nonce: nonce,
+    relayToken: created.tokenRelay,
+    client: client,
+    flowControl: ConnectFlowControlWindow(appToWallet: 8, walletToApp: 8)
+)
+client.start()
+try await session.sendOpen(open: ConnectOpen(
+    appPublicKey: appKeys.publicKey,
+    appMetadata: nil,
+    constraints: ConnectConstraints(networkID: networkID),
+    permissions: ConnectPermissions(methods: ["SIGN_REQUEST_TX"])
+))
 
-// 3. Drive the WS loop and handle frames.
+// 2. Drive the WS loop and handle frames.
 for try await event in session.eventStream() {
     switch event {
     case .ciphertext(let frame):
@@ -63,15 +82,15 @@ for try await event in session.eventStream() {
 }
 ```
 Tips:
-- Call `ConnectSession.resumeSummary()` after reconnecting to emit sequence/queue depth telemetry.
+- `flowControl` is an SDK-local queue limiter only. Connect V1 has no `FlowControl`, `Resume`, or `Rotate` wire controls.
 - Use `ConnectSession.eventStream(filter:)` or `eventsPublisher` (Combine) for UI integration.
-- Check `NoritoNativeBridge.shared.isAvailable` before trying bridge-backed features; fall back to error surfaces when unavailable.
+- Treat bridge-unavailable errors as fatal setup errors for Connect.
 
 ## Offline queues and journals
 - **Connect queue persistence**: `ConnectQueueJournal` writes per-direction journals under Application Support. Configure bounds to avoid unbounded files:
 ```swift
 let journal = ConnectQueueJournal(
-    sessionID: sid.rawBytes,
+    sessionID: try ConnectCrypto.deriveSessionID(networkID: networkID, appPublicKey: appKeys.publicKey, nonce: nonce),
     configuration: .init(maxRecordsPerQueue: 64, maxBytesPerQueue: 1 << 20)
 )
 try journal.append(direction: .appToWallet, sequence: 1, ciphertext: payload)
@@ -81,7 +100,7 @@ Oversize/truncated files raise `ConnectQueueError` instead of loading into memor
 
 - **Offline wallet journal**: `OfflineJournal` stores pending/committed envelopes with hash chain + HMAC. Set caps with `OfflineJournalConfiguration(maxRecords:maxBytes:)` to prevent runaway files.
 
-- **Pipeline retry queue**: `FilePendingTransactionQueue` uses newline-delimited base64 JSON. Configure bounds with `FilePendingTransactionQueueConfiguration` and handle `overflow*` errors.
+- **Caller-managed pipeline archive**: `FilePendingTransactionQueue` uses newline-delimited base64 JSON for explicit local storage only. `IrohaSDK` never drains or submits it; configure bounds with `FilePendingTransactionQueueConfiguration` and handle `overflow*` errors.
 
 - **Evidence export**: `ConnectReplayRecorder` + `ConnectSessionDiagnostics.exportJournalBundle` write `manifest.json`, queue files, and `metrics.ndjson` so operators can inspect/replay sessions.
 

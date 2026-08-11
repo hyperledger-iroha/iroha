@@ -1,5 +1,3 @@
-// Same-scope regression coverage extracted to keep the parent source budget bounded.
-
 #[test]
 fn validation_fee_activation_delay_enforces_exact_boundary_and_overflow() {
     let enacted_at_height = 40;
@@ -37,6 +35,36 @@ fn validation_fee_activation_delay_enforces_exact_boundary_and_overflow() {
 }
 
 #[test]
+fn sorafs_provider_owner_transition_requires_full_parliament_gate() {
+    let kind = ProposalKind::SorafsProviderGovernance(
+        iroha_data_model::governance::types::SorafsProviderGovernanceProposal {
+            action: Box::new(
+                iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1::Establish(
+                    iroha_data_model::isi::sorafs::EstablishSorafsProviderOwnerV1 {
+                        provider_id: iroha_data_model::sorafs::capacity::ProviderId::new(
+                            [0xA7; 32],
+                        ),
+                        owner: ALICE_ID.clone(),
+                    },
+                ),
+            ),
+        },
+    );
+    assert_eq!(
+        super::required_parliament_bodies(&kind),
+        &[
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::FmaCommittee,
+        ]
+    );
+}
+
+#[test]
 fn contract_subject_binding_materializes_missing_account_and_preserves_existing_account() {
     let state = State::new_for_testing(
         World::default(),
@@ -58,7 +86,9 @@ fn contract_subject_binding_materializes_missing_account_and_preserves_existing_
         .expect("seed lifecycle authority");
 
     let missing_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &ALICE_ID,
         41,
         DataSpaceId::UNIVERSAL,
@@ -67,12 +97,9 @@ fn contract_subject_binding_materializes_missing_account_and_preserves_existing_
     let missing_subject = missing_address.subject_id();
     assert!(state_transaction.world.account(&missing_subject).is_err());
 
-    let bound_subject = super::ensure_contract_subject_binding(
-        &ALICE_ID,
-        &mut state_transaction,
-        &missing_address,
-    )
-    .expect("bind and materialize missing contract subject");
+    let bound_subject =
+        super::ensure_contract_subject_binding(&ALICE_ID, &mut state_transaction, &missing_address)
+            .expect("bind and materialize missing contract subject");
     assert_eq!(bound_subject, missing_subject);
     assert!(state_transaction.world.account(&missing_subject).is_ok());
     assert!(crate::smartcontracts::code::is_historical_contract_subject(
@@ -81,7 +108,9 @@ fn contract_subject_binding_materializes_missing_account_and_preserves_existing_
     ));
 
     let existing_address = ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &ALICE_ID,
         42,
         DataSpaceId::UNIVERSAL,
@@ -356,6 +385,201 @@ fn fee_sponsor_revision_fixture(
 }
 
 #[test]
+fn fee_sponsor_program_rejects_unregistered_payout_account() {
+    use iroha_data_model::{
+        isi::nexus::CreateFeeSponsorProgram,
+        nexus::{FeeSponsorProgram, FeeSponsorProgramId},
+    };
+
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(1).expect("nonzero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    Register::account(Account::new(ALICE_ID.clone()))
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register sponsor");
+
+    let program_id = FeeSponsorProgramId::new(
+        ALICE_ID.clone(),
+        "closed_payout".parse().expect("program name"),
+    );
+    let create = CreateFeeSponsorProgram {
+        program: FeeSponsorProgram::new(program_id.clone(), BOB_ID.clone()),
+    };
+    let error = create
+        .clone()
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("an unregistered payout account must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("unknown fee sponsor payout account")
+    );
+    assert!(stx.world.fee_sponsor_programs.get(&program_id).is_none());
+
+    Register::account(Account::new(BOB_ID.clone()))
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register payout account");
+    create
+        .execute(&ALICE_ID, &mut stx)
+        .expect("registered immutable payout account must be accepted");
+    assert_eq!(
+        stx.world
+            .fee_sponsor_programs
+            .get(&program_id)
+            .expect("created sponsor program")
+            .payout_account,
+        *BOB_ID
+    );
+    let error = Unregister::account(BOB_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("a live program's immutable payout account must remain registered");
+    assert!(error.to_string().contains("immutable payout account"));
+}
+
+#[test]
+fn fee_sponsor_withdrawal_is_owner_only_and_pays_registered_account() {
+    use iroha_data_model::{
+        isi::nexus::WithdrawFeeSponsorProgram,
+        nexus::{
+            FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle, FeeSponsorVault,
+            FeeSponsorVaultKey,
+        },
+        permission::Permissions,
+    };
+    use iroha_executor_data_model::permission::nexus::CanManageFeeSponsorProgram;
+
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(1).expect("nonzero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let custody = stx.nexus.fees.sponsor_vault_custody_account_id.clone();
+    for account in [ALICE_ID.clone(), BOB_ID.clone(), custody.clone()] {
+        if stx.world.account(&account).is_err() {
+            Register::account(Account::new(account))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register sponsor withdrawal fixture account");
+        }
+    }
+
+    let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+        .parse()
+        .expect("canonical asset definition id");
+    stx.world.asset_definitions.insert(
+        asset_definition_id.clone(),
+        AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "global fee asset".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID),
+    );
+    let custody_asset = AssetId::new(asset_definition_id.clone(), custody);
+    Mint::asset_quantity(Quantity::from(10_u32), custody_asset.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("fund sponsor custody");
+
+    let program_id = FeeSponsorProgramId::new(
+        ALICE_ID.clone(),
+        "owner_payout".parse().expect("program name"),
+    );
+    let mut program = FeeSponsorProgram::new(program_id.clone(), BOB_ID.clone());
+    program.lifecycle = FeeSponsorProgramLifecycle::Paused;
+    stx.world
+        .fee_sponsor_programs
+        .insert(program_id.clone(), program);
+    let vault_key = FeeSponsorVaultKey {
+        program_id: program_id.clone(),
+        asset_definition_id: asset_definition_id.clone(),
+    };
+    stx.world.fee_sponsor_vaults.insert(
+        vault_key.clone(),
+        FeeSponsorVault {
+            key: vault_key.clone(),
+            balance: Quantity::from(10_u32),
+        },
+    );
+    stx.world.account_permissions.insert(
+        BOB_ID.clone(),
+        Permissions::from([CanManageFeeSponsorProgram {
+            sponsor: ALICE_ID.clone(),
+        }
+        .into()]),
+    );
+
+    let withdrawal = WithdrawFeeSponsorProgram {
+        program_id: program_id.clone(),
+        asset_definition_id: asset_definition_id.clone(),
+        amount: Quantity::from(3_u32),
+    };
+    let error = withdrawal
+        .clone()
+        .execute(&BOB_ID, &mut stx)
+        .expect_err("a delegated manager must not withdraw sponsor funds");
+    assert!(error.to_string().contains("only sponsor"));
+    assert_eq!(
+        stx.world
+            .fee_sponsor_vaults
+            .get(&vault_key)
+            .expect("rejected withdrawal preserves vault")
+            .balance,
+        Quantity::from(10_u32)
+    );
+
+    withdrawal
+        .execute(&ALICE_ID, &mut stx)
+        .expect("exact sponsor may withdraw to the registered payout account");
+    let payout_asset = AssetId::new(asset_definition_id, BOB_ID.clone());
+    assert_eq!(
+        stx.world
+            .assets
+            .get(&payout_asset)
+            .expect("registered payout receives withdrawal")
+            .as_ref(),
+        &Quantity::from(3_u32)
+    );
+    assert_eq!(
+        stx.world
+            .assets
+            .get(&custody_asset)
+            .expect("custody retains remaining balance")
+            .as_ref(),
+        &Quantity::from(7_u32)
+    );
+    assert_eq!(
+        stx.world
+            .fee_sponsor_vaults
+            .get(&vault_key)
+            .expect("nonempty vault remains")
+            .balance,
+        Quantity::from(7_u32)
+    );
+}
+
+#[test]
 fn fee_sponsor_vault_allocation_requires_program_management_authority() {
     use iroha_data_model::{
         isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation,
@@ -395,7 +619,7 @@ fn fee_sponsor_vault_allocation_requires_program_management_authority() {
         FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
         fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 1),
     );
-    let mut program = FeeSponsorProgram::new(program_id.clone());
+    let mut program = FeeSponsorProgram::new(program_id.clone(), program_id.sponsor.clone());
     program.lifecycle = FeeSponsorProgramLifecycle::Active;
     program.active_revision = Some(1);
     stx.world
@@ -488,7 +712,7 @@ fn fee_sponsor_vault_allocation_rejects_future_source_height() {
         FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
         fee_sponsor_revision_fixture(program_id.clone(), asset_definition_id.clone(), 1),
     );
-    let mut program = FeeSponsorProgram::new(program_id.clone());
+    let mut program = FeeSponsorProgram::new(program_id.clone(), program_id.sponsor.clone());
     program.lifecycle = FeeSponsorProgramLifecycle::Active;
     program.active_revision = Some(1);
     stx.world
@@ -591,7 +815,7 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
         FeeSponsorProgramRevisionKey::new(program_id.clone(), 1),
         revision_one,
     );
-    let mut program = FeeSponsorProgram::new(program_id.clone());
+    let mut program = FeeSponsorProgram::new(program_id.clone(), program_id.sponsor.clone());
     program.lifecycle = FeeSponsorProgramLifecycle::Active;
     program.active_revision = Some(1);
     stx.world

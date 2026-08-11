@@ -91,7 +91,7 @@ pub use sorafs_reputation::{
 };
 use thiserror::Error;
 use url::Url;
-pub use user::{DevTelemetry, Logger, Snapshot, SnapshotBootstrapPolicy};
+pub use user::{DevTelemetry, Logger, Snapshot, SnapshotBootstrapPolicy, SnapshotResourcePolicy};
 
 use crate::{
     kura::{FsyncMode, InitMode},
@@ -2758,7 +2758,7 @@ pub struct Governance {
     pub sorafs_penalty: SorafsPenaltyPolicy,
     /// SoraFS telemetry authentication/replay safeguards.
     pub sorafs_telemetry: SorafsTelemetryPolicy,
-    /// Static provider→owner bindings seeded at startup.
+    /// Trusted provider→owner bindings seeded only before the first block.
     pub sorafs_provider_owners: BTreeMap<ProviderId, AccountId>,
     /// Conviction step in blocks for plain (non‑ZK) voting. Duration/step yields extra weight.
     pub conviction_step_blocks: u64,
@@ -3804,6 +3804,9 @@ struct NexusConsensusDaV1 {
     sample_size_max: u16,
     threshold_base: u16,
     per_attester_shards: u16,
+    ingest_quota_window_blocks: u64,
+    ingest_quota_max_count_per_account: u64,
+    ingest_quota_max_bytes_per_account: u64,
     audit_sample_size: u16,
     audit_window_count: u16,
     audit_interval: NexusConsensusDurationV1,
@@ -4093,6 +4096,9 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
             sample_size_max: nexus.da.sample_size_max.get(),
             threshold_base: nexus.da.threshold_base.get(),
             per_attester_shards: nexus.da.per_attester_shards.get(),
+            ingest_quota_window_blocks: nexus.da.ingest_quota_window_blocks.get(),
+            ingest_quota_max_count_per_account: nexus.da.ingest_quota_max_count_per_account.get(),
+            ingest_quota_max_bytes_per_account: nexus.da.ingest_quota_max_bytes_per_account.get(),
             audit_sample_size: nexus.da.audit.sample_size.get(),
             audit_window_count: nexus.da.audit.window_count.get(),
             audit_interval: nexus.da.audit.interval.into(),
@@ -4615,6 +4621,30 @@ pub fn execution_policy_digest_v1(
         .collect::<Vec<_>>();
     policy.push("governance.sorafs_pin.approval_signers", &pin_signers);
     policy.push(
+        "governance.sorafs_pin.max_global_manifests",
+        &pin.max_global_manifests,
+    );
+    policy.push(
+        "governance.sorafs_pin.max_global_bytes",
+        &pin.max_global_bytes,
+    );
+    policy.push(
+        "governance.sorafs_pin.max_manifests_per_authority",
+        &pin.max_manifests_per_authority,
+    );
+    policy.push(
+        "governance.sorafs_pin.max_bytes_per_authority",
+        &pin.max_bytes_per_authority,
+    );
+    policy.push(
+        "governance.sorafs_pin.max_lineage_depth",
+        &pin.max_lineage_depth,
+    );
+    policy.push(
+        "governance.sorafs_pin.max_successor_fanout",
+        &pin.max_successor_fanout,
+    );
+    policy.push(
         "governance.sorafs_pin_fee_asset_id",
         &governance.sorafs_pin_fee_asset_id,
     );
@@ -4946,6 +4976,8 @@ pub struct Confidential {
     pub policy_transition_delay_blocks: u64,
     /// Grace window around policy activation.
     pub policy_transition_window_blocks: u64,
+    /// Maximum confidential-policy transitions that may share one effective height.
+    pub policy_transition_max_per_height: NonZeroU32,
     /// Non-zero commitment tree root history length.
     pub tree_roots_history_len: NonZeroUsize,
     /// Frontier checkpoint interval.
@@ -5431,6 +5463,12 @@ pub struct Da {
     pub threshold_base: NonZeroU16,
     /// Number of shards each attester must verify per slot.
     pub per_attester_shards: NonZeroU16,
+    /// Number of consecutive block heights in one deterministic ingest quota window.
+    pub ingest_quota_window_blocks: NonZeroU64,
+    /// Maximum accepted DA ingests per account in one quota window.
+    pub ingest_quota_max_count_per_account: NonZeroU64,
+    /// Maximum canonical DA payload bytes per account in one quota window.
+    pub ingest_quota_max_bytes_per_account: NonZeroU64,
     /// Rolling audit configuration.
     pub audit: DaAudit,
     /// Recovery deadline configuration.
@@ -5454,6 +5492,18 @@ impl Default for Da {
                 .expect("default threshold_base > 0"),
             per_attester_shards: NonZeroU16::new(defaults::nexus::da::PER_ATTESTER_SHARDS)
                 .expect("default per_attester_shards > 0"),
+            ingest_quota_window_blocks: NonZeroU64::new(
+                defaults::nexus::da::INGEST_QUOTA_WINDOW_BLOCKS,
+            )
+            .expect("default ingest quota window > 0"),
+            ingest_quota_max_count_per_account: NonZeroU64::new(
+                defaults::nexus::da::INGEST_QUOTA_MAX_COUNT_PER_ACCOUNT,
+            )
+            .expect("default ingest quota count > 0"),
+            ingest_quota_max_bytes_per_account: NonZeroU64::new(
+                defaults::nexus::da::INGEST_QUOTA_MAX_BYTES_PER_ACCOUNT,
+            )
+            .expect("default ingest quota bytes > 0"),
             audit: DaAudit::default(),
             recovery: DaRecovery::default(),
             rotation: DaRotation::default(),
@@ -8554,6 +8604,14 @@ pub struct Torii {
     pub zk_ivm_prove_job_max_entries: usize,
     /// Aggregate bytes retained by `/v1/zk/ivm/prove` job requests and cached responses.
     pub zk_ivm_prove_job_max_retained_bytes: Bytes<u64>,
+    /// Maximum number of retained `/v1/zk/ivm/prove` jobs for one authenticated account.
+    ///
+    /// Set to 0 to disable the per-account count cap (not recommended).
+    pub zk_ivm_prove_job_max_entries_per_owner: usize,
+    /// Maximum bytes retained by `/v1/zk/ivm/prove` for one authenticated account.
+    ///
+    /// Set to 0 to disable the per-account byte cap (not recommended).
+    pub zk_ivm_prove_job_max_retained_bytes_per_owner: Bytes<u64>,
     /// Iroha Connect configuration.
     pub connect: Connect,
     /// ISO 20022 bridge configuration.
@@ -8993,8 +9051,44 @@ pub struct ToriiTransport {
     /// Explicit trusted proxy hosts whose appended `X-Forwarded-For` chain is
     /// used to derive the canonical remote IP.
     pub trusted_proxy_cidrs: Vec<String>,
+    /// HTTP/1 listener, parser, and socket limits.
+    pub http: ToriiHttpTransport,
     /// Norito-RPC rollout settings.
     pub norito_rpc: NoritoRpcTransport,
+}
+
+/// HTTP/1 limits enforced before request middleware.
+#[derive(Debug, Clone, Copy)]
+pub struct ToriiHttpTransport {
+    /// Maximum accepted TCP connections retained by Torii.
+    pub max_connections: NonZeroUsize,
+    /// Maximum accepted TCP connections retained for one source IP.
+    pub max_connections_per_ip: NonZeroUsize,
+    /// Absolute deadline for reading one HTTP/1 request head.
+    pub header_read_timeout: Duration,
+    /// Maximum duration without socket write progress.
+    pub write_timeout: Duration,
+    /// Maximum number of HTTP/1 headers accepted in one request.
+    pub max_headers: NonZeroUsize,
+    /// Maximum HTTP/1 parser buffer, including the request head.
+    pub max_header_bytes: Bytes<u64>,
+}
+
+impl Default for ToriiHttpTransport {
+    fn default() -> Self {
+        Self {
+            max_connections: defaults::torii::transport::http::MAX_CONNECTIONS,
+            max_connections_per_ip: defaults::torii::transport::http::MAX_CONNECTIONS_PER_IP,
+            header_read_timeout: Duration::from_millis(
+                defaults::torii::transport::http::HEADER_READ_TIMEOUT_MS,
+            ),
+            write_timeout: Duration::from_millis(
+                defaults::torii::transport::http::WRITE_TIMEOUT_MS,
+            ),
+            max_headers: defaults::torii::transport::http::MAX_HEADERS,
+            max_header_bytes: defaults::torii::transport::http::MAX_HEADER_BYTES,
+        }
+    }
 }
 
 /// Native MCP tool profile.
@@ -9052,10 +9146,6 @@ pub struct ToriiMcp {
     pub rate_per_minute: Option<NonZeroU32>,
     /// Optional MCP burst budget.
     pub burst: Option<NonZeroU32>,
-    /// Retention window in seconds for asynchronous MCP jobs.
-    pub async_job_ttl_secs: u64,
-    /// Maximum asynchronous MCP jobs retained in memory.
-    pub async_job_max_entries: usize,
 }
 
 /// Torii CORS response-header policy.
@@ -9168,6 +9258,14 @@ impl From<user::ToriiTransport> for ToriiTransport {
     fn from(value: user::ToriiTransport) -> Self {
         Self {
             trusted_proxy_cidrs: value.trusted_proxy_cidrs,
+            http: ToriiHttpTransport {
+                max_connections: value.http.max_connections,
+                max_connections_per_ip: value.http.max_connections_per_ip,
+                header_read_timeout: value.http.header_read_timeout_ms.get(),
+                write_timeout: value.http.write_timeout_ms.get(),
+                max_headers: value.http.max_headers,
+                max_header_bytes: value.http.max_header_bytes,
+            },
             norito_rpc: value.norito_rpc.into(),
         }
     }
@@ -9186,8 +9284,6 @@ impl Default for ToriiMcp {
             deny_tool_prefixes: defaults::torii::mcp::deny_tool_prefixes(),
             rate_per_minute: defaults::torii::mcp::RATE_PER_MINUTE.and_then(NonZeroU32::new),
             burst: defaults::torii::mcp::BURST.and_then(NonZeroU32::new),
-            async_job_ttl_secs: defaults::torii::mcp::ASYNC_JOB_TTL_SECS,
-            async_job_max_entries: defaults::torii::mcp::ASYNC_JOB_MAX_ENTRIES,
         }
     }
 }
@@ -9215,8 +9311,6 @@ impl From<user::ToriiMcp> for ToriiMcp {
                 .burst
                 .or(defaults::torii::mcp::BURST)
                 .and_then(NonZeroU32::new),
-            async_job_ttl_secs: value.async_job_ttl_secs.max(1),
-            async_job_max_entries: value.async_job_max_entries.max(1),
         }
     }
 }
@@ -9740,7 +9834,7 @@ pub struct SorafsPotrRuntimeBinding {
 /// Public identity and qualification of one PoTR runtime signer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsPotrRuntimeSignerBinding {
-    /// Stable opaque HSM/KMS provider handle.
+    /// Stable opaque authenticated external signer handle.
     pub handle: String,
     /// Stable signer administration identity.
     pub signer_id: [u8; 32],
@@ -9838,9 +9932,9 @@ pub struct SorafsAppealFinanceSettlement {
     pub pricing: SorafsAppealPricingPolicy,
     /// Governed inline appeal settlement policy.
     pub settlement: SorafsAppealSettlementPolicy,
-    /// Non-secret bindings for runtime-only HSM/KMS signer providers.
+    /// Non-secret bindings for runtime-only external signer providers.
     pub submitter_signers: Vec<SorafsAppealFinanceSignerBinding>,
-    /// Independent non-secret binding for the checkpoint HSM/KMS provider.
+    /// Independent non-secret binding for the sealed checkpoint provider.
     pub checkpoint_provider: Option<SorafsAppealFinanceCheckpointBinding>,
     /// Interval between worker reconciliation scans for follow-up settlement steps.
     pub worker_scan_interval: Duration,
@@ -10177,7 +10271,7 @@ impl SorafsAppealSettlementRule {
 /// configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsAppealFinanceSignerBinding {
-    /// Stable opaque PKCS#11/HSM/KMS provider handle.
+    /// Stable opaque authenticated external signer handle.
     pub handle: String,
     /// Exact transaction authority controlled by this signer.
     pub authority: AccountId,
@@ -10193,10 +10287,10 @@ pub struct SorafsAppealFinanceSignerBinding {
     pub revoked_at_block_height: Option<u64>,
 }
 
-/// Public identity and policy of the independent checkpoint HSM/KMS provider.
+/// Public identity and policy of the independent sealed checkpoint provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsAppealFinanceCheckpointBinding {
-    /// Stable opaque HSM/KMS provider handle.
+    /// Stable opaque sealed checkpoint provider handle.
     pub handle: String,
     /// Exact Ed25519 checkpoint verification key.
     pub public_key: PublicKey,
@@ -10312,7 +10406,7 @@ pub struct SorafsStorage {
     /// Finalized-ledger billing projection, statement delivery, and
     /// hedge-intent generation policy.
     ///
-    /// Ledger queries, proof verification, HSM signing, immutable publication,
+    /// Ledger queries, proof verification, external signing, immutable publication,
     /// acknowledgement authority, and sealed epoch storage remain
     /// runtime-injected.
     pub hedging_billing_runtime: Option<SorafsHedgingBillingRuntime>,
@@ -10352,7 +10446,7 @@ pub struct SorafsStorage {
     pub governance_dag_dir: Option<PathBuf>,
     /// Optional publisher peer identifier used for signed Governance DAG blocks.
     pub governance_dag_publisher_peer_id: Option<String>,
-    /// Opaque runtime HSM/KMS signer handle used for signed Governance DAG blocks.
+    /// Opaque authenticated external signer handle for Governance DAG blocks.
     pub governance_dag_signer_handle: Option<String>,
     /// Exact non-zero public-policy revision required from the runtime signer.
     pub governance_dag_signer_revision: Option<u64>,
@@ -10468,7 +10562,7 @@ pub struct SorafsGovernanceDagServiceView {
     pub source_dir: Option<PathBuf>,
     /// Publisher peer identifier bound to the signed local producer.
     pub producer_publisher_peer_id: Option<String>,
-    /// Opaque runtime HSM/KMS signer handle bound to the signed local producer.
+    /// Opaque authenticated external signer handle bound to the local producer.
     pub producer_signer_handle: Option<String>,
     /// Exact non-zero public-policy revision required from the producer signer.
     pub producer_signer_revision: Option<u64>,
@@ -10625,7 +10719,7 @@ pub struct SorafsModerationOrchestrator {
     /// Exact checkpoint-store public-policy digest.
     pub checkpoint_store_policy_digest: [u8; 32],
     /// Archive-lifetime-stable Ed25519 trust anchor for sealed checkpoint statements.
-    /// HSM-internal rotation must preserve this public identity in V1.
+    /// Provider-internal rotation must preserve this public identity in V1.
     pub checkpoint_store_attestation_public_key: [u8; 32],
     /// Governance authority used only for deterministic deadline maintenance.
     pub maintenance_authority: AccountId,
@@ -10805,7 +10899,7 @@ pub struct SorafsHedgingBillingRuntime {
     pub journal_verifier_revision: u64,
     /// Exact non-zero digest of the journal-verifier provider's public policy.
     pub journal_verifier_policy_digest: [u8; 32],
-    /// Identity-pinned statement HSM/KMS provider handle.
+    /// Identity-pinned authenticated external statement signer handle.
     pub statement_signer_handle: String,
     /// Exact non-zero statement-signer provider revision.
     pub statement_signer_revision: u64,
@@ -10869,6 +10963,57 @@ pub struct SorafsProviderIngestOutbox {
     pub max_status_page_size: usize,
 }
 
+/// Public qualification binding for one provider-attestation runtime effect.
+///
+/// The handle is an opaque deployment identity, not an endpoint or credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsProviderAttestationRuntimeBinding {
+    /// Stable credential-free production provider handle.
+    pub handle: String,
+    /// Exact non-zero adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the provider's public policy.
+    pub policy_digest: [u8; 32],
+}
+
+/// Bounded activation policy for the Musubi provider-attestation journal.
+///
+/// This policy contains no filesystem selector, nonce, endpoint, credential,
+/// token, or key material. Its three bindings name the external effects that a
+/// daemon registry projects as three independent public roles. Live adapter
+/// qualification and consumption remain gated, and stock `irohad` continues
+/// to reject activation until that wiring is complete.
+/// TODO: consume these projected bindings only after all three adapters and
+/// the capture child satisfy their qualification contracts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsProviderAttestationJournal {
+    /// Qualified rollback-resistant UNIX-time seal provider.
+    pub clock_seal: SorafsProviderAttestationRuntimeBinding,
+    /// Qualified approval-only HSM/KMS or threshold signer provider.
+    pub approval_signer: SorafsProviderAttestationRuntimeBinding,
+    /// Qualified authenticated coordinator-inventory provider.
+    pub inventory: SorafsProviderAttestationRuntimeBinding,
+    /// Maximum retained active and terminal entries, independently of the
+    /// checkpoint byte cap.
+    pub max_entries: usize,
+    /// Maximum approval or inventory-handoff attempts per stage.
+    pub max_attempts: u32,
+    /// Lease duration for approval and inventory-handoff claims.
+    pub lease_ttl_ms: u64,
+    /// Maximum external approval-signer operation duration.
+    pub approval_timeout_ms: u64,
+    /// Maximum external coordinator-inventory operation duration.
+    pub handoff_timeout_ms: u64,
+    /// Delay before retrying a transient stage failure.
+    pub retry_delay_ms: u64,
+    /// Maximum canonical checkpoint size, independently of the entry cap and
+    /// including the minimum reserve for one active intent's worst-case future
+    /// attestation state.
+    pub checkpoint_max_bytes: usize,
+    /// Maximum CAS conflicts retried by one journal operation.
+    pub max_cas_retries: u32,
+}
+
 /// Public binding for the external finalized-archive retention authority.
 #[derive(Debug, Clone)]
 pub struct SorafsProviderIngestFinalizedArchiveRetentionAuthority {
@@ -10918,13 +11063,13 @@ pub struct SorafsProviderIngestRuntime {
     pub authenticated_source_fetch_revision: u64,
     /// Exact non-zero digest of the authenticated source-pool public policy.
     pub authenticated_source_fetch_policy_digest: [u8; 32],
-    /// Identity-pinned completion HSM/KMS signer-resolver handle.
+    /// Identity-pinned governed completion-signer resolver handle.
     pub completion_signer_resolver_handle: String,
     /// Exact non-zero governed signer-resolver adapter/public-policy revision.
     pub completion_signer_resolver_revision: u64,
     /// Exact non-zero digest of the governed signer-resolver public policy.
     pub completion_signer_resolver_policy_digest: [u8; 32],
-    /// Stable public HSM/KMS completion-signer or key handle.
+    /// Stable authenticated external completion-signer handle.
     pub completion_signer_handle: String,
     /// Exact non-zero completion-signer adapter and public-policy revision.
     pub completion_signer_adapter_revision: u64,
@@ -10954,7 +11099,7 @@ pub struct SorafsProviderIngestRuntime {
     pub source_operation_timeout_ms: u64,
     /// Durable source-lease renewal cadence.
     pub source_lease_renew_interval_ms: u64,
-    /// Timeout for completion payload construction and HSM/KMS signing.
+    /// Timeout for completion payload construction and external signing.
     pub signer_timeout_ms: u64,
     /// Timeout for transaction preflight, submission, and observation.
     pub ingress_timeout_ms: u64,
@@ -10964,6 +11109,10 @@ pub struct SorafsProviderIngestRuntime {
     pub finalized_archive: SorafsProviderIngestFinalizedArchive,
     /// Durable payload-free completion-outbox policy.
     pub outbox: SorafsProviderIngestOutbox,
+    /// Optional request to activate the capture-only Musubi provider-attestation
+    /// journal; stock `irohad` currently rejects `Some` until a concrete child
+    /// is qualified.
+    pub provider_attestation_journal: Option<SorafsProviderAttestationJournal>,
 }
 
 /// Operational policy for the durable native orderbook transaction worker.
@@ -11428,7 +11577,7 @@ pub struct SorafsMeteringSmoothing {
 pub struct SorafsTokenConfig {
     /// Enable stream-token issuance.
     pub enabled: bool,
-    /// Opaque runtime-only HSM/KMS signer handle.
+    /// Opaque runtime-only authenticated external signer handle.
     pub signer_handle: Option<String>,
     /// Exact Ed25519 public key bound to the runtime signer.
     pub signer_public_key: Option<[u8; 32]>,
@@ -12051,6 +12200,18 @@ pub struct SorafsPinPolicyConstraints {
     pub approval_quorum: u16,
     /// Canonically signer-id-ordered trusted Ed25519 approval roster.
     pub approval_signers: Vec<SorafsPinApprovalSigner>,
+    /// Maximum number of retained pin-manifest records in consensus state.
+    pub max_global_manifests: u64,
+    /// Maximum aggregate content bytes represented by live pin manifests.
+    pub max_global_bytes: u64,
+    /// Maximum number of retained pin-manifest records submitted by one account.
+    pub max_manifests_per_authority: u64,
+    /// Maximum aggregate content bytes represented by one account's live pins.
+    pub max_bytes_per_authority: u64,
+    /// Maximum predecessor depth admitted for a manifest lineage.
+    pub max_lineage_depth: u32,
+    /// Maximum number of retained direct successors admitted for one manifest.
+    pub max_successor_fanout: u32,
 }
 
 impl Default for SorafsPinPolicyConstraints {
@@ -12066,6 +12227,16 @@ impl Default for SorafsPinPolicyConstraints {
                 super::defaults::governance::sorafs_pin_policy::REQUIRE_COUNCIL_SIGNATURES,
             approval_quorum: super::defaults::governance::sorafs_pin_policy::APPROVAL_QUORUM,
             approval_signers: Vec::new(),
+            max_global_manifests:
+                super::defaults::governance::sorafs_pin_policy::MAX_GLOBAL_MANIFESTS,
+            max_global_bytes: super::defaults::governance::sorafs_pin_policy::MAX_GLOBAL_BYTES,
+            max_manifests_per_authority:
+                super::defaults::governance::sorafs_pin_policy::MAX_MANIFESTS_PER_AUTHORITY,
+            max_bytes_per_authority:
+                super::defaults::governance::sorafs_pin_policy::MAX_BYTES_PER_AUTHORITY,
+            max_lineage_depth: super::defaults::governance::sorafs_pin_policy::MAX_LINEAGE_DEPTH,
+            max_successor_fanout:
+                super::defaults::governance::sorafs_pin_policy::MAX_SUCCESSOR_FANOUT,
         }
     }
 }
@@ -12335,6 +12506,8 @@ pub struct Zk {
     pub policy_transition_delay_blocks: u64,
     /// Grace window (in blocks) around policy activation for conversions.
     pub policy_transition_window_blocks: u64,
+    /// Maximum confidential-policy transitions that may share one effective height.
+    pub policy_transition_max_per_height: NonZeroU32,
     /// Non-zero commitment tree root history length to retain.
     pub tree_roots_history_len: NonZeroUsize,
     /// Interval (in blocks) between frontier checkpoints.

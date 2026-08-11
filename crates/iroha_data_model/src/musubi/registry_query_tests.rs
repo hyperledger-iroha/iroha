@@ -76,8 +76,7 @@ fn exact_release_snapshot_binds_home_and_universal_finalized_views() {
         index_revision: 3,
     };
     let exact = MusubiExactReleaseSnapshotV1 {
-        chain_id: ChainId::from("musubi-publish-test"),
-        genesis_hash: [0x72; 32],
+        network_id: test_network_id(0x73),
         snapshot: snapshot(),
         home_release,
         universal_release,
@@ -418,8 +417,7 @@ fn archive_retention_decisions_are_bounded_and_fail_closed() {
         .expect("published archives remain retained even without a healthy location");
     assert!(referenced.must_retain());
     let page = MusubiArchiveRetentionPageV1 {
-        chain_id: ChainId::from("retention-model-test"),
-        genesis_hash: [0xE7; 32],
+        network_id: test_network_id(0xE7),
         items: vec![referenced],
         snapshot: snapshot(),
         finalized_time_ms: 1_700_000_000_000,
@@ -883,8 +881,7 @@ fn page_and_cursor_bounds_are_enforced() {
                 cursor: None,
             },
         },
-        chain_id: ChainId::from("musubi-test-chain"),
-        genesis_hash: [9; 32],
+        network_id: test_network_id(9),
         items: Vec::new(),
         next_cursor: None,
         snapshot: snapshot(),
@@ -894,7 +891,7 @@ fn page_and_cursor_bounds_are_enforced() {
         .expect("resolver page has authoritative lock identity");
     assert!(
         MusubiResolverIndexPageV1 {
-            genesis_hash: [0; 32],
+            network_id: test_network_id(8),
             ..resolver_page
         }
         .validate()
@@ -909,8 +906,7 @@ fn page_and_cursor_bounds_are_enforced() {
                 cursor: None,
             },
         },
-        chain_id: ChainId::from("musubi-test-chain"),
-        genesis_hash: [9; 32],
+        network_id: test_network_id(9),
         namespace_binding: MusubiNamespaceBindingV1 {
             namespace: "sora".parse().expect("namespace"),
             home_dataspace: DataSpaceId::new(7),
@@ -926,7 +922,7 @@ fn page_and_cursor_bounds_are_enforced() {
         .expect("directory page has authoritative lock identity");
     assert!(
         MusubiOrderedPackagePageV1 {
-            genesis_hash: [0; 32],
+            network_id: test_network_id(8),
             ..directory_page
         }
         .validate()
@@ -967,8 +963,7 @@ fn empty_response_pages_retain_their_exact_query_identity() {
     };
     let resolver = MusubiResolverIndexPageV1 {
         query: resolver_query.clone(),
-        chain_id: ChainId::from("musubi-test-chain"),
-        genesis_hash: [9; 32],
+        network_id: test_network_id(9),
         items: Vec::new(),
         next_cursor: None,
         snapshot: snapshot(),
@@ -1016,8 +1011,7 @@ fn empty_response_pages_retain_their_exact_query_identity() {
     };
     let directory = MusubiOrderedPackagePageV1 {
         query: prefix_query.clone(),
-        chain_id: ChainId::from("musubi-test-chain"),
-        genesis_hash: [9; 32],
+        network_id: test_network_id(9),
         namespace_binding: MusubiNamespaceBindingV1 {
             namespace: "sora".parse().expect("namespace"),
             home_dataspace: DataSpaceId::new(7),
@@ -1145,8 +1139,7 @@ fn resolver_next_cursor_may_bind_a_nonempty_byte_budgeted_short_page() {
     };
     let page = MusubiResolverIndexPageV1 {
         query: query.clone(),
-        chain_id: ChainId::from("musubi-resolver-page-test"),
-        genesis_hash: [0x52; 32],
+        network_id: test_network_id(0x53),
         items: vec![row],
         next_cursor: Some(cursor.clone()),
         snapshot,
@@ -1209,23 +1202,75 @@ fn ordered_prefix_requires_canonical_namespace_and_package_prefix() {
 }
 
 #[test]
-fn sorafs_reverse_reference_keys_are_fixed_and_provider_prefix_bounded() {
-    let location = MusubiArchiveLocationKeyV1::new(
-        ArchiveId::new([7; 32]),
-        MusubiArchiveLocationIdV1::new([8; 32]),
-    );
+fn sorafs_reverse_references_bind_complete_archives_and_provider_prefixes() {
+    let commitment = archive_commitment();
+    let archive_id = commitment.archive_id();
+    let location =
+        MusubiArchiveLocationKeyV1::new(archive_id, MusubiArchiveLocationIdV1::new([8; 32]));
     let pin = MusubiPinLocationReferenceV1 {
         pin_manifest: ManifestDigest::new([9; 32]),
         location,
         active: true,
     };
-    let order = MusubiReplicationOrderLocationReferenceV1 {
-        replication_order: ReplicationOrderId::new([10; 32]),
-        location,
-        active: false,
+    let binding = MusubiReplicationOrderArchiveBindingV1::new(
+        ReplicationOrderId::new([10; 32]),
+        archive_id,
+        commitment,
+    );
+    assert!(
+        binding.encode().len() <= MUSUBI_MAX_REPLICATION_ORDER_ARCHIVE_BINDING_CANONICAL_BYTES_V1
+    );
+    let pre_location = MusubiReplicationOrderLocationReferenceV1::pre_location(binding.clone());
+    let active = MusubiReplicationOrderLocationReferenceV1 {
+        binding: binding.clone(),
+        lifecycle: MusubiReplicationOrderLocationLifecycleV1::Active(location),
+    };
+    let retired = MusubiReplicationOrderLocationReferenceV1 {
+        binding: binding.clone(),
+        lifecycle: MusubiReplicationOrderLocationLifecycleV1::Retired(
+            MusubiRetiredReplicationOrderLocationV1::new(location, vec![ProviderId::new([11; 32])]),
+        ),
     };
     pin.validate().expect("valid pin reverse reference");
-    order.validate().expect("valid order reuse tombstone");
+    binding.validate().expect("valid immutable order binding");
+    pre_location.validate().expect("valid pre-location binding");
+    active.validate().expect("valid active order binding");
+    retired.validate().expect("valid order reuse tombstone");
+    assert_eq!(active.active_location(), Some(location));
+    assert_eq!(retired.retired_location(), Some(location));
+
+    let mut empty_retired_providers = retired.clone();
+    let MusubiReplicationOrderLocationLifecycleV1::Retired(retired_history) =
+        &mut empty_retired_providers.lifecycle
+    else {
+        unreachable!("retired fixture lifecycle")
+    };
+    retired_history.providers.clear();
+    assert!(empty_retired_providers.validate().is_err());
+
+    let mut duplicate_retired_providers = retired.clone();
+    let MusubiReplicationOrderLocationLifecycleV1::Retired(retired_history) =
+        &mut duplicate_retired_providers.lifecycle
+    else {
+        unreachable!("retired fixture lifecycle")
+    };
+    retired_history.providers.push(ProviderId::new([11; 32]));
+    assert!(duplicate_retired_providers.validate().is_err());
+
+    let wrong_location = MusubiReplicationOrderLocationReferenceV1 {
+        binding: binding.clone(),
+        lifecycle: MusubiReplicationOrderLocationLifecycleV1::Active(
+            MusubiArchiveLocationKeyV1::new(
+                ArchiveId::new([0xEE; 32]),
+                MusubiArchiveLocationIdV1::new([0xEF; 32]),
+            ),
+        ),
+    };
+    assert!(wrong_location.validate().is_err());
+
+    let mut substituted = binding;
+    substituted.archive_id = ArchiveId::new([0xEE; 32]);
+    assert!(substituted.validate().is_err());
 
     let provider = ProviderId::new([11; 32]);
     let range = MusubiProviderLocationKeyV1::provider_range(provider);

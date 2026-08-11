@@ -15,7 +15,7 @@ manifest.json          # deterministic file manifest with SHA-256 hashes
 
 ## Running the desktop shell
 
-1. Install the `irohad` and `iroha_cli` binaries somewhere in your `PATH`.
+1. Install the `iroha3d` and `iroha` binaries somewhere in your `PATH`.
    MOCHI supervises these executables instead of embedding the node itself.
    The bundle now includes a matching `kagami` binary under `bin/` so genesis
    generation works out of the box. If you store the binaries elsewhere, point

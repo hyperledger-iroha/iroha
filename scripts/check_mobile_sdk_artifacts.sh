@@ -25,7 +25,7 @@ integration:
   - Kotlin/Android SDK modules are included and publishable; when Android
     outputs are required, raw cargo-ndk and generated stripped libraries match
     embedded provenance, and generated/AAR bytes are identical while binding
-    the exact ABI-21 feature state.
+    the exact ABI-22 feature state.
 
 By default Android build outputs are not required. Pass --require-built-android
 or set MOBILE_SDK_REQUIRE_ANDROID_OUTPUTS=1 to require jar/aar outputs too.
@@ -440,7 +440,7 @@ KAGEMUSHA_CANDIDATE_LAB_C_SYMBOLS=(
   connect_norito_kagemusha_recursive_spend_candidate_lab_apple_restart_phase_v1
 )
 
-# The first mobile release is one exact ABI-21/V4 contract. Keep the complete
+# The first mobile release is one exact ABI-22/V4 contract. Keep the complete
 # Kagemusha C export allow-list here so Apple archives, Android shared objects,
 # checked-out Rust, and the checked-in header are all compared against the same
 # surface. V2 suffixes below are unchanged note, authorization, membership, and
@@ -928,7 +928,6 @@ check_bridge_source_contract() {
   local bridge_header="$ROOT_DIR/crates/connect_norito_bridge/include/connect_norito_bridge.h"
   local privacy_protocol="$ROOT_DIR/crates/iroha_data_model/src/privacy/protocol.rs"
   local bridge_cargo="$ROOT_DIR/crates/connect_norito_bridge/Cargo.toml"
-  local canonical_abi_source="$ROOT_DIR/crates/iroha_data_model/src/privacy/protocol.rs"
 
   # Packaged artifacts can be checked outside a source checkout. When source is
   # present, however, refuse to certify a build whose callable Kagemusha ABI is
@@ -959,7 +958,7 @@ expected_lab = set(sys.argv[lab_separator + 1:])
 text = open(path, "r", encoding="utf-8").read()
 try:
     header_text = open(header_path, "r", encoding="utf-8").read()
-    canonical_abi_text = open(canonical_abi_path, "r", encoding="utf-8").read()
+    canonical_abi_text = open(protocol_path, "r", encoding="utf-8").read()
 except OSError:
     header_text = canonical_abi_text = ""
 
@@ -1055,16 +1054,16 @@ def code_matches(pattern):
 errors = []
 abi_aliases = code_matches(re.compile(
     r"(?m)^const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = "
-    r"(PRIVACY_BRIDGE_ABI_VERSION_V1);$",
+    r"([^;\n]+);$",
 ))
 header_abis = re.findall(
     r"^#define[ \t]+CONNECT_NORITO_BRIDGE_ABI_VERSION[ \t]+([0-9]+)[ \t]*$",
-    open(header_path, "r", encoding="utf-8").read(),
+    header_text,
     re.MULTILINE,
 )
 protocol_abis = re.findall(
     r"^pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = ([0-9]+);$",
-    open(protocol_path, "r", encoding="utf-8").read(),
+    canonical_abi_text,
     re.MULTILINE,
 )
 export_pattern = re.compile(
@@ -1224,12 +1223,12 @@ if lab_present:
 actual = set(all_export_counts) - set(lab_export_counts)
 if (
     len(abi_aliases) != 1
-    or abi_aliases[0].group(1) != "PRIVACY_BRIDGE_ABI_VERSION_V1"
-    or header_abis != ["21"]
+    or abi_aliases[0].group(1).strip() != "PRIVACY_BRIDGE_ABI_VERSION_V1"
+    or header_abis != ["22"]
     or protocol_abis != header_abis
 ):
     errors.append(
-        "bridge ABI must be exact public-header 21 with the canonical Rust alias "
+        "bridge ABI must be exact public-header 22 with the canonical Rust alias "
         "and privacy protocol constant"
     )
 missing = sorted(expected - actual)
@@ -1503,7 +1502,7 @@ for label, actual, expected in inventories:
     retired_or_extra = sorted(actual - expected)
     if missing or retired_or_extra:
         errors.append(
-            f"Swift Kagemusha {label} inventory is not exact ABI-21/V4 "
+            f"Swift Kagemusha {label} inventory is not exact ABI-22/V4 "
             f"(missing={missing}, retired_or_unexpected={retired_or_extra})"
         )
 if re.search(r"\bpublic\s+(?:struct|enum|class|typealias|protocol)\s+[A-Za-z0-9_]*V3\b", text):
@@ -1625,7 +1624,7 @@ for path in paths:
         retired_or_extra = sorted(actual - expected)
         if missing or retired_or_extra:
             errors.append(
-                f"{path}: {label} inventory is not exact ABI-21/V4 "
+                f"{path}: {label} inventory is not exact ABI-22/V4 "
                 f"(missing={missing}, retired_or_unexpected={retired_or_extra})"
             )
     if re.search(r"\b(?:data\s+class|class|interface|record|enum)\s+[A-Za-z0-9_]*V3\b", text):
@@ -2131,7 +2130,7 @@ PY
       fi
     done
 
-    require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*21([[:space:]]*[,}])' "exact first-release NoritoBridge ABI 21"
+    require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*22([[:space:]]*[,}])' "exact first-release NoritoBridge ABI 22"
     require_regex "$manifest" '"source_commit"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{40}"' "NoritoBridge source commit"
     require_regex "$manifest" '"source_tree_dirty"[[:space:]]*:[[:space:]]*(true|false)' "NoritoBridge source dirty state"
     require_regex "$manifest" '"source_fingerprint_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge source fingerprint"
@@ -2254,7 +2253,7 @@ protocol_abis = re.findall(
     re.MULTILINE,
 )
 if (
-    header_abis != ["21"]
+    header_abis != ["22"]
     or bridge_aliases != ["PRIVACY_BRIDGE_ABI_VERSION_V1"]
     or protocol_abis != header_abis
 ):
@@ -2263,8 +2262,8 @@ print(header_abis[0])
 PY
 )" || source_abi=""
       manifest_abi="$(manifest_json_value "$manifest" native_bridge_abi_version 2>/dev/null || true)"
-      if [[ "$source_abi" != "21" || "$manifest_abi" != "21" ]]; then
-        fail "NoritoBridge artifact ABI must match exact public-header 21, canonical Rust alias, and privacy protocol constant"
+      if [[ "$source_abi" != "22" || "$manifest_abi" != "22" ]]; then
+        fail "NoritoBridge artifact ABI must match exact public-header 22, canonical Rust alias, and privacy protocol constant"
       fi
       manifest_commit="$(manifest_json_value "$manifest" source_commit 2>/dev/null || true)"
       source_relationship="$(
@@ -2495,7 +2494,7 @@ retired_or_extra = sorted(actual - expected)
 if missing:
     print(
         f"[mobile-sdk-artifacts] ERROR: client-android {abi} bridge is missing "
-        "ABI21/V4 symbols: " + ", ".join(missing),
+        "ABI22/V4 symbols: " + ", ".join(missing),
         file=sys.stderr,
     )
 if retired_or_extra:
@@ -2761,8 +2760,8 @@ with archive:
         )
     if manifest["schema"] != "iroha.android-native-build-provenance.v1":
         fail("client-android native provenance schema is not v1")
-    if type(manifest["native_bridge_abi_version"]) is not int or manifest["native_bridge_abi_version"] != 21:
-        fail("client-android native provenance does not bind exact ABI 21")
+    if type(manifest["native_bridge_abi_version"]) is not int or manifest["native_bridge_abi_version"] != 22:
+        fail("client-android native provenance does not bind exact ABI 22")
     if manifest["build_profile"] != "release" or manifest["cargo_locked"] is not True:
         fail("client-android native provenance must bind a locked Cargo release build")
     production = manifest["privacy_production_enabled"]

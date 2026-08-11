@@ -127,14 +127,17 @@ export const REQUIRED_NATIVE_EXPORTS = Object.freeze([
   "noritoDecodeInstruction",
   "compileKotodama",
   "privacyCompiledProfileCatalogV1",
+  "privacyExact12CapabilityManifestJsonV1",
+  "privacyRequireExact12CapabilityTupleV1",
   "privacyValidateCompiledProfileCatalogV1",
+  "privacyValidateExact12CapabilityManifestV1",
   "sorafsValidateAppealFinanceCancelAssetLockJson",
   "securePrivateFileAbiVersion",
   "securePrivateDirectoryEnsure",
   "securePrivateFileRead",
   "securePrivateFileWriteAtomic",
 ]);
-export const REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 21;
+export const REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 22;
 export const REQUIRED_NATIVE_EXPORT_RESULTS = Object.freeze({
   connectNoritoBridgeAbiVersion: REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   securePrivateFileAbiVersion: 1,
@@ -437,6 +440,28 @@ if (
   } catch (error) {
     process.stderr.write(
       "invalid native privacy compiled-profile catalog contract: " +
+        String(error?.message ?? error),
+    );
+    process.exitCode = 1;
+  }
+}
+if (
+  required.includes("privacyValidateExact12CapabilityManifestV1") &&
+  typeof binding.privacyValidateExact12CapabilityManifestV1 === "function"
+) {
+  try {
+    for (const hostile of [Buffer.alloc(0), Buffer.from("digest-shell")]) {
+      const status = binding.privacyValidateExact12CapabilityManifestV1(hostile);
+      if (!Number.isSafeInteger(status) || status === 0) {
+        throw new Error(
+          "privacyValidateExact12CapabilityManifestV1 must reject empty and digest-shell bytes, found " +
+            String(status),
+        );
+      }
+    }
+  } catch (error) {
+    process.stderr.write(
+      "invalid native Exact12 capability-manifest validator contract: " +
         String(error?.message ?? error),
     );
     process.exitCode = 1;

@@ -12,7 +12,7 @@ credential header, or client-generated payment proof in this workbook.
 
 ## Lab 1 — Readiness diagnostics
 
-1. Validate the supplied node configuration with `irohad --check-config`.
+1. Validate the supplied node configuration with `iroha3d --check-config`.
 2. Use the authenticated alias doctor/readiness flow documented in
    `specs/sns/registrar_api.md`.
 3. Record the overall status: `Ready | Pending | Blocked`.

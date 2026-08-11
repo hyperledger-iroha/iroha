@@ -1,13 +1,12 @@
 use core::num::NonZeroU64;
 
-use iroha_core::sumeragi::consensus::compute_consensus_fingerprint_from_params;
+use iroha_core::sumeragi::consensus::compute_consensus_parameters_fingerprint;
 use iroha_data_model::{
     block::{
         consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams},
         consensus_v2::{PROTOCOL_VERSION, SumeragiV2GenesisContextParameters},
     },
     parameter::system::Parameters,
-    prelude::ChainId,
 };
 
 fn hex(bytes: &[u8]) -> String {
@@ -19,7 +18,6 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn main() {
-    let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
     let default_params = Parameters::default();
     let baseline = ConsensusGenesisParams {
         block_cadence_ms: NonZeroU64::new(333).expect("non-zero cadence"),
@@ -56,7 +54,7 @@ fn main() {
     ];
 
     for (label, params) in scenarios {
-        let fp = compute_consensus_fingerprint_from_params(&chain, &params)
+        let fp = compute_consensus_parameters_fingerprint(&params)
             .expect("scenario must use canonical consensus params");
         println!("{label}: fp=0x{}", hex(&fp));
     }

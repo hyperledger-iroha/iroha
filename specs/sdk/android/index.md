@@ -327,9 +327,9 @@ building blocks:
   (`Transport|Codec|Authorization|Timeout|QueueOverflow|Internal`) with telemetry hooks so
   `connect.queue_depth`, `connect.queue_dropped_total`, and `connect.replay_success_total`
   feed the OpenTelemetry exporter described in the roadmap.
-- Flow-control windows arrive as `ConnectEvent.FlowControl` instances. Dequeue ciphertext
-  only when a window token is available, and call `ConnectEvent.Resume` after the wallet
-  replays buffered frames so dashboards can plot `{seqAppMax, seqWalletMax, queueDepths}`.
+- Connect V1 has no `FlowControl`, `Resume`, or `Rotate` wire controls. A wallet may use
+  an SDK-local queue limiter and local reconnect metrics, but must never serialize them
+  as Connect events.
 - Attestations (`{platform, evidence_b64, statement_hash}`) are generated whenever keys live
   in StrongBox; wallet approvals pass them through automatically so dApps can verify device
   posture.

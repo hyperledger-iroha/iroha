@@ -152,13 +152,15 @@ class JsonParser private constructor(private val input: String) {
         val token = input.substring(start, index)
         return try {
             if (!hasFraction && !hasExponent) {
+                if (token == "-0") return -0.0
                 try {
                     token.toLong()
                 } catch (_: NumberFormatException) {
                     java.math.BigInteger(token)
                 }
             } else {
-                java.math.BigDecimal(token)
+                val decimal = java.math.BigDecimal(token)
+                if (token.startsWith('-') && decimal.signum() == 0) -0.0 else decimal
             }
         } catch (ex: NumberFormatException) {
             throw IllegalStateException("Invalid number: $token", ex)

@@ -36,17 +36,10 @@ frames deterministically when debugging or proving coverage gaps.
   (creates `manifest.json`, queues, metrics, and notes).
 
 ## Capture Workflow
-1. **Stage a preview session.** Use the JS helper to mint a deterministic SID and
-   WebSocket URL:
-   ```js
-   const { preview } = await bootstrapConnectPreviewSession(client, {
-     chainId: "sora-mainnet",
-     appBundle: "dev.sora.example.dapp",
-     walletBundle: "dev.sora.example.wallet",
-     register: true,
-   });
-   // persist preview.sidBase64Url + preview.webSocketUrl into the artefact folder
-   ```
+1. **Stage a preview session.** Record one exact canonical `NetworkId`, 32-byte app
+   public key, and non-zero 16-byte nonce. Derive the SID with
+   `ConnectCrypto.deriveSessionID(networkID:appPublicKey:nonce:)`, submit all four
+   identity fields to Torii, and persist the verified response plus WebSocket URL.
 2. **Wire queue instrumentation.** Use `ConnectReplayRecorder` to persist frames
    and metrics to the shared diagnostics root while the session runs:
    ```swift
@@ -60,8 +53,8 @@ frames deterministically when debugging or proving coverage gaps.
    ```
    Call `record(frame:)` after every `ConnectClient.receiveFrame()` and before
    sending frames from the app/wallet so sequence numbers line up.
-3. **Run the flows.** Exercise open/approve/reject, heartbeat loss, and resume
-   paths. When testing queue faults, shrink the limits via
+3. **Run the flows.** Exercise open/approve/reject, heartbeat loss, and local
+   reconnect/replay paths. Connect V1 has no Resume wire control. When testing queue faults, shrink the limits via
    `ConnectQueueJournal.Configuration(maxRecordsPerQueue: …)` to force drops.
    Journals stream-parse their files with the default 32-record/1 MiB cap per
    direction; oversize or malformed bundles surface `ConnectQueueError` instead

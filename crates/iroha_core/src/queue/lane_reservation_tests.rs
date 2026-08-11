@@ -714,7 +714,7 @@ fn lane_reservation_release_barrier(
     let first = keys.first().expect("release barrier needs a reservation");
     LaneQueueReservationReleaseBarrierV3 {
         version: LaneQueueReservationReleaseBarrierV3::VERSION,
-        chain_id_hash: Hash::new(b"queue-release-chain"),
+        network_id: super::queue_test_network_id(),
         epoch: 7,
         lane_id: first.lane_id,
         dataspace_id: first.dataspace_id,

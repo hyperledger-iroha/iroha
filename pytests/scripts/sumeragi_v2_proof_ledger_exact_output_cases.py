@@ -486,14 +486,6 @@
             "finalized sidecar pruning must remain fail-stop and Kura-bound",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn retain_active_owned_reply_routes_with_snapshot_hook<AfterSnapshot>(",
-            "let (retained, receipt) = routes.retain_active_with_receipt();",
-            "let retained = routes.retain_active();\n"
-            "    let receipt = NetworkReplyRouteHistoryReceipt::default();",
-            "runner pruning must retain every live source attempt and its tombstones",
-        ),
-        (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn is_pending(",
             "fanout.has_dispatchable_target()",
@@ -937,15 +929,15 @@
             "runner lane dispatch must apply writer receipts after complete and source-retained exact handoffs",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "lane_work.prune_finalized_merge_sidecars()?;",
+            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
+            "fn rollover_finalized_height_outputs(",
             "let _ = retry_exact_output_and_apply_sidecar_admissions(\n"
-            "                    &mut lane_work,\n"
-            "                    &services,\n"
-            "                    control_queue_capacity,\n"
-            "                )?;",
+            "        &mut lane_work,\n"
+            "        services,\n"
+            "        control_queue_capacity,\n"
+            "    )?;",
             "let _ = services.retry_pending_exact_output();",
-            "durable finalization must perform receipt-aware retry, dispatch, and exact handoff before successor activation",
+            "durable finalization must retry and apply sidecar receipts before reconstructing rollover authority",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
@@ -953,6 +945,47 @@
             "self.hydrate_canonical_lane_artifacts()?;",
             "let _ = &self.lane_sessions;",
             "late canonical lane hydration must precede committed-session collection",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn new_with_output_guard_and_transport_inner(",
+            "adapter.ensure_globally_applied_lane_receipts_durable()?;\n"
+            "        construction.complete();",
+            "adapter.ensure_globally_applied_lane_receipts_durable()?;\n"
+            "        adapter.hydrate_canonical_lane_artifacts()?;\n"
+            "        construction.complete();",
+            "production constructor must remain carrier-silent before exact Queue installation",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn activate_after_lane_drain_queue_install(",
+            "self.revalidate_hydrated_autonomous_queue_owners(installed_queue.as_ref())?;",
+            "let _ = installed_queue;",
+            "one-shot startup activation must authenticate the installed Queue",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn claim_runner_lifecycle_process_generation(",
+            "kura.claim_autonomous_lifecycle_process_generation(",
+            "kura.read_autonomous_lifecycle_process_generation(",
+            "the configured-role process generation helper must durably claim validator ownership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn claim_runner_lifecycle_process_generation(",
+            "match role {",
+            "if local_validator_index(context, local_peer, role)?.is_none() {\n"
+            "        return Ok(None);\n"
+            "    }\n"
+            "    match role {",
+            "the configured-role process generation helper must not consult height-local roster membership",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn run_inner(",
+            "lane_work.activate_after_lane_drain_queue_install(&queue)?;",
+            "let _ = &queue;",
+            "runner startup must install the exact Queue before the one-shot carrier activation seam",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
@@ -964,25 +997,25 @@
             "late canonical lane hydration must retain the exact proposal as bounded recovery work",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "if executor.ready_to_finish() {",
+            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
+            "fn rollover_finalized_height_outputs(",
             "lane_work.persist_anchored_sessions()?;",
             "let _ = &lane_work;",
-            "durable finality must retire the old exact-output corridor",
+            "finalized output rollover must durably reconstruct every predecessor owner",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "if executor.ready_to_finish() {",
-            "lane_work.durable_lane_rollover_authority(&durable_artifact)?",
+            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
+            "fn rollover_finalized_height_outputs(",
+            ".durable_lane_rollover_authority(artifact)?",
             "None",
-            "durable finality must retire the old exact-output corridor",
+            "finalized output rollover must durably reconstruct every predecessor owner",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "if executor.ready_to_finish() {",
-            "&durable_lane_authority,",
-            "&durable_lane_authority.clone(),",
-            "durable finality must retire the old exact-output corridor",
+            "crates/iroha_core/src/sumeragi/v2_runner/finalized_output_rollover.rs",
+            "fn rollover_finalized_height_outputs(",
+            "lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority)?;",
+            "lane_work.retain_successor_owned_rollover_effects(artifact, &durable_lane_authority.clone())?;",
+            "finalized output rollover must durably reconstruct every predecessor owner",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -1135,13 +1168,6 @@
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "fn lifecycle_max_snapshot_bytes_for_attempt_capacity(",
-            ".checked_mul(2)",
-            ".checked_mul(1)",
-            "lifecycle byte geometry must reserve requester and responder stream records for every semantic validator",
-        ),
-        (
-            "crates/iroha_core/src/merge_sidecar.rs",
             "fn advance_piggybacked_close_floor(",
             "!retained_request.same_occurrence_except_close_floor(request)",
             "retained_request.same_occurrence_except_close_floor(request)",
@@ -1194,7 +1220,10 @@
             "fn transition_server_service_generation(",
             "if !self.server_generation_is_terminal() {",
             "if false && !self.server_generation_is_terminal() {",
-            "ordinary responder generation rollover must occur only for a full terminal table",
+            (
+                "ordinary responder generation rollover must occur only for a full terminal table",
+                "ordinary responder generation transition must prepare without mutation, reject nonterminal state, and only then commit the prepared fence",
+            ),
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -1870,13 +1899,6 @@
             "lane effect peek must clone the exact fairly selected queue head",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "fn push_effect(",
-            "if !lane_work_effect_reply_routes_have_valid_shape(&effect) {",
-            "if !lane_work_effect_reply_routes_are_valid(&effect) {",
-            "maintenance-only duplicate lane effects must reach canonical reconciliation before live-delivery admission",
-        ),
-        (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "fn apply_bounded_sidecar_admissions<T, Error>(",
             "let mut applied = 0usize;",
@@ -2018,13 +2040,6 @@
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn commit_serve(",
-            "tracked.ingress_ownership = Some(ownership_candidate);",
-            "drop(ownership_candidate);",
-            "exact Serve retries must consume one observed-route receipt into cloned ingress ownership and atomically install the resulting route/ownership pair",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn commit_serve(\n"
             "        &self,\n"
             "        admission: &CertifiedServeAdmission,\n"
@@ -2077,13 +2092,6 @@
             "orphan chunk duplicates must merge alternate source ownership without replacing canonical semantic identity",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "pub(crate) fn replay_buffered_chunks<R: EffectRuntime>(",
-            "buffered.ingress_ownership.ok_or_else(|| {",
-            "None.ok_or_else(|| {",
-            "orphan replay must preserve the exact ownership carrier into live chunk delivery",
-        ),
-        (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "fn accept_lane_message_owned(",
             "|| !ownership.matches_semantic_origin(sender.as_ref())",
@@ -2107,36 +2115,36 @@
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "fn drain_v2_ingress(",
-            "if !is_barrier_target {\n"
-            "                    return false;\n"
-            "                }",
-            "if !is_barrier_target {\n"
-            "                    return true;\n"
-            "                }",
-            "a pending exact Serve barrier must freeze ingress selection to its immutable request hash",
+            ".try_recv_if_checked_retiring_obsolete_with_barrier_bypass(barrier_bypass, |inbound| {",
+            ".try_recv_if_at_checked_classified(|inbound| {",
+            "ingress drain must use the gate-bound checked selector",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "fn drain_v2_ingress(",
             "|| !ingress_ownership.matches_semantic_origin(Some(sender))",
             "|| false",
-            "exact Serve ingress must validate identity and reserve/coalesce its lifecycle atomically before the selected head can drain",
+            "exact Serve ingress must validate complete transport ownership",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "fn drain_v2_ingress(",
-            "serve_barrier = Some(HashOf::new(request));\n"
-            "                    false",
-            "let _ = HashOf::new(request);\n"
-            "                    true",
-            "exact Serve ingress must validate identity and reserve/coalesce its lifecycle atomically before the selected head can drain",
+            "Err(CertifiedServePrepareError::Backpressure) => {\n"
+            "                        // `prepare_certified_request` installs the off-queue debt",
+            "Err(CertifiedServePrepareError::Backpressure) => {\n"
+            "                        return true;\n"
+            "                        // `prepare_certified_request` installs the off-queue debt",
+            "exact Serve ingress must validate complete transport ownership",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "fn drain_v2_ingress(",
             "prepared_serve = Some(PreparedCertifiedServe::Admitted(admission));",
             "drop(admission);",
-            "exact Serve ingress must validate identity and reserve/coalesce its lifecycle atomically before the selected head can drain",
+            (
+                "exact Serve ingress must validate identity and reserve/coalesce its lifecycle atomically before the selected head can drain",
+                "exact Serve ingress must validate complete transport ownership",
+            ),
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
@@ -2191,16 +2199,16 @@
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "fn run_inner(",
-            "let mut certified_serve_ingress_binding = CertifiedServeIngressBinding::bind(",
-            "let mut certified_serve_ingress_binding = CertifiedServeIngressBinding::bind_for_test(",
-            "the runner must bind ingress selection to the same durable exact Serve queue before processing this height",
+            "HeightIngressBindings::new(",
+            "HeightIngressBindings::new_for_test(",
+            "the runner must bind Serve and leader-wire ingress to one joint per-height queue owner",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "fn run_inner(",
-            "certified_serve_ingress_binding.retire()?;",
-            "let _ = certified_serve_ingress_binding.retire();",
-            "every clean shutdown and finality path must retire the exact Serve ingress binding",
+            "height_ingress_bindings.retire()?;",
+            "let _ = height_ingress_bindings.retire();",
+            "every clean shutdown and finality path must atomically retire both per-height ingress bindings",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
@@ -2208,13 +2216,6 @@
             "executor.can_admit_network_message_with_ingress_ownership(message, ingress_ownership)",
             "executor.can_admit_network_message(message)",
             "runner preflight must preserve the exact fair-ingress carrier into owned runtime capacity admission",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
-            "retained.merge_downstream_with_strict_receipt(candidate, merge_receipt)",
-            "retained.merge_downstream(candidate)",
-            "retained fair-ingress ownership must consume the strict receipt and yield the sole authoritative route snapshot",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -2267,13 +2268,6 @@
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "fn begin_apply<S: V2EffectServices>(",
-            "        if let Some(finality) = &self.finality_completion {\n",
-            "        if false && let Some(finality) = &self.finality_completion {\n",
-            "durable Apply completion must tombstone the exact logical request against later periodic recreation",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_effects.rs",
             "fn begin_fetch<S: V2EffectServices>(",
             "        if round.context_id != self.context.id()\n",
             "        self.finality_completion = None;\n        if round.context_id != self.context.id()\n",
@@ -2289,13 +2283,6 @@
         (
             "crates/iroha_core/src/sumeragi/v2_effects.rs",
             "fn begin_apply<S: V2EffectServices>(",
-            "            let exact = finality.tag == tag\n",
-            "            let exact = true\n",
-            "durable Apply completion must tombstone the exact logical request against later periodic recreation",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "fn begin_apply<S: V2EffectServices>(",
             "        if let Some(existing) = self.pending_applications.values().next() {\n",
             "        if false && let Some(existing) = self.pending_applications.values().next() {\n",
             "exact Apply retransmission must retain the incumbent authority and coalesce every later periodic lifecycle",
@@ -2306,13 +2293,6 @@
             "            if self.has_exact_reconstructed_completion(manifest_hash, &ingress_ownership)? {\n",
             "            if false && self.has_exact_reconstructed_completion(manifest_hash, &ingress_ownership)? {\n",
             "an unmatched productive chunk must consult exact reconstructed and executor-owned lifecycle authority before buffering",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "fn sweep_buffered_payload_chunk_lifecycles<R: EffectRuntime>(",
-            "                    Ok(PayloadChunkLifecycleDisposition::Retain) => {\n                        retained.push_back(buffered);\n                        continue;\n                    }",
-            "                    Ok(PayloadChunkLifecycleDisposition::Retain) => {\n                        continue;\n                    }",
-            "the buffered lifecycle sweep must preserve every nonterminal or unclassifiable exact owner",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -2336,11 +2316,22 @@
             "durable sidecar rehydration must preserve and requeue retained exact outbound ownership after validating the rollover authority",
         ),
         (
-            "crates/iroha_core/src/merge_sidecar.rs",
-            "fn transition_server_service_generation(",
-            "if !self.server_generation_is_terminal() {",
-            "if false && !self.server_generation_is_terminal() {",
-            "ordinary responder generation transition must prepare without mutation, reject nonterminal state, and only then commit the prepared fence",
+            "crates/iroha_core/src/sumeragi/v2_runner/reply_route_retention.rs",
+            "fn retain_active_owned_reply_routes_with_snapshot_hook<AfterSnapshot>(",
+            "let (retained, receipt) = routes.retain_active_with_receipt();",
+            "let retained = routes.retain_active();\n"
+            "    let receipt = NetworkReplyRouteHistoryReceipt::default();",
+            "runner pruning must retain every live source attempt and its tombstones",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn drain_v2_ingress(",
+            "        if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {\n"
+            "            admit_kura_replica_advert_ingress(receiver, kura, inbound)?;\n"
+            "            continue;\n"
+            "        }\n",
+            "",
+            "KuraReplicaAdvert ingress must bypass both consensus reducers",
         ),
     ),
 )
@@ -2350,26 +2341,10 @@ def test_exact_output_production_source_mutations_fail_closed(
     region_marker: str,
     old: str,
     new: str,
-    error_fragment: str,
+    error_fragment: str | tuple[str, ...],
 ) -> None:
     module = load_checker()
-    for source_name in (
-        "crates/iroha_core/src/lib.rs",
-        "crates/iroha_core/src/merge_sidecar.rs",
-        "crates/iroha_core/src/sumeragi/v2_worker.rs",
-        "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "crates/iroha_core/src/sumeragi/mod.rs",
-        "crates/iroha_core/src/sumeragi/v2_effects.rs",
-        "crates/iroha_core/src/sumeragi/v2_core.rs",
-        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
-        "crates/iroha_config/src/parameters/defaults.rs",
-        "crates/iroha_config/src/parameters/actual.rs",
-        "crates/iroha_config/src/parameters/user.rs",
-    ):
-        destination = tmp_path / source_name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / source_name, destination)
+    exact_output_production_fixture(tmp_path)
 
     path = tmp_path / relative_path
     source = path.read_text(encoding="utf-8")
@@ -2395,4 +2370,10 @@ def test_exact_output_production_source_mutations_fail_closed(
     )
 
     errors = module._exact_output_production_source_fidelity_errors(tmp_path)
-    assert any(error_fragment in error for error in errors), errors
+    expected_errors = (
+        (error_fragment,) if isinstance(error_fragment, str) else error_fragment
+    )
+    assert all(
+        any(expected_error in error for error in errors)
+        for expected_error in expected_errors
+    ), errors

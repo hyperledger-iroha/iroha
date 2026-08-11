@@ -33,15 +33,16 @@ fn fixture_queue(state: &State, events_sender: crate::EventsSender) -> Arc<Queue
     queue
 }
 
-type ApplyNativeReceiptBuilder = fn(
-    &ApplyFixture,
-    &wire::HeightContext,
-    Hash,
-    &LaneBlockProposalV1,
-    &[TransactionEntrypoint],
-    &[crate::queue::LaneQueueReservationKeyV2],
-    &[crate::queue::RoutingPlan],
-) -> Vec<Option<iroha_data_model::block::consensus::NativeAmxReceipt>>;
+type ApplyNativeReceiptBuilder =
+    fn(
+        &ApplyFixture,
+        &wire::HeightContext,
+        Hash,
+        &LaneBlockProposalV1,
+        &[TransactionEntrypoint],
+        &[crate::queue::LaneQueueReservationKeyV2],
+        &[crate::queue::RoutingPlan],
+    ) -> Vec<Option<iroha_data_model::block::consensus::NativeAmxReceipt>>;
 
 fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightContext) {
     use iroha_data_model::nexus::{
@@ -128,8 +129,7 @@ fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightCont
         .collect::<Vec<_>>();
     expected.sort();
     expected.dedup();
-    let mut actual =
-        state.authoritative_lane_peer_ids_at_height(participant_lane, context.height);
+    let mut actual = state.authoritative_lane_peer_ids_at_height(participant_lane, context.height);
     actual.sort();
     actual.dedup();
     assert_eq!(actual, expected, "Native fixture participant authority");
@@ -147,7 +147,7 @@ fn install_fixture_native_lane(state: &mut State, context: &mut wire::HeightCont
 fn native_amx_receipts_for_apply_fixture(
     fixture: &ApplyFixture,
     context: &wire::HeightContext,
-    chain_id_hash: Hash,
+    network_id: iroha_data_model::NetworkId,
     coordinator_proposal: &LaneBlockProposalV1,
     entrypoints: &[TransactionEntrypoint],
     reservation_keys: &[crate::queue::LaneQueueReservationKeyV2],
@@ -352,36 +352,35 @@ fn native_amx_receipts_for_apply_fixture(
         view: 0,
     };
     let participant_validator_set_hash = HashOf::new(&validator_set);
-    let body_for = |source_id,
-                    tx_entrypoint_hash,
-                    phase,
-                    participant_settlement_commitment| NativeAmxAttestationBodyV2 {
-        round,
-        epoch: context.epoch,
-        chain_id_hash,
-        source_id,
-        tx_entrypoint_hash,
-        plan_digest: expected_plan.digest(),
-        phase,
-        coordinator_lane_id: coordinator_descriptor.lane_id,
-        coordinator_dataspace_id: coordinator_descriptor.dataspace_id,
-        coordinator_lane_incarnation: coordinator_descriptor.lane_incarnation,
-        participant_lane_id: participant_lane,
-        participant_dataspace_id: participant_dataspace,
-        participant_lane_incarnation: participant_incarnation,
-        participant_previous_block_height: 0,
-        participant_previous_block_descriptor_hash: None,
-        participant_lane_block_height: participant_proposal.descriptor.lane_block_height,
-        participant_lane_block_view: participant_proposal.descriptor.lane_block_view,
-        participant_proposal_hash: participant_proposal.proposal_hash,
-        participant_settlement_commitment,
-        participant_validator_set_hash,
-        participant_validator_count: validator_count,
-        participant_min_quorum,
-        authority_context_height: context.height,
-        planned_coordinator_block_height: coordinator_descriptor.lane_block_height,
-        coordinator_lane_block_view: coordinator_descriptor.lane_block_view,
-        coordinator_proposal_hash: coordinator_proposal.proposal_hash,
+    let body_for = |source_id, tx_entrypoint_hash, phase, participant_settlement_commitment| {
+        NativeAmxAttestationBodyV2 {
+            round,
+            epoch: context.epoch,
+            network_id,
+            source_id,
+            tx_entrypoint_hash,
+            plan_digest: expected_plan.digest(),
+            phase,
+            coordinator_lane_id: coordinator_descriptor.lane_id,
+            coordinator_dataspace_id: coordinator_descriptor.dataspace_id,
+            coordinator_lane_incarnation: coordinator_descriptor.lane_incarnation,
+            participant_lane_id: participant_lane,
+            participant_dataspace_id: participant_dataspace,
+            participant_lane_incarnation: participant_incarnation,
+            participant_previous_block_height: 0,
+            participant_previous_block_descriptor_hash: None,
+            participant_lane_block_height: participant_proposal.descriptor.lane_block_height,
+            participant_lane_block_view: participant_proposal.descriptor.lane_block_view,
+            participant_proposal_hash: participant_proposal.proposal_hash,
+            participant_settlement_commitment,
+            participant_validator_set_hash,
+            participant_validator_count: validator_count,
+            participant_min_quorum,
+            authority_context_height: context.height,
+            planned_coordinator_block_height: coordinator_descriptor.lane_block_height,
+            coordinator_lane_block_view: coordinator_descriptor.lane_block_view,
+            coordinator_proposal_hash: coordinator_proposal.proposal_hash,
+        }
     };
     let settlement_template = body_for(
         source_ids[0],
@@ -456,7 +455,7 @@ fn native_amx_receipts_for_apply_fixture(
             let receipt = NativeAmxReceipt {
                 version: 2,
                 source_id,
-                chain_id_hash,
+                network_id,
                 plan_digest: routing_plan.digest(),
                 lane_id: coordinator_descriptor.lane_id,
                 dataspace_id: coordinator_descriptor.dataspace_id,
@@ -473,7 +472,7 @@ fn native_amx_receipts_for_apply_fixture(
                     routing_plan,
                     source_id.as_slice(),
                     Hash::from(entrypoint_hash),
-                    chain_id_hash,
+                    network_id,
                     coordinator_proposal,
                 ),
                 "grouped Native receipt matches the exact coordinator payload"
@@ -590,7 +589,7 @@ v2_apply_test!(
         );
         assert!(
             archive
-                .activation_floor(&fixture.service.chain_id)
+                .activation_floor(&fixture.service.network_id)
                 .expect("read empty activation floor")
                 .is_none()
         );
@@ -631,7 +630,7 @@ v2_apply_test!(
             .health_generation()
             .expect("read first provider-ingest archive generation");
         let qualification = archive
-            .qualify_against_kura_tip(&fixture.service.chain_id, fixture.kura.as_ref(), 0)
+            .qualify_against_kura_tip(&fixture.service.network_id, fixture.kura.as_ref(), 0)
             .expect("provider-ingest archive is exact at the durable Kura tip");
         assert_eq!(qualification.activation_floor().height, 1);
         assert_eq!(qualification.archive_tip().height, 1);
@@ -720,7 +719,7 @@ v2_apply_test!(
         );
         assert!(
             archive
-                .activation_floor(&fixture.service.chain_id)
+                .activation_floor(&fixture.service.network_id)
                 .expect("read empty activation floor")
                 .is_none()
         );
@@ -761,7 +760,7 @@ v2_apply_test!(
             "injected archive-boundary crash must precede StateBlock::commit"
         );
         let qualification = archive
-            .qualify_against_kura_tip(&fixture.service.chain_id, fixture.kura.as_ref(), 0)
+            .qualify_against_kura_tip(&fixture.service.network_id, fixture.kura.as_ref(), 0)
             .expect("captured archive is exact at the durable Kura tip");
         assert_eq!(qualification.activation_floor().height, 1);
         assert_eq!(qualification.archive_tip().height, 1);
@@ -850,12 +849,12 @@ v2_apply_test!(
             "an exact replay must not publish a second archive generation"
         );
         let projection = archive
-            .latest_at_or_before(&fixture.service.chain_id, 1)
+            .latest_at_or_before(&fixture.service.network_id, 1)
             .expect("read recovered projection")
             .expect("height one remains archived");
         assert_eq!(projection.key.height, 1);
         let qualification = archive
-            .qualify_against_kura_tip(&fixture.service.chain_id, fixture.kura.as_ref(), 0)
+            .qualify_against_kura_tip(&fixture.service.network_id, fixture.kura.as_ref(), 0)
             .expect("recovered archive remains contiguous and exact");
         assert_eq!(qualification.activation_floor().height, 1);
         assert_eq!(qualification.archive_tip().height, 1);
@@ -896,7 +895,7 @@ v2_apply_test!(
             .expect("commit and archive the retention-floor block");
         drop(parent_store);
         let parent = archive
-            .latest_at_or_before(&fixture.service.chain_id, 1)
+            .latest_at_or_before(&fixture.service.network_id, 1)
             .expect("read retention-floor projection")
             .expect("height-one archive anchor");
         let fence = archive
@@ -923,7 +922,7 @@ v2_apply_test!(
         );
         assert_eq!(
             archive
-                .retention_floor(&fixture.service.chain_id)
+                .retention_floor(&fixture.service.network_id)
                 .expect("read active virtual base"),
             Some(parent.key.clone())
         );
@@ -959,7 +958,7 @@ v2_apply_test!(
             Some(successor.body.hash())
         );
         let qualification = archive
-            .qualify_against_kura_tip(&fixture.service.chain_id, fixture.kura.as_ref(), 0)
+            .qualify_against_kura_tip(&fixture.service.network_id, fixture.kura.as_ref(), 0)
             .expect("qualify retained successor against exact Kura tip");
         assert_eq!(qualification.activation_floor().height, 1);
         assert_eq!(qualification.archive_tip().height, 2);
@@ -979,7 +978,7 @@ v2_apply_test!(
         let reopened = ReputationFinalizedArchive::try_open_with_retention_authority(
             archive_root.path(),
             bounds,
-            &fixture.service.chain_id,
+            &fixture.service.network_id,
             fixture.kura.as_ref(),
             &retention_binding,
             &retention_authority,
@@ -993,12 +992,12 @@ v2_apply_test!(
         );
         assert_eq!(
             reopened
-                .retention_floor(&fixture.service.chain_id)
+                .retention_floor(&fixture.service.network_id)
                 .expect("read reopened virtual base"),
             Some(parent.key)
         );
         let reopened_qualification = reopened
-            .qualify_against_kura_tip(&fixture.service.chain_id, fixture.kura.as_ref(), 0)
+            .qualify_against_kura_tip(&fixture.service.network_id, fixture.kura.as_ref(), 0)
             .expect("reopened archive preserves exact predecessor continuity");
         assert_eq!(reopened_qualification.archive_tip().height, 2);
         assert_eq!(
@@ -1049,7 +1048,7 @@ v2_apply_test!(
                 .expect("commit and archive the retention-floor block");
             drop(parent_store);
             let parent = archive
-                .latest_at_or_before(&fixture.service.chain_id, 1)
+                .latest_at_or_before(&fixture.service.network_id, 1)
                 .expect("read retention-floor projection")
                 .expect("height-one archive anchor");
             let fence = archive
@@ -1073,7 +1072,7 @@ v2_apply_test!(
             ));
             assert_eq!(
                 archive
-                    .retention_floor(&fixture.service.chain_id)
+                    .retention_floor(&fixture.service.network_id)
                     .expect("read ambiguous local retention floor"),
                 checkpoint_was_published.then(|| parent.key.clone())
             );
@@ -1096,7 +1095,7 @@ v2_apply_test!(
             let recovered = ReputationFinalizedArchive::try_open_with_retention_authority(
                 archive_root.path(),
                 bounds,
-                &fixture.service.chain_id,
+                &fixture.service.network_id,
                 fixture.kura.as_ref(),
                 &binding,
                 &authority,
@@ -1104,7 +1103,7 @@ v2_apply_test!(
             .expect("recover exact externally approved retention state");
             assert_eq!(
                 recovered
-                    .retention_floor(&fixture.service.chain_id)
+                    .retention_floor(&fixture.service.network_id)
                     .expect("read recovered retention floor"),
                 Some(parent.key.clone())
             );
@@ -1129,7 +1128,7 @@ v2_apply_test!(
             let reopened = ReputationFinalizedArchive::try_open_with_retention_authority(
                 archive_root.path(),
                 bounds,
-                &fixture.service.chain_id,
+                &fixture.service.network_id,
                 fixture.kura.as_ref(),
                 &binding,
                 &authority,
@@ -1144,7 +1143,7 @@ v2_apply_test!(
             );
             assert_eq!(
                 reopened
-                    .retention_floor(&fixture.service.chain_id)
+                    .retention_floor(&fixture.service.network_id)
                     .expect("read replayed retention floor"),
                 Some(parent.key)
             );

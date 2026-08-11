@@ -2,11 +2,19 @@ import { Buffer } from "buffer";
 import { AccountAddress } from "./address.js";
 import { createHash, randomBytes } from "./cryptoHash.js";
 import { signEd25519 } from "./crypto.js";
+import { NetworkId, networkIdBytes } from "./networkId.js";
+
+export { NetworkId };
 
 const DEFAULT_JSON_HEADERS = Object.freeze({
   "Content-Type": "application/json",
   Accept: "application/json",
 });
+
+const CANONICAL_REQUEST_NETWORK_DOMAIN = Buffer.from(
+  "iroha.app.request.network.v1\0",
+  "utf8",
+);
 
 function compareUtf8(left, right) {
   if (left === right) {
@@ -105,11 +113,13 @@ export function canonicalRequestMessage({ method, path, query, body }) {
 }
 
 /**
- * Build canonical request bytes for signature verification with freshness metadata.
- * @param {{method: string, path: string, query?: string | URLSearchParams, body?: Buffer | ArrayBuffer | ArrayBufferView | string, timestampMs: number, nonce: string}} params
+ * Build canonical request bytes for signature verification, bound to one exact
+ * genesis-derived network and freshness metadata.
+ * @param {{networkId: import("./networkId.js").NetworkId, method: string, path: string, query?: string | URLSearchParams, body?: Buffer | ArrayBuffer | ArrayBufferView | string, timestampMs: number, nonce: string}} params
  * @returns {Buffer}
  */
 export function canonicalRequestSignatureMessage({
+  networkId,
   method,
   path,
   query,
@@ -120,24 +130,28 @@ export function canonicalRequestSignatureMessage({
   const checkedNonce = requireExactNonBlankString(
     nonce,
     "nonce",
-    "canonical signatures",
+    "canonical exact-network signatures",
   );
+  const network = Buffer.from(networkIdBytes(networkId, "networkId"));
   const base = canonicalRequestMessage({ method, path, query, body });
-  return Buffer.from(
-    `${base.toString("utf8")}\n${String(timestampMs)}\n${checkedNonce}`,
-    "utf8",
-  );
+  return Buffer.concat([
+    CANONICAL_REQUEST_NETWORK_DOMAIN,
+    network,
+    base,
+    Buffer.from(`\n${String(timestampMs)}\n${checkedNonce}`, "utf8"),
+  ]);
 }
 
 /**
  * Build canonical signing headers for app-facing Torii endpoints.
  * `accountId` is the exact canonical I105 account or active canonical ASCII
  * account alias carried by `X-Iroha-Account`.
- * @param {{accountId: string, method: string, path: string, query?: string | URLSearchParams, body?: Buffer | ArrayBuffer | ArrayBufferView | string, privateKey: Buffer | ArrayBuffer | ArrayBufferView, timestampMs?: number, nonce?: string}} params
+ * @param {{accountId: string, networkId: import("./networkId.js").NetworkId, method: string, path: string, query?: string | URLSearchParams, body?: Buffer | ArrayBuffer | ArrayBufferView | string, privateKey: Buffer | ArrayBuffer | ArrayBufferView, timestampMs?: number, nonce?: string}} params
  * @returns {{ "X-Iroha-Account": string, "X-Iroha-Signature": string, "X-Iroha-Timestamp-Ms": string, "X-Iroha-Nonce": string }}
  */
 export function buildCanonicalRequestHeaders({
   accountId,
+  networkId,
   method,
   path,
   query,
@@ -158,14 +172,15 @@ export function buildCanonicalRequestHeaders({
   }
   const checkedNonce = requireExactNonBlankString(nonce, "nonce", "canonical headers");
   const normalizedTimestampMs = Math.trunc(timestampMs);
-  const message = canonicalRequestSignatureMessage({
+  const signatureInput = {
     method,
     path,
     query,
     body,
     timestampMs: normalizedTimestampMs,
     nonce: checkedNonce,
-  });
+  };
+  const message = canonicalRequestSignatureMessage({ networkId, ...signatureInput });
   const signature = signEd25519(message, privateKey);
   return {
     "X-Iroha-Account": canonicalAuthAccountHeaderValue(checkedAccount),
@@ -272,16 +287,17 @@ function canonicalTargetFromPath({ path, query, baseUrl }) {
  * `accountId` must be the exact canonical I105 account or active canonical
  * ASCII alias used as the auth header.
  *
- * @param {{accountId: string, method?: string, path: string, baseUrl?: string, query?: string | URLSearchParams, body?: unknown, headers?: Headers | Array<[string, string]> | Record<string, string>, privateKey?: Buffer | ArrayBuffer | ArrayBufferView, sign?: (input: {message: Buffer, messageBase64: string, method: string, path: string, query?: string | URLSearchParams, body: string, timestampMs: number, nonce: string}) => Promise<Buffer | ArrayBuffer | ArrayBufferView | string> | Buffer | ArrayBuffer | ArrayBufferView | string, timestampMs?: number, nonce?: string}} params
+ * @param {{accountId: string, networkId: import("./networkId.js").NetworkId, method?: string, path: string, baseUrl?: string, query?: string | URLSearchParams, body?: unknown, headers?: Headers | Array<[string, string]> | Record<string, string>, privateKey?: Buffer | ArrayBuffer | ArrayBufferView, sign?: (input: {message: Buffer, messageBase64: string, networkId: import("./networkId.js").NetworkId, method: string, path: string, query?: string | URLSearchParams, body: string, timestampMs: number, nonce: string}) => Promise<Buffer | ArrayBuffer | ArrayBufferView | string> | Buffer | ArrayBuffer | ArrayBufferView | string, timestampMs?: number, nonce?: string}} params
  * @returns {Promise<{method: string, headers: Record<string, string>, body: string}>}
  */
 export async function buildCanonicalJsonRequest({
   accountId,
+  networkId,
   method = "POST",
   path,
   baseUrl,
   query,
-  body = {},
+  body,
   headers,
   privateKey,
   sign,
@@ -309,8 +325,9 @@ export async function buildCanonicalJsonRequest({
   const methodUpper = String(method).toUpperCase();
   const normalizedTimestampMs = Math.trunc(timestampMs);
   const canonicalTarget = canonicalTargetFromPath({ path, query, baseUrl });
-  const bodyJson = JSON.stringify(body);
+  const bodyJson = body === undefined ? "" : JSON.stringify(body);
   const message = canonicalRequestSignatureMessage({
+    networkId,
     method: methodUpper,
     path: canonicalTarget.path,
     query: canonicalTarget.query,
@@ -324,6 +341,7 @@ export async function buildCanonicalJsonRequest({
         await sign({
           message,
           messageBase64: message.toString("base64"),
+          networkId,
           method: methodUpper,
           path: canonicalTarget.path,
           query: canonicalTarget.query,

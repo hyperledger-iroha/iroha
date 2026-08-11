@@ -63,6 +63,7 @@ case "${NODE_VERSION}" in
     ;;
 esac
 
-"${NODE_BIN}" --test --test-name-pattern "registerSorafsPinManifest|SoraFS pin-register SDK guard|SoraFS .* SDK runner" \
+"${NODE_BIN}" --test --test-name-pattern "registerSorafsPinManifest|buildRegisterPinManifestInstruction|rejects a retired submitted epoch|SoraFS pin-register SDK guard|SoraFS .* SDK runner" \
   test/toriiClient.test.js \
+  test/transactionBuilder.test.js \
   test/sorafsPinRegisterSdkGuard.test.js

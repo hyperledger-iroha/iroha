@@ -15,7 +15,7 @@ reports nearby DA/RBC maintenance events such as:
 Typical usage::
 
     python3 scripts/sumeragi_backpressure_log_scraper.py \
-        /var/log/irohad.log --window-before 30 --window-after 5
+        /var/log/iroha3d.log --window-before 30 --window-after 5
 
     python3 scripts/sumeragi_backpressure_log_scraper.py - --status status.json
 

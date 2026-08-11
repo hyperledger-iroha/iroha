@@ -20,6 +20,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
+try:
+    from . import taira_privacy_rollout_contract as rollout_observation
+except ImportError:
+    import taira_privacy_rollout_contract as rollout_observation
+
 TERMINAL_FILES = (
     "publication-receipt-v1.json",
     "publication-receipt-v1.json.pub",
@@ -64,6 +69,15 @@ class Captured:
 
 def _fail(message: str) -> NoReturn:
     raise PublicationHandoffError(message)
+
+
+def _require_authenticated_rollout_observation_authority() -> None:
+    """Translate the independent observation provisioning barrier."""
+
+    try:
+        rollout_observation.require_authenticated_rollout_observation_authority_provisioned()
+    except rollout_observation.RolloutContractError as exc:
+        raise PublicationHandoffError(str(exc)) from exc
 
 
 def _identity(info: os.stat_result) -> tuple[int, ...]:
@@ -714,6 +728,7 @@ def close_handoff(
 ) -> dict[str, object]:
     """Close a publication terminal under the fixed root-controller contract."""
 
+    _require_authenticated_rollout_observation_authority()
     return _close_handoff(
         source_parent,
         handoff_root,
@@ -757,7 +772,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        result = close_handoff(
+        # Refuse before canonicalizing identities or inspecting terminal/output paths.
+        _require_authenticated_rollout_observation_authority()
+        result = _close_handoff(
             args.source_parent,
             args.handoff_root,
             expected_authority_uid=_canonical_positive(
@@ -784,6 +801,7 @@ def main(argv: list[str] | None = None) -> int:
             expected_workspace_source_manifest_sha256=(
                 args.expected_workspace_source_manifest_sha256
             ),
+            _required_controller_uid=0,
         )
     except (OSError, PublicationHandoffError) as exc:
         print(f"Taira publication handoff refused: {exc}", file=sys.stderr)

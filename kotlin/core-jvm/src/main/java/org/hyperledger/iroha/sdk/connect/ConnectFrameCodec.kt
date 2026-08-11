@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Optional
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
@@ -94,7 +95,7 @@ private class WalletSignature(val algorithm: Int, signature: ByteArray) {
     val signature: ByteArray = signature.copyOf()
 }
 
-private class Constraints(val chainId: String)
+private class Constraints(val networkId: NetworkId)
 
 private val DIRECTION_ADAPTER: TypeAdapter<ConnectDirection> =
     object : TypeAdapter<ConnectDirection> {
@@ -127,11 +128,20 @@ private val ROLE_ADAPTER: TypeAdapter<ConnectRole> =
 private val CONSTRAINTS_ADAPTER: TypeAdapter<Constraints> =
     object : TypeAdapter<Constraints> {
         override fun encode(encoder: NoritoEncoder, value: Constraints) {
-            STRING.encode(encoder, value.chainId)
+            val compactLen = (encoder.flags and NoritoHeader.COMPACT_LEN) != 0
+            encoder.writeLength(NetworkId.BYTE_LENGTH.toLong(), compactLen)
+            encoder.writeBytes(value.networkId.bytes())
         }
 
-        override fun decode(decoder: NoritoDecoder): Constraints =
-            Constraints(STRING.decode(decoder))
+        override fun decode(decoder: NoritoDecoder): Constraints {
+            val length = decoder.readLength(decoder.compactLenActive())
+            require(length == NetworkId.BYTE_LENGTH.toLong() &&
+                decoder.remaining() == NetworkId.BYTE_LENGTH
+            ) {
+                "Connect NetworkId must contain exactly ${NetworkId.BYTE_LENGTH} bytes"
+            }
+            return Constraints(NetworkId.fromBytes(decoder.readBytes(NetworkId.BYTE_LENGTH)))
+        }
     }
 
 private val WALLET_SIGNATURE_ADAPTER: TypeAdapter<WalletSignature> =
@@ -232,6 +242,30 @@ private val CIPHERTEXT_ADAPTER: TypeAdapter<ConnectCiphertext> =
 
 /** Connect wire codec for frame/control payloads used by wallet-role flows. */
 object ConnectFrameCodec {
+
+    /** Encodes the launch-bound, first app-to-wallet `Open` control frame. */
+    @JvmStatic
+    @Throws(ConnectProtocolException::class)
+    fun encodeOpenFrame(
+        sessionId: ByteArray,
+        appPublicKey: ByteArray,
+        networkId: NetworkId,
+    ): ByteArray {
+        val appPkField = encodeField(appPublicKey, FIXED_ARRAY_U8_32, "open.app_pk")
+        val appMetaField = encodeField(Optional.empty(), OPTIONAL_PLACEHOLDER, "open.app_meta")
+        val constraintsField = encodeField(Constraints(networkId), CONSTRAINTS_ADAPTER, "open.constraints")
+        val permissionsField = encodeField(Optional.empty(), OPTIONAL_PLACEHOLDER, "open.permissions")
+
+        val body = ByteArrayOutputStream()
+        writeLengthPrefixed(body, appPkField)
+        writeLengthPrefixed(body, appMetaField)
+        writeLengthPrefixed(body, constraintsField)
+        writeLengthPrefixed(body, permissionsField)
+
+        val controlPayload = wrapTaggedPayload(CONTROL_OPEN, body.toByteArray())
+        val kindPayload = wrapTaggedPayload(FRAME_KIND_CONTROL, controlPayload)
+        return encodeFrame(sessionId, ConnectDirection.APP_TO_WALLET, 1L, kindPayload)
+    }
 
     @JvmStatic
     @Throws(ConnectProtocolException::class)
@@ -357,7 +391,7 @@ object ConnectFrameCodec {
         skipLengthPrefixedField(cursor, "open.permissions")
         cursor.ensureFullyConsumed("open control")
 
-        val open = OpenControl(appPk, constraints.chainId)
+        val open = OpenControl(appPk, constraints.networkId)
         return DecodedFrame(sid, direction, sequence, FrameType.OPEN, open, null, null, null)
     }
 

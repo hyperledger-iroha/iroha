@@ -243,6 +243,7 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
     let chain_id = ChainId::from("test-chain");
     let torii = Torii::new_with_handle(
         chain_id.clone(),
+        iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
         queue.clone(),

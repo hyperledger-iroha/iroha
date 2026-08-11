@@ -4,8 +4,6 @@ evaluation_interval: 1m
 tests:
   - interval: 1m
     input_series:
-      - series: 'torii_sorafs_replication_backlog_total'
-        values: '11 11 11 11 11 11 11 11 11 11 11 11 11 11 11'
       - series: 'torii_sorafs_capacity_utilised_gib{provider="provider-a"}'
         values: '95 95 95 95 95 95 95 95 95 95 95 95 95 95 95'
       - series: 'torii_sorafs_capacity_effective_gib{provider="provider-a"}'
@@ -14,23 +12,7 @@ tests:
         values: '50 50 50 50 50 50 50 50 50 50 50 50 50 50 50'
       - series: 'torii_sorafs_capacity_declared_gib{provider="provider-a"}'
         values: '100 100 100 100 100 100 100 100 100 100 100 100 100 100 100'
-      - series: 'torii_sorafs_registry_orders_total{status="expired"}'
-        values: '0 0 0 0 1 2 3 4 5 6 7 8 9 10 11'
     alert_rule_test:
-      - alertname: SoraFSReplicationBacklogGrowing
-        eval_time: 5m
-        exp_alerts: []
-      - alertname: SoraFSReplicationBacklogGrowing
-        eval_time: 12m
-        exp_alerts:
-          - exp_labels:
-              severity: critical
-            exp_annotations:
-              summary: "SoraFS replication backlog above threshold"
-              description: |
-                Pending replication orders stayed above 10 for 10 minutes
-                (value=11). Reassign manifests or investigate
-                stalled providers before deadlines expire.
       - alertname: SoraFSCapacityPressure
         eval_time: 3m
         exp_alerts: []
@@ -63,26 +45,8 @@ tests:
                 GiB tied up in outstanding reservations (value=50%).
                 Audit replication scheduler backlog and confirm incentives before
                 accepting additional capacity from this provider.
-      - alertname: SoraFSReplicationExpiredOrders
-        eval_time: 2m
-        exp_alerts: []
-      - alertname: SoraFSReplicationExpiredOrders
-        eval_time: 8m
-        exp_alerts:
-          - exp_labels:
-              status: expired
-              severity: warning
-            exp_annotations:
-              summary: "SoraFS replication orders expired"
-              description: |
-                At least one replication order expired within the last 5 minutes.
-                Review torii_sorafs_registry_orders_total{status="expired"} to
-                identify the provider and manifest combinations that need manual
-                intervention.
   - interval: 1m
     input_series:
-      - series: 'torii_sorafs_replication_backlog_total'
-        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
       - series: 'torii_sorafs_capacity_utilised_gib{provider="provider-b"}'
         values: '40 40 40 40 40 40 40 40 40 40 40 40 40 40 40'
       - series: 'torii_sorafs_capacity_effective_gib{provider="provider-b"}'
@@ -91,19 +55,11 @@ tests:
         values: '10 10 10 10 10 10 10 10 10 10 10 10 10 10 10'
       - series: 'torii_sorafs_capacity_declared_gib{provider="provider-b"}'
         values: '100 100 100 100 100 100 100 100 100 100 100 100 100 100 100'
-      - series: 'torii_sorafs_registry_orders_total{status="expired"}'
-        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
     alert_rule_test:
-      - alertname: SoraFSReplicationBacklogGrowing
-        eval_time: 12m
-        exp_alerts: []
       - alertname: SoraFSCapacityPressure
         eval_time: 12m
         exp_alerts: []
       - alertname: SoraFSOutstandingDemandSpike
-        eval_time: 12m
-        exp_alerts: []
-      - alertname: SoraFSReplicationExpiredOrders
         eval_time: 12m
         exp_alerts: []
   - interval: 1m

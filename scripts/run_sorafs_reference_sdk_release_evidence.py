@@ -59,8 +59,7 @@ from sorafs_runner_preflight import (  # noqa: E402
 
 
 from sorafs_topology_qualification import (  # noqa: E402
-    DEFAULT_MAX_QUALIFICATION_REVIEW_AGE_SECS,
-    add_topology_qualification_argument,
+    add_signed_topology_qualification_arguments,
 )
 
 PLAN_SCHEMA = "sorafs.reference_sdk.release_evidence_collection_plan.v1"
@@ -91,8 +90,10 @@ TOPOLOGY_QUALIFICATION_PLAN_FIELDS = frozenset(
         "summary_path",
         "envelope_path",
         "verification_public_key_fingerprint_hex",
-        "signer_identity",
+        "signer_service_id",
+        "signer_administrator_id",
         "signer_key_revision",
+        "signer_policy_revision",
         "signer_policy_digest_hex",
     }
 )
@@ -213,8 +214,14 @@ def topology_qualification_plan(args: argparse.Namespace) -> dict[str, object]:
                 args.topology_qualification_verification_public_key_hex
             )
         ),
-        "signer_identity": args.topology_qualification_signer_identity,
+        "signer_service_id": args.topology_qualification_signer_service_id,
+        "signer_administrator_id": (
+            args.topology_qualification_signer_administrator_id
+        ),
         "signer_key_revision": args.topology_qualification_signer_key_revision,
+        "signer_policy_revision": (
+            args.topology_qualification_signer_policy_revision
+        ),
         "signer_policy_digest_hex": (
             args.topology_qualification_signer_policy_digest_hex
         ),
@@ -300,15 +307,19 @@ def validate_topology_qualification_inputs(
 ) -> None:
     """Require the independent topology signer trust tuple without echoing it."""
 
-    signer_identity = args.topology_qualification_signer_identity
-    if (
-        canonical_runner_plan_string(signer_identity) is None
-        or len(signer_identity) > 256
-        or signer_identity != unicodedata.normalize("NFC", signer_identity)
-    ):
-        errors.append(
-            "--topology-qualification-signer-identity must be canonical"
-        )
+    signer_ids = (
+        ("service-id", args.topology_qualification_signer_service_id),
+        ("administrator-id", args.topology_qualification_signer_administrator_id),
+    )
+    for option, signer_id in signer_ids:
+        if (
+            canonical_runner_plan_string(signer_id) is None
+            or len(signer_id.encode("utf-8", "surrogatepass")) > 128
+            or signer_id != unicodedata.normalize("NFC", signer_id)
+        ):
+            errors.append(f"--topology-qualification-signer-{option} must be canonical")
+    if signer_ids[0][1] == signer_ids[1][1]:
+        errors.append("topology signer service-id and administrator-id must differ")
     topology_key_fingerprint = provenance_verification_key_fingerprint(
         args.topology_qualification_verification_public_key_hex
     )
@@ -421,10 +432,14 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
             str(args.topology_qualification_envelope),
             "--topology-qualification-verification-public-key-hex",
             args.topology_qualification_verification_public_key_hex,
-            "--topology-qualification-signer-identity",
-            args.topology_qualification_signer_identity,
+            "--topology-qualification-signer-service-id",
+            args.topology_qualification_signer_service_id,
+            "--topology-qualification-signer-administrator-id",
+            args.topology_qualification_signer_administrator_id,
             "--topology-qualification-signer-key-revision",
             str(args.topology_qualification_signer_key_revision),
+            "--topology-qualification-signer-policy-revision",
+            str(args.topology_qualification_signer_policy_revision),
             "--topology-qualification-signer-policy-digest-hex",
             args.topology_qualification_signer_policy_digest_hex,
             "--max-topology-qualification-review-age-secs",
@@ -559,7 +574,12 @@ def validate_plan_json(
                 "reference SDK release runner plan topology_qualification "
                 "fields must match the schema-closed contract"
             )
-        for field in ("summary_path", "envelope_path", "signer_identity"):
+        for field in (
+            "summary_path",
+            "envelope_path",
+            "signer_service_id",
+            "signer_administrator_id",
+        ):
             if canonical_runner_plan_string(topology.get(field)) is None:
                 errors.append(
                     "reference SDK release runner plan topology_qualification "
@@ -590,16 +610,13 @@ def validate_plan_json(
                 "reference SDK release runner plan topology_qualification "
                 "signer policy digest must be canonical"
             )
-        signer_key_revision = topology.get("signer_key_revision")
-        if (
-            not isinstance(signer_key_revision, int)
-            or isinstance(signer_key_revision, bool)
-            or signer_key_revision <= 0
-        ):
-            errors.append(
-                "reference SDK release runner plan topology_qualification "
-                "signer key revision must be positive"
-            )
+        for field in ("signer_key_revision", "signer_policy_revision"):
+            revision = topology.get(field)
+            if not isinstance(revision, int) or isinstance(revision, bool) or revision <= 0:
+                errors.append(
+                    "reference SDK release runner plan topology_qualification "
+                    f"{field.replace('_', ' ')} must be positive"
+                )
         if topology != topology_qualification_plan(args):
             errors.append(
                 "reference SDK release runner plan topology_qualification "
@@ -716,40 +733,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print the verifier command plan without executing it.",
     )
-    add_topology_qualification_argument(parser)
-    parser.add_argument(
-        "--topology-qualification-envelope",
-        type=Path,
-        required=True,
-        help="Existing independently signed companion for the topology summary.",
-    )
-    parser.add_argument(
-        "--topology-qualification-verification-public-key-hex",
-        required=True,
-        help="Operator-trusted raw Ed25519 topology verification public key.",
-    )
-    parser.add_argument(
-        "--topology-qualification-signer-identity",
-        required=True,
-        help="Operator-trusted topology qualification signer identity.",
-    )
-    parser.add_argument(
-        "--topology-qualification-signer-key-revision",
-        type=positive_int_arg,
-        required=True,
-        help="Operator-trusted positive topology signer key revision.",
-    )
-    parser.add_argument(
-        "--topology-qualification-signer-policy-digest-hex",
-        required=True,
-        help="Operator-trusted topology signer policy SHA-256 digest.",
-    )
-    parser.add_argument(
-        "--max-topology-qualification-review-age-secs",
-        type=non_negative_int_arg,
-        default=DEFAULT_MAX_QUALIFICATION_REVIEW_AGE_SECS,
-        help="Maximum accepted age of the independently signed topology review.",
-    )
+    add_signed_topology_qualification_arguments(parser)
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)

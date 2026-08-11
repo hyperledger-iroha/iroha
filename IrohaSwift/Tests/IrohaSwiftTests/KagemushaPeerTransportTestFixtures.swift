@@ -63,14 +63,14 @@ enum KagemushaPeerTransportTestFixtures {
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let amount = try KagemushaScaledAmount(atomicUnits: "125", scale: 2)
         let note = try KagemushaSpendableNoteDescriptor(
-            chainID: "swift-kagemusha-transport",
+            networkID: TestNetworkIds.canonical,
             assetDefinitionID: assetDefinitionID(),
             noteCommitment: fixed32(seed &+ 1),
             spendNullifier: fixed32(seed &+ 2),
             amount: amount
         )
         let payload = try KagemushaRecipientPaymentRequestSigningPayload(
-            chainID: note.chainID,
+            networkID: note.networkID,
             assetDefinitionID: note.assetDefinitionID,
             amount: amount,
             recipient: recipient,

@@ -42,7 +42,7 @@ fn retention_checkpoint_inventory_accepts_only_exact_crash_boundary_sets() {
         .read_index()
         .expect("read archive")
         .virtual_bases
-        .get(&third.key.chain_id)
+        .get(&third.key.network_id)
         .expect("predecessor checkpoint")
         .clone();
     let approved = candidate_for_prepared_compaction(&archive, &approved_prepared);
@@ -51,19 +51,19 @@ fn retention_checkpoint_inventory_accepts_only_exact_crash_boundary_sets() {
     validate_retention_checkpoint_candidate_inventory(
         std::slice::from_ref(&approved),
         &approval,
-        &third.key.chain_id,
+        &third.key.network_id,
     )
     .expect("completed cleanup retains only the approved checkpoint");
     validate_retention_checkpoint_candidate_inventory(
         &[predecessor.clone(), approved.clone()],
         &approval,
-        &third.key.chain_id,
+        &third.key.network_id,
     )
     .expect("publication crash window retains predecessor and approved checkpoint");
     validate_retention_checkpoint_candidate_inventory(
         std::slice::from_ref(&predecessor),
         &approval,
-        &third.key.chain_id,
+        &third.key.network_id,
     )
     .expect("pre-publication crash retains only the predecessor checkpoint");
 
@@ -71,7 +71,7 @@ fn retention_checkpoint_inventory_accepts_only_exact_crash_boundary_sets() {
         validate_retention_checkpoint_candidate_inventory(
             &[approved.clone(), approved.clone()],
             &approval,
-            &third.key.chain_id,
+            &third.key.network_id,
         ),
         Err(ProviderIngestFinalizedArchiveErrorV1::UnapprovedRetentionCheckpoint)
     ));
@@ -79,12 +79,12 @@ fn retention_checkpoint_inventory_accepts_only_exact_crash_boundary_sets() {
         validate_retention_checkpoint_candidate_inventory(
             &[predecessor, approved, alternate],
             &approval,
-            &third.key.chain_id,
+            &third.key.network_id,
         ),
         Err(ProviderIngestFinalizedArchiveErrorV1::UnapprovedRetentionCheckpoint)
     ));
     assert!(matches!(
-        validate_retention_checkpoint_candidate_inventory(&[], &approval, &third.key.chain_id,),
+        validate_retention_checkpoint_candidate_inventory(&[], &approval, &third.key.network_id,),
         Err(ProviderIngestFinalizedArchiveErrorV1::RetentionAuthorityRollback)
     ));
 }

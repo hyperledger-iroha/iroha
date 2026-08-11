@@ -18,12 +18,14 @@ fn overlay_entries(tx: &SignedTransaction) -> Vec<String> {
 
 #[test]
 fn kotodama_bytecode_fault_injection_smoke() -> Result<(), iroha_crypto::Error> {
-    let chain: ChainId = "fi-smoke-chain".parse().unwrap();
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([0x2E; Hash::LENGTH]),
+    ));
     let keypair = iroha_crypto::KeyPair::try_random()?;
     let account_id = AccountId::new(keypair.public_key().clone());
 
     let mut tx = TransactionBuilder::new(
-        chain,
+        network_id,
         account_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

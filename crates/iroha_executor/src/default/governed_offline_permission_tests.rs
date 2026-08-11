@@ -11,9 +11,7 @@ mod governed_offline_permission_tests {
         prelude::{AccountId, Grant, Json, Register, Revoke, Role, RoleId, ValidationFail},
     };
     use iroha_executor_data_model::permission::{
-        nexus::{
-            CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanWithdrawFeeSponsorProgram,
-        },
+        nexus::{CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram},
         offline::{
             CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
             CanManageOfflineEscrow,
@@ -218,10 +216,7 @@ mod governed_offline_permission_tests {
             PermissionObject::from(CanManageFeeSponsorProgram {
                 sponsor: sponsor.clone(),
             }),
-            PermissionObject::from(CanEnrollFeeSponsorProgram {
-                program_id: program_id.clone(),
-            }),
-            PermissionObject::from(CanWithdrawFeeSponsorProgram { program_id }),
+            PermissionObject::from(CanEnrollFeeSponsorProgram { program_id }),
         ];
         let previous =
             test_override::replace_permissions(vec![PermissionObject::from(CanSetParameters)]);

@@ -7,36 +7,26 @@ import java.util.Objects;
 
 /**
  * Typed builder for the {@code ApprovePinManifest} instruction (SoraFS manifest lifecycle).
+ * The recorded approval epoch comes exclusively from the block consensus timestamp.
  */
 public final class ApprovePinManifestInstruction implements InstructionTemplate {
 
   public static final String ACTION = "ApprovePinManifest";
 
   private final String digestHex;
-  private final long approvedEpoch;
   private final String councilEnvelopeBase64;
   private final String councilEnvelopeDigestHex;
   private final Map<String, String> arguments;
 
   private ApprovePinManifestInstruction(final Builder builder) {
-    this(builder, builder.canonicalArguments());
-  }
-
-  private ApprovePinManifestInstruction(
-      final Builder builder, final Map<String, String> argumentOrder) {
     this.digestHex = builder.digestHex;
-    this.approvedEpoch = builder.approvedEpoch;
     this.councilEnvelopeBase64 = builder.councilEnvelopeBase64;
     this.councilEnvelopeDigestHex = builder.councilEnvelopeDigestHex;
-    this.arguments = Map.copyOf(argumentOrder);
+    this.arguments = Map.copyOf(builder.canonicalArguments());
   }
 
   public String digestHex() {
     return digestHex;
-  }
-
-  public long approvedEpoch() {
-    return approvedEpoch;
   }
 
   public String councilEnvelopeBase64() {
@@ -62,10 +52,19 @@ public final class ApprovePinManifestInstruction implements InstructionTemplate 
   }
 
   public static ApprovePinManifestInstruction fromArguments(final Map<String, String> arguments) {
-    final Builder builder =
-        builder()
-            .setDigestHex(require(arguments, "digest_hex"))
-            .setApprovedEpoch(requireLong(arguments, "approved_epoch"));
+    Objects.requireNonNull(arguments, "arguments");
+    if (!ACTION.equals(arguments.get("action"))) {
+      throw new IllegalArgumentException("Instruction argument 'action' must be " + ACTION);
+    }
+    for (final String key : arguments.keySet()) {
+      if (!key.equals("action")
+          && !key.equals("digest_hex")
+          && !key.equals("council_envelope_base64")
+          && !key.equals("council_envelope_digest_hex")) {
+        throw new IllegalArgumentException("Unsupported ApprovePinManifest argument: " + key);
+      }
+    }
+    final Builder builder = builder().setDigestHex(require(arguments, "digest_hex"));
     final String envelope = arguments.get("council_envelope_base64");
     if (envelope != null && !envelope.isBlank()) {
       builder.setCouncilEnvelopeBase64(envelope);
@@ -74,7 +73,7 @@ public final class ApprovePinManifestInstruction implements InstructionTemplate 
     if (envelopeDigest != null && !envelopeDigest.isBlank()) {
       builder.setCouncilEnvelopeDigestHex(envelopeDigest);
     }
-    return new ApprovePinManifestInstruction(builder, new LinkedHashMap<>(arguments));
+    return builder.build();
   }
 
   private static String require(final Map<String, String> arguments, final String key) {
@@ -102,16 +101,6 @@ public final class ApprovePinManifestInstruction implements InstructionTemplate 
     return trimmed;
   }
 
-  private static long requireLong(final Map<String, String> arguments, final String key) {
-    final String value = require(arguments, key);
-    try {
-      return Long.parseLong(value);
-    } catch (final NumberFormatException ex) {
-      throw new IllegalArgumentException(
-          "Instruction argument '" + key + "' must be a number: " + value, ex);
-    }
-  }
-
   @Override
   public boolean equals(final Object obj) {
     if (this == obj) {
@@ -120,20 +109,18 @@ public final class ApprovePinManifestInstruction implements InstructionTemplate 
     if (!(obj instanceof ApprovePinManifestInstruction other)) {
       return false;
     }
-    return approvedEpoch == other.approvedEpoch
-        && Objects.equals(digestHex, other.digestHex)
+    return Objects.equals(digestHex, other.digestHex)
         && Objects.equals(councilEnvelopeBase64, other.councilEnvelopeBase64)
         && Objects.equals(councilEnvelopeDigestHex, other.councilEnvelopeDigestHex);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(digestHex, approvedEpoch, councilEnvelopeBase64, councilEnvelopeDigestHex);
+    return Objects.hash(digestHex, councilEnvelopeBase64, councilEnvelopeDigestHex);
   }
 
   public static final class Builder {
     private String digestHex;
-    private Long approvedEpoch;
     private String councilEnvelopeBase64;
     private String councilEnvelopeDigestHex;
 
@@ -141,14 +128,6 @@ public final class ApprovePinManifestInstruction implements InstructionTemplate 
 
     public Builder setDigestHex(final String digestHex) {
       this.digestHex = Objects.requireNonNull(digestHex, "digestHex");
-      return this;
-    }
-
-    public Builder setApprovedEpoch(final long approvedEpoch) {
-      if (approvedEpoch < 0) {
-        throw new IllegalArgumentException("approvedEpoch must be non-negative");
-      }
-      this.approvedEpoch = approvedEpoch;
       return this;
     }
 
@@ -173,9 +152,6 @@ public final class ApprovePinManifestInstruction implements InstructionTemplate 
       if (digestHex == null || digestHex.isBlank()) {
         throw new IllegalStateException("digestHex must be set");
       }
-      if (approvedEpoch == null) {
-        throw new IllegalStateException("approvedEpoch must be set");
-      }
       return new ApprovePinManifestInstruction(this);
     }
 
@@ -183,7 +159,6 @@ public final class ApprovePinManifestInstruction implements InstructionTemplate 
       final Map<String, String> args = new LinkedHashMap<>();
       args.put("action", ACTION);
       args.put("digest_hex", digestHex);
-      args.put("approved_epoch", Long.toString(approvedEpoch));
       if (councilEnvelopeBase64 != null && !councilEnvelopeBase64.isBlank()) {
         args.put("council_envelope_base64", councilEnvelopeBase64);
       }

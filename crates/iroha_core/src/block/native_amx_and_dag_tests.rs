@@ -1,5 +1,5 @@
 #[test]
-fn native_amx_receipt_survives_into_lane_settlement_status() {
+fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
     let _guard = crate::sumeragi::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus status test lock");
@@ -53,7 +53,7 @@ fn native_amx_receipt_survives_into_lane_settlement_status() {
 
     let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
     let tx = TransactionBuilder::new_with_time_source(
-        chain_id.clone(),
+        state.network_id,
         authority.clone(),
         &time_source,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -164,24 +164,57 @@ fn native_amx_receipt_survives_into_lane_settlement_status() {
             .collect::<Vec<_>>()
     );
 
-    let snapshot = crate::sumeragi::status::snapshot();
-    assert_eq!(snapshot.lane_settlement_commitments.len(), 1);
-    let commitment = &snapshot.lane_settlement_commitments[0];
+    let statements = valid_block.as_ref().lane_finality_statements();
+    assert_eq!(statements.len(), 1);
+    let statement = &statements[0];
+    assert_eq!(statement.block_header_hash, valid_block.as_ref().hash());
+    let commitment = &statement.settlement_commitment;
     assert_eq!(commitment.tx_count, 1);
     assert_eq!(commitment.native_amx_receipts, vec![receipt]);
     assert_eq!(
         commitment.lane_id,
         plan.coordinator_route().lane_id,
-        "settlement status must use the native AMX coordinator lane"
+        "lane-finality statement must use the native AMX coordinator lane"
     );
     assert_eq!(
         commitment.dataspace_id,
         plan.coordinator_route().dataspace_id,
-        "settlement status must use the native AMX coordinator dataspace"
+        "lane-finality statement must use the native AMX coordinator dataspace"
+    );
+
+    let snapshot = crate::sumeragi::status::snapshot();
+    assert!(
+        snapshot.lane_settlement_commitments.is_empty() && snapshot.lane_relay_envelopes.is_empty(),
+        "candidate validation must not publish process-global relay evidence before commit"
     );
 
     crate::sumeragi::status::set_lane_settlement_commitments(Vec::new());
     crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+}
+
+#[test]
+fn autonomous_anchor_admission_rejects_same_label_different_network() {
+    let mut fixture = autonomous_anchor_fixture(None, 0);
+    let display_name = fixture.state.chain_id.clone();
+    let original_network_id = fixture.state.network_id;
+    fixture.state.network_id = deterministic_test_network_id(0x7A);
+    assert_eq!(fixture.state.chain_id, display_name);
+    assert_ne!(fixture.state.network_id, original_network_id);
+
+    let view = fixture.state.query_view();
+    let error = ValidBlock::validate_execution_context_autonomous_lane_payloads(
+        &fixture.block,
+        &fixture.topology,
+        &view,
+        &fixture.bundle,
+        fixture.profile.clone(),
+    )
+    .expect_err("the same display label must not authorize another genesis lineage");
+    assert!(matches!(
+        error,
+        BlockValidationError::ExecutionContextInvalid(message)
+            if message.contains("autonomous lane payload envelope")
+    ));
 }
 
 fn seed_domain_name_lease(world: &mut World, owner: &AccountId, domain_id: &DomainId) {
@@ -315,14 +348,14 @@ pub fn committed_and_valid_block_hashes_are_equal() {
 #[test]
 fn merkle_root_matches_header() {
     use std::borrow::Cow;
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+    let network_id = deterministic_test_network_id(0x0A);
     let (alice_id, alice_keypair) = gen_account_in("wonderland");
 
     let log = Log::new(Level::INFO, "test".to_string());
 
     let tx1 = Box::new(
         TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -334,7 +367,7 @@ fn merkle_root_matches_header() {
 
     let tx2 = Box::new(
         TransactionBuilder::new(
-            chain_id,
+            network_id,
             alice_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -487,8 +520,8 @@ fn lane_relay_helper_emits_pending_relay_and_rbc_bytes() {
     assert_eq!(relays.len(), 1);
     let envelope = &relays[0];
     assert!(
-        envelope.qc.is_none(),
-        "block-level commit QC must not be copied into lane relay QC"
+        envelope.finality_authority.is_none(),
+        "execution-stage relay must wait for genuine global finality"
     );
     assert_eq!(envelope.rbc_bytes_total, 2048);
     assert_eq!(envelope.block_height, 3);
@@ -591,7 +624,6 @@ fn lane_relay_envelopes_attach_manifest_roots() {
 #[test]
 fn dag_fingerprint_stability_smoke() {
     // Build a small world and a block with two independent txs to exercise access-set derivation
-    let chain_id = ChainId::from("chain");
     let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, bob_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId =
@@ -626,14 +658,14 @@ fn dag_fingerprint_stability_smoke() {
         );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let tx1 = TransactionBuilder::new(
-        chain_id.clone(),
+        state.network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
     .sign(alice_keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain_id.clone(),
+        state.network_id,
         bob_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

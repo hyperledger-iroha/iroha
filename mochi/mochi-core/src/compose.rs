@@ -15,7 +15,7 @@ use std::{
 
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::{
         ACCOUNT_ADMISSION_POLICY_METADATA_KEY, Account, AccountAdmissionMode,
         AccountAdmissionPolicy, AccountId, admission::ImplicitAccountFeeDestination,
@@ -157,14 +157,6 @@ impl fmt::Display for InstructionPermission {
 /// Errors that can occur while preparing transaction previews.
 #[derive(Debug, thiserror::Error)]
 pub enum ComposeError {
-    /// The provided chain identifier was not canonical.
-    #[error("failed to parse chain id `{chain}`: {reason}")]
-    InvalidChainId {
-        /// String representation of the chain identifier that failed to parse.
-        chain: String,
-        /// Human readable failure reason.
-        reason: String,
-    },
     /// The provided asset identifier could not be parsed.
     #[error("failed to parse asset id `{asset}`: {reason}")]
     InvalidAssetId {
@@ -560,14 +552,15 @@ impl TransactionPreview {
 /// Compose an asset quantity mint transaction assigned to the default MOCHI signer.
 ///
 /// The helper signs the transaction with the sample Alice key pair so local
-/// deployments have a predictable authority without requiring user input.
+/// deployments have a predictable authority without requiring user input. The
+/// caller supplies the exact genesis-derived network identity.
 ///
 /// # Errors
 ///
 /// Returns [`ComposeError::InvalidAssetId`] when the supplied identifier cannot
 /// be parsed according to Iroha's asset id rules.
 pub fn mint_quantity_preview(
-    chain_id: &str,
+    network_id: NetworkId,
     asset_id: &str,
     quantity: impl Into<Quantity>,
 ) -> Result<TransactionPreview, ComposeError> {
@@ -575,46 +568,48 @@ pub fn mint_quantity_preview(
         asset: parse_asset_id(asset_id)?,
         quantity: quantity.into(),
     };
-    compose_preview_with_authority(chain_id, &[draft], default_authority())
+    compose_preview_with_authority(network_id, &[draft], default_authority())
 }
 
-/// Compose a transaction preview from a list of [`InstructionDraft`] entries.
+/// Compose a transaction preview for an exact network from a list of
+/// [`InstructionDraft`] entries.
 ///
 /// # Errors
 ///
 /// Returns [`ComposeError::EmptyInstructions`] when the provided slice is empty.
 pub fn compose_preview(
-    chain_id: &str,
+    network_id: NetworkId,
     drafts: &[InstructionDraft],
 ) -> Result<TransactionPreview, ComposeError> {
-    compose_preview_with_authority(chain_id, drafts, default_authority())
+    compose_preview_with_authority(network_id, drafts, default_authority())
 }
 
-/// Compose a transaction preview signed by the provided authority.
+/// Compose a transaction preview for an exact network signed by the provided authority.
 ///
 /// # Errors
 ///
 /// Returns [`ComposeError::EmptyInstructions`] when the provided slice is empty.
 pub fn compose_preview_with_authority(
-    chain_id: &str,
+    network_id: NetworkId,
     drafts: &[InstructionDraft],
     authority: &SigningAuthority,
 ) -> Result<TransactionPreview, ComposeError> {
     compose_preview_with_options(
-        chain_id,
+        network_id,
         drafts,
         authority,
         &TransactionComposeOptions::default(),
     )
 }
 
-/// Compose a preview while applying the supplied [`TransactionComposeOptions`].
+/// Compose an exact-network preview while applying the supplied
+/// [`TransactionComposeOptions`].
 ///
 /// # Errors
 ///
 /// Returns [`ComposeError::EmptyInstructions`] when the provided slice is empty.
 pub fn compose_preview_with_options(
-    chain_id: &str,
+    network_id: NetworkId,
     drafts: &[InstructionDraft],
     authority: &SigningAuthority,
     options: &TransactionComposeOptions,
@@ -623,18 +618,12 @@ pub fn compose_preview_with_options(
         return Err(ComposeError::EmptyInstructions);
     }
     authority.validate_drafts(drafts)?;
-    let chain = chain_id
-        .parse::<ChainId>()
-        .map_err(|error| ComposeError::InvalidChainId {
-            chain: chain_id.to_owned(),
-            reason: error.to_string(),
-        })?;
     let instructions = drafts
         .iter()
         .map(InstructionDraft::instruction)
         .collect::<Vec<_>>();
     let mut builder = TransactionBuilder::new(
-        chain,
+        network_id,
         authority.account_id().clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -973,9 +962,8 @@ impl InstructionDraft {
             ),
             InstructionDraft::RegisterPinManifest { request } => {
                 format!(
-                    "Register pin manifest ({} payload bytes, epoch {})",
-                    request.manifest_payload.len(),
-                    request.submitted_epoch
+                    "Register pin manifest ({} payload bytes)",
+                    request.manifest_payload.len()
                 )
             }
             InstructionDraft::SetAccountAdmissionPolicy { domain, policy } => format!(
@@ -1610,6 +1598,12 @@ mod tests {
         "/../fixtures/composer/draft_pin_manifest.json"
     ));
 
+    fn test_network_id() -> NetworkId {
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            .parse()
+            .expect("test network id")
+    }
+
     fn draft_from_fixture(fixture: &str) -> InstructionDraft {
         let value: Value = json::from_str(fixture).expect("fixture json");
         InstructionDraft::from_json_value(&value).expect("fixture draft")
@@ -1623,7 +1617,8 @@ mod tests {
             .expect("definition id");
         let asset_id = format!("{asset_def}#{account}");
 
-        let preview = mint_quantity_preview("mochi-local", &asset_id, 5_u32).expect("preview");
+        let network_id = test_network_id();
+        let preview = mint_quantity_preview(network_id, &asset_id, 5_u32).expect("preview");
 
         assert_eq!(preview.authority(), account);
         assert!(
@@ -1635,6 +1630,7 @@ mod tests {
             "hex encoding must not be empty"
         );
         assert!(!preview.hash().is_empty(), "hash must not be empty");
+        assert_eq!(preview.signed_transaction().network_id(), Some(&network_id));
 
         // Ensure Norito payload roundtrips back to a transaction.
         assert!(
@@ -1645,7 +1641,7 @@ mod tests {
 
     #[test]
     fn invalid_asset_id_reports_error() {
-        let err = mint_quantity_preview("chain", "invalid-format", 1_u32)
+        let err = mint_quantity_preview(test_network_id(), "invalid-format", 1_u32)
             .expect_err("invalid identifiers should produce compose error");
         matches!(err, ComposeError::InvalidAssetId { .. });
     }
@@ -1697,7 +1693,8 @@ mod tests {
 
     #[test]
     fn compose_preview_requires_instructions() {
-        let err = compose_preview("chain", &[]).expect_err("empty instructions should fail");
+        let err =
+            compose_preview(test_network_id(), &[]).expect_err("empty instructions should fail");
         matches!(err, ComposeError::EmptyInstructions);
     }
 
@@ -1716,8 +1713,8 @@ mod tests {
             quantity: Quantity::from(3_u32),
             destination: BOB_ID.clone(),
         };
-        let preview =
-            compose_preview("chain", &[mint, transfer]).expect("compose multi instruction");
+        let preview = compose_preview(test_network_id(), &[mint, transfer])
+            .expect("compose multi instruction");
         assert_eq!(
             preview.instructions().len(),
             2,
@@ -1738,7 +1735,9 @@ mod tests {
         )
         .into();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            .parse()
+            .expect("canonical test network id"),
             &ALICE_ID,
             1,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -1751,7 +1750,7 @@ mod tests {
             arguments: None,
         };
         let signed = TransactionBuilder::new(
-            ChainId::from("mixed-preview"),
+            test_network_id(),
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(
                 Vec::new(),
@@ -2095,7 +2094,7 @@ mod tests {
 
         let draft = InstructionDraft::register_account_from_input(&account_literal(&ALICE_ID))
             .expect("account draft");
-        let err = compose_preview_with_authority("chain", &[draft], bob)
+        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
             .expect_err("Bob should not be allowed to register accounts");
 
         match err {
@@ -2128,7 +2127,7 @@ mod tests {
         )
         .expect("multisig draft");
 
-        let err = compose_preview_with_authority("chain", &[draft], bob)
+        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
             .expect_err("Bob should not be allowed to propose multisig transactions");
 
         match err {
@@ -2148,7 +2147,7 @@ mod tests {
             .expect("Bob signer present");
         let draft = draft_from_fixture(FIXTURE_SPACE_MANIFEST_TOUCH);
 
-        let err = compose_preview_with_authority("chain", &[draft], bob)
+        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
             .expect_err("Bob should not be allowed to publish space directory manifests");
 
         match err {
@@ -2168,7 +2167,7 @@ mod tests {
             .expect("Bob signer present");
         let draft = draft_from_fixture(FIXTURE_PIN_MANIFEST);
 
-        let err = compose_preview_with_authority("chain", &[draft], bob)
+        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
             .expect_err("Bob should not be allowed to register pin manifests");
 
         match err {
@@ -2198,7 +2197,7 @@ mod tests {
         let draft = InstructionDraft::publish_space_directory_manifest_from_json(manifest_json)
             .expect("space directory draft");
 
-        let err = compose_preview_with_authority("chain", &[draft], bob)
+        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
             .expect_err("Bob should not be allowed to publish space directory manifests");
 
         match err {
@@ -2219,14 +2218,13 @@ mod tests {
         let pin_manifest_json = r#"{
   "manifest_payload": "TlJUMAAAduKskROcpAXus8dyJtDtlwD5AAAAAAAAAP11VCbJ+r+OAgEBLCQAAAAAAAAAAXEfIGIKrspjqahUS44Ka/oZKH+vxtnoUoM+vR660uOpRn5yCQhxAAAAAAAAAF4FBAEAAAAHBnNvcmFmcwQDc2YxBgUxLjAuMAQAAAEABAAABAAEAAAIAAT//wAACB8AAAAAAAAAJgIAAAAAAAAAERBzb3JhZnMuc2YxQDEuMC4wCwpzb3JhZnMtc2YxCAAAEAAAAAAAIM5QqarfhOV1WSCNOSAWISYv0bGIeuSQylRHDioAFT8nCNwEEAAAAAAAEQIDAAQAAAAACIBRAQAAAAAACQgAAAAAAAAAAAgAAAAAAAAAAAgAAAAAAAAAAA==",
   "chunk_digest_sha3_256": [7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7],
-  "submitted_epoch": 42,
   "alias": null,
   "successor_of": null
 }"#;
         let draft = InstructionDraft::register_pin_manifest_from_json(pin_manifest_json)
             .expect("pin manifest draft");
 
-        let err = compose_preview_with_authority("chain", &[draft], bob)
+        let err = compose_preview_with_authority(test_network_id(), &[draft], bob)
             .expect_err("Bob should not be allowed to register pin manifests");
 
         match err {
@@ -2256,7 +2254,7 @@ mod tests {
             .with_creation_time(Duration::from_millis(1_234))
             .with_nonce(NonZeroU32::new(42).expect("non-zero nonce"));
 
-        let preview = compose_preview_with_options("chain", &[draft], signer, &options)
+        let preview = compose_preview_with_options(test_network_id(), &[draft], signer, &options)
             .expect("compose with overrides");
 
         assert_eq!(

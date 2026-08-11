@@ -183,8 +183,7 @@ fn validation_fee_plain_ballots_use_the_retained_proposal_contract() {
 
     let policy = ValidationFeePolicyV1 {
         schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-        chain_id: state.chain_id.clone(),
-        genesis_hash: [0xA5; 32],
+        network_id: *state.network_id_ref(),
         policy_version: 1,
         previous_policy_hash: None,
         ds_asset_id: voting_asset_id.clone(),

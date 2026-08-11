@@ -17,4 +17,8 @@ fn node_handle_storage_methods_error_when_disabled() {
         .ingest_manifest(&manifest, &plan, &mut reader)
         .expect_err("storage disabled");
     assert!(matches!(err, NodeStorageError::Disabled));
+    assert!(matches!(
+        handle.with_admitted_payload_read_lease(&[0xA5; 32], |_| ()),
+        Err(AdmittedPayloadReadLeaseErrorV1::Disabled)
+    ));
 }

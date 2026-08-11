@@ -63,6 +63,9 @@ struct Args {
     torii_url: String,
     #[arg(long)]
     chain_id: String,
+    /// Exact genesis consensus-header hash of the target network.
+    #[arg(long)]
+    network_id: NetworkId,
     #[arg(long)]
     authority: String,
     /// Owner-held mode-0600 regular file containing one exact private-key
@@ -148,6 +151,7 @@ fn default_rollout_phase() -> SorafsRolloutPhase {
 fn make_client(
     torii_url: &str,
     chain_id: &str,
+    network_id: NetworkId,
     authority: AccountId,
     chain_discriminant: u16,
     key_pair: KeyPair,
@@ -159,6 +163,7 @@ fn make_client(
         chain: chain_id
             .parse::<ChainId>()
             .wrap_err("--chain-id must be canonical")?,
+        network_id,
         account: authority,
         account_chain_discriminant: chain_discriminant,
         key_pair,
@@ -476,7 +481,7 @@ struct NativeUploadTransactionPlan {
 }
 
 struct TransactionSigningContext<'a> {
-    chain_id: &'a ChainId,
+    network_id: NetworkId,
     authority: &'a AccountId,
     private_key: &'a PrivateKey,
     transaction_ttl: Option<Duration>,
@@ -490,7 +495,7 @@ impl TransactionSigningContext<'_> {
         instructions: impl IntoIterator<Item = InstructionBox>,
     ) -> Result<SignedTransaction> {
         let mut builder = TransactionBuilder::new(
-            self.chain_id.clone(),
+            self.network_id,
             self.authority.clone(),
             self.fee_payment.clone(),
         );
@@ -645,6 +650,12 @@ mod tests {
 
     use super::*;
 
+    fn test_network_id() -> NetworkId {
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            .parse()
+            .expect("canonical test network id")
+    }
+
     fn checked_ivm_contract_deploy_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
             .expect("generate checked IVM contract deploy fixture key")
@@ -723,6 +734,8 @@ mod tests {
             "http://127.0.0.1:8080",
             "--chain-id",
             "localnet",
+            "--network-id",
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
             "--authority",
             "authority",
             "--private-key",
@@ -803,6 +816,8 @@ mod tests {
                 "http://127.0.0.1:8080",
                 "--chain-id",
                 "localnet",
+                "--network-id",
+                "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
                 "--authority",
                 "authority",
                 "--private-key-file",
@@ -827,11 +842,10 @@ mod tests {
     fn transaction_signing_context_checked_helper_verifies() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::of(key_pair.public_key().clone());
-        let chain_id = ChainId::from("ivm-contract-deploy-instruction-sign-test");
         let fee_payment = test_fee_payment();
         let metadata = Metadata::default();
         let signing = TransactionSigningContext {
-            chain_id: &chain_id,
+            network_id: test_network_id(),
             authority: &authority,
             private_key: key_pair.private_key(),
             transaction_ttl: None,
@@ -851,11 +865,11 @@ mod tests {
     fn final_deployment_transaction_is_one_native_atomic_commit() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::of(key_pair.public_key().clone());
-        let chain_id = ChainId::from("ivm-contract-deploy-native-commit-test");
+        let network_id = test_network_id();
         let fee_payment = test_fee_payment();
         let metadata = Metadata::default();
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            &chain_id,
+            &network_id,
             &authority,
             11,
             DataSpaceId::UNIVERSAL,
@@ -865,7 +879,7 @@ mod tests {
         let code_hash = Hash::new(b"reviewed-contract-artifact");
         let transaction = build_commit_deployment_transaction(
             &TransactionSigningContext {
-                chain_id: &chain_id,
+                network_id,
                 authority: &authority,
                 private_key: key_pair.private_key(),
                 transaction_ttl: None,
@@ -910,7 +924,7 @@ mod tests {
         let code = vec![1, 2, 3, 4];
         let plan = build_native_upload_transaction_plan(
             &TransactionSigningContext {
-                chain_id: &ChainId::from("ivm-contract-deploy-native-register-test"),
+                network_id: test_network_id(),
                 authority: &authority,
                 private_key: key_pair.private_key(),
                 transaction_ttl: None,
@@ -960,7 +974,7 @@ mod tests {
         let authority = AccountId::of(key_pair.public_key().clone());
         let result = build_native_upload_transaction_plan(
             &TransactionSigningContext {
-                chain_id: &ChainId::from("ivm-contract-deploy-empty-register-test"),
+                network_id: test_network_id(),
                 authority: &authority,
                 private_key: key_pair.private_key(),
                 transaction_ttl: None,
@@ -985,7 +999,7 @@ mod tests {
         let code = [0x01, 0x02, 0x03];
         let result = build_native_upload_transaction_plan(
             &TransactionSigningContext {
-                chain_id: &ChainId::from("ivm-contract-deploy-wrong-hash-test"),
+                network_id: test_network_id(),
                 authority: &authority,
                 private_key: key_pair.private_key(),
                 transaction_ttl: None,
@@ -1010,7 +1024,7 @@ mod tests {
         let code = vec![0x91; SMART_CONTRACT_CODE_CHUNK_BYTES];
         let plan = build_native_upload_transaction_plan(
             &TransactionSigningContext {
-                chain_id: &ChainId::from("ivm-contract-deploy-boundary-register-test"),
+                network_id: test_network_id(),
                 authority: &authority,
                 private_key: key_pair.private_key(),
                 transaction_ttl: None,
@@ -1042,9 +1056,9 @@ mod tests {
         let code = (0..(3 * 1024 * 1024 + 17))
             .map(|index| (index % 251) as u8)
             .collect::<Vec<_>>();
-        let chain_id = ChainId::from("ivm-contract-deploy-large-native-register-test");
+        let network_id = test_network_id();
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            &chain_id,
+            &network_id,
             &authority,
             11,
             DataSpaceId::UNIVERSAL,
@@ -1054,7 +1068,7 @@ mod tests {
             deployment_transaction_metadata(&contract_address, &[authority.to_string()])?;
         let plan = build_native_upload_transaction_plan(
             &TransactionSigningContext {
-                chain_id: &chain_id,
+                network_id,
                 authority: &authority,
                 private_key: key_pair.private_key(),
                 transaction_ttl: Some(Duration::from_secs(30)),
@@ -1130,7 +1144,7 @@ mod tests {
         let code = vec![0x35; 2 * SMART_CONTRACT_CODE_CHUNK_BYTES + 1];
         let plan = build_native_upload_transaction_plan(
             &TransactionSigningContext {
-                chain_id: &ChainId::from("ivm-contract-deploy-json-test"),
+                network_id: test_network_id(),
                 authority: &authority,
                 private_key: key_pair.private_key(),
                 transaction_ttl: None,
@@ -1199,12 +1213,11 @@ mod tests {
     fn skip_registration_omits_all_uploads_and_emit_order_is_stable() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::of(key_pair.public_key().clone());
-        let chain = ChainId::from("ivm-contract-deploy-sequence-test");
         let code = vec![0x7a; SMART_CONTRACT_CODE_CHUNK_BYTES + 1];
         let fee_payment = test_fee_payment();
         let metadata = Metadata::default();
         let signing = TransactionSigningContext {
-            chain_id: &chain,
+            network_id: test_network_id(),
             authority: &authority,
             private_key: key_pair.private_key(),
             transaction_ttl: None,
@@ -1277,9 +1290,9 @@ mod tests {
     fn every_real_deployment_transaction_carries_identical_governance_metadata() -> Result<()> {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::of(key_pair.public_key().clone());
-        let chain = ChainId::from("ivm-contract-deploy-metadata-test");
+        let network_id = test_network_id();
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            &chain,
+            &network_id,
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -1290,7 +1303,7 @@ mod tests {
         let fee_payment = test_fee_payment();
         let code = vec![0x44; SMART_CONTRACT_CODE_CHUNK_BYTES + 1];
         let signing = TransactionSigningContext {
-            chain_id: &chain,
+            network_id,
             authority: &authority,
             private_key: key_pair.private_key(),
             transaction_ttl: None,
@@ -1356,7 +1369,7 @@ mod tests {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::of(key_pair.public_key().clone());
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            &ChainId::from("ivm-contract-deploy-metadata-validation-test"),
+            &test_network_id(),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -1421,6 +1434,7 @@ fn main() -> Result<()> {
     let client = make_client(
         &args.torii_url,
         &args.chain_id,
+        args.network_id,
         authority.clone(),
         args.chain_discriminant,
         key_pair.clone(),
@@ -1446,7 +1460,7 @@ fn main() -> Result<()> {
         .checked_add(1)
         .ok_or_else(|| eyre!("deploy nonce overflow"))?;
     let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-        &client.chain,
+        &client.network_id,
         &authority,
         deploy_nonce,
         dataspace_id,
@@ -1471,7 +1485,7 @@ fn main() -> Result<()> {
     let tx_metadata =
         deployment_transaction_metadata(&contract_address, &args.gov_manifest_approvers)?;
     let signing = TransactionSigningContext {
-        chain_id: &client.chain,
+        network_id: client.network_id,
         authority: &authority,
         private_key: &private_key,
         transaction_ttl,

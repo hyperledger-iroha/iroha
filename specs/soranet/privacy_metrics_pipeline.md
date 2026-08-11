@@ -104,6 +104,12 @@ visible without leaving stale accumulators in memory.
 Torii now exposes two telemetry-gated HTTP endpoints so relays and collectors
 can forward observations without embedding a bespoke transport:
 
+The route boundary classifies both endpoints as mutations admitted only to a
+configured collector. It checks the enabled flag, non-empty CIDR allow-list,
+optional dedicated token, and rate budget before any body extractor runs, and
+caps each body at 128 KiB. Malformed or oversized unauthenticated input can
+therefore never reach Norito decoding or the telemetry accumulator.
+
 - `POST /v1/soranet/privacy/event` accepts a
   `RecordSoranetPrivacyEventDto` payload. The body wraps a
   `SoranetPrivacyEventV1` plus an optional `source` label. Torii validates the

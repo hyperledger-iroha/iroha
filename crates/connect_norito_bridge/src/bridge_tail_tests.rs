@@ -2,8 +2,10 @@
 mod signed_transaction_fixture_tests {
     use std::time::Duration;
 
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{ChainId, account::AccountId, transaction::TransactionBuilder};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{
+        NetworkId, account::AccountId, block::BlockHeader, transaction::TransactionBuilder,
+    };
     use iroha_version::codec::EncodeVersioned as _;
 
     use super::decode_signed_transaction;
@@ -14,6 +16,12 @@ mod signed_transaction_fixture_tests {
     fn fixture_key_pair() -> KeyPair {
         KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
+    }
+
+    fn fixture_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"connect-norito-signed-transaction-fixture-genesis",
+        )))
     }
 
     #[test]
@@ -30,9 +38,8 @@ mod signed_transaction_fixture_tests {
         let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
         let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
-        let chain_id: ChainId = "00000004".parse().expect("valid chain id");
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            fixture_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -51,9 +58,8 @@ mod signed_transaction_fixture_tests {
         let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
         let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
-        let chain_id: ChainId = "00000004".parse().expect("valid chain id");
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            fixture_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -69,9 +75,8 @@ mod signed_transaction_fixture_tests {
         let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
         let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
-        let chain_id: ChainId = "00000004".parse().expect("valid chain id");
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            fixture_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );

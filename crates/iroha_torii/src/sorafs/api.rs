@@ -69,7 +69,7 @@ use iroha_data_model::events::data::sorafs::SorafsOrderbookLedgerEvent;
 #[cfg(test)]
 use iroha_data_model::sorafs::pin_registry::ManifestRootCid;
 use iroha_data_model::{
-    ChainId,
+    ChainId, NetworkId,
     account::{AccountId, ParsedAccountId},
     asset::AssetDefinitionId,
     block::BlockHeader,
@@ -98,8 +98,8 @@ use iroha_data_model::{
             FindSorafsOrderbookChannelById, FindSorafsOrderbookChannels, FindSorafsOrderbookEvents,
             FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy, FindSorafsOrderbookReceipts,
             FindSorafsOrderbookStatus, FindSorafsOrderbookTrades, FindSorafsPinManifest,
-            FindSorafsProofOutcome, FindSorafsRepairEvents, FindSorafsRepairStatus,
-            FindSorafsRepairTask, FindSorafsRepairTasks,
+            FindSorafsPinManifests, FindSorafsProofOutcome, FindSorafsRepairEvents,
+            FindSorafsRepairStatus, FindSorafsRepairTask, FindSorafsRepairTasks,
         },
     },
     role::RoleId,
@@ -127,8 +127,9 @@ use iroha_data_model::{
             OrderbookTradePageV1,
         },
         pin_registry::{
-            ManifestDigest, PinManifestFinalizedCursorV1, PinManifestRecord, PinStatus,
-            ReplicationOrderStatus,
+            ManifestDigest, PIN_MANIFEST_QUERY_MAX_ITEMS_V1, PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1,
+            PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1, PinManifestFinalizedCursorV1, PinManifestRecord,
+            PinStatus, PinStatusKindV1, ReplicationOrderStatus,
         },
         proof_ledger::{
             PdpOutcomeStatusV1, PotrOutcomeStatusV1, ProofOutcomeFinalizedCursorV1,
@@ -273,7 +274,6 @@ use crate::{
             CapacitySnapshot, GovernanceSummary, ManifestLineageSummary, PinRegistryMetricsSummary,
             PinRegistrySnapshot, RegistryAlias, RegistryError, RegistryManifest,
             RegistryReplicationOrder, collect_pin_registry, collect_snapshot, lineage_to_json,
-            record_pin_registry_metrics,
         },
         site::{
             content_type_for_path, decode_content_cid, encode_content_cid, find_site_binding,
@@ -905,6 +905,7 @@ impl<'a> SoraFsRepairTransactionHandoff<'a> {
         let finalized_cursor = current_sorafs_repair_finalized_cursor(self.state)
             .ok_or_else(|| "finalized repair cursor is unavailable".to_owned())?;
         let context = sorafs_node::repair_transaction_forwarder::RepairTransactionContextV1 {
+            network_id: *self.state.state.network_id_ref(),
             chain_id: (*self.state.chain_id).clone(),
             finalized_cursor,
         };
@@ -2586,8 +2587,11 @@ const REPUTATION_COMMITTED_POLL_INTERVAL: Duration = Duration::from_millis(250);
 #[derive(Debug, Default)]
 struct PinListQuery {
     limit: Option<u32>,
-    offset: Option<u32>,
-    status: Option<String>,
+    max_bytes: Option<u32>,
+    after_digest_hex: Option<String>,
+    expected_finalized_height: Option<u64>,
+    expected_finalized_block_hash_hex: Option<String>,
+    status: Option<PinStatusKindV1>,
 }
 
 #[derive(Debug, Default)]
@@ -2734,17 +2738,158 @@ struct CapacityStateReadbackQuery {
 
 impl PinListQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        if let Some(raw) = raw {
+            if raw.contains('%') {
+                return Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "percent-encoded finalized SoraFS pin-list query spellings are not accepted",
+                )));
+            }
+            if !raw.is_empty() && raw.split('&').any(str::is_empty) {
+                return Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "empty finalized SoraFS pin-list query segments are not accepted",
+                )));
+            }
+        }
         let mut query = Self::default();
         walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            "offset" => parse_u32_field(&mut query.offset, "offset", value),
-            "status" => {
-                query.status = Some(value.to_owned());
+            "limit" => {
+                if query.limit.is_some() {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "duplicate limit",
+                    )));
+                }
+                let limit = parse_canonical_nonzero_u32_query(value, "limit")?;
+                if limit > PIN_MANIFEST_QUERY_MAX_ITEMS_V1 {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        format!("limit must be 1..={PIN_MANIFEST_QUERY_MAX_ITEMS_V1}"),
+                    )));
+                }
+                query.limit = Some(limit);
                 Ok(())
             }
-            _ => Ok(()),
+            "max_bytes" => {
+                if query.max_bytes.is_some() {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "duplicate max_bytes",
+                    )));
+                }
+                let max_bytes = parse_canonical_nonzero_u32_query(value, "max_bytes")?;
+                if !(PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1..=PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1)
+                    .contains(&max_bytes)
+                {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "max_bytes must be {PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1}..={PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1}"
+                        ),
+                    )));
+                }
+                query.max_bytes = Some(max_bytes);
+                Ok(())
+            }
+            "after_digest_hex" => {
+                if query.after_digest_hex.is_some() {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "duplicate after_digest_hex",
+                    )));
+                }
+                let digest = parse_canonical_hex_fixed::<32>(value, "after_digest_hex").map_err(
+                    |error| ResponseError::from(json_error(StatusCode::BAD_REQUEST, error)),
+                )?;
+                if digest == [0; 32] {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "after_digest_hex must be non-zero",
+                    )));
+                }
+                query.after_digest_hex = Some(value.to_owned());
+                Ok(())
+            }
+            "expected_finalized_height" => {
+                if query.expected_finalized_height.is_some() {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "duplicate expected_finalized_height",
+                    )));
+                }
+                query.expected_finalized_height = Some(parse_canonical_nonzero_u64_query(
+                    value,
+                    "expected_finalized_height",
+                )?);
+                Ok(())
+            }
+            "expected_finalized_block_hash_hex" => {
+                if query.expected_finalized_block_hash_hex.is_some() {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "duplicate expected_finalized_block_hash_hex",
+                    )));
+                }
+                let block_hash =
+                    parse_canonical_hex_fixed::<32>(value, "expected_finalized_block_hash_hex")
+                        .map_err(|error| {
+                            ResponseError::from(json_error(StatusCode::BAD_REQUEST, error))
+                        })?;
+                if block_hash == [0; 32] {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "expected_finalized_block_hash_hex must be non-zero",
+                    )));
+                }
+                query.expected_finalized_block_hash_hex = Some(value.to_owned());
+                Ok(())
+            }
+            "status" => {
+                if query.status.is_some() {
+                    return Err(ResponseError::from(json_error(
+                        StatusCode::BAD_REQUEST,
+                        "duplicate status",
+                    )));
+                }
+                query.status = Some(match value {
+                    "pending" => PinStatusKindV1::Pending,
+                    "approved" => PinStatusKindV1::Approved,
+                    "retired" => PinStatusKindV1::Retired,
+                    _ => {
+                        return Err(ResponseError::from(json_error(
+                            StatusCode::BAD_REQUEST,
+                            "status must be pending, approved, or retired",
+                        )));
+                    }
+                });
+                Ok(())
+            }
+            _ => Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("unknown finalized SoraFS pin-list query parameter `{key}`"),
+            ))),
         })?;
+        query
+            .expected_finalized_cursor()
+            .map_err(ResponseError::from)?;
         Ok(query)
+    }
+
+    fn expected_finalized_cursor(&self) -> Result<Option<PinManifestFinalizedCursorV1>, Response> {
+        PinManifestReadbackQuery {
+            expected_finalized_height: self.expected_finalized_height,
+            expected_finalized_block_hash_hex: self.expected_finalized_block_hash_hex.clone(),
+        }
+        .expected_finalized_cursor()
+    }
+
+    fn after_digest(&self) -> Option<ManifestDigest> {
+        self.after_digest_hex.as_deref().map(|value| {
+            let digest = parse_canonical_hex_fixed::<32>(value, "after_digest_hex")
+                .expect("validated pin-list cursor remains canonical");
+            ManifestDigest::new(digest)
+        })
     }
 }
 
@@ -3881,6 +4026,46 @@ fn parse_u32_field(target: &mut Option<u32>, name: &str, raw: &str) -> ApiResult
     )
 }
 
+fn parse_canonical_nonzero_u32_query(raw: &str, name: &str) -> ApiResult<u32> {
+    if !raw
+        .as_bytes()
+        .first()
+        .is_some_and(|first| matches!(*first, b'1'..=b'9'))
+        || !raw.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{name} must be a canonical non-zero unsigned integer"),
+        )));
+    }
+    raw.parse::<u32>().map_err(|_| {
+        ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{name} exceeds the supported range"),
+        ))
+    })
+}
+
+fn parse_canonical_nonzero_u64_query(raw: &str, name: &str) -> ApiResult<u64> {
+    if !raw
+        .as_bytes()
+        .first()
+        .is_some_and(|first| matches!(*first, b'1'..=b'9'))
+        || !raw.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{name} must be a canonical non-zero unsigned integer"),
+        )));
+    }
+    raw.parse::<u64>().map_err(|_| {
+        ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{name} exceeds the supported range"),
+        ))
+    })
+}
+
 fn ensure_percent_sequences(segment: &str, context: &str) -> Result<(), ResponseError> {
     let bytes = segment.as_bytes();
     let mut index = 0;
@@ -3935,13 +4120,6 @@ fn walk_query_params(
         }
     }
     Ok(())
-}
-
-#[derive(Copy, Clone)]
-enum PinStatusFilter {
-    Pending,
-    Approved,
-    Retired,
 }
 
 #[derive(Copy, Clone)]
@@ -11255,8 +11433,15 @@ fn require_reputation_canonical_auth(
             "SoraFS reputation routes accept GET only",
         ));
     }
-    match crate::app_auth::verify_canonical_request(&state.state, headers, method, uri, body, None)
-    {
+    match crate::app_auth::verify_canonical_network_request(
+        &state.state,
+        state.state.network_id_ref(),
+        headers,
+        method,
+        uri,
+        body,
+        None,
+    ) {
         Ok(Some(_)) => Ok(()),
         Ok(None) | Err(_) => Err(reputation_authentication_required_response()),
     }
@@ -12054,7 +12239,9 @@ fn moderation_dead_letter_resolution_fixture(
 ) -> ModerationDeadLetterResolutionV1 {
     ModerationDeadLetterResolutionV1 {
         version: 1,
-        chain_id: "moderation-recovery-test-chain".to_owned(),
+        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"moderation-recovery-test-genesis"),
+        )),
         checkpoint_namespace_digest: [0x11; 32],
         checkpoint_generation: 7,
         checkpoint_revision: [0x22; 32],
@@ -12524,7 +12711,7 @@ fn validate_moderation_signed_transaction(
     transaction: &SignedTransaction,
     route: ModerationCommandRouteV1,
 ) -> Result<(), Response> {
-    if transaction.chain() != state.chain_id.as_ref() {
+    if transaction.network_id() != Some(state.state.network_id_ref()) {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
             "SoraFS moderation transaction chain does not match this peer",
@@ -13936,7 +14123,9 @@ async fn submit_repair_signed_transaction(
     if !repair_api_enabled(&state) {
         return feature_disabled("sorafs repair API is not enabled on this node");
     }
-    if let Err(response) = validate_repair_signed_transaction(&transaction, route) {
+    if let Err(response) =
+        validate_repair_signed_transaction(state.state.network_id_ref(), &transaction, route)
+    {
         return response;
     }
     match crate::submit_signed_transaction_for_ingress_strict_durable(
@@ -13953,9 +14142,22 @@ async fn submit_repair_signed_transaction(
 }
 
 fn validate_repair_signed_transaction(
+    expected_network: &NetworkId,
     transaction: &SignedTransaction,
     route: RepairCommandRouteV1,
 ) -> Result<(), Response> {
+    if transaction.network_id() != Some(expected_network) {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS repair transaction network does not match this peer",
+        ));
+    }
+    transaction.verify_signature().map_err(|_| {
+        json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS repair transaction signature or authority binding is invalid",
+        )
+    })?;
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
@@ -14071,6 +14273,18 @@ fn validate_orderbook_signed_transaction(
     transaction: &SignedTransaction,
     route: OrderbookCommandRouteV1,
 ) -> Result<(), Response> {
+    if transaction.network_id() != Some(state.state.network_id_ref()) {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS orderbook transaction network does not match this peer",
+        ));
+    }
+    transaction.verify_signature().map_err(|_| {
+        json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS orderbook transaction signature or authority binding is invalid",
+        )
+    })?;
     let canonical_transaction = norito::to_bytes(transaction).map_err(|_| {
         json_error(
             StatusCode::BAD_REQUEST,
@@ -14329,8 +14543,9 @@ fn require_moderation_request_auth(
     body: &[u8],
     expected_account: Option<&AccountId>,
 ) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
-    match crate::app_auth::verify_canonical_request(
+    match crate::app_auth::verify_canonical_network_request(
         &state.state,
+        state.state.network_id_ref(),
         headers,
         method,
         uri,
@@ -14450,8 +14665,15 @@ fn require_appeal_finance_request_auth(
     uri: &Uri,
     body: &[u8],
 ) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
-    match crate::app_auth::verify_canonical_request(&state.state, headers, method, uri, body, None)
-    {
+    match crate::app_auth::verify_canonical_network_request(
+        &state.state,
+        state.state.network_id_ref(),
+        headers,
+        method,
+        uri,
+        body,
+        None,
+    ) {
         Ok(Some(verified)) => Ok(verified),
         Ok(None) => Err(json_error(
             StatusCode::UNAUTHORIZED,
@@ -14477,8 +14699,15 @@ fn require_transparency_source_request_auth(
     uri: &Uri,
     body: &[u8],
 ) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
-    match crate::app_auth::verify_canonical_request(&state.state, headers, method, uri, body, None)
-    {
+    match crate::app_auth::verify_canonical_network_request(
+        &state.state,
+        state.state.network_id_ref(),
+        headers,
+        method,
+        uri,
+        body,
+        None,
+    ) {
         Ok(Some(verified)) => Ok(verified),
         Ok(None) => Err(json_error(
             StatusCode::UNAUTHORIZED,
@@ -15378,6 +15607,7 @@ async fn submit_appeal_finance_deposit_settlement_step(
         )
     })?;
     let context = AppealFinanceTransactionContextV1 {
+        network_id: *state.state.network_id_ref(),
         chain_id: (*state.chain_id).clone(),
         finalized_cursor,
         expected_record: Some(record.clone()),
@@ -15814,10 +16044,19 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                 continue;
             }
         };
+        if request.network_id != *state.state.network_id_ref()
+            || request.chain_id != *state.chain_id
+        {
+            scan.deferred = scan.deferred.saturating_add(1);
+            warn!(
+                "durable SoraFS appeal-finance delivery belongs to another network or business chain"
+            );
+            continue;
+        }
         let signed_transaction = delivery
             .signed_transaction_bytes
             .as_deref()
-            .and_then(decode_appeal_finance_signed_transaction);
+            .and_then(|bytes| decode_appeal_finance_signed_transaction(bytes, &request.network_id));
         let transaction_hash = signed_transaction.as_ref().map(SignedTransaction::hash);
         let Some((finalized_cursor, record, transaction_outcome)) =
             observe_appeal_finance_finalized_state(
@@ -16131,6 +16370,7 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                     submitter,
                     delivery.operation_id,
                     &bytes,
+                    &request.network_id,
                     finalized_cursor,
                 )
                 .await
@@ -16183,6 +16423,7 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                     submitter,
                     delivery.operation_id,
                     bytes,
+                    &request.network_id,
                     finalized_cursor,
                 )
                 .await
@@ -16451,11 +16692,14 @@ async fn sign_sorafs_appeal_finance_delivery(
     signer: &crate::SoraFsAppealFinanceQualifiedSignerV1,
     request: &sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceTransactionSigningRequestV1,
 ) -> Option<Vec<u8>> {
-    if AccountId::new(signer.public_key().clone()) != request.authority {
+    if AccountId::new(signer.public_key().clone()) != request.authority
+        || request.network_id != *state.state.network_id_ref()
+        || request.chain_id != *state.chain_id
+    {
         return None;
     }
     let mut builder = TransactionBuilder::new(
-        request.chain_id.clone(),
+        request.network_id,
         request.authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -16478,7 +16722,10 @@ async fn sign_sorafs_appeal_finance_delivery(
     norito::to_bytes(&transaction).ok()
 }
 
-fn decode_appeal_finance_signed_transaction(bytes: &[u8]) -> Option<SignedTransaction> {
+fn decode_appeal_finance_signed_transaction(
+    bytes: &[u8],
+    expected_network_id: &NetworkId,
+) -> Option<SignedTransaction> {
     let max_bytes = sorafs_node::appeal_finance_transaction_forwarder::
         APPEAL_FINANCE_TRANSACTION_MAX_CANONICAL_BYTES_V1;
     if bytes.is_empty() || bytes.len() > max_bytes {
@@ -16494,7 +16741,8 @@ fn decode_appeal_finance_signed_transaction(bytes: &[u8]) -> Option<SignedTransa
     );
     let transaction =
         norito::decode_from_bytes_with_limits::<SignedTransaction>(bytes, limits).ok()?;
-    (transaction.verify_signature().is_ok()
+    (transaction.network_id() == Some(expected_network_id)
+        && transaction.verify_signature().is_ok()
         && norito::to_bytes(&transaction).ok().as_deref() == Some(bytes))
     .then_some(transaction)
 }
@@ -16504,13 +16752,18 @@ async fn submit_sorafs_appeal_finance_delivery(
     submitter: &crate::SoraFsAppealSettlementSubmitter,
     operation_id: [u8; 32],
     transaction_bytes: &[u8],
+    expected_network_id: &NetworkId,
     finalized_cursor: sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceFinalizedCursorV1,
 ) -> AppealFinanceDeliverySubmitOutcomeV1 {
-    let Some(transaction) = decode_appeal_finance_signed_transaction(transaction_bytes) else {
+    if expected_network_id != state.state.network_id_ref() {
+        return AppealFinanceDeliverySubmitOutcomeV1::Deferred;
+    }
+    let Some(transaction) =
+        decode_appeal_finance_signed_transaction(transaction_bytes, expected_network_id)
+    else {
         return AppealFinanceDeliverySubmitOutcomeV1::Deferred;
     };
     let accepted = match crate::routing::accept_transaction_for_ingress(
-        state.chain_id.clone(),
         state.state.clone(),
         transaction.clone(),
         &state.telemetry,
@@ -16899,7 +17152,7 @@ fn publish_finalized_appeal_finance_receipt(
     let Some(transaction) = delivery
         .signed_transaction_bytes
         .as_deref()
-        .and_then(decode_appeal_finance_signed_transaction)
+        .and_then(|bytes| decode_appeal_finance_signed_transaction(bytes, &request.network_id))
     else {
         return false;
     };
@@ -16987,6 +17240,7 @@ fn enqueue_appeal_finance_followup(
                 record.remaining_amount.clone(),
             )),
             &AppealFinanceTransactionContextV1 {
+                network_id: request.network_id,
                 chain_id: request.chain_id.clone(),
                 finalized_cursor,
                 expected_record: Some(record.clone()),
@@ -17336,7 +17590,7 @@ async fn sign_sorafs_proof_outcome_delivery(
 ) -> Option<SignedTransaction> {
     let expected_authority = signer.authority();
     let mut builder = TransactionBuilder::new(
-        (*state.chain_id).clone(),
+        *state.state.network_id_ref(),
         expected_authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -17373,7 +17627,7 @@ mod native_signer_returned_transaction_tests {
 
     fn fixture_payload(authority: AccountId) -> TransactionPayload {
         TransactionBuilder::new(
-            ChainId::from("native-signer-return-validation"),
+            crate::signed_query_test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -17432,7 +17686,6 @@ async fn submit_sorafs_proof_outcome_delivery(
     transaction: SignedTransaction,
 ) -> bool {
     let accepted = match crate::routing::accept_transaction_for_ingress(
-        state.chain_id.clone(),
         state.state.clone(),
         transaction.clone(),
         &state.telemetry,
@@ -18171,6 +18424,7 @@ mod repair_transaction_forwarder_tests {
         let instruction = SubmitSorafsRepairTask::new([0x66; 32], report_payload.clone());
         let request = RepairTransactionSigningRequestV1 {
             operation_id: [0x67; 32],
+            network_id: crate::signed_query_test_network_id(),
             chain_id: ChainId::from("repair-forwarder-test"),
             authority: authority.clone(),
             operation: RepairOperationV1::Submit(instruction),
@@ -18210,6 +18464,7 @@ mod repair_transaction_forwarder_tests {
         );
         let request = RepairTransactionSigningRequestV1 {
             operation_id: [0x6B; 32],
+            network_id: crate::signed_query_test_network_id(),
             chain_id: ChainId::from("repair-forwarder-test"),
             authority: authority.clone(),
             operation: RepairOperationV1::Action(instruction.clone()),
@@ -18262,6 +18517,7 @@ mod repair_transaction_forwarder_tests {
         );
         let request = RepairTransactionSigningRequestV1 {
             operation_id: [0x70; 32],
+            network_id: crate::signed_query_test_network_id(),
             chain_id: ChainId::from("repair-forwarder-test"),
             authority: authority.clone(),
             operation: RepairOperationV1::Appeal(instruction.clone()),
@@ -18678,6 +18934,7 @@ async fn enqueue_sorafs_finalized_native_repair_work(
         None
     };
     let transaction_context = RepairTransactionContextV1 {
+        network_id: *state.state.network_id_ref(),
         chain_id: (*state.chain_id).clone(),
         finalized_cursor: page.finalized_cursor,
     };
@@ -18907,7 +19164,9 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
     for delivery in pending {
         cursor.after_sequence = Some(delivery.sequence);
         scan.scanned = scan.scanned.saturating_add(1);
-        if delivery.chain_id != *state.chain_id {
+        if delivery.network_id != *state.state.network_id_ref()
+            || delivery.chain_id != *state.chain_id
+        {
             if let Some(finalized_cursor) = current_sorafs_repair_finalized_cursor(state) {
                 match state
                     .sorafs_node
@@ -18921,7 +19180,7 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
             } else {
                 scan.deferred = scan.deferred.saturating_add(1);
             }
-            warn!("native SoraFS repair transaction belongs to another chain");
+            warn!("native SoraFS repair transaction belongs to another network or business chain");
             continue;
         }
         let request = match state
@@ -18930,6 +19189,7 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
         {
             Ok(request)
                 if request.operation_id == delivery.operation_id
+                    && request.network_id == delivery.network_id
                     && request.chain_id == delivery.chain_id
                     && request.authority == delivery.authority =>
             {
@@ -18951,7 +19211,7 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
                 continue;
             };
             let Some(transaction) =
-                decode_sorafs_repair_signed_transaction(transaction_bytes, &delivery.chain_id)
+                decode_sorafs_repair_signed_transaction(transaction_bytes, &request.network_id)
             else {
                 scan.deferred = scan.deferred.saturating_add(1);
                 warn!("durable native SoraFS repair transaction bytes failed validation");
@@ -19112,9 +19372,10 @@ pub(crate) async fn run_sorafs_repair_transaction_forwarder_scan(
                     scan.deferred = scan.deferred.saturating_add(1);
                     continue;
                 };
-                let Some(transaction) =
-                    decode_sorafs_repair_signed_transaction(&transaction_bytes, &delivery.chain_id)
-                else {
+                let Some(transaction) = decode_sorafs_repair_signed_transaction(
+                    &transaction_bytes,
+                    &request.network_id,
+                ) else {
                     scan.deferred = scan.deferred.saturating_add(1);
                     warn!("durable native SoraFS repair transaction bytes failed validation");
                     continue;
@@ -19231,11 +19492,14 @@ async fn sign_sorafs_repair_transaction(
     signer: Arc<dyn crate::SoraFsRepairTransactionSigner>,
     request: &sorafs_node::repair_transaction_forwarder::RepairTransactionSigningRequestV1,
 ) -> Option<(SignedTransaction, Vec<u8>)> {
-    if signer.authority() != request.authority || request.chain_id != *state.chain_id {
+    if signer.authority() != request.authority
+        || request.network_id != *state.state.network_id_ref()
+        || request.chain_id != *state.chain_id
+    {
         return None;
     }
     let mut builder = TransactionBuilder::new(
-        request.chain_id.clone(),
+        request.network_id,
         request.authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -19261,7 +19525,7 @@ async fn sign_sorafs_repair_transaction(
 
 fn decode_sorafs_repair_signed_transaction(
     bytes: &[u8],
-    expected_chain_id: &ChainId,
+    expected_network_id: &NetworkId,
 ) -> Option<SignedTransaction> {
     let max_bytes =
         sorafs_node::repair_transaction_forwarder::REPAIR_TRANSACTION_MAX_CANONICAL_BYTES_V1;
@@ -19282,7 +19546,7 @@ fn decode_sorafs_repair_signed_transaction(
         norito::decode_from_bytes_with_limits::<SignedTransaction>(bytes, limits).ok()?;
     if norito::to_bytes(&transaction).ok()?.as_slice() != bytes
         || transaction.verify_signature().is_err()
-        || transaction.chain() != expected_chain_id
+        || transaction.network_id() != Some(expected_network_id)
     {
         return None;
     }
@@ -19295,11 +19559,10 @@ async fn submit_sorafs_repair_transaction(
     transaction_bytes: Vec<u8>,
     transaction: SignedTransaction,
 ) -> bool {
-    if transaction.chain() != state.chain_id.as_ref() {
+    if transaction.network_id() != Some(state.state.network_id_ref()) {
         return false;
     }
     let accepted = match crate::routing::accept_transaction_for_ingress(
-        state.chain_id.clone(),
         state.state.clone(),
         transaction.clone(),
         &state.telemetry,
@@ -19785,6 +20048,7 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_deposit(
     let signing_request =
         sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceTransactionSigningRequestV1 {
             operation_id: [0; 32],
+            network_id: *state.state.network_id_ref(),
             chain_id: (*state.chain_id).clone(),
             authority: deposit.expected.payer_account.clone(),
             operation: operation.clone(),
@@ -19855,6 +20119,7 @@ pub(crate) async fn handle_post_sorafs_appeal_finance_deposit(
     }
     let context =
         sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceTransactionContextV1 {
+            network_id: *state.state.network_id_ref(),
             chain_id: (*state.chain_id).clone(),
             finalized_cursor,
             expected_record: None,
@@ -25852,10 +26117,6 @@ pub(crate) async fn handle_get_sorafs_pin_registry(
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
     accept: Option<ExtractAccept>,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled("sorafs pin registry API is not enabled on this node");
-    }
-
     let query = match PinListQuery::parse(raw_query.as_deref()) {
         Ok(query) => query,
         Err(err) => return err.into_response(),
@@ -25866,114 +26127,35 @@ pub(crate) async fn handle_get_sorafs_pin_registry(
         Err(err) => return err.into_response(),
     };
 
-    let (attestation, snapshot) = match pin_snapshot_with_attestation(&state) {
-        Ok(snapshot) => snapshot,
-        Err(err) => return err.into_response(),
+    let expected_finalized_cursor = match query.expected_finalized_cursor() {
+        Ok(cursor) => cursor,
+        Err(response) => return response,
+    };
+    let page = match FindSorafsPinManifests::new(
+        expected_finalized_cursor,
+        query.status,
+        query.after_digest(),
+        query.limit.unwrap_or(DEFAULT_LIST_LIMIT as u32),
+        query
+            .max_bytes
+            .unwrap_or(PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1),
+    )
+    .execute(&state.state.query_view())
+    {
+        Ok(page) => page,
+        Err(error) => return pin_manifest_query_error_response(error),
     };
 
-    let status_filter = match query.status.as_deref() {
-        Some(value) => match parse_pin_status_filter(value) {
-            Some(filter) => Some(filter),
-            None => {
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    format!(
-                        "invalid status filter `{value}`; expected pending, approved, or retired"
-                    ),
-                );
-            }
-        },
-        None => None,
-    };
-
-    let mut manifests: Vec<&RegistryManifest> = snapshot.manifests.iter().collect();
-    if let Some(filter) = status_filter {
-        manifests.retain(|manifest| filter.matches(manifest.status_label()));
-    }
-    let policy = &state.sorafs_alias_cache_policy;
-    let enforcement = state.sorafs_alias_enforcement;
-    let now_secs = crate::sorafs::unix_now_secs();
-
-    let total = manifests.len();
-    let limit = normalize_limit(query.limit);
-    let offset = normalize_offset(query.offset, total);
-    let end = offset.saturating_add(limit).min(total);
-
-    let page = &manifests[offset..end];
-    let mut manifests_json = Vec::with_capacity(page.len());
-    for manifest in page {
-        let mut value = match manifest.to_json() {
-            Ok(value) => value,
-            Err(err) => {
-                error!(?err, "failed to serialize pin registry manifests");
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "failed to serialize pin registry manifests",
-                );
-            }
-        };
-        if let Value::Object(mut map) = value {
-            let lineage = snapshot.lineage_for(manifest.digest_hex());
-            map.insert("lineage".into(), lineage_to_json(&lineage));
-            if let Some(alias) = snapshot.alias_by_manifest_digest(manifest.digest_hex()) {
-                let governance = manifest.governance_summary();
-                match prepare_alias_presentation(
-                    alias,
-                    &lineage,
-                    &governance,
-                    policy,
-                    enforcement,
-                    &state.telemetry,
-                    now_secs,
-                ) {
-                    Ok(presentation) => {
-                        map.insert(
-                            "cache_evaluation".into(),
-                            build_cache_evaluation_json(
-                                &presentation.evaluation,
-                                &presentation.decision,
-                                policy,
-                            ),
-                        );
-                    }
-                    Err(err) => return err.into_response(),
-                }
-            }
-            value = Value::Object(map);
-        }
-        manifests_json.push(value);
-    }
-
-    let response = json_object(vec![
-        json_entry("attestation", attestation),
-        json_entry("total_count", total as u64),
-        json_entry("returned_count", manifests_json.len() as u64),
-        json_entry("offset", offset as u64),
-        json_entry("limit", limit as u64),
-        json_entry("manifests", Value::Array(manifests_json)),
-    ]);
-    match format {
-        crate::utils::ResponseFormat::Json => {
-            crate::utils::respond_value_with_format(response, format)
-        }
+    let mut response = match format {
+        crate::utils::ResponseFormat::Json => (StatusCode::OK, JsonBody(page)).into_response(),
         crate::utils::ResponseFormat::Norito => {
-            let json_text = match json::to_string(&response) {
-                Ok(value) => value,
-                Err(err) => {
-                    error!(?err, "failed to serialize pin registry response");
-                    return json_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "failed to serialize pin registry response",
-                    );
-                }
-            };
-            let bytes = match norito::to_bytes(&json_text) {
+            let bytes = match norito::to_bytes(&page) {
                 Ok(bytes) => bytes,
                 Err(err) => {
-                    error!(?err, "failed to encode pin registry Norito response");
+                    error!(?err, "failed to encode finalized pin-manifest page");
                     return json_error(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        "failed to encode pin registry response",
+                        "failed to encode finalized pin-manifest page",
                     );
                 }
             };
@@ -25983,7 +26165,12 @@ pub(crate) async fn handle_get_sorafs_pin_registry(
                 .body(Body::from(bytes))
                 .expect("build pin registry Norito response")
         }
-    }
+    };
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -27579,389 +27766,7 @@ async fn resolve_site_manifest_by_cid(
 
 #[cfg(test)]
 mod remote_hydration_security_tests {
-    use std::convert::Infallible;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use axum::{Router, routing::get};
-    use tokio::net::TcpListener;
-
-    use super::*;
-
-    #[test]
-    fn provider_base_url_requires_clean_https_origin() {
-        assert_eq!(
-            normalize_provider_torii_base_url("provider.example:8443")
-                .expect("bare HTTPS origin")
-                .as_str(),
-            "https://provider.example:8443/"
-        );
-        assert!(normalize_provider_torii_base_url("https://provider.example/").is_ok());
-
-        for unsafe_url in [
-            "http://provider.example/",
-            "https://user@provider.example/",
-            "https://user:password@provider.example/",
-            "https://provider.example/?token=secret",
-            "https://provider.example/#fragment",
-            "https://provider.example/api",
-            "https://provider.example/a/..",
-            "https://provider.example/%2e%2e/",
-            "https://provider.example\\@127.0.0.1/",
-            "https://provider.example@127.0.0.1/",
-            "https://[fe80::1%25en0]/",
-            "https://provider.example:0/",
-        ] {
-            assert!(
-                normalize_provider_torii_base_url(unsafe_url).is_err(),
-                "unsafe endpoint should be rejected: {unsafe_url}"
-            );
-        }
-    }
-
-    #[test]
-    fn public_ip_policy_rejects_special_ipv4_and_ipv6_ranges() {
-        for ip in [
-            "0.0.0.0",
-            "10.0.0.1",
-            "100.64.0.1",
-            "127.0.0.1",
-            "169.254.169.254",
-            "172.16.0.1",
-            "192.0.0.1",
-            "192.0.2.1",
-            "192.168.1.1",
-            "198.18.0.1",
-            "198.51.100.1",
-            "203.0.113.1",
-            "224.0.0.1",
-            "255.255.255.255",
-            "::",
-            "::1",
-            "::ffff:127.0.0.1",
-            "::ffff:10.0.0.1",
-            "::ffff:169.254.169.254",
-            "::8.8.8.8",
-            "::192.168.1.1",
-            "fc00::1",
-            "fe80::1",
-            "ff02::1",
-            "2001:db8::1",
-            "2001:2::1",
-            "2002::1",
-            "3fff::1",
-        ] {
-            let parsed = ip.parse::<IpAddr>().expect("test IP literal");
-            assert!(!ip_is_public(parsed), "special address allowed: {ip}");
-        }
-
-        for ip in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
-            let parsed = ip.parse::<IpAddr>().expect("test public IP literal");
-            assert!(ip_is_public(parsed), "public address rejected: {ip}");
-        }
-    }
-
-    #[tokio::test]
-    async fn endpoint_resolution_rejects_private_literals_before_connect() {
-        for endpoint in [
-            "https://127.0.0.1/",
-            "https://127.1/",
-            "https://2130706433/",
-            "https://0177.0.0.1/",
-            "https://0x7f000001/",
-            "https://[::ffff:127.0.0.1]/",
-            "https://[fe80::1]/",
-        ] {
-            let private = normalize_provider_torii_base_url(endpoint)
-                .expect("syntactically valid private endpoint");
-            assert!(
-                resolve_public_endpoint(&private).await.is_err(),
-                "private endpoint should be rejected: {endpoint}"
-            );
-        }
-
-        let public =
-            normalize_provider_torii_base_url("https://8.8.8.8:444/").expect("public endpoint");
-        assert_eq!(
-            resolve_public_endpoint(&public)
-                .await
-                .expect("resolve public literal"),
-            vec!["8.8.8.8:444".parse().expect("socket literal")]
-        );
-        let public_v6 = normalize_provider_torii_base_url("https://[2606:4700:4700::1111]:444/")
-            .expect("public IPv6 endpoint");
-        assert_eq!(
-            resolve_public_endpoint(&public_v6)
-                .await
-                .expect("resolve public IPv6 literal"),
-            vec![
-                "[2606:4700:4700::1111]:444"
-                    .parse()
-                    .expect("IPv6 socket literal")
-            ]
-        );
-    }
-
-    #[test]
-    fn pinned_client_revalidates_addresses_to_prevent_rebinding() {
-        let mut source = RemoteCidSource {
-            manifest_digest_hex: hex::encode([0x11; 32]),
-            provider_id_hex: hex::encode([0x22; 32]),
-            torii_base_url: normalize_provider_torii_base_url("https://provider.example/")
-                .expect("provider URL"),
-            pinned_addrs: vec!["8.8.8.8:443".parse().expect("public address")],
-        };
-        assert!(build_pinned_remote_client(&source).is_ok());
-
-        source.pinned_addrs = vec!["127.0.0.1:443".parse().expect("loopback address")];
-        assert!(build_pinned_remote_client(&source).is_err());
-    }
-
-    #[test]
-    fn remote_file_layout_rejects_traversal_gaps_and_overflow() {
-        let file = |path: &[&str], offset, size| StorageStoredFileDto {
-            path: path
-                .iter()
-                .map(|component| (*component).to_owned())
-                .collect(),
-            offset,
-            size,
-            first_chunk: 0,
-            chunk_count: 1,
-        };
-        assert!(
-            storage_file_entries_from_manifest_response(&[file(&["..", "secret"], 0, 1)], 1)
-                .is_err()
-        );
-        assert!(
-            storage_file_entries_from_manifest_response(&[file(&["index.html"], 1, 1)], 1).is_err()
-        );
-        assert!(
-            storage_file_entries_from_manifest_response(
-                &[
-                    file(&["first"], 0, u64::MAX),
-                    file(&["second"], u64::MAX, 1),
-                ],
-                u64::MAX,
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn site_ranges_are_bounded_and_single_only() {
-        let empty = HeaderMap::new();
-        assert_eq!(
-            parse_site_response_range(&empty, 7).expect("full range"),
-            SiteResponseRange {
-                offset: 0,
-                length: 7,
-                partial: false,
-            }
-        );
-        assert_eq!(
-            parse_site_response_range(&empty, MAX_SITE_RESPONSE_BYTES + 1)
-                .expect_err("oversized full response")
-                .status(),
-            StatusCode::PAYLOAD_TOO_LARGE
-        );
-
-        let mut headers = HeaderMap::new();
-        headers.insert(header::RANGE, HeaderValue::from_static("bytes=2-5"));
-        assert_eq!(
-            parse_site_response_range(&headers, 10).expect("bounded range"),
-            SiteResponseRange {
-                offset: 2,
-                length: 4,
-                partial: true,
-            }
-        );
-        headers.insert(header::RANGE, HeaderValue::from_static("bytes=-3"));
-        assert_eq!(
-            parse_site_response_range(&headers, 10).expect("suffix range"),
-            SiteResponseRange {
-                offset: 7,
-                length: 3,
-                partial: true,
-            }
-        );
-        headers.insert(header::RANGE, HeaderValue::from_static("bytes=0-1,4-5"));
-        assert_eq!(
-            parse_site_response_range(&headers, 10)
-                .expect_err("multiple ranges")
-                .status(),
-            StatusCode::BAD_REQUEST
-        );
-    }
-
-    #[test]
-    fn active_content_types_require_isolated_origin() {
-        for media_type in [
-            "text/html; charset=utf-8",
-            "text/css; charset=utf-8",
-            "text/javascript; charset=utf-8",
-            "image/svg+xml",
-            "application/xml; charset=utf-8",
-            "application/pdf",
-            "application/wasm",
-        ] {
-            assert!(content_type_is_active(media_type), "missed {media_type}");
-        }
-        assert!(!content_type_is_active("image/png"));
-        assert!(!content_type_is_active("application/octet-stream"));
-    }
-
-    #[tokio::test]
-    async fn same_cid_hydrations_share_one_exclusion_lock() {
-        let cid = b"single-flight-security-test-cid";
-        let first = cid_hydration_flight(cid).expect("first hydration flight");
-        let second = cid_hydration_flight(cid).expect("second hydration flight");
-        assert!(Arc::ptr_eq(&first, &second));
-
-        let active = Arc::new(AtomicUsize::new(0));
-        let maximum = Arc::new(AtomicUsize::new(0));
-        let mut tasks = Vec::new();
-        for _ in 0..24 {
-            let active = Arc::clone(&active);
-            let maximum = Arc::clone(&maximum);
-            let lock = Arc::clone(&first);
-            tasks.push(tokio::spawn(async move {
-                let _guard = lock.gate.lock().await;
-                let current = active.fetch_add(1, Ordering::SeqCst) + 1;
-                maximum.fetch_max(current, Ordering::SeqCst);
-                tokio::task::yield_now().await;
-                active.fetch_sub(1, Ordering::SeqCst);
-            }));
-        }
-        for task in tasks {
-            task.await.expect("hydration task");
-        }
-        assert_eq!(maximum.load(Ordering::SeqCst), 1);
-
-        first.record_failure();
-        assert!(second.failure_backoff_active());
-        first.clear_failure();
-        assert!(!second.failure_backoff_active());
-    }
-
-    #[tokio::test]
-    async fn remote_response_reader_rejects_redirects_and_declared_or_streamed_oversize_bodies() {
-        let router = Router::new()
-            .route(
-                "/ok",
-                get(|| async {
-                    let mut response = Response::new(Body::from("{}"));
-                    response.headers_mut().insert(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static("application/json"),
-                    );
-                    response
-                }),
-            )
-            .route(
-                "/redirect",
-                get(|| async {
-                    let mut response = Response::new(Body::from("{}"));
-                    *response.status_mut() = StatusCode::FOUND;
-                    response
-                        .headers_mut()
-                        .insert(header::LOCATION, HeaderValue::from_static("/target"));
-                    response.headers_mut().insert(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static("application/json"),
-                    );
-                    response
-                }),
-            )
-            .route(
-                "/declared-oversize",
-                get(|| async {
-                    let mut response = Response::new(Body::from("12345"));
-                    response.headers_mut().insert(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static("application/json"),
-                    );
-                    response
-                        .headers_mut()
-                        .insert(header::CONTENT_LENGTH, HeaderValue::from_static("5"));
-                    response
-                }),
-            )
-            .route(
-                "/streamed-oversize",
-                get(|| async {
-                    let chunks = futures::stream::iter([
-                        Ok::<_, Infallible>(Bytes::from_static(b"123")),
-                        Ok::<_, Infallible>(Bytes::from_static(b"456")),
-                    ]);
-                    let mut response = Response::new(Body::from_stream(chunks));
-                    response.headers_mut().insert(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static("application/json"),
-                    );
-                    response
-                }),
-            )
-            .route(
-                "/oversize-headers",
-                get(|| async {
-                    let mut response = Response::new(Body::from("{}"));
-                    response.headers_mut().insert(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static("application/json"),
-                    );
-                    response.headers_mut().insert(
-                        HeaderName::from_static("x-adversarial-padding"),
-                        HeaderValue::from_str(&"a".repeat(MAX_REMOTE_RESPONSE_HEADER_BYTES + 1))
-                            .expect("oversized test header"),
-                    );
-                    response
-                }),
-            );
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind adversarial response server");
-        let addr = listener.local_addr().expect("response server address");
-        let server = tokio::spawn(async move {
-            axum::serve(listener, router)
-                .await
-                .expect("serve adversarial responses");
-        });
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("test client");
-
-        for path in [
-            "redirect",
-            "declared-oversize",
-            "streamed-oversize",
-            "oversize-headers",
-        ] {
-            let response = client
-                .get(format!("http://{addr}/{path}"))
-                .send()
-                .await
-                .expect("fetch adversarial response");
-            assert!(
-                bounded_remote_response_bytes(response, 4, "adversarial response")
-                    .await
-                    .is_err(),
-                "response should be rejected: {path}"
-            );
-        }
-        let response = client
-            .get(format!("http://{addr}/ok"))
-            .send()
-            .await
-            .expect("fetch bounded response");
-        let (status, body) = bounded_remote_response_bytes(response, 4, "bounded response")
-            .await
-            .expect("accept bounded response");
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body, b"{}");
-
-        server.abort();
-    }
+    include!("api/remote_hydration_security_tests.rs");
 }
 
 fn enforce_governed_site_compliance(
@@ -33055,6 +32860,57 @@ mod app_api_tests {
     }
 
     #[test]
+    fn pin_list_query_is_finalized_keyset_and_strictly_bounded() {
+        let block_hash = "11".repeat(32);
+        let after_digest = "22".repeat(32);
+        let raw = format!(
+            "expected_finalized_height=7&expected_finalized_block_hash_hex={block_hash}&limit=25&max_bytes=16384&after_digest_hex={after_digest}&status=approved"
+        );
+        let query = PinListQuery::parse(Some(&raw)).expect("canonical finalized pin page query");
+        assert_eq!(query.limit, Some(25));
+        assert_eq!(query.max_bytes, Some(16 * 1024));
+        assert_eq!(query.status, Some(PinStatusKindV1::Approved));
+        assert_eq!(query.after_digest(), Some(ManifestDigest::new([0x22; 32])));
+        assert_eq!(
+            query.expected_finalized_cursor().expect("build cursor"),
+            Some(PinManifestFinalizedCursorV1 {
+                height: 7,
+                block_hash: [0x11; 32],
+            })
+        );
+
+        for invalid in [
+            "offset=1".to_owned(),
+            "limit=0".to_owned(),
+            "limit=01".to_owned(),
+            format!("limit={}", PIN_MANIFEST_QUERY_MAX_ITEMS_V1 + 1),
+            "limit=1&limit=2".to_owned(),
+            format!("max_bytes={}", PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1 - 1),
+            format!("max_bytes={}", PIN_MANIFEST_QUERY_MAX_PAGE_BYTES_V1 + 1),
+            "status=Approved".to_owned(),
+            "status=approved&status=pending".to_owned(),
+            "sta%74us=approved".to_owned(),
+            "after_digest_hex=00".to_owned(),
+            format!("after_digest_hex={}", "00".repeat(32)),
+            format!("after_digest_hex={}", after_digest.to_ascii_uppercase()),
+            "expected_finalized_height=7".to_owned(),
+            format!("expected_finalized_block_hash_hex={block_hash}"),
+            format!("expected_finalized_height=07&expected_finalized_block_hash_hex={block_hash}"),
+            "&limit=1".to_owned(),
+            "limit=1&".to_owned(),
+            "limit=1&&max_bytes=1024".to_owned(),
+        ] {
+            let error = PinListQuery::parse(Some(&invalid))
+                .expect_err("legacy or noncanonical pin-list query must fail");
+            assert_eq!(
+                error.status(),
+                StatusCode::BAD_REQUEST,
+                "query unexpectedly accepted: {invalid}"
+            );
+        }
+    }
+
+    #[test]
     fn pin_manifest_readback_query_requires_one_complete_canonical_cursor() {
         let block_hash = "11".repeat(32);
         let query = PinManifestReadbackQuery::parse(Some(&format!(
@@ -33520,11 +33376,7 @@ fn pin_snapshot_with_attestation(
     };
 
     match collect_pin_registry(view.world()) {
-        Ok(snapshot) => {
-            let telemetry = state.telemetry_handle();
-            record_pin_registry_metrics(&telemetry, &snapshot);
-            Ok((attestation, snapshot))
-        }
+        Ok(snapshot) => Ok((attestation, snapshot)),
         Err(err) => {
             error!(?err, "failed to collect pin registry snapshot");
             Err(json_error(
@@ -33606,25 +33458,6 @@ fn limit_governance_readback_values(mut entries: Vec<Value>, limit: usize) -> (V
 fn normalize_offset(offset: Option<u32>, total: usize) -> usize {
     let requested = offset.unwrap_or(0);
     requested.min(total as u32) as usize
-}
-
-impl PinStatusFilter {
-    fn matches(self, status: &str) -> bool {
-        match self {
-            PinStatusFilter::Pending => status.eq_ignore_ascii_case("pending"),
-            PinStatusFilter::Approved => status.eq_ignore_ascii_case("approved"),
-            PinStatusFilter::Retired => status.eq_ignore_ascii_case("retired"),
-        }
-    }
-}
-
-fn parse_pin_status_filter(value: &str) -> Option<PinStatusFilter> {
-    match value.to_ascii_lowercase().as_str() {
-        "pending" => Some(PinStatusFilter::Pending),
-        "approved" => Some(PinStatusFilter::Approved),
-        "retired" => Some(PinStatusFilter::Retired),
-        _ => None,
-    }
 }
 
 impl ReplicationStatusFilter {
@@ -33802,6 +33635,10 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
             StatusCode::NOT_FOUND,
             format!("manifest {manifest_id} not found"),
         ),
+        StorageBackendError::ManifestRetirementInProgress { manifest_id } => json_error(
+            StatusCode::CONFLICT,
+            format!("manifest {manifest_id} retirement is already in progress"),
+        ),
         StorageBackendError::ChunkNotFound {
             manifest_id,
             digest_hex,
@@ -33958,6 +33795,15 @@ mod storage_backend_error_tests {
         });
         let response = storage_backend_error(err);
         assert_eq!(response.status(), super::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn concurrent_manifest_retirement_maps_to_conflict() {
+        let err = StorageBackendError::ManifestRetirementInProgress {
+            manifest_id: "deadbeef".to_owned(),
+        };
+        let response = storage_backend_error(err);
+        assert_eq!(response.status(), super::StatusCode::CONFLICT);
     }
 
     #[test]
@@ -34236,87 +34082,7 @@ pub(crate) fn chunk_profile_for_manifest(manifest: &ManifestV1) -> ApiResult<Chu
 
 #[cfg(test)]
 mod chunk_profile_tests {
-    use super::*;
-
-    use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
-
-    fn canonical_fixture_car_stats(
-        plan: &CarBuildPlan,
-        payload: &[u8],
-    ) -> sorafs_car::CarWriteStats {
-        sorafs_car::CarWriter::new(plan, payload)
-            .expect("canonical fixture CAR writer")
-            .write_to(std::io::sink())
-            .expect("derive canonical fixture CAR archive stats")
-    }
-
-    #[test]
-    fn chunk_profile_for_manifest_accepts_inline_profile() {
-        let payload = b"chunk-profile-fixture";
-        let content_length = payload.len() as u64;
-        let profile = sorafs_chunker::ChunkProfile {
-            min_size: 8,
-            target_size: 8,
-            max_size: 8,
-            break_mask: 1,
-        };
-        let plan =
-            CarBuildPlan::single_file_with_profile(payload, profile).expect("canonical chunk plan");
-        let car_stats = canonical_fixture_car_stats(&plan, payload);
-        let manifest = ManifestBuilder::new()
-            .root_cid(car_stats.root_cids[0].clone())
-            .dag_codec(DagCodecId(car_stats.dag_codec))
-            .chunking_from_profile(profile, BLAKE3_256_MULTIHASH_CODE)
-            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-            .por_root(
-                sorafs_car::compute_por_root(payload, &plan)
-                    .expect("derive canonical inline-profile PoR root"),
-            )
-            .content_length(content_length)
-            .car_digest(car_stats.car_archive_digest.into())
-            .car_size(car_stats.car_size)
-            .pin_policy(PinPolicy::default())
-            .build()
-            .expect("manifest");
-
-        let resolved = chunk_profile_for_manifest(&manifest).expect("inline profile accepted");
-
-        assert_eq!(resolved, profile);
-    }
-
-    #[test]
-    fn chunk_profile_for_manifest_rejects_unknown_profile_id() {
-        let payload = b"chunk-profile-fixture";
-        let content_length = payload.len() as u64;
-        let plan = CarBuildPlan::single_file(payload).expect("canonical chunk plan");
-        let car_stats = canonical_fixture_car_stats(&plan, payload);
-        let mut manifest = ManifestBuilder::new()
-            .root_cid(car_stats.root_cids[0].clone())
-            .dag_codec(DagCodecId(car_stats.dag_codec))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                BLAKE3_256_MULTIHASH_CODE,
-            )
-            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-            .por_root(
-                sorafs_car::compute_por_root(payload, &plan)
-                    .expect("derive canonical unknown-profile fixture PoR root"),
-            )
-            .content_length(content_length)
-            .car_digest(car_stats.car_archive_digest.into())
-            .car_size(car_stats.car_size)
-            .pin_policy(PinPolicy::default())
-            .build()
-            .expect("manifest");
-        manifest.chunking.profile_id = sorafs_manifest::ProfileId(u32::MAX);
-        manifest.chunking.min_size = 1024;
-        manifest.chunking.target_size = 512;
-        manifest.chunking.max_size = 2048;
-        manifest.chunking.break_mask = 1;
-
-        let err = chunk_profile_for_manifest(&manifest).expect_err("invalid profile should fail");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
-    }
+    include!("api/chunk_profile_tests.rs");
 }
 
 fn advert_to_json(
@@ -34860,7 +34626,8 @@ mod advert_tests {
             },
             pin_registry::{
                 ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasRecord, ManifestDigest,
-                PinFeePayment, PinManifestRecord, PinPolicy as RegistryPinPolicy, PinStatus,
+                PinFeePayment, PinManifestPageV1, PinManifestRecord,
+                PinPolicy as RegistryPinPolicy, PinResourceUsage, PinStatus,
                 ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
                 ProviderIngestFinalizedAnchorV1, ReplicationOrderCompletionRecord,
                 ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
@@ -34871,6 +34638,7 @@ mod advert_tests {
                 ProofOutcomeSignerPolicyV1,
             },
         },
+        state_path::StatePath,
     };
     use iroha_executor_data_model::permission::sorafs::CanManageSorafsProofOutcomePolicy;
     use iroha_primitives::json::Json;
@@ -34966,9 +34734,11 @@ mod advert_tests {
                 RegistryFeeLedgerEntry,
             },
         },
-        tests_runtime_handlers::{mk_app_state_for_tests_with_world, signed_app_headers},
+        tests_runtime_handlers::{mk_app_state_for_tests_with_world, signed_network_app_headers},
         utils::extractors::JsonOnly,
     };
+
+    include!("api/exact_network_auth_tests.rs");
 
     #[test]
     fn finalized_capacity_worker_preserves_bounded_restart_semantics() {
@@ -35064,31 +34834,7 @@ mod advert_tests {
         }
     }
 
-    impl GovernanceDagRuntimeSigner for ApiTestGovernanceDagSigner {
-        fn handle(&self) -> &str {
-            Self::HANDLE
-        }
-
-        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
-            Ok(Self::expected_qualification())
-        }
-
-        fn publisher_peer_id(&self) -> &[u8] {
-            Self::PEER_ID
-        }
-
-        fn public_key(&self) -> [u8; 32] {
-            self.public_key_bytes()
-        }
-
-        fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
-            IrohaSignature::try_new(self.key_pair.private_key(), payload)
-                .map_err(|_| "Torii API test Governance DAG signing failed".to_owned())?
-                .payload()
-                .try_into()
-                .map_err(|_| "Torii API test Governance DAG signature width changed".to_owned())
-        }
-    }
+    include!("api/governance_dag_signer_test_impl.rs");
 
     #[derive(Debug)]
     struct ApiTestGovernanceDagCheckpointStoreState {
@@ -37903,23 +37649,6 @@ mod advert_tests {
         (app, temp_dir)
     }
 
-    fn reputation_request_keypair() -> KeyPair {
-        KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519)
-            .expect("derive reputation request authentication key")
-    }
-
-    fn reputation_signed_get_headers(uri: &Uri, body: &[u8]) -> HeaderMap {
-        let keypair = reputation_request_keypair();
-        let account = AccountId::new(keypair.public_key().clone());
-        signed_app_headers(&account, &keypair, &Method::GET, uri, body)
-    }
-
-    fn reputation_auth_test_guard() -> impl Drop {
-        crate::tests_runtime_handlers::app_auth_test_guard(
-            crate::app_auth::CanonicalRequestAuthConfig::default(),
-        )
-    }
-
     fn assert_reputation_terminal_response(response: &Response, expected_status: StatusCode) {
         assert_eq!(response.status(), expected_status);
         assert_eq!(
@@ -38864,7 +38593,7 @@ mod advert_tests {
         instruction: InstructionBox,
     ) -> SignedTransaction {
         let mut builder = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             signer.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -38877,7 +38606,7 @@ mod advert_tests {
     }
 
     #[test]
-    fn moderation_command_contract_requires_exact_chain_signature_route_and_one_instruction() {
+    fn moderation_command_contract_requires_exact_network_signature_route_and_one_instruction() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let assignment: InstructionBox = AcceptSorafsModerationJurorAssignment::new(
             "case-route-1".to_owned(),
@@ -38902,7 +38631,7 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let mut multiple_builder = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -38920,15 +38649,17 @@ mod advert_tests {
         .expect_err("multiple moderation instructions must fail before ingress");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-        let mut wrong_chain_builder = TransactionBuilder::new(
-            ChainId::from("wrong-moderation-chain"),
+        let mut wrong_network_builder = TransactionBuilder::new(
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0xFE; Hash::LENGTH]),
+            )),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
-        wrong_chain_builder.set_ttl(Duration::from_millis(
+        wrong_network_builder.set_ttl(Duration::from_millis(
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
         ));
-        let wrong_chain = wrong_chain_builder
+        let wrong_network = wrong_network_builder
             .with_instructions([AcceptSorafsModerationJurorAssignment::new(
                 "case-route-1".to_owned(),
                 "round-1".to_owned(),
@@ -38937,10 +38668,10 @@ mod advert_tests {
             .sign(auth.provider.keypair.private_key());
         let response = validate_moderation_signed_transaction(
             &app,
-            &wrong_chain,
+            &wrong_network,
             ModerationCommandRouteV1::AcceptAssignment,
         )
-        .expect_err("cross-chain moderation transaction must fail before ingress");
+        .expect_err("cross-network moderation transaction must fail before ingress");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let substituted = transaction
@@ -38962,7 +38693,7 @@ mod advert_tests {
             )
         };
         let mut wrong_ttl_builder = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -38981,7 +38712,7 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let mut nonce_builder = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -39006,7 +38737,7 @@ mod advert_tests {
             Json::new("assignment".to_owned()),
         );
         let mut metadata_builder = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -39158,14 +38889,18 @@ mod advert_tests {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let report: InstructionBox = SubmitSorafsRepairTask::new([0x71; 32], vec![0x01]).into();
         let multiple = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([report.clone(), report])
         .sign(auth.provider.keypair.private_key());
-        let response = validate_repair_signed_transaction(&multiple, RepairCommandRouteV1::Report)
-            .expect_err("multiple repair instructions must be rejected before ingress");
+        let response = validate_repair_signed_transaction(
+            app.state.network_id_ref(),
+            &multiple,
+            RepairCommandRouteV1::Report,
+        )
+        .expect_err("multiple repair instructions must be rejected before ingress");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let claim: InstructionBox = ApplySorafsRepairTaskAction::new(
@@ -39178,17 +38913,60 @@ mod advert_tests {
         )
         .into();
         let transaction = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([claim])
         .sign(auth.provider.keypair.private_key());
-        validate_repair_signed_transaction(&transaction, RepairCommandRouteV1::Claim)
-            .expect("matching claim route must pass pre-ingress contract validation");
-        let response = validate_repair_signed_transaction(&transaction, RepairCommandRouteV1::Fail)
-            .expect_err("claim action must not enter the fail route");
+        validate_repair_signed_transaction(
+            app.state.network_id_ref(),
+            &transaction,
+            RepairCommandRouteV1::Claim,
+        )
+        .expect("matching claim route must pass pre-ingress contract validation");
+        let response = validate_repair_signed_transaction(
+            app.state.network_id_ref(),
+            &transaction,
+            RepairCommandRouteV1::Fail,
+        )
+        .expect_err("claim action must not enter the fail route");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let wrong_network = TransactionBuilder::new(
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0xFD; Hash::LENGTH]),
+            )),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([ApplySorafsRepairTaskAction::new(
+            "REP-ROUTE-1".to_owned(),
+            1,
+            SorafsRepairTaskActionV1::Claim(iroha_data_model::isi::sorafs::SorafsRepairClaimV1 {
+                lease_duration_ms: 60_000,
+                idempotency_key: "claim-route-1".to_owned(),
+            }),
+        )])
+        .sign(auth.provider.keypair.private_key());
+        let response = validate_repair_signed_transaction(
+            app.state.network_id_ref(),
+            &wrong_network,
+            RepairCommandRouteV1::Claim,
+        )
+        .expect_err("cross-network repair transaction must fail before ingress");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let substituted = transaction
+            .clone()
+            .with_authority(auth.buyer.account.clone());
+        let response = validate_repair_signed_transaction(
+            app.state.network_id_ref(),
+            &substituted,
+            RepairCommandRouteV1::Claim,
+        )
+        .expect_err("authority substitution must invalidate the repair envelope");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[test]
@@ -39197,7 +38975,7 @@ mod advert_tests {
         let instruction: InstructionBox =
             SubmitSorafsOrderbookOrder::new(Vec::new(), [0; 32]).into();
         let transaction = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -39220,7 +38998,7 @@ mod advert_tests {
         let payload =
             vec![0xA5; sorafs_manifest::orderbook::ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1];
         let transaction = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -39247,7 +39025,7 @@ mod advert_tests {
         let instruction: InstructionBox =
             SubmitSorafsOrderbookOrder::new(Vec::new(), [0; 32]).into();
         let transaction = TransactionBuilder::new(
-            app.chain_id.as_ref().clone(),
+            *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -42608,6 +42386,7 @@ mod advert_tests {
                     order_id: completed_met_id,
                     manifest_digest: manifest_digest.clone(),
                     manifest_root_cid: manifest_root_cid.clone(),
+                    musubi_archive: None,
                     issued_by: issuer.clone(),
                     issued_epoch: 10,
                     deadline_epoch: 16,
@@ -42636,6 +42415,7 @@ mod advert_tests {
                     order_id: expired_missed_id,
                     manifest_digest: manifest_digest.clone(),
                     manifest_root_cid: manifest_root_cid.clone(),
+                    musubi_archive: None,
                     issued_by: issuer.clone(),
                     issued_epoch: 20,
                     deadline_epoch: 25,
@@ -42661,6 +42441,7 @@ mod advert_tests {
                     order_id: pending_id,
                     manifest_digest: manifest_digest.clone(),
                     manifest_root_cid: manifest_root_cid.clone(),
+                    musubi_archive: None,
                     issued_by: issuer.clone(),
                     issued_epoch: 40,
                     deadline_epoch: 55,
@@ -42686,6 +42467,7 @@ mod advert_tests {
                     order_id: expired_id,
                     manifest_digest: manifest_digest.clone(),
                     manifest_root_cid: manifest_root_cid.clone(),
+                    musubi_archive: None,
                     issued_by: issuer,
                     issued_epoch: 50,
                     deadline_epoch: 60,
@@ -42724,31 +42506,6 @@ mod advert_tests {
         latencies.sort_by(f64::total_cmp);
         assert_eq!(latencies, vec![3.0]);
         assert_eq!(summary.deadline_slack_epochs, vec![15.0]);
-
-        #[cfg(feature = "telemetry")]
-        {
-            let telemetry = isolated_test_telemetry();
-            record_pin_registry_metrics(&telemetry, &snapshot);
-            let metrics_text = telemetry
-                .telemetry()
-                .expect("telemetry handle")
-                .metrics()
-                .await
-                .try_to_string()
-                .expect("serialize metrics");
-            assert!(
-                metrics_text.contains("torii_sorafs_registry_aliases_total 1"),
-                "alias gauge missing in metrics output: {metrics_text}"
-            );
-            assert!(
-                metrics_text.contains("torii_sorafs_replication_sla_total{outcome=\"met\"} 1"),
-                "SLA met gauge missing in metrics output: {metrics_text}"
-            );
-            assert!(
-                metrics_text.contains("torii_sorafs_replication_sla_total{outcome=\"missed\"} 2"),
-                "SLA missed gauge missing in metrics output: {metrics_text}"
-            );
-        }
     }
 
     fn encode_replication_order_bytes_with_providers(
@@ -42937,6 +42694,7 @@ mod advert_tests {
                     order_id,
                     manifest_digest: manifest_digest.clone(),
                     manifest_root_cid,
+                    musubi_archive: None,
                     issued_by: issuer.clone(),
                     issued_epoch: 8,
                     deadline_epoch: 24,
@@ -44510,10 +44268,10 @@ mod advert_tests {
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("collect body");
-        assert!(
-            !body_bytes.is_empty(),
-            "Norito response body should not be empty"
-        );
+        let page: PinManifestPageV1 = norito::decode_from_bytes(&body_bytes)
+            .expect("decode the typed finalized pin-manifest page");
+        assert!(page.manifests.is_empty());
+        assert!(!page.has_more);
     }
 
     #[tokio::test]
@@ -44541,7 +44299,26 @@ mod advert_tests {
             Metadata::default(),
         );
         manifest_record.approve(7, None);
-        tx.world_mut_for_testing()
+        let global_usage_key = StatePath::from_str("sorafs_pin_accounting_v1/global")
+            .expect("static global usage key");
+        let status_key = StatePath::from_str(&format!(
+            "sorafs_pin_accounting_v1/status/approved/{}",
+            hex::encode(manifest_digest.as_bytes())
+        ))
+        .expect("static status-index prefix plus digest");
+        let global_usage = to_bytes(&PinResourceUsage {
+            manifest_count: 1,
+            content_bytes: content_length,
+        })
+        .expect("encode canonical pin usage");
+        let world = tx.world_mut_for_testing();
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(global_usage_key, global_usage);
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(status_key, Vec::new());
+        world
             .pin_manifests_mut_for_testing()
             .insert(manifest_digest.clone(), manifest_record);
         tx.apply();
@@ -44588,10 +44365,59 @@ mod advert_tests {
         .await;
         assert_eq!(anchored.status(), StatusCode::OK);
 
+        let list_query = format!(
+            "expected_finalized_height={}&expected_finalized_block_hash_hex={}&limit=1&max_bytes={}&status=approved",
+            finalized.finalized_cursor.height,
+            hex::encode(finalized.finalized_cursor.block_hash),
+            PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1,
+        );
+        let list = handle_get_sorafs_pin_registry(
+            State(app.clone()),
+            axum::extract::RawQuery(Some(list_query.clone())),
+            None,
+        )
+        .await;
+        assert_eq!(list.status(), StatusCode::OK);
+        assert_eq!(
+            list.headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store, max-age=0")
+        );
+        let list_body = body::to_bytes(list.into_body(), usize::MAX)
+            .await
+            .expect("collect bounded pin page");
+        let page: PinManifestPageV1 =
+            norito::json::from_slice(&list_body).expect("decode bounded pin page");
+        assert_eq!(page.finalized_cursor, finalized.finalized_cursor);
+        assert_eq!(page.charged_usage.manifest_count, 1);
+        assert_eq!(page.charged_usage.content_bytes, content_length);
+        assert_eq!(page.manifests.len(), 1);
+        assert_eq!(page.manifests[0].digest, manifest_digest);
+        assert!(!page.has_more);
+
+        let exhausted = handle_get_sorafs_pin_registry(
+            State(app.clone()),
+            axum::extract::RawQuery(Some(format!(
+                "{list_query}&after_digest_hex={}",
+                hex::encode(manifest_digest.as_bytes())
+            ))),
+            None,
+        )
+        .await;
+        assert_eq!(exhausted.status(), StatusCode::OK);
+        let exhausted_body = body::to_bytes(exhausted.into_body(), usize::MAX)
+            .await
+            .expect("collect exhausted pin page");
+        let exhausted_page: PinManifestPageV1 =
+            norito::json::from_slice(&exhausted_body).expect("decode exhausted pin page");
+        assert!(exhausted_page.manifests.is_empty());
+        assert!(!exhausted_page.has_more);
+
         let mut stale_block_hash = finalized.finalized_cursor.block_hash;
         stale_block_hash[0] ^= 0xFF;
         let stale = handle_get_sorafs_pin_manifest(
-            State(app),
+            State(app.clone()),
             Path(hex::encode(manifest_digest.as_bytes())),
             axum::extract::RawQuery(Some(format!(
                 "expected_finalized_height={}&expected_finalized_block_hash_hex={}",
@@ -44602,6 +44428,19 @@ mod advert_tests {
         )
         .await;
         assert_eq!(stale.status(), StatusCode::CONFLICT);
+
+        let stale_list = handle_get_sorafs_pin_registry(
+            State(app),
+            axum::extract::RawQuery(Some(format!(
+                "expected_finalized_height={}&expected_finalized_block_hash_hex={}&limit=1&max_bytes={}",
+                finalized.finalized_cursor.height,
+                hex::encode(stale_block_hash),
+                PIN_MANIFEST_QUERY_MIN_PAGE_BYTES_V1,
+            ))),
+            None,
+        )
+        .await;
+        assert_eq!(stale_list.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]

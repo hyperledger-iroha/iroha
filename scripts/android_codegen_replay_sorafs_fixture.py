@@ -371,10 +371,21 @@ def require_policy_cargo_proxy(value: Path) -> str:
     """Require the source-bound shared-policy proxy, with no caller override."""
 
     candidate = Path(value)
+    identity_errors: list[str] = []
+    expected = resolve_path_identity(
+        DEFAULT_CARGO_PROXY,
+        identity_errors,
+        label="source-bound Cargo policy proxy",
+    )
+    resolved = resolve_path_identity(
+        candidate,
+        identity_errors,
+        label="configured Cargo policy proxy",
+    )
+    if expected is None or resolved is None:
+        raise ValueError("Android codegen Cargo policy proxy is unavailable")
     try:
-        expected = DEFAULT_CARGO_PROXY.resolve(strict=True)
         metadata = candidate.lstat()
-        resolved = candidate.resolve(strict=True)
     except OSError as error:
         raise ValueError("Android codegen Cargo policy proxy is unavailable") from error
     if (
@@ -423,7 +434,6 @@ def build_fixture_example(
     timestamp = iso_utc_from_unix_timestamp(fixture_meta["now_unix_secs"])
     instruction = {
         "manifest_payload_base64": manifest_payload_base64,
-        "submitted_epoch": fixture_meta["now_unix_secs"],
         "alias": None,
         "successor_of": None,
     }

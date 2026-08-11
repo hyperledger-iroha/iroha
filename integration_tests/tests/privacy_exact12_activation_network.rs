@@ -23,18 +23,26 @@ use integration_tests::sandbox;
 use iroha::client::Client;
 use iroha_core::{
     privacy::PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1,
-    privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
+    privacy_profiles::{
+        CompiledPrivacyProfileErrorV1, CompiledPrivacyProfileV1,
+        compiled_privacy_profile_snapshot_result_v1, compiled_privacy_profile_v1,
+        zk_ams_release_candidate_profile_material_v1,
+    },
 };
 use iroha_data_model::{
     Level,
-    isi::{Grant, InstructionBox, Log, privacy::RegisterPrivacyProtocolActivationV1},
+    isi::{
+        Grant, InstructionBox, Log,
+        privacy::{RegisterPrivacyProtocolActivationV1, SubmitPrivacyProofV1},
+    },
     metadata::Metadata,
     permission::Permission,
     prelude::QueryBuilderExt,
     privacy::{
-        PrivacyActiveLifecycleV1, PrivacyCapabilitySnapshotV1, PrivacyCompiledProfileResultV1,
-        PrivacyCompiledProfileSnapshotV1, PrivacyProposedLifecycleV1,
-        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+        PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
+        PrivacyCompiledProfileUnavailableReasonV1, PrivacyExact12CapabilityManifestV1,
+        PrivacyProofEnvelopeV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationRecordV1,
+        PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, privacy_exact12_fixture_bundle_v1,
     },
     query::transaction::prelude::FindTransactions,
     transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
@@ -52,6 +60,7 @@ const RESTART_TIMEOUT: Duration = Duration::from_secs(90);
 const ACTIVATION_ADVANCE_TIMEOUT: Duration = Duration::from_secs(300);
 const TEST_BLOCK_CADENCE: Duration = Duration::from_millis(100);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
+const ZK_AMS_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkAmsV1;
 
 #[derive(Clone, Copy)]
 struct ExpectedProtocolState {
@@ -164,7 +173,7 @@ fn expected_states(
 }
 
 fn assert_exact12_snapshot(
-    snapshot: &PrivacyCapabilitySnapshotV1,
+    snapshot: &PrivacyExact12CapabilityManifestV1,
     minimum_height: u64,
     expected: &[ExpectedProtocolState],
     context: &str,
@@ -219,7 +228,7 @@ async fn wait_for_identical_exact12_snapshots(
     minimum_height: u64,
     expected: &[ExpectedProtocolState],
     context: &str,
-) -> Result<Vec<PrivacyCapabilitySnapshotV1>> {
+) -> Result<Vec<PrivacyExact12CapabilityManifestV1>> {
     ensure!(
         !clients.is_empty() && clients.len() <= 4,
         "{context}: exact-12 snapshot polling requires between one and four validator clients"
@@ -429,6 +438,287 @@ async fn wait_for_transaction_on_peers(
         }
         sleep(POLL_INTERVAL).await;
     }
+}
+
+fn assert_zk_ams_unavailable(
+    snapshot: &PrivacyExact12CapabilityManifestV1,
+    minimum_height: u64,
+    context: &str,
+) -> Result<()> {
+    snapshot
+        .validate()
+        .wrap_err_with(|| format!("{context}: invalid capability snapshot"))?;
+    ensure!(
+        snapshot.committed_height >= minimum_height,
+        "{context}: committed height {} is below {minimum_height}",
+        snapshot.committed_height
+    );
+    let row = snapshot
+        .protocols
+        .iter()
+        .find(|row| row.protocol_id == ZK_AMS_PROTOCOL)
+        .ok_or_else(|| eyre!("{context}: capability snapshot omitted ZK-AMS"))?;
+    ensure!(
+        row.compiled_profile
+            == PrivacyCompiledProfileResultV1::Unavailable(
+                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+            ),
+        "{context}: ZK-AMS compiled status unexpectedly changed: {:?}",
+        row.compiled_profile
+    );
+    ensure!(
+        row.activation.is_none(),
+        "{context}: unavailable ZK-AMS unexpectedly has an activation: {:?}",
+        row.activation
+    );
+    Ok(())
+}
+
+async fn wait_for_identical_zk_ams_unavailable(
+    clients: &[Client],
+    minimum_height: u64,
+    context: &str,
+) -> Result<Vec<PrivacyExact12CapabilityManifestV1>> {
+    let deadline = Instant::now() + PEER_CONVERGENCE_TIMEOUT;
+    let mut last_observed = Vec::new();
+    loop {
+        let mut snapshots = Vec::with_capacity(clients.len());
+        last_observed.clear();
+        for (index, client) in clients.iter().enumerate() {
+            match client.get_privacy_capabilities() {
+                Ok(snapshot) => match assert_zk_ams_unavailable(
+                    &snapshot,
+                    minimum_height,
+                    context,
+                ) {
+                    Ok(()) => {
+                        last_observed.push(format!(
+                            "peer {index}: unavailable at height {}",
+                            snapshot.committed_height
+                        ));
+                        snapshots.push(snapshot);
+                    }
+                    Err(error) => last_observed.push(format!("peer {index}: {error}")),
+                },
+                Err(error) => {
+                    last_observed.push(format!("peer {index}: query failed: {error}"));
+                }
+            }
+        }
+        if snapshots.len() == clients.len()
+            && snapshots
+                .iter()
+                .skip(1)
+                .all(|snapshot| snapshot == &snapshots[0])
+        {
+            return Ok(snapshots);
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "{context}: unavailable snapshots did not converge within \
+                 {PEER_CONVERGENCE_TIMEOUT:?}; {}",
+                last_observed.join("; ")
+            ));
+        }
+        sleep(POLL_INTERVAL).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn zk_ams_unreleased_profile_fails_closed_across_four_peer_restart() -> Result<()> {
+    require_test_network_feature(REQUIRED_DAEMON_FEATURE)?;
+    init_instruction_registry();
+    let unavailable = CompiledPrivacyProfileErrorV1::EngineUnavailable {
+        protocol_id: ZK_AMS_PROTOCOL,
+    };
+    ensure!(
+        compiled_privacy_profile_v1(ZK_AMS_PROTOCOL) == Err(unavailable),
+        "this closed-profile test must be replaced when every ZK-AMS release gate closes"
+    );
+    ensure!(
+        compiled_privacy_profile_snapshot_result_v1(ZK_AMS_PROTOCOL)
+            == PrivacyCompiledProfileResultV1::Unavailable(
+                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+            ),
+        "local ZK-AMS capability result is not the exact fail-closed status"
+    );
+    let candidate = zk_ams_release_candidate_profile_material_v1()
+        .wrap_err("derive deterministic but non-activatable ZK-AMS candidate profile")?;
+
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_block_cadence(TEST_BLOCK_CADENCE)
+        .with_permissioned_consensus()
+        .with_config_layer(|layer| {
+            layer.write(["zk", "stark", "enabled"], true);
+        });
+    let context = stringify!(zk_ams_unreleased_profile_fails_closed_across_four_peer_restart);
+    let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
+        return Ok(());
+    };
+
+    let result: Result<()> = async {
+        ensure!(
+            network.peers().len() == 4,
+            "ZK-AMS closed-profile test requires exactly four validators"
+        );
+        let all_clients = network
+            .peers()
+            .iter()
+            .map(|peer| bounded_client(peer.client()))
+            .collect::<Vec<_>>();
+        let client = all_clients[0].clone();
+        let initial_height = client
+            .get_privacy_capabilities()
+            .wrap_err("query initial ZK-AMS capability state")?
+            .committed_height;
+        wait_for_identical_zk_ams_unavailable(
+            &all_clients,
+            initial_height,
+            "ZK-AMS must begin unavailable and unregistered",
+        )
+        .await?;
+
+        let grant = instruction_transaction(
+            &client,
+            Grant::account_permission(
+                Permission::from(CanEnactGovernance),
+                client.account.clone(),
+            ),
+        );
+        submit_signed_transaction(&client, &grant, "grant ZK-AMS governance permission").await?;
+        wait_for_transaction_on_peers(
+            &all_clients,
+            &grant,
+            "ZK-AMS governance grant convergence",
+        )
+        .await?;
+
+        let proposal_height = next_incoming_height(&client)?;
+        let activation_height = proposal_height
+            .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
+            .ok_or_else(|| eyre!("ZK-AMS candidate activation height overflowed"))?;
+        let activation = instruction_transaction(
+            &client,
+            RegisterPrivacyProtocolActivationV1::new(proposed_activation(
+                candidate,
+                proposal_height,
+                activation_height,
+            )),
+        );
+        let activation_error = submit_signed_transaction(
+            &client,
+            &activation,
+            "unreleased ZK-AMS candidate activation must reject",
+        )
+        .await
+        .expect_err("unreleased ZK-AMS candidate activation was accepted");
+        ensure!(
+            error_chain_contains(&activation_error, "does not match compiled native profile")
+                && error_chain_contains(&activation_error, "not governance-available"),
+            "ZK-AMS candidate activation rejected for wrong reason: {activation_error:?}"
+        );
+
+        let bundle = privacy_exact12_fixture_bundle_v1()
+            .wrap_err("construct canonical Exact12 fixture bundle")?;
+        let fixture_row = bundle
+            .rows
+            .iter()
+            .find(|row| row.protocol_id == ZK_AMS_PROTOCOL)
+            .ok_or_else(|| eyre!("Exact12 fixture bundle omitted ZK-AMS"))?;
+        let envelope: PrivacyProofEnvelopeV1 =
+            norito::decode_from_bytes(&fixture_row.envelope_norito)
+                .wrap_err("decode canonical ZK-AMS fixture envelope")?;
+        let action = instruction_transaction(&client, SubmitPrivacyProofV1::new(envelope));
+        let action_error = submit_signed_transaction(
+            &client,
+            &action,
+            "unreleased ZK-AMS production action must reject",
+        )
+        .await
+        .expect_err("unreleased ZK-AMS production action was accepted");
+        ensure!(
+            error_chain_contains(&action_error, "privacy protocol")
+                && error_chain_contains(&action_error, "is not registered"),
+            "ZK-AMS production action rejected for wrong reason: {action_error:?}"
+        );
+
+        let pre_restart_height = client
+            .get_privacy_capabilities()
+            .wrap_err("query ZK-AMS state before restart")?
+            .committed_height;
+        wait_for_identical_zk_ams_unavailable(
+            &all_clients,
+            pre_restart_height,
+            "ZK-AMS activation and action rejections must preserve closed state",
+        )
+        .await?;
+
+        let restart_index = all_clients.len() - 1;
+        let restart_peer = network.peers()[restart_index].clone();
+        let config_layers = network.config_layers().collect::<Vec<_>>();
+        ensure!(
+            restart_peer.shutdown_if_started().await,
+            "selected ZK-AMS validator was not running before restart"
+        );
+        let sentinel = instruction_transaction(
+            &client,
+            Log::new(Level::INFO, "ZK-AMS closed-profile restart sentinel".to_owned()),
+        );
+        submit_signed_transaction(&client, &sentinel, "commit ZK-AMS restart sentinel").await?;
+        wait_for_transaction_on_peers(
+            &all_clients[..restart_index],
+            &sentinel,
+            "healthy-validator ZK-AMS sentinel convergence",
+        )
+        .await?;
+        timeout(
+            RESTART_TIMEOUT,
+            restart_peer.start_checked(config_layers.iter(), None),
+        )
+        .await
+        .map_err(|_| eyre!("ZK-AMS validator restart exceeded {RESTART_TIMEOUT:?}"))?
+        .wrap_err("restart ZK-AMS validator")?;
+        wait_for_transaction_on_peers(
+            &all_clients,
+            &sentinel,
+            "post-restart ZK-AMS sentinel convergence",
+        )
+        .await?;
+        let final_height = client
+            .get_privacy_capabilities()
+            .wrap_err("query final ZK-AMS capability state")?
+            .committed_height;
+        wait_for_identical_zk_ams_unavailable(
+            &all_clients,
+            final_height,
+            "ZK-AMS closed status must survive validator restart",
+        )
+        .await?;
+
+        let restarted_client = bounded_client(restart_peer.client());
+        let replay_error = submit_signed_transaction(
+            &restarted_client,
+            &action,
+            "post-restart unreleased ZK-AMS action must reject",
+        )
+        .await
+        .expect_err("post-restart unreleased ZK-AMS action was accepted");
+        ensure!(
+            error_chain_contains(&replay_error, "privacy protocol")
+                && error_chain_contains(&replay_error, "is not registered"),
+            "post-restart ZK-AMS action rejected for wrong reason: {replay_error:?}"
+        );
+        println!(
+            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_activation_network::zk_ams_unreleased_profile_fails_closed_across_four_peer_restart:passed"
+        );
+        Ok(())
+    }
+    .await;
+
+    network.shutdown().await;
+    result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

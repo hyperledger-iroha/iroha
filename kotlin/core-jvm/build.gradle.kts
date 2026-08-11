@@ -79,7 +79,7 @@ tasks.test {
             .dir("fixtures/sorafs_manifest/reference_sdk"),
     )
 
-    // Release CI supplies a freshly built, isolated ABI-21 bridge. Local
+    // Release CI supplies a freshly built, isolated ABI-22 bridge. Local
     // development retains the conventional root target/debug fallback.
     val configuredNativeDir = System.getenv("IROHA_NATIVE_LIBRARY_PATH")
     val hostNativeDir = if (configuredNativeDir.isNullOrBlank()) {

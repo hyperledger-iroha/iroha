@@ -155,7 +155,7 @@ fn queue_reuses_gossip_payload_without_side_cache() {
         entrypoint,
         Arc::clone(&payload),
         entrypoint_hash,
-        &ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &queue_test_network_id(),
         Duration::from_millis(10),
         tx_limits,
         &crypto_cfg,
@@ -267,10 +267,10 @@ fn sealed_commitment_uses_local_queue_residence_ttl() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    let chain_id = ChainId::from("sealed-queue-expiry");
+    let network_id = state.network_id;
     let (authority, keypair) = gen_account_in("wonderland");
     let inner_tx = TransactionBuilder::new_with_time_source(
-        chain_id.clone(),
+        network_id,
         authority.clone(),
         &time_source,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -283,9 +283,9 @@ fn sealed_commitment_uses_local_queue_residence_ttl() {
     let salt = [0xD4; 32];
     let reveal_deadline_height = 10;
     let commitment_hash =
-        compute_sealed_transaction_commitment(&chain_id, &inner_tx, salt, reveal_deadline_height);
+        compute_sealed_transaction_commitment(&network_id, &inner_tx, salt, reveal_deadline_height);
     let payload = SealedTransactionCommitmentPayload::new(
-        chain_id,
+        network_id,
         authority,
         commitment_hash,
         2,

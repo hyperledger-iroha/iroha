@@ -8,6 +8,7 @@ import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -15,7 +16,7 @@ import org.hyperledger.iroha.sdk.tx.TransactionBuilder
 
 /** Canonical one-instruction transaction for the ABI-21 device-attestation path. */
 class RegisterOfflineDeviceAttestation(
-    val chainId: String,
+    val networkId: NetworkId,
     val authority: String,
     val registration: DeviceAttestationRegistration,
     val creationTimeMs: Long,
@@ -27,9 +28,6 @@ class RegisterOfflineDeviceAttestation(
     private val metadataSnapshot = metadata.toMap()
 
     init {
-        require(chainId.isNotEmpty() && chainId == chainId.trim()) {
-            "chainId must be exact non-empty text"
-        }
         require(authority.isNotEmpty() && authority == authority.trim()) {
             "authority must be exact non-empty text"
         }
@@ -54,7 +52,7 @@ class RegisterOfflineDeviceAttestation(
 
     /** Build a payload containing exactly one registration instruction. */
     fun transactionPayload(): TransactionPayload = TransactionPayload(
-        chainId = chainId,
+        networkId = networkId,
         authority = authority,
         creationTimeMs = creationTimeMs,
         executable = Executable.instructions(listOf(instruction())),
@@ -69,7 +67,7 @@ class RegisterOfflineDeviceAttestation(
         val expected = transactionPayload()
         val instructions = payload.executable as? Executable.Instructions
         require(
-            payload.chainId == expected.chainId &&
+            payload.networkId == expected.networkId &&
                 payload.authority == expected.authority &&
                 payload.creationTimeMs == expected.creationTimeMs &&
                 payload.timeToLiveMs == expected.timeToLiveMs &&

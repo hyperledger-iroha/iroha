@@ -1,5 +1,98 @@
 // Runtime diagnostics fixtures and regression tests included in the parent test module.
 
+fn sample_native_amx_qc(
+    phase: NativeAmxPhase,
+    source_id: [u8; 32],
+    plan_digest: Hash,
+    coordinator: (LaneId, DataSpaceId),
+    participant: (LaneId, DataSpaceId),
+    mut validator_set: Vec<PeerId>,
+) -> NativeAmxAttestationQcV2 {
+    validator_set.sort();
+    validator_set.dedup();
+    let (coordinator_lane_id, coordinator_dataspace_id) = coordinator;
+    let (participant_lane_id, participant_dataspace_id) = participant;
+    let participant_validator_count =
+        u32::try_from(validator_set.len()).expect("fixture validator count fits u32");
+    let participant_min_quorum = u32::try_from(
+        validator_set
+            .len()
+            .saturating_sub(validator_set.len().saturating_sub(1) / 3)
+            .max(1),
+    )
+    .expect("fixture validator quorum fits u32");
+    let validator_set_hash = HashOf::new(&validator_set);
+    let validator_set_pops = vec![vec![0x5A; 96]; validator_set.len()];
+    let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"native-amx-model-genesis",
+    )));
+    let coordinator_lane_incarnation = Hash::new(b"native-amx-model-coordinator");
+    let participant_lane_incarnation = Hash::new(
+        [
+            b"native-amx-model-participant:".as_slice(),
+            &participant_lane_id.as_u32().to_be_bytes(),
+        ]
+        .concat(),
+    );
+    let coordinator_proposal_hash = Hash::new(b"native-amx-model-proposal");
+    let participant_previous_block_descriptor_hash = Some(Hash::new(
+        [
+            b"native-amx-model-participant-parent:".as_slice(),
+            &participant_lane_id.as_u32().to_be_bytes(),
+        ]
+        .concat(),
+    ));
+    let mut body = NativeAmxAttestationBodyV2 {
+        round: crate::block::consensus_v2::ConsensusRound {
+            context_id: crate::block::consensus_v2::HeightContextId(
+                HashOf::from_untyped_unchecked(Hash::new(b"native-amx-receipt-context")),
+            ),
+            height: 42,
+            view: 3,
+        },
+        epoch: 7,
+        network_id,
+        source_id,
+        tx_entrypoint_hash: HashOf::from_untyped_unchecked(Hash::prehashed(source_id)),
+        plan_digest,
+        phase,
+        coordinator_lane_id,
+        coordinator_dataspace_id,
+        coordinator_lane_incarnation,
+        participant_lane_id,
+        participant_dataspace_id,
+        participant_lane_incarnation,
+        participant_previous_block_height: 41,
+        participant_previous_block_descriptor_hash,
+        participant_lane_block_height: 42,
+        participant_lane_block_view: 0,
+        participant_proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
+        participant_validator_set_hash: validator_set_hash,
+        participant_validator_count,
+        participant_min_quorum,
+        authority_context_height: 42,
+        planned_coordinator_block_height: 42,
+        coordinator_lane_block_view: 3,
+        coordinator_proposal_hash,
+    };
+    body.participant_proposal_hash =
+        sample_native_amx_participant_proposal(&body, validator_set.clone()).proposal_hash;
+    body.participant_settlement_commitment = body
+        .computed_grouped_participant_settlement_commitment(&[body.source_id])
+        .expect("single-source test fixture settlement is valid");
+    NativeAmxAttestationQcV2::try_new(
+        body,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash,
+        validator_set,
+        validator_set_pops,
+        vec![0b0000_0111],
+        vec![0xA5; 96],
+    )
+    .expect("fixture validator set and proofs must align")
+}
+
 #[test]
 fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
     let document = grouped_native_amx_fixture_document();
@@ -7,8 +100,8 @@ fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
         .pointer("/golden/receipt_group")
         .cloned()
         .expect("fixture contains receipt group");
-    let commitment: LaneBlockCommitment = norito::json::from_value(receipt_group.clone())
-        .expect("fixture receipt group decodes");
+    let commitment: LaneBlockCommitment =
+        norito::json::from_value(receipt_group.clone()).expect("fixture receipt group decodes");
     commitment
         .validate_native_amx_receipts()
         .expect("Rust-owned grouped Native AMX fixture is structurally valid");
@@ -80,7 +173,7 @@ fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
             b"native-amx-payload-hint-unknown-field",
         )),
     };
-    let mut hint_json = norito::json::to_value(hint).expect("serialize payload hint");
+    let mut hint_json = norito::json::to_value(&hint).expect("serialize payload hint");
     hint_json
         .as_object_mut()
         .expect("payload hint is an object")

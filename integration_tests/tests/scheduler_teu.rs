@@ -39,8 +39,6 @@ use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
 use tokio::sync::broadcast;
 
-const TEST_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
-
 fn disable_nexus_fee_admission(nexus: &mut Nexus) {
     nexus.fees.base_fee = Quantity::zero();
     nexus.fees.per_byte_fee = Quantity::zero();
@@ -69,14 +67,14 @@ fn build_world(authority: &AccountId, domain_id: &DomainId) -> World {
 }
 
 fn build_transaction(
-    chain_id: &ChainId,
+    network_id: NetworkId,
     authority: &AccountId,
     keypair: &KeyPair,
     time_source: &TimeSource,
     instructions: Vec<InstructionBox>,
 ) -> AcceptedTransaction<'static> {
     let tx = TransactionBuilder::new_with_time_source(
-        chain_id.clone(),
+        network_id,
         authority.clone(),
         time_source,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -94,13 +92,18 @@ fn build_transaction(
         default_limits.max_metadata_depth(),
     );
     let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-    AcceptedTransaction::accept(tx, chain_id, Duration::from_secs(30), params, &crypto_cfg)
-        .expect("transaction should be accepted")
+    AcceptedTransaction::accept(
+        tx,
+        &network_id,
+        Duration::from_secs(30),
+        params,
+        &crypto_cfg,
+    )
+    .expect("transaction should be accepted")
 }
 
 #[test]
 fn queue_teu_backlog_matches_metering() -> Result<()> {
-    let chain_id = ChainId::from(TEST_CHAIN_ID);
     let (account_id, keypair) = gen_account_in("wonderland");
     let wonderland_domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let world = build_world(&account_id, &wonderland_domain);
@@ -119,6 +122,7 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
         .set_nexus(nexus)
         .expect("apply Nexus config for TEU scheduler test");
     let state = Arc::new(state_inner);
+    let network_id = *state.network_id_ref();
     let (events_sender, _) = broadcast::channel(16);
     let queue_cfg = QueueConfig::default();
     let router: Arc<dyn LaneRouter> = Arc::new(SingleLaneRouter::new());
@@ -148,21 +152,21 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
 
     let txs = vec![
         build_transaction(
-            &chain_id,
+            network_id,
             &account_id,
             &keypair,
             &time_source,
             vec![InstructionBox::from(mint.clone())],
         ),
         build_transaction(
-            &chain_id,
+            network_id,
             &account_id,
             &keypair,
             &time_source,
             vec![InstructionBox::from(transfer.clone())],
         ),
         build_transaction(
-            &chain_id,
+            network_id,
             &account_id,
             &keypair,
             &time_source,
@@ -217,7 +221,6 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
 #[test]
 #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
 fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
-    let chain_id = ChainId::from(TEST_CHAIN_ID);
     let (lane0_account, lane0_keypair) = gen_account_in("nexus");
     let (lane1_account, lane1_keypair) = gen_account_in("nexus_alt");
     let lane0_domain_id: DomainId = DomainId::try_new("nexus", "universal").unwrap();
@@ -322,6 +325,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         .set_nexus(nexus.clone())
         .expect("apply Nexus config for router TEU test");
     let state = Arc::new(state_inner);
+    let network_id = *state.network_id_ref();
 
     let (events_sender, _) = broadcast::channel(16);
     let queue_cfg = QueueConfig::default();
@@ -364,14 +368,14 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
     let teu_lane1 = gas::meter_instructions(&[instr_lane1_a.clone(), instr_lane1_b.clone()]);
 
     let tx_lane0 = build_transaction(
-        &chain_id,
+        network_id,
         &lane0_account,
         &lane0_keypair,
         &time_source,
         vec![instr_lane0.clone()],
     );
     let tx_lane1 = build_transaction(
-        &chain_id,
+        network_id,
         &lane1_account,
         &lane1_keypair,
         &time_source,
@@ -456,7 +460,6 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
 #[test]
 #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
 fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
-    let chain_id = ChainId::from(TEST_CHAIN_ID);
     let (fallback_account, fallback_keypair) = gen_account_in("fallback");
     let (routed_account, routed_keypair) = gen_account_in("routed");
     let fallback_domain_id: DomainId = DomainId::try_new("fallback", "universal").unwrap();
@@ -559,6 +562,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         .set_nexus(nexus.clone())
         .expect("apply Nexus config for per-account routing test");
     let state = Arc::new(state_inner);
+    let network_id = *state.network_id_ref();
 
     let (events_sender, _) = broadcast::channel(16);
     let queue_cfg = QueueConfig::default();
@@ -594,14 +598,14 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
     let fallback_teu = gas::meter_instructions(std::slice::from_ref(&fallback_instr));
 
     let tx_routed = build_transaction(
-        &chain_id,
+        network_id,
         &routed_account,
         &routed_keypair,
         &time_source,
         vec![routed_instr.clone()],
     );
     let tx_fallback = build_transaction(
-        &chain_id,
+        network_id,
         &fallback_account,
         &fallback_keypair,
         &time_source,

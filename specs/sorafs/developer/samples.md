@@ -56,7 +56,9 @@ Add the file to your test suite (for example under `tests/`) and invoke the
 a deterministic text payload: the CAR archive, chunk plan, manifest (`.to` plus
 JSON), and proof summary. These are deterministic test inputs, not release
 signatures. Production authenticity applies to the aggregate release manifest
-through the governed Ed25519/HSM path. Pair the fixtures with
+through `signing_provider=authenticated_external_signer` with exact
+`signing_backend=software`; accepted output is
+`signer_qualification=software-key-qualified`. Pair the fixtures with
 `fixtures/documentation/sorafs_ci_sample/` when you need a ready-to-clone repository
 layout or moustache template for release notes.
 

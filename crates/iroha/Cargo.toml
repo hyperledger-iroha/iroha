@@ -27,6 +27,8 @@ maintenance = { status = "actively-developed" }
 # Enable SM algorithm support unless downstream consumers opt out via `--no-default-features`.
 default = ["tls-rustls-native-roots", "sm"]
 ids_projection = ["iroha_data_model/ids_projection"]
+# Expose deterministic, secret-free fixture constructors only to repository tooling.
+test-fixtures = ["iroha_data_model/test-fixtures"]
 sm = [
     "iroha_crypto/sm",
     "iroha_data_model/sm",

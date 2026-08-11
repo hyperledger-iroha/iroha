@@ -70,8 +70,8 @@ macro_rules! fixed_id {
 
 fixed_id!(Digest, "An opaque, canonical 32-byte digest.");
 fixed_id!(
-    ChainId,
-    "The chain identifier bound into consensus messages."
+    NetworkId,
+    "The exact genesis-derived network identifier bound into consensus messages."
 );
 fixed_id!(ContextId, "Digest identifying a frozen height context.");
 fixed_id!(ValidatorId, "Canonical identifier of a voting validator.");
@@ -352,7 +352,7 @@ impl CertificateRef {
 pub struct HeightContext {
     protocol_version: u16,
     id: ContextId,
-    chain_id: ChainId,
+    network_id: NetworkId,
     height: u64,
     parent_commit: Option<CertificateRef>,
     snapshot_bootstrap: bool,
@@ -377,7 +377,7 @@ impl HeightContext {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ContextId,
-        chain_id: ChainId,
+        network_id: NetworkId,
         height: u64,
         parent_commit: Option<CertificateRef>,
         epoch: u64,
@@ -390,7 +390,7 @@ impl HeightContext {
     ) -> Result<Self, HeightContextError> {
         Self::new_inner(
             id,
-            chain_id,
+            network_id,
             height,
             parent_commit,
             false,
@@ -416,7 +416,7 @@ impl HeightContext {
     #[allow(clippy::too_many_arguments)]
     pub fn new_snapshot_bootstrap(
         id: ContextId,
-        chain_id: ChainId,
+        network_id: NetworkId,
         height: u64,
         epoch: u64,
         roster: Vec<Validator>,
@@ -428,7 +428,7 @@ impl HeightContext {
     ) -> Result<Self, HeightContextError> {
         Self::new_inner(
             id,
-            chain_id,
+            network_id,
             height,
             None,
             true,
@@ -445,7 +445,7 @@ impl HeightContext {
     #[allow(clippy::too_many_arguments)]
     fn new_inner(
         id: ContextId,
-        chain_id: ChainId,
+        network_id: NetworkId,
         height: u64,
         parent_commit: Option<CertificateRef>,
         snapshot_bootstrap: bool,
@@ -505,7 +505,7 @@ impl HeightContext {
         Ok(Self {
             protocol_version: PROTOCOL_VERSION_V4,
             id,
-            chain_id,
+            network_id,
             height,
             parent_commit,
             snapshot_bootstrap,
@@ -532,10 +532,10 @@ impl HeightContext {
         self.id
     }
 
-    /// Returns the chain identifier.
+    /// Returns the exact genesis-derived network identifier.
     #[must_use]
-    pub const fn chain_id(&self) -> ChainId {
-        self.chain_id
+    pub const fn network_id(&self) -> NetworkId {
+        self.network_id
     }
 
     /// Returns the block height.

@@ -28,7 +28,7 @@ use iroha_core::privacy_engines::{
 };
 use iroha_crypto::{Algorithm, PrivateKey, PublicKey};
 use iroha_data_model::{
-    asset::{AssetBalanceScope, AssetDefinitionId},
+    asset::AssetDefinitionId,
     prelude::AccountId,
     privacy::{
         BootleLanternIssuerPolicyV1, PrivacyAuthorizationKeyDigestV1, PrivacyChallengeV1,
@@ -53,7 +53,7 @@ use crate::privacy_native_actions::{
     VeRangeActionRequestV1, VegaCredentialPresentationActionRequestV1,
     ZkAceAuthorizationActionRequestV1, ZkAmsActionRequestV1, ZkAmsAdmissionCredentialRequestV1,
     ZkAmsBatchAdmissionActionRequestV1, ZkAmsProvisionAccountActionRequestV1,
-    privacy_native_action_capability_for_protocol_v1,
+    parse_canonical_public_balance_scope_v1, privacy_native_action_capability_for_protocol_v1,
 };
 use zk_ace_prover::ZkAcePrivacyTransferV1;
 
@@ -697,7 +697,13 @@ fn decode_zk_ace_request_v1(
     )?;
     exact_fields(
         &public,
-        &["amount_decimal", "destination", "policy", "source"],
+        &[
+            "amount_decimal",
+            "destination",
+            "policy",
+            "public_balance_scope",
+            "source",
+        ],
         "zk-ace-public-action",
     )?;
     let policy = norito::json::from_value::<PrivacyZkAcePolicyRecordV1>(take_value(
@@ -719,15 +725,17 @@ fn decode_zk_ace_request_v1(
         )?,
         "zk-ace-destination",
     )?;
+    let public_balance_scope = parse_canonical_public_balance_scope_v1(&take_text(
+        &mut public,
+        "public_balance_scope",
+        30,
+        "zk-ace-public-balance-scope",
+    )?)
+    .ok_or_else(|| PrivacyWalletBundleErrorV1::at("zk-ace-public-balance-scope"))?;
     let amount = take_decimal_u128(&mut public, "amount_decimal", "zk-ace-amount", false)?;
-    let transfer = ZkAcePrivacyTransferV1::try_new(
-        policy,
-        source,
-        destination,
-        AssetBalanceScope::Global,
-        amount,
-    )
-    .map_err(|_| PrivacyWalletBundleErrorV1::at("zk-ace-transfer"))?;
+    let transfer =
+        ZkAcePrivacyTransferV1::try_new(policy, source, destination, public_balance_scope, amount)
+            .map_err(|_| PrivacyWalletBundleErrorV1::at("zk-ace-transfer"))?;
 
     let mut secret = secret_object(protocol_witness)?;
     exact_fields(
@@ -1476,6 +1484,7 @@ fn decode_orchard_request_v1(
             "expiry_height",
             "minimum_action_count",
             "pool_id_hex",
+            "public_balance_scope",
         ],
         "orchard-public-action",
     )?;
@@ -1483,6 +1492,13 @@ fn decode_orchard_request_v1(
         take_text(&mut public, "asset_definition_id", 512, "orchard-asset")?,
         "orchard-asset",
     )?;
+    let public_balance_scope = parse_canonical_public_balance_scope_v1(&take_text(
+        &mut public,
+        "public_balance_scope",
+        30,
+        "orchard-public-balance-scope",
+    )?)
+    .ok_or_else(|| PrivacyWalletBundleErrorV1::at("orchard-public-balance-scope"))?;
     let pool_id =
         PrivacyPoolIdV1::new(take_hex(&mut public, "pool_id_hex", "orchard-pool", false)?);
     let anchor_bytes = take_hex(&mut public, "anchor_hex", "orchard-anchor", false)?;
@@ -1613,6 +1629,7 @@ fn decode_orchard_request_v1(
     Ok(PrivacyNativeActionRequestV1::Orchard(
         OrchardNoteActionRequestV1 {
             asset_definition_id,
+            public_balance_scope,
             pool_id,
             anchor,
             anchor_epoch,
@@ -1857,6 +1874,7 @@ fn decode_ivm_request_v1(
         &[
             "asset_definition_id",
             "pool_id_hex",
+            "public_balance_scope",
             "root_epoch",
             "state_root_hex",
         ],
@@ -1866,6 +1884,13 @@ fn decode_ivm_request_v1(
         take_text(&mut public, "asset_definition_id", 512, "ivm-asset")?,
         "ivm-asset",
     )?;
+    let public_balance_scope = parse_canonical_public_balance_scope_v1(&take_text(
+        &mut public,
+        "public_balance_scope",
+        30,
+        "ivm-public-balance-scope",
+    )?)
+    .ok_or_else(|| PrivacyWalletBundleErrorV1::at("ivm-public-balance-scope"))?;
     let pool_id = PrivacyPoolIdV1::new(take_hex(&mut public, "pool_id_hex", "ivm-pool", false)?);
     let state_root = PrivacyRootV1::new(take_hex(
         &mut public,
@@ -1972,6 +1997,7 @@ fn decode_ivm_request_v1(
     Ok(PrivacyNativeActionRequestV1::IvmPrivateNote(
         IvmPrivateNoteActionRequestV1 {
             asset_definition_id,
+            public_balance_scope,
             pool_id,
             state_root,
             root_epoch,
@@ -2562,6 +2588,46 @@ mod tests {
                 decode_privacy_wallet_execution_bundle_v1(&mut bundle, public_action.as_bytes(),)
                     .is_err(),
                 "adversarial public action was accepted: {public_action}"
+            );
+        }
+    }
+
+    #[test]
+    fn reserve_backed_public_actions_require_scope_and_reject_unknown_fields_first() {
+        for public_action in [
+            br#"{"amount_decimal":"1","destination":"x","policy":null,"source":"x"}"#.as_slice(),
+            br#"{"amount_decimal":"1","destination":"x","policy":null,"public_balance_scope":"global","source":"x","unexpected":0}"#.as_slice(),
+        ] {
+            assert_eq!(
+                decode_zk_ace_request_v1(public_action, b"{}")
+                    .err()
+                    .expect("closed ZK-ACE public schema")
+                    .stage(),
+                "zk-ace-public-action"
+            );
+        }
+        for public_action in [
+            br#"{"anchor_epoch":1,"anchor_hex":"00","asset_definition_id":"x","expiry_height":1,"minimum_action_count":1,"pool_id_hex":"00"}"#.as_slice(),
+            br#"{"anchor_epoch":1,"anchor_hex":"00","asset_definition_id":"x","expiry_height":1,"minimum_action_count":1,"pool_id_hex":"00","public_balance_scope":"global","unexpected":0}"#.as_slice(),
+        ] {
+            assert_eq!(
+                decode_orchard_request_v1(public_action, b"{}")
+                    .err()
+                    .expect("closed Orchard public schema")
+                    .stage(),
+                "orchard-public-action"
+            );
+        }
+        for public_action in [
+            br#"{"asset_definition_id":"x","pool_id_hex":"00","root_epoch":1,"state_root_hex":"00"}"#.as_slice(),
+            br#"{"asset_definition_id":"x","pool_id_hex":"00","public_balance_scope":"global","root_epoch":1,"state_root_hex":"00","unexpected":0}"#.as_slice(),
+        ] {
+            assert_eq!(
+                decode_ivm_request_v1(public_action, b"{}")
+                    .err()
+                    .expect("closed private-IVM public schema")
+                    .stage(),
+                "ivm-public-action"
             );
         }
     }

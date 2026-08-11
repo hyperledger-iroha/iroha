@@ -2,24 +2,27 @@
 //!
 //! Usage (demo):
 //!   cargo run -p `iroha_torii_shared` --example `connect_wallet` -- \
-//!     --node <http://127.0.0.1:8080> --sid <base64> --token <`token_wallet`>
+//!     --node <http://127.0.0.1:8080> --sid <base64url> \
+//!     --network-id <hash:...#....> --app-pk <base64url> --nonce <base64url> \
+//!     --token <token_wallet> --relay <token_relay> \
+//!     [--action ok|reject|close]
 //!
-//! Notes: This demo uses placeholder ECDH keys for both sides for simplicity.
+//! Supply the signing seed at runtime through
+//! `IROHA_CONNECT_ACCOUNT_SEED_HEX=<32-byte-ed25519-seed>`; never persist it in
+//! source, shell history, or a checked-in configuration file.
 
 #[cfg(feature = "connect")]
 use anyhow::Context;
 #[cfg(feature = "connect")]
 use base64::Engine as _;
 #[cfg(feature = "connect")]
-use blake2::Blake2bVar;
-#[cfg(feature = "connect")]
-use blake2::digest::{Update, VariableOutput};
-#[cfg(feature = "connect")]
 use futures_util::{SinkExt, StreamExt as _};
 #[cfg(feature = "connect")]
 use iroha_crypto::kex::{KeyExchangeScheme as _, X25519Sha256};
 #[cfg(feature = "connect")]
-use iroha_crypto::{Algorithm, KeyGenOption, Signature};
+use iroha_crypto::{Algorithm, KeyGenOption, KeyPair, Signature};
+#[cfg(feature = "connect")]
+use iroha_data_model::{NetworkId, account::AccountId};
 #[cfg(feature = "connect")]
 use iroha_torii_shared::connect as proto;
 #[cfg(feature = "connect")]
@@ -41,25 +44,45 @@ type WalletWebSocket =
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
-    let _flag_node = args.next();
-    let node = args
-        .next()
-        .unwrap_or_else(|| "http://127.0.0.1:8080".into());
-    let _flag_sid = args.next();
-    let sid_b64 = args.next().context("--sid <base64>")?;
-    let _flag_token = args.next();
-    let token = args.next().context("--token <token_wallet>")?;
-    // Optional: action after decrypting request: ok | reject | close
-    let action = args.next().unwrap_or_else(|| "ok".into());
-
-    let sid_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(sid_b64.as_bytes())
-        .context("sid b64")?;
-    if sid_bytes.len() != 32 {
-        anyhow::bail!("sid must be 32 bytes");
+    let node = required_arg(&mut args, "--node")?;
+    let sid_b64 = required_arg(&mut args, "--sid")?;
+    let network_id_literal = required_arg(&mut args, "--network-id")?;
+    let network_id: NetworkId = network_id_literal.parse()?;
+    if network_id.to_string() != network_id_literal {
+        anyhow::bail!("--network-id must use the canonical checksummed spelling");
     }
-    let mut sid = [0u8; 32];
-    sid.copy_from_slice(&sid_bytes);
+    let app_pk_b64 = required_arg(&mut args, "--app-pk")?;
+    let nonce_b64 = required_arg(&mut args, "--nonce")?;
+    let token = required_arg(&mut args, "--token")?;
+    let relay_token = required_arg(&mut args, "--relay")?;
+    let action = match args.next() {
+        Some(flag) if flag == "--action" => args
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("--action requires ok, reject, or close"))?,
+        Some(other) => anyhow::bail!("unexpected argument `{other}`; expected --action"),
+        None => "ok".into(),
+    };
+    if let Some(other) = args.next() {
+        anyhow::bail!("unexpected trailing argument `{other}`");
+    }
+
+    let sid = decode_canonical_base64url::<32>(&sid_b64, "sid")?;
+    let app_pk_bytes = decode_canonical_base64url::<32>(&app_pk_b64, "app_pk")?;
+    let nonce = decode_canonical_base64url::<16>(&nonce_b64, "nonce")?;
+    if app_pk_bytes.iter().all(|byte| *byte == 0) || nonce.iter().all(|byte| *byte == 0) {
+        anyhow::bail!("app_pk and nonce must not be all zero");
+    }
+    if sdk::derive_session_id(&network_id, &app_pk_bytes, &nonce) != sid {
+        anyhow::bail!("sid is not bound to the exact NetworkId, app_pk, and nonce");
+    }
+    let account_seed_hex = std::env::var("IROHA_CONNECT_ACCOUNT_SEED_HEX")
+        .context("set runtime-only IROHA_CONNECT_ACCOUNT_SEED_HEX")?;
+    let account_seed = hex::decode(account_seed_hex)?;
+    if account_seed.len() != 32 || account_seed.iter().all(|byte| *byte == 0) {
+        anyhow::bail!("account seed must be exactly 32 nonzero bytes");
+    }
+    let account_key_pair = KeyPair::try_from_seed(account_seed, Algorithm::Ed25519)?;
+    let account_id = AccountId::new(account_key_pair.public_key().clone()).to_string();
 
     // Connect WS as wallet
     let ws_url = format!(
@@ -74,21 +97,60 @@ async fn main() -> anyhow::Result<()> {
     let (mut ws, _resp) = tokio_tungstenite::connect_async(request).await?;
     eprintln!("wallet: connected WS");
 
-    // Derive deterministic demo ephemerals from sid so app/wallet interoperate
-    let mut app_seed = [0u8; 32];
-    let mut b2 = Blake2bVar::new(32).unwrap();
-    b2.update(b"connect:demo:app|");
-    b2.update(&sid);
-    b2.finalize_variable(&mut app_seed).unwrap();
-    let mut wallet_seed = [0u8; 32];
-    let mut b3 = Blake2bVar::new(32).unwrap();
-    b3.update(b"connect:demo:wallet|");
-    b3.update(&sid);
-    b3.finalize_variable(&mut wallet_seed).unwrap();
+    let open_message = ws.next().await.context("Open frame")??;
+    let Message::Binary(open_bytes) = open_message else {
+        anyhow::bail!("expected binary Open frame");
+    };
+    let mut open_cursor = open_bytes.as_ref();
+    let open_frame = proto::ConnectFrameV1::decode_all(&mut open_cursor).context("decode Open")?;
+    if open_frame.sid != sid || open_frame.dir != proto::Dir::AppToWallet || open_frame.seq != 1 {
+        anyhow::bail!("Open substituted the session, direction, or sequence");
+    }
+    let proto::FrameKind::Control(proto::ConnectControlV1::Open {
+        app_pk,
+        constraints,
+        permissions,
+        ..
+    }) = open_frame.kind
+    else {
+        anyhow::bail!("expected one-shot Open control");
+    };
+    if app_pk != app_pk_bytes || constraints.network_id != network_id {
+        anyhow::bail!("Open does not match the canonical invite identity");
+    }
+
     let x = X25519Sha256::new();
-    let (app_pk, _app_sk) = x.keypair(KeyGenOption::UseSeed(app_seed.to_vec()));
-    let (_wallet_pk, wallet_sk) = x.keypair(KeyGenOption::UseSeed(wallet_seed.to_vec()));
-    let app_pk_bytes: [u8; 32] = *app_pk.as_bytes();
+    let (wallet_pk, wallet_sk) = x.try_keypair(KeyGenOption::Random)?;
+    let wallet_pk_bytes: [u8; 32] = *wallet_pk.as_bytes();
+    let relay_auth = sdk::relay_auth_hash(&sid, &relay_token);
+    let approval_preimage = sdk::build_approve_preimage(
+        &constraints,
+        &sid,
+        &app_pk_bytes,
+        &wallet_pk_bytes,
+        &account_id,
+        permissions.as_ref(),
+        None,
+        &relay_auth,
+    );
+    let approval = proto::ConnectFrameV1 {
+        sid,
+        dir: proto::Dir::WalletToApp,
+        seq: 1,
+        kind: proto::FrameKind::Control(proto::ConnectControlV1::Approve {
+            wallet_pk: wallet_pk_bytes,
+            account_id,
+            permissions,
+            proof: None,
+            sig_wallet: proto::WalletSignatureV1::new(
+                Algorithm::Ed25519,
+                Signature::try_new(account_key_pair.private_key(), &approval_preimage)?,
+            ),
+        }),
+    };
+    ws.send(Message::Binary(Bytes::from(approval.encode())))
+        .await?;
+
     let (k_app, k_wallet) = sdk::x25519_derive_keys(&wallet_sk.to_bytes(), &app_pk_bytes, &sid)
         .expect("x25519 derive keys");
 
@@ -99,6 +161,9 @@ async fn main() -> anyhow::Result<()> {
     };
     let mut cursor = bin.as_ref();
     let frame = proto::ConnectFrameV1::decode_all(&mut cursor).context("decode frame")?;
+    if frame.sid != sid || frame.dir != proto::Dir::AppToWallet || frame.seq != 2 {
+        anyhow::bail!("sign request substituted the session, direction, or sequence");
+    }
     let env = match &frame.kind {
         proto::FrameKind::Ciphertext(_) => {
             sdk::open_envelope_current(&k_app, &frame).map_err(|e| anyhow::anyhow!(e))?
@@ -107,8 +172,44 @@ async fn main() -> anyhow::Result<()> {
     };
     log_wallet_payload(&env);
 
-    send_wallet_action(&mut ws, &k_wallet, &sid, action.as_str()).await?;
+    send_wallet_action(
+        &mut ws,
+        &k_wallet,
+        &sid,
+        &env,
+        &account_key_pair,
+        action.as_str(),
+    )
+    .await?;
     Ok(())
+}
+
+#[cfg(feature = "connect")]
+fn decode_canonical_base64url<const N: usize>(value: &str, field: &str) -> anyhow::Result<[u8; N]> {
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(value)
+        .with_context(|| format!("{field} must be canonical unpadded base64url"))?;
+    if base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes) != value {
+        anyhow::bail!("{field} must use its canonical unpadded base64url spelling");
+    }
+    bytes
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("{field} must decode to exactly {N} bytes"))
+}
+
+#[cfg(feature = "connect")]
+fn required_arg(
+    args: &mut impl Iterator<Item = String>,
+    expected_flag: &'static str,
+) -> anyhow::Result<String> {
+    let supplied_flag = args
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing required {expected_flag} argument"))?;
+    if supplied_flag != expected_flag {
+        anyhow::bail!("expected {expected_flag}, found `{supplied_flag}`");
+    }
+    args.next()
+        .ok_or_else(|| anyhow::anyhow!("{expected_flag} requires a value"))
 }
 
 // Fallback stub when `tokio-tungstenite` `connect` feature is not enabled.
@@ -167,18 +268,25 @@ async fn send_wallet_action(
     ws: &mut WalletWebSocket,
     k_wallet: &[u8; 32],
     sid: &[u8; 32],
+    request: &proto::EnvelopeV1,
+    account_key_pair: &KeyPair,
     action: &str,
 ) -> anyhow::Result<()> {
     match action {
         "ok" => {
+            let message = match &request.payload {
+                proto::ConnectPayloadV1::SignRequestTx { tx_bytes } => tx_bytes.as_slice(),
+                proto::ConnectPayloadV1::SignRequestRaw { bytes, .. } => bytes.as_slice(),
+                _ => anyhow::bail!("ok action requires a signing request"),
+            };
             let reply = proto::ConnectPayloadV1::SignResultOk {
                 signature: proto::WalletSignatureV1::new(
                     Algorithm::Ed25519,
-                    Signature::try_from_bytes(&[0xDE; 64])?,
+                    Signature::try_new(account_key_pair.private_key(), message)?,
                 ),
             };
             let frame =
-                sdk::seal_envelope_current(k_wallet, sid, proto::Dir::WalletToApp, 1, reply);
+                sdk::seal_envelope_current(k_wallet, sid, proto::Dir::WalletToApp, 2, reply);
             ws.send(Message::Binary(Bytes::from(frame.encode())))
                 .await?;
             eprintln!("wallet: sent SignResultOk");
@@ -187,7 +295,7 @@ async fn send_wallet_action(
                 k_wallet,
                 sid,
                 proto::Dir::WalletToApp,
-                2,
+                3,
                 proto::Role::Wallet,
                 1000,
                 "done".into(),
@@ -202,7 +310,7 @@ async fn send_wallet_action(
                 k_wallet,
                 sid,
                 proto::Dir::WalletToApp,
-                1,
+                2,
                 401,
                 "UNAUTHORIZED".into(),
                 "user denied".into(),
@@ -215,7 +323,7 @@ async fn send_wallet_action(
                 k_wallet,
                 sid,
                 proto::Dir::WalletToApp,
-                1,
+                2,
                 proto::Role::Wallet,
                 1000,
                 "done".into(),

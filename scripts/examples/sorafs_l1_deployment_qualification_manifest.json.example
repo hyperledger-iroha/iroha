@@ -1,30 +1,33 @@
 {
   "schema": "sorafs.l1.deployment_qualification.v1",
   "deployment": {
+    "chain_discriminant": 369,
+    "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0",
     "deployment_id": "sorafs-mainnet-2026-07",
-    "environment": "production"
+    "environment": "production",
+    "network": "taira"
   },
   "validators": [
     {
-      "validator_id": "validator-a",
+      "validator_id": "taira-validator-1",
       "voting": true,
       "da_enabled": true,
       "rbc_enabled": true
     },
     {
-      "validator_id": "validator-b",
+      "validator_id": "taira-validator-2",
       "voting": true,
       "da_enabled": true,
       "rbc_enabled": true
     },
     {
-      "validator_id": "validator-c",
+      "validator_id": "taira-validator-3",
       "voting": true,
       "da_enabled": true,
       "rbc_enabled": true
     },
     {
-      "validator_id": "validator-d",
+      "validator_id": "taira-validator-4",
       "voting": true,
       "da_enabled": true,
       "rbc_enabled": true

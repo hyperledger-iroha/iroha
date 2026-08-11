@@ -27,7 +27,10 @@ pub(super) const OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1: u16 =
 pub(super) const OPERATION_PROVIDER_INGEST_RETENTION_LOAD_V1: u16 = 25;
 pub(super) const OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1: u16 = 26;
 pub(super) const OPERATION_PROVIDER_INGEST_SOURCE_READINESS_V1: u16 = 27;
-pub(super) const OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1: u16 = 28;
+// Operation 28 carried the retired two-field pre-release source request. It is
+// deliberately not accepted: V2 adds the optional Musubi archive commitment
+// without silently reinterpreting the old canonical wire layout.
+pub(super) const OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2: u16 = 29;
 pub(super) const OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1: u16 = 30;
 pub(super) const OPERATION_MODERATION_QUARANTINE_UNWRAP_DEK_V1: u16 = 31;
 pub(super) const OPERATION_EVIDENCE_VIEWER_ISSUE_CHALLENGE_V1: u16 = 40;
@@ -114,6 +117,188 @@ pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1: u16 = 124
 // the authenticated slot and operation provide the request-domain binding.
 pub(super) const CHECKPOINT_LOAD_REQUEST_VERSION_V1: u8 = 1;
 
+#[derive(Clone, PartialEq, Eq, Decode, Encode)]
+pub(super) struct SignRequestWireV1 {
+    pub(super) payload: Vec<u8>,
+}
+
+impl fmt::Debug for SignRequestWireV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignRequestWireV1")
+            .field("payload_len", &self.payload.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for SignRequestWireV1 {
+    fn drop(&mut self) {
+        self.payload.fill(0);
+        let _ = std::hint::black_box(&self.payload);
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Decode, Encode)]
+pub(super) struct PurposeSignRequestWireV1 {
+    pub(super) purpose: u8,
+    pub(super) payload: Vec<u8>,
+}
+
+impl fmt::Debug for PurposeSignRequestWireV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PurposeSignRequestWireV1")
+            .field("purpose", &self.purpose)
+            .field("payload_len", &self.payload.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for PurposeSignRequestWireV1 {
+    fn drop(&mut self) {
+        self.payload.fill(0);
+        let _ = std::hint::black_box(&self.payload);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub(super) struct SignResultWireV1 {
+    pub(super) signature: [u8; 64],
+}
+
+#[derive(Clone, PartialEq, Eq, Decode, Encode)]
+pub(super) struct VariableSignatureResultWireV1 {
+    pub(super) signature: Vec<u8>,
+}
+
+impl fmt::Debug for VariableSignatureResultWireV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VariableSignatureResultWireV1")
+            .field("signature_len", &self.signature.len())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub(super) struct PopIssuerSignRequestWireV1 {
+    pub(super) purpose: u8,
+    pub(super) digest: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub(super) struct PopIssuerSignResultWireV1 {
+    pub(super) signature: [u8; 64],
+}
+
+pub(super) fn governance_signing_purpose_from_wire(
+    value: u8,
+) -> Result<sorafs_node::GovernanceDagSigningPurposeV1, BrokerError> {
+    sorafs_node::GovernanceDagSigningPurposeV1::try_from_wire_id(value).ok_or(BrokerError::Rejected)
+}
+
+pub(super) fn validate_governance_purpose_signing_request(
+    signing: &PurposeSignRequestWireV1,
+    binding: &ProviderBindingWireV1,
+) -> Result<sorafs_node::GovernanceDagSigningPurposeV1, BrokerError> {
+    validate_signing_payload_len(signing.payload.len())?;
+    let purpose = governance_signing_purpose_from_wire(signing.purpose)?;
+    let peer_id = binding
+        .governance_dag_publisher_peer_id
+        .as_deref()
+        .ok_or(BrokerError::BindingMismatch)?;
+    let public_key = binding
+        .governance_dag_publisher_public_key
+        .ok_or(BrokerError::BindingMismatch)?;
+    let valid = match purpose {
+        sorafs_node::GovernanceDagSigningPurposeV1::LogNode => {
+            sorafs_manifest::governance::
+                validate_governance_log_node_signing_payload_for_publisher_v1(
+                    &signing.payload,
+                    peer_id,
+                )
+        }
+        sorafs_node::GovernanceDagSigningPurposeV1::DagBlock => {
+            sorafs_manifest::governance::
+                validate_governance_dag_block_signing_payload_for_publisher_v1(
+                    &signing.payload,
+                    peer_id,
+                    public_key,
+                )
+        }
+        sorafs_node::GovernanceDagSigningPurposeV1::DagHead => {
+            sorafs_manifest::governance::
+                validate_governance_dag_head_signing_payload_for_publisher_v1(
+                    &signing.payload,
+                    peer_id,
+                )
+        }
+        sorafs_node::GovernanceDagSigningPurposeV1::KeyTransition
+        | sorafs_node::GovernanceDagSigningPurposeV1::QualificationArchive => {
+            return sorafs_node::validate_governance_dag_control_signing_payload_v1(
+                purpose,
+                &signing.payload,
+                peer_id,
+                public_key,
+            )
+            .map(|()| purpose)
+            .map_err(|_| BrokerError::Rejected);
+        }
+    };
+    valid.map_err(|_| BrokerError::Rejected)?;
+    Ok(purpose)
+}
+
+pub(super) fn validate_governance_sign_operation_result(
+    request: &OperationRequestV1,
+    result: &[u8],
+) -> Result<(), BrokerError> {
+    let signed =
+        decode_canonical::<SignResultWireV1>(result, MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1)?;
+    let sign = decode_canonical::<PurposeSignRequestWireV1>(
+        &request.payload,
+        MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
+    )?;
+    validate_governance_purpose_signing_request(&sign, &request.binding)
+        .map_err(|_| BrokerError::Protocol)?;
+    let public_key = request
+        .binding
+        .governance_dag_publisher_public_key
+        .ok_or(BrokerError::BindingMismatch)?;
+    verify_evidence_viewer_ed25519_signature(public_key, signed.signature, &sign.payload)
+        .map_err(|_| BrokerError::Protocol)
+}
+
+pub(super) fn evidence_signing_purpose_from_wire(
+    value: u8,
+) -> Result<sorafs_node::evidence_viewer::EvidenceViewerSigningPurposeV1, BrokerError> {
+    sorafs_node::evidence_viewer::EvidenceViewerSigningPurposeV1::try_from_wire_id(value)
+        .ok_or(BrokerError::Rejected)
+}
+
+pub(super) fn validate_evidence_purpose_signing_request(
+    signing: &PurposeSignRequestWireV1,
+    binding: &ProviderBindingWireV1,
+) -> Result<sorafs_node::evidence_viewer::EvidenceViewerSigningPurposeV1, BrokerError> {
+    if signing.payload.is_empty()
+        || signing.payload.len() > MAX_EVIDENCE_VIEWER_RECEIPT_MESSAGE_BYTES_V1
+    {
+        return Err(BrokerError::Rejected);
+    }
+    let purpose = evidence_signing_purpose_from_wire(signing.purpose)?;
+    let public_key = binding
+        .evidence_viewer_receipt_signer_public_key
+        .ok_or(BrokerError::BindingMismatch)?;
+    sorafs_node::evidence_viewer::validate_evidence_viewer_signing_message_v1(
+        purpose,
+        &signing.payload,
+        &binding.handle,
+        public_key,
+    )
+    .map_err(|_| BrokerError::Rejected)?;
+    Ok(purpose)
+}
+
 pub(super) const STATUS_OK_V1: u8 = 0;
 pub(super) const STATUS_REJECTED_V1: u8 = 1;
 pub(super) const STATUS_CONFLICT_V1: u8 = 2;
@@ -149,7 +334,7 @@ pub(super) const PROVIDER_INGEST_SOURCE_CHUNK_DOMAIN_V1: &[u8] =
 
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct PopRuntimeOpenResultWireV1 {
-    pub(super) issuer_hsm_key_id: String,
+    pub(super) issuer_signer_handle: String,
     pub(super) issuer_public_key: [u8; 32],
     pub(super) enrollment_recipient_key_id: String,
     pub(super) enrollment_recipient_public_key_digest: [u8; 32],
@@ -212,7 +397,7 @@ pub(super) fn validate_pop_open_result(
     result: &PopRuntimeOpenResultWireV1,
     exact: &PopCredentialRuntimeBindingWireV1,
 ) -> Result<(), BrokerError> {
-    if result.issuer_hsm_key_id != exact.issuer_hsm_key_id
+    if result.issuer_signer_handle != exact.issuer_signer_handle
         || result.issuer_public_key != exact.issuer_public_key
         || result.enrollment_recipient_key_id != exact.enrollment_recipient_key_id
         || result.enrollment_recipient_public_key_digest
@@ -303,7 +488,7 @@ mod pop_recipient_wire_tests {
         PopCredentialRuntimeBindingWireV1 {
             issuer_policy_digest: [0x11; 32],
             issuer_id: "pop-issuer-production-primary".to_owned(),
-            issuer_hsm_key_id: "pkcs11:pop/issuer:primary".to_owned(),
+            issuer_signer_handle: "software://sorafs/pop-credentials/primary".to_owned(),
             issuer_public_key: [0x12; 32],
             enrollment_recipient_key_id: "kms:pop/enrollment:primary".to_owned(),
             enrollment_recipient_public_key_digest: [0x13; 32],
@@ -335,7 +520,7 @@ mod pop_recipient_wire_tests {
     fn pop_runtime_open_is_public_and_legacy_operation_is_retired() {
         let exact = exact_binding();
         let outcome = PopRuntimeOpenResultWireV1 {
-            issuer_hsm_key_id: exact.issuer_hsm_key_id.clone(),
+            issuer_signer_handle: exact.issuer_signer_handle.clone(),
             issuer_public_key: exact.issuer_public_key,
             enrollment_recipient_key_id: exact.enrollment_recipient_key_id.clone(),
             enrollment_recipient_public_key_digest: exact.enrollment_recipient_public_key_digest,
@@ -678,7 +863,7 @@ pub(super) struct AppealFinanceCheckpointBindingWireV1 {
 pub(super) struct PopCredentialRuntimeBindingWireV1 {
     pub(super) issuer_policy_digest: [u8; 32],
     pub(super) issuer_id: String,
-    pub(super) issuer_hsm_key_id: String,
+    pub(super) issuer_signer_handle: String,
     pub(super) issuer_public_key: [u8; 32],
     pub(super) enrollment_recipient_key_id: String,
     pub(super) enrollment_recipient_public_key_digest: [u8; 32],
@@ -711,7 +896,7 @@ impl From<&crate::runtime_provider_registry::PopCredentialRuntimeBindingV1>
         Self {
             issuer_policy_digest: binding.issuer_policy_digest,
             issuer_id: binding.issuer_id.clone(),
-            issuer_hsm_key_id: binding.issuer_hsm_key_id.clone(),
+            issuer_signer_handle: binding.issuer_signer_handle.clone(),
             issuer_public_key: binding.issuer_public_key,
             enrollment_recipient_key_id: binding.enrollment_recipient_key_id.clone(),
             enrollment_recipient_public_key_digest: binding.enrollment_recipient_public_key_digest,

@@ -1176,7 +1176,7 @@ _SERVE_INGRESS_GATE_WORKER_REGRESSION_TEST_SHA256 = {
         "0c27de66d91cd2c0744cf962e673de7e54881838e12f4d920cbfeabeccbcf875"
     ),
     "selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle": (
-        "41a895827dc6eaa478f0ba88949ebaa405ce3fe05789201b0e48544c304bf303"
+        "956cda57dac79761f171293376a988eae0c1b2c8ad79dd0f5228f7a978d46f75"
     ),
 }
 _SERVICED_CANDIDATE_STORE_STRUCT_SHA256 = {
@@ -1322,11 +1322,6 @@ _SERVICED_CANDIDATE_PRODUCTION_STRUCT_SHA256 = {
     ),
     "DeferredServiceEvidence": (
         "f988f1de9f3d9d6b89880bc8ad31585ea848d0d098a2abb8bb07f874fdde7812"
-    ),
-}
-_SERVICED_CANDIDATE_RUNNER_ITEM_SHA256 = {
-    "run_inner": (
-        "e2b02f36f0f3111dc2946fa3cb608697a3e172140b9c14c37cdd1a83377302ac"
     ),
 }
 _SERVICED_CANDIDATE_REGRESSION_TEST_SHA256 = {
@@ -1516,7 +1511,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "fabc9cf096cec0f7c03ea8a13ebbdb00c9f6556feec6544fa2f4b719662b62f8"
     ),
     "open_with_aggregator_and_publication_with_capacity": (
-        "10aefb03ef7e3f60e44d96637545b9f1073eaf03126db8dcb67b2ddf72d7f49a"
+        "f080dd6418dbbfb1cbc3cc762c16a6ac9b3842eeb5e2934baf8e574e85d32719"
     ),
     "dormant_producer_lifecycle": (
         "3103fd04b61950b06212a9e50f4ae43b4b8ad35949566680afb8f721c133155e"
@@ -1613,7 +1608,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "a9dcc40ab11d2af33c91c5449a24bd524289d8a00e89ea2cdfafe99b27ed2a86"
     ),
     "with_driver_and_lifecycle_ordinals": (
-        "55334cf5d0666b58324bcd332d9ab9098a36adbfe2dc32cda3a9dcf88a3d1367"
+        "c64394eb23aa7a0f2cebc630ac2c35558f6a31b54653d52bf4157cf065179b80"
     ),
     "freeze_due_clock_owners": (
         "d28538a60f9391277b1db6c60b71ed694c1d776de425305c52f8703450ebae85"
@@ -1625,14 +1620,12 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "61dfb5c5bed49fe8191be06bd09a2e929f70da89b1ff829add86f8966fd90f01"
     ),
     "minimum_runnable_lifecycle_ordinal": (
-        "3c782c6e97e8a3639ea8d9c1eece964b64f9863f2cface7013c95d6e8ed17c61"
+        "18d848ad2bd2263010994b2649313c9e3d9d1db9b2117a9c772120478bb65fd3"
     ),
     "complete_leader_wire_runtime_owner": (
         "e17e62beccb6e2e219f3aac01c126456531ffb0448930b83026d9cf02da6695c"
     ),
-    "step": (
-        "b6fff2e4570afb934840f7d1f6cb9070490d66638101f31d1d4efc74c9180617"
-    ),
+    "step": "bafd283fd50fe929e000481a8314f98cd0ad3aef30c8e8677a93b0784045136c",
     "finish_dispatched_step": (
         "79b15a8142c81629b078a64822c4bba3a7cc930d1da75eb816c7f64609021285"
     ),
@@ -1653,9 +1646,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256 = {
-    "run_inner": (
-        "1fea9bed1cf4cedeefd640f47d99367b73d9c1e82e2bba0a58d3aca1315578b6"
-    ),
+    "run_inner": "ab23dad98c55d25f940f2da39ba7c053e6a20fa3d27fa7ed87900a0dd31ee0fe",
 }
 _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256 = {
     "snapshot_roundtrips_and_rejects_a_b_a_resurrection": (
@@ -1799,7 +1790,7 @@ _TIMEOUT_VOTE_SEMANTIC_CAPACITY_ITEM_SHA256 = {
         "329002c5d70440e4b06c7d6b7953abefffad11e097f8a6f2be43df02a07d5701"
     ),
     "admit_authenticated_payload": (
-        "5a415b6dd963bff9d6e5c90187d9f74558c05ac0a3534420a2a34d2fe335262d"
+        "b4c6e1a0d4c6f726e59c20494d6c189813b2f9b5d34fe73811219e539968ecb6"
     ),
     "prune_ingress_records": (
         "380a67be7fc040a1424c45ebbdd08fac6087450df43acb1521fa756df5ca1db8"
@@ -1807,7 +1798,7 @@ _TIMEOUT_VOTE_SEMANTIC_CAPACITY_ITEM_SHA256 = {
 }
 _TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256 = {
     "capacity_bypass_records_follow_current_lock_and_timeout_view": (
-        "c4f9a66c50a9216e3e07a3a01fff45d7753562a68bd06e08763cb4a30ef87cfc"
+        "5132c93697d0b4ed29e1b10cd1ca0fb3e2022ac5735afa7c26efb949b6065b65"
     ),
     "certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote": (
         "fe36421732ae85439ae7bcdc1a3c3162470a49525736ea4feeef003f2744a027"

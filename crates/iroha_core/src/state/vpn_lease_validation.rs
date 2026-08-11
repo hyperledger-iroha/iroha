@@ -11,22 +11,22 @@ fn validate_vpn_lease_quote_projection(record: &VpnLeaseRecordV1) -> Result<(), 
         ));
     }
     let canonical_lease_id =
-        derive_vpn_lease_id_v1(&quote.chain_id, quote.quote_id, &quote.client_account_id);
+        derive_vpn_lease_id_v1(&quote.network_id, quote.quote_id, &quote.client_account_id);
     if quote.lease_id != canonical_lease_id {
         return Err(format!(
-            "VPN lease {} retains a non-canonical chain/client/quote id",
+            "VPN lease {} retains a non-canonical network/client/quote id",
             hex::encode(record.lease_id)
         ));
     }
     let canonical_session_id = derive_vpn_session_id_v1(
-        &quote.chain_id,
+        &quote.network_id,
         quote.quote_id,
         &quote.client_account_id,
         quote.address_slot,
     );
     if quote.session_id != canonical_session_id {
         return Err(format!(
-            "VPN lease {} retains a non-canonical chain/client/quote/slot session id",
+            "VPN lease {} retains a non-canonical network/client/quote/slot session id",
             hex::encode(record.lease_id)
         ));
     }
@@ -98,7 +98,7 @@ fn validate_vpn_lease_quote_projection(record: &VpnLeaseRecordV1) -> Result<(), 
         ));
     }
     let canonical_custody = crate::smartcontracts::isi::vpn::vpn_lease_custody_account_id(
-        &quote.chain_id,
+        &quote.network_id,
         &quote.lease_id,
         &quote.asset_definition,
     )
@@ -234,6 +234,19 @@ fn validate_vpn_lease_quote_projection(record: &VpnLeaseRecordV1) -> Result<(), 
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_vpn_lease_network(
+    record: &VpnLeaseRecordV1,
+    expected_network_id: &iroha_data_model::NetworkId,
+) -> Result<(), String> {
+    if &record.signed_quote.body.network_id != expected_network_id {
+        return Err(format!(
+            "VPN lease {} belongs to a different exact network",
+            hex::encode(record.lease_id)
+        ));
     }
     Ok(())
 }

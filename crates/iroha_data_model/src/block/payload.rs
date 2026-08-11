@@ -113,6 +113,8 @@ mod model {
         /// Completed AXT envelopes recorded while executing the block.
         #[norito(default)]
         pub axt_envelopes: Vec<crate::nexus::AxtEnvelopeRecord>,
+        /// Canonically ordered post-execution lane effects authenticated by the global CommitQC.
+        pub lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
         /// Trigger completion events recorded while executing the block.
         #[norito(default)]
         pub trigger_completions: Vec<TriggerCompletedEvent>,
@@ -207,6 +209,7 @@ impl PartialEq for BlockResult {
             && self.committed_fragment_count == other.committed_fragment_count
             && self.fastpq_transcripts == other.fastpq_transcripts
             && self.axt_envelopes == other.axt_envelopes
+            && self.lane_finality_statements == other.lane_finality_statements
             && self.trigger_completions == other.trigger_completions
             && self.axt_policy_snapshot == other.axt_policy_snapshot
     }
@@ -230,6 +233,7 @@ impl Ord for BlockResult {
             &self.committed_fragment_count,
             &self.fastpq_transcripts,
             &self.axt_envelopes,
+            &self.lane_finality_statements,
             &self.trigger_completions,
             &self.axt_policy_snapshot,
         )
@@ -241,6 +245,7 @@ impl Ord for BlockResult {
                 &other.committed_fragment_count,
                 &other.fastpq_transcripts,
                 &other.axt_envelopes,
+                &other.lane_finality_statements,
                 &other.trigger_completions,
                 &other.axt_policy_snapshot,
             ))

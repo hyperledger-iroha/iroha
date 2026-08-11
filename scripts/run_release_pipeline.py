@@ -12,7 +12,7 @@ Example:
         --version <release-version> \\
         --previous-tag <previous-release-tag> \\
         --output-dir artifacts/releases/<release-version> \\
-        --external-signer /opt/iroha/bin/pkcs11-ed25519-sign \\
+        --external-signer /opt/iroha/bin/authenticated-external-software-ed25519-sign \\
         --signing-public-key /run/iroha-release/ed25519-public.raw \\
         --trusted-signing-fingerprint <reviewed-lowercase-sha256> \\
         --release-manifest-verifier /opt/iroha/bin/sorafs-validate \\
@@ -74,6 +74,9 @@ IMAGE_PLATFORM_TARGETS = {
 }
 REQUIRED_IMAGE_PLATFORMS = tuple(IMAGE_PLATFORM_TARGETS)
 AGGREGATE_TARGET = "multi-target"
+RELEASE_SIGNING_PROVIDER = "authenticated_external_signer"
+RELEASE_SIGNING_BACKEND = "software"
+RELEASE_SIGNER_QUALIFICATION = "software-key-qualified"
 
 
 class PipelineError(RuntimeError):
@@ -515,8 +518,9 @@ def main() -> int:
     parser.add_argument(
         "--external-signer",
         help=(
-            "Reviewed PKCS#11/HSM Ed25519 wrapper invoked only with the final "
-            "canonical aggregate-manifest path and a new raw-signature output path."
+            "Reviewed adapter for the authenticated external software Ed25519 "
+            "signer, invoked only with the final canonical aggregate-manifest "
+            "path and a new raw-signature output path."
         ),
     )
     parser.add_argument(
@@ -1578,6 +1582,13 @@ def main() -> int:
                     Path(args.release_manifest_verifier),
                     args.trusted_release_manifest_verifier_sha256,
                 )
+                aggregate_signing_result.update(
+                    {
+                        "signing_provider": RELEASE_SIGNING_PROVIDER,
+                        "signing_backend": RELEASE_SIGNING_BACKEND,
+                        "signer_qualification": RELEASE_SIGNER_QUALIFICATION,
+                    }
+                )
             except ReleaseManifestSignatureError as exc:
                 raise PipelineError(
                     f"Aggregate release-manifest signing failed: {exc}"
@@ -1718,6 +1729,20 @@ def main() -> int:
             )
         )
         lines.append("Aggregate manifest public key: release_manifest.json.pub")
+        lines.append(
+            "Aggregate manifest signing provider: " + RELEASE_SIGNING_PROVIDER
+        )
+        lines.append(
+            "Aggregate manifest signing backend: " + RELEASE_SIGNING_BACKEND
+        )
+        lines.append(
+            "Aggregate manifest signer qualification: "
+            + (
+                RELEASE_SIGNER_QUALIFICATION
+                if aggregate_signing_result is not None
+                else "unqualified (dry-run target: software-key-qualified)"
+            )
+        )
         lines.append(
             "Aggregate manifest native verifier: "
             f"{args.release_manifest_verifier} "

@@ -215,9 +215,13 @@ mod model {
         #[getset(get = "pub")]
         #[registrable_builder(skip, init = Quantity::zero())]
         pub total_quantity: Quantity,
-        /// Confidential asset policy controlling shielded operations.
+        /// Runtime confidential-asset policy controlling shielded operations.
+        ///
+        /// Registration always initializes this field to [`AssetConfidentialPolicy::default`].
+        /// It is deliberately absent from [`NewAssetDefinition`]; verifier-backed activation
+        /// must use [`crate::isi::zk::RegisterZkAsset`].
         #[getset(get = "pub")]
-        #[registrable_builder(default = AssetConfidentialPolicy::default())]
+        #[registrable_builder(skip, init = AssetConfidentialPolicy::default())]
         pub confidential_policy: AssetConfidentialPolicy,
     }
 
@@ -377,6 +381,7 @@ mod model {
     #[repr(u8)]
     pub enum ConfidentialPolicyMode {
         /// Asset behaves transparently; shielded instructions are rejected.
+        /// This mode is only valid before confidential activation in ABI V1.
         #[display("TransparentOnly")]
         TransparentOnly,
         /// All issuance and movement must occur through confidential instructions.
@@ -422,7 +427,7 @@ mod model {
         /// Policy mode active before this transition was scheduled.
         #[getset(get_copy = "pub")]
         pub previous_mode: ConfidentialPolicyMode,
-        /// Transition identifier for replay protection and auditability.
+        /// Transition identifier used to correlate cancellation and audit records.
         #[getset(get = "pub")]
         pub transition_id: Hash,
         /// Optional conversion window length (in blocks) prior to finalizing the transition.
@@ -533,7 +538,10 @@ impl AssetDefinition {
         self.owned_by = owner;
     }
 
-    /// Set the confidential policy configuration.
+    /// Set the runtime confidential policy configuration.
+    ///
+    /// Consensus execution uses this after validating the canonical confidential verifier
+    /// registration or a valid policy transition. Asset-registration payloads cannot call it.
     pub fn set_confidential_policy(&mut self, policy: AssetConfidentialPolicy) {
         self.confidential_policy = policy;
     }
@@ -566,14 +574,6 @@ impl NewAssetDefinition {
         self.mintable = Mintable::limited_from_u32(tokens)?;
         Ok(self)
     }
-
-    /// Set a custom confidential policy.
-    #[inline]
-    #[must_use]
-    pub fn confidential_policy(mut self, policy: AssetConfidentialPolicy) -> Self {
-        self.confidential_policy = policy;
-        self
-    }
 }
 
 impl Default for AssetConfidentialPolicy {
@@ -589,6 +589,41 @@ impl Default for AssetConfidentialPolicy {
 }
 
 impl AssetConfidentialPolicy {
+    fn transition_is_valid_for_current_mode(
+        &self,
+        transition: ConfidentialPolicyTransition,
+    ) -> bool {
+        transition.previous_mode == self.mode
+            && matches!(
+                (self.mode, transition.new_mode),
+                (
+                    ConfidentialPolicyMode::Convertible,
+                    ConfidentialPolicyMode::ShieldedOnly
+                ) | (
+                    ConfidentialPolicyMode::ShieldedOnly,
+                    ConfidentialPolicyMode::Convertible
+                )
+            )
+            && transition.effective_height > 0
+            && match transition.new_mode {
+                ConfidentialPolicyMode::ShieldedOnly => transition
+                    .conversion_window
+                    .is_some_and(|window| window > 0 && window <= transition.effective_height),
+                ConfidentialPolicyMode::Convertible => transition.conversion_window.is_none(),
+                ConfidentialPolicyMode::TransparentOnly => false,
+            }
+    }
+
+    /// Return whether the persisted pending transition has a valid ABI V1 shape.
+    ///
+    /// This is a recovery boundary as well as a runtime invariant: authenticated
+    /// snapshots must not defer malformed policy state until its advertised height.
+    #[must_use]
+    pub fn pending_transition_is_valid(&self) -> bool {
+        self.pending_transition
+            .is_none_or(|transition| self.transition_is_valid_for_current_mode(transition))
+    }
+
     /// Create a transparent-only policy.
     #[must_use]
     pub fn transparent() -> Self {
@@ -628,10 +663,17 @@ impl AssetConfidentialPolicy {
     }
 
     /// Determine the policy mode that should be in effect at `block_height`.
+    ///
     /// Returns the pending transition's mode once the effective height is reached.
+    /// A transition outside the ABI V1 confidential state machine is ignored.
+    /// In particular, confidential activation is possible only through
+    /// verifier registration and can never be reversed to `TransparentOnly`.
     #[must_use]
     pub fn effective_mode(&self, block_height: u64) -> ConfidentialPolicyMode {
         if let Some(transition) = self.pending_transition.as_ref() {
+            if !self.transition_is_valid_for_current_mode(*transition) {
+                return self.mode;
+            }
             if transition.new_mode == ConfidentialPolicyMode::ShieldedOnly
                 && let Some(window) = transition.conversion_window()
             {
@@ -649,9 +691,16 @@ impl AssetConfidentialPolicy {
 
     /// Apply the pending transition when it is due, returning the updated policy and
     /// whether a change occurred.
+    ///
+    /// A transition outside the ABI V1 confidential state machine is discarded
+    /// without changing the active mode, even before its advertised height.
     #[must_use]
     pub fn apply_if_due(mut self, block_height: u64) -> (Self, bool) {
         if let Some(transition) = self.pending_transition {
+            if !self.transition_is_valid_for_current_mode(transition) {
+                self.pending_transition = None;
+                return (self, true);
+            }
             if transition.new_mode == ConfidentialPolicyMode::ShieldedOnly
                 && let Some(window) = transition.conversion_window
             {
@@ -902,7 +951,7 @@ impl HasMetadata for NewAssetDefinition {
 mod validation_tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
-    use norito::codec::{Decode as _, Encode as _};
+    use norito::codec::{Decode as _, DecodeAll as _, Encode as _};
 
     use super::*;
     use crate::domain::DomainId;
@@ -924,10 +973,133 @@ mod validation_tests {
         confidential_policy: AssetConfidentialPolicy,
     }
 
+    #[derive(Encode)]
+    struct ForgedNewAssetDefinitionWithPolicy {
+        id: AssetDefinitionId,
+        name: String,
+        description: Option<String>,
+        alias: Option<AssetDefinitionAlias>,
+        spec: NumericSpec,
+        mintable: Mintable,
+        logo: Option<SorafsUri>,
+        metadata: Metadata,
+        balance_scope_policy: AssetBalancePolicy,
+        owning_domain: Option<DomainId>,
+        confidential_policy: AssetConfidentialPolicy,
+    }
+
     fn owner() -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
             .expect("derive checked asset-definition fixture owner");
         AccountId::new(key_pair.public_key().clone())
+    }
+
+    #[test]
+    fn confidential_policy_discards_transitions_outside_the_v1_state_machine() {
+        for (mode, previous_mode, new_mode) in [
+            (
+                ConfidentialPolicyMode::Convertible,
+                ConfidentialPolicyMode::Convertible,
+                ConfidentialPolicyMode::TransparentOnly,
+            ),
+            (
+                ConfidentialPolicyMode::ShieldedOnly,
+                ConfidentialPolicyMode::ShieldedOnly,
+                ConfidentialPolicyMode::TransparentOnly,
+            ),
+            (
+                ConfidentialPolicyMode::TransparentOnly,
+                ConfidentialPolicyMode::TransparentOnly,
+                ConfidentialPolicyMode::Convertible,
+            ),
+            (
+                ConfidentialPolicyMode::TransparentOnly,
+                ConfidentialPolicyMode::TransparentOnly,
+                ConfidentialPolicyMode::ShieldedOnly,
+            ),
+            (
+                ConfidentialPolicyMode::Convertible,
+                ConfidentialPolicyMode::ShieldedOnly,
+                ConfidentialPolicyMode::ShieldedOnly,
+            ),
+        ] {
+            let transition = ConfidentialPolicyTransition {
+                new_mode,
+                effective_height: 10,
+                previous_mode,
+                transition_id: Hash::prehashed([0xA5; 32]),
+                conversion_window: None,
+            };
+            let policy = AssetConfidentialPolicy {
+                mode,
+                pending_transition: Some(transition),
+                ..AssetConfidentialPolicy::default()
+            };
+
+            assert_eq!(policy.effective_mode(10), mode);
+            let (before_due, changed) = policy.apply_if_due(9);
+            assert_eq!(before_due.mode(), mode);
+            assert!(before_due.pending_transition().is_none());
+            assert!(changed);
+
+            assert_eq!(policy.effective_mode(10), mode);
+        }
+    }
+
+    #[test]
+    fn confidential_policy_validates_persisted_transition_shape() {
+        let valid_to_shielded = ConfidentialPolicyTransition {
+            new_mode: ConfidentialPolicyMode::ShieldedOnly,
+            effective_height: 20,
+            previous_mode: ConfidentialPolicyMode::Convertible,
+            transition_id: Hash::prehashed([0x31; 32]),
+            conversion_window: Some(5),
+        };
+        let valid_to_convertible = ConfidentialPolicyTransition {
+            new_mode: ConfidentialPolicyMode::Convertible,
+            effective_height: 20,
+            previous_mode: ConfidentialPolicyMode::ShieldedOnly,
+            transition_id: Hash::prehashed([0x32; 32]),
+            conversion_window: None,
+        };
+        for (mode, transition) in [
+            (ConfidentialPolicyMode::Convertible, valid_to_shielded),
+            (ConfidentialPolicyMode::ShieldedOnly, valid_to_convertible),
+        ] {
+            let policy = AssetConfidentialPolicy {
+                mode,
+                pending_transition: Some(transition),
+                ..AssetConfidentialPolicy::default()
+            };
+            assert!(policy.pending_transition_is_valid());
+        }
+
+        let malformed = [
+            ConfidentialPolicyTransition {
+                conversion_window: None,
+                ..valid_to_shielded
+            },
+            ConfidentialPolicyTransition {
+                conversion_window: Some(21),
+                ..valid_to_shielded
+            },
+            ConfidentialPolicyTransition {
+                effective_height: 0,
+                ..valid_to_shielded
+            },
+            ConfidentialPolicyTransition {
+                conversion_window: Some(1),
+                ..valid_to_convertible
+            },
+        ];
+        for transition in malformed {
+            let policy = AssetConfidentialPolicy {
+                mode: transition.previous_mode,
+                pending_transition: Some(transition),
+                ..AssetConfidentialPolicy::default()
+            };
+            assert!(!policy.pending_transition_is_valid());
+        }
     }
 
     #[test]
@@ -974,6 +1146,41 @@ mod validation_tests {
         assert_eq!(decoded.id, explicit.id);
         assert_eq!(decoded.alias, None);
         assert_eq!(decoded.owning_domain, Some(domain));
+    }
+
+    #[test]
+    fn new_asset_definition_binary_rejects_custom_confidential_policy() {
+        let domain = DomainId::try_new("wonderland", "universal").expect("domain");
+        let id =
+            AssetDefinitionId::derive_from_components(domain, "rose".parse().expect("asset name"));
+        let forged = ForgedNewAssetDefinitionWithPolicy {
+            id: id.clone(),
+            name: "Rose".to_owned(),
+            description: None,
+            alias: None,
+            spec: NumericSpec::integer(),
+            mintable: Mintable::Infinitely,
+            logo: None,
+            metadata: Metadata::default(),
+            balance_scope_policy: AssetBalancePolicy::Global,
+            owning_domain: None,
+            confidential_policy: AssetConfidentialPolicy::convertible(),
+        };
+        let encoded = forged.encode();
+        assert!(
+            NewAssetDefinition::decode_all(&mut encoded.as_slice()).is_err(),
+            "registration wire must not carry caller-selected confidential policy state"
+        );
+
+        let canonical = AssetDefinition::numeric(id, "Rose", AssetBalancePolicy::Global, None);
+        let encoded = canonical.encode();
+        let decoded = NewAssetDefinition::decode_all(&mut encoded.as_slice())
+            .expect("canonical transparent registration payload");
+        let registered = decoded.build(&owner());
+        assert_eq!(
+            registered.confidential_policy(),
+            &AssetConfidentialPolicy::default()
+        );
     }
 
     #[test]
@@ -1051,14 +1258,13 @@ mod validation_tests {
 mod json_tests {
     use std::str::FromStr;
 
-    use iroha_crypto::Hash;
     use norito::json::{Arena, FastFromJson, TapeWalker};
 
     use super::*;
     use crate::{Name, domain::DomainId, metadata::Metadata};
 
     #[test]
-    fn new_asset_definition_json_roundtrip_preserves_policy() {
+    fn new_asset_definition_json_roundtrip_omits_confidential_policy() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let id = AssetDefinitionId::derive_from_components(
             domain.clone(),
@@ -1066,20 +1272,6 @@ mod json_tests {
         );
         let mut metadata = Metadata::default();
         metadata.insert("unit".parse().expect("metadata key"), "bloom");
-        let transition = ConfidentialPolicyTransition {
-            new_mode: ConfidentialPolicyMode::ShieldedOnly,
-            effective_height: 64,
-            previous_mode: ConfidentialPolicyMode::Convertible,
-            transition_id: Hash::prehashed([0x55; 32]),
-            conversion_window: Some(5),
-        };
-        let policy = AssetConfidentialPolicy {
-            mode: ConfidentialPolicyMode::Convertible,
-            vk_set_hash: Some(Hash::prehashed([0x11; 32])),
-            poseidon_params_id: Some(7),
-            pedersen_params_id: Some(3),
-            pending_transition: Some(transition),
-        };
         let new_definition = NewAssetDefinition {
             id,
             name: "Rose".to_owned(),
@@ -1095,11 +1287,14 @@ mod json_tests {
             metadata: metadata.clone(),
             balance_scope_policy: AssetBalancePolicy::DataspaceRestricted,
             owning_domain: Some(domain),
-            confidential_policy: policy,
         };
 
         let json =
             norito::json::to_json(&new_definition).expect("serialize asset definition builder");
+        assert!(
+            !json.contains("confidential_policy"),
+            "registration JSON must not expose confidential policy state"
+        );
         let decoded: NewAssetDefinition =
             norito::json::from_json(&json).expect("deserialize asset definition builder");
 
@@ -1116,7 +1311,34 @@ mod json_tests {
             new_definition.balance_scope_policy
         );
         assert_eq!(decoded.owning_domain, new_definition.owning_domain);
-        assert_eq!(decoded.confidential_policy, policy);
+    }
+
+    #[test]
+    fn new_asset_definition_json_rejects_custom_confidential_policy() {
+        let definition = AssetDefinition::numeric(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").expect("domain id"),
+                Name::from_str("rose").expect("asset name"),
+            ),
+            "Rose",
+            AssetBalancePolicy::Global,
+            None,
+        );
+        let value = norito::json::to_value(&definition).expect("serialize registration payload");
+        let Value::Object(mut object) = value else {
+            panic!("asset-definition registration payload must be an object");
+        };
+        object.insert(
+            "confidential_policy".to_owned(),
+            norito::json::to_value(&AssetConfidentialPolicy::convertible())
+                .expect("serialize rejected policy"),
+        );
+        let forged =
+            norito::json::to_json(&Value::Object(object)).expect("serialize malformed payload");
+        assert!(
+            norito::json::from_json::<NewAssetDefinition>(&forged).is_err(),
+            "registration JSON must reject caller-selected confidential policy state"
+        );
     }
 
     #[test]
@@ -1137,7 +1359,6 @@ mod json_tests {
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
             owning_domain: None,
-            confidential_policy: AssetConfidentialPolicy::transparent(),
         };
 
         let json = norito::json::to_json(&new_definition).expect("serialize asset definition");

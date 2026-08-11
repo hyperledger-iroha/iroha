@@ -3,7 +3,7 @@
 ## Highlights
 - `sorafs_cli` covers deterministic content packaging (`car pack`, `manifest
   build`, `proof verify`) while aggregate release authentication is isolated in
-  the governed raw-Ed25519/HSM release helper.
+  the governed external software-Ed25519 release helper.
 - The multi-source fetch *scoreboard* ships as part of `sorafs_car`: it normalises
   provider telemetry, enforces capability penalties, persists JSON/Norito reports, and
   feeds the orchestrator simulator (`sorafs_fetch`) through the shared registry handle.

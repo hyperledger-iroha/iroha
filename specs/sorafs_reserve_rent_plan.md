@@ -24,7 +24,7 @@ The canonical implementation consists of:
 - finalized, typed policy/provider/movement/appeal/event queries;
 - the durable reserve transaction forwarder; and
 - the supervised Torii reserve worker, which derives work from one immutable
-  finalized ledger view, signs through an injected runtime/HSM boundary, and
+  finalized ledger view, signs through an injected external software-signer boundary, and
   submits only through strict Torii transaction ingress.
 
 Pre-release reserve state encoded without the V1 settlement anchor is not
@@ -189,8 +189,8 @@ stranded signer claim back to ready without refunding the attempt.
 
 The signer boundary receives only the exact fee-quoted `TransactionPayload`.
 It must return a transaction with the governed authority, active chain ID, and
-single expected native reserve instruction. Production injects a
-PKCS#11/HSM-backed signer; file keys and environment overrides are
+single expected native reserve instruction. Production injects an independently
+administered external software signer; file keys and environment overrides are
 test/development-only.
 
 Canonical signed bytes are persisted before submission. Their retained digest

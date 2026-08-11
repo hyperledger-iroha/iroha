@@ -11,11 +11,11 @@ use crate::poseidon;
 const NULLIFIER_DST: &[u8] = b"iroha:conf:nullifier:v1";
 
 /// Derive a canonical 32-byte nullifier from the nullifier key `nk`,
-/// per-note randomness `rho`, the asset identifier, and the chain id.
+/// per-note randomness `rho`, the asset identifier, and the exact network ID.
 ///
 /// Inputs follow the design captured in `specs/confidential_assets.md`.
-/// All callers must supply the *canonical* UTF-8 representations for the asset
-/// identifier and chain id (matching the values hashed into block headers).
+/// Callers supply the canonical asset identifier and the exact 32-byte
+/// genesis-header-derived network identity.
 ///
 /// The derivation is:
 /// ```text
@@ -23,7 +23,7 @@ const NULLIFIER_DST: &[u8] = b"iroha:conf:nullifier:v1";
 ///     NULLIFIER_DST || 0x00 ||
 ///     nk[32] || rho[32] ||
 ///     len(asset_id)[u32 LE] || asset_id ||
-///     len(chain_id)[u32 LE] || chain_id
+///     network_id[32]
 /// )
 /// ```
 /// The nullifier is returned in canonical little-endian byte order matching the
@@ -33,10 +33,9 @@ pub fn derive_nullifier(
     nk: &[u8; 32],
     rho: &[u8; 32],
     asset_id: impl AsRef<[u8]>,
-    chain_id: impl AsRef<[u8]>,
+    network_id: &[u8; 32],
 ) -> [u8; 32] {
     let asset_id = asset_id.as_ref();
-    let chain_id = chain_id.as_ref();
 
     let mut buf = Vec::with_capacity(
         NULLIFIER_DST.len()
@@ -45,8 +44,7 @@ pub fn derive_nullifier(
             + rho.len()
             + core::mem::size_of::<u32>()
             + asset_id.len()
-            + core::mem::size_of::<u32>()
-            + chain_id.len(),
+            + network_id.len(),
     );
     buf.extend_from_slice(NULLIFIER_DST);
     buf.push(0x00); // explicit separator to guard against accidental DST tweaks
@@ -54,8 +52,7 @@ pub fn derive_nullifier(
     buf.extend_from_slice(rho);
     buf.extend_from_slice(&(asset_id.len() as u32).to_le_bytes());
     buf.extend_from_slice(asset_id);
-    buf.extend_from_slice(&(chain_id.len() as u32).to_le_bytes());
-    buf.extend_from_slice(chain_id);
+    buf.extend_from_slice(network_id);
     poseidon::hash_bytes(&buf)
 }
 
@@ -69,10 +66,10 @@ mod tests {
     #[test]
     fn derive_nullifier_is_deterministic() {
         let asset_id = b"shielded#chain";
-        let chain_id = b"alphanet";
+        let network_id = [0x31; 32];
 
-        let first = derive_nullifier(&NK, &RHO, asset_id, chain_id);
-        let second = derive_nullifier(&NK, &RHO, asset_id, chain_id);
+        let first = derive_nullifier(&NK, &RHO, asset_id, &network_id);
+        let second = derive_nullifier(&NK, &RHO, asset_id, &network_id);
         assert_eq!(
             first, second,
             "nullifier derivation must be deterministic for identical inputs"
@@ -83,19 +80,19 @@ mod tests {
     fn derive_nullifier_domain_separates_inputs() {
         let asset_id_a = b"asset#a";
         let asset_id_b = b"asset#b";
-        let chain_id = b"iroha-main";
+        let network_id = [0x41; 32];
 
-        let nullifier_a = derive_nullifier(&NK, &RHO, asset_id_a, chain_id);
-        let nullifier_b = derive_nullifier(&NK, &RHO, asset_id_b, chain_id);
+        let nullifier_a = derive_nullifier(&NK, &RHO, asset_id_a, &network_id);
+        let nullifier_b = derive_nullifier(&NK, &RHO, asset_id_b, &network_id);
         assert_ne!(
             nullifier_a, nullifier_b,
             "distinct asset ids must yield distinct nullifiers"
         );
 
-        let nullifier_chain = derive_nullifier(&NK, &RHO, asset_id_a, b"iroha-test");
+        let nullifier_network = derive_nullifier(&NK, &RHO, asset_id_a, &[0x43; 32]);
         assert_ne!(
-            nullifier_a, nullifier_chain,
-            "chain id must participate in nullifier derivation"
+            nullifier_a, nullifier_network,
+            "exact network ID must participate in nullifier derivation"
         );
     }
 }

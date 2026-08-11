@@ -527,17 +527,23 @@ pub async fn handle_node_capabilities(
     })
 }
 
-/// GET /v1/privacy/capabilities — return the authoritative committed snapshot.
+/// GET /v1/privacy/capabilities — return the canonical committed Exact12 manifest.
 pub async fn handle_privacy_capabilities(
     state: Arc<iroha_core::state::State>,
-) -> Result<iroha_data_model::privacy::PrivacyCapabilitySnapshotV1, crate::Error> {
-    state
+) -> Result<iroha_data_model::privacy::PrivacyExact12CapabilityManifestV1, crate::Error> {
+    let snapshot = state
         .view()
         .privacy_capability_snapshot_v1()
         .map_err(|source| crate::Error::AppServiceUnavailable {
             code: "privacy_capability_snapshot_invalid",
             message: source.to_string(),
-        })
+        })?;
+    snapshot.exact12_capability_manifest_v1().map_err(|source| {
+        crate::Error::AppServiceUnavailable {
+            code: "privacy_exact12_capability_manifest_invalid",
+            message: source.to_string(),
+        }
+    })
 }
 
 /// GET /v1/node/query/projection/checkpoint — return the latest persisted checkpoint descriptor.
@@ -1996,6 +2002,7 @@ pub async fn handle_runtime_cancel_upgrade(
 
 #[cfg(test)]
 mod tests {
+    use http_body_util::BodyExt as _;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::State};
 
     use super::*;
@@ -2231,35 +2238,79 @@ mod tests {
         let world = iroha_core::state::World::default();
         let state = State::new_for_testing(world, kura, query_handle);
 
-        let snapshot = handle_privacy_capabilities(std::sync::Arc::new(state))
+        let manifest = handle_privacy_capabilities(std::sync::Arc::new(state))
             .await
-            .expect("valid committed privacy snapshot");
-        assert_eq!(snapshot.committed_height, 0);
+            .expect("valid committed Exact12 capability manifest");
+        assert_eq!(manifest.committed_height, 0);
         assert_eq!(
-            snapshot.consensus_policy,
+            manifest.consensus_policy,
             iroha_data_model::privacy::PrivacyConsensusPolicyV1::taira_default()
         );
         assert_eq!(
-            snapshot
+            manifest
                 .protocols
                 .iter()
                 .map(|row| row.protocol_id)
                 .collect::<Vec<_>>(),
             iroha_data_model::privacy::PrivacyProtocolIdV1::ALL
         );
-        snapshot.validate().expect("snapshot validates");
+        let jindo = &manifest.protocols[6];
+        assert_eq!(
+            jindo.readiness,
+            iroha_data_model::privacy::PrivacyCapabilityReadinessV1::AvailableExperimental
+        );
+        assert_eq!(
+            jindo.limitation,
+            Some(
+                iroha_data_model::privacy::PrivacyCapabilityLimitationV1::MissingDistributionWideKnowledgeSoundnessEvidence
+            )
+        );
+        for row in [&manifest.protocols[3], &manifest.protocols[5]] {
+            assert!(matches!(
+                row.readiness,
+                iroha_data_model::privacy::PrivacyCapabilityReadinessV1::Unavailable(_)
+            ));
+            assert!(!row.is_network_available());
+        }
+        manifest.validate().expect("manifest validates");
+        assert!(!manifest.manifest_digest.is_zero());
 
-        let json = norito::json::to_json(&snapshot).expect("snapshot JSON");
+        let json = norito::json::to_json(&manifest).expect("manifest JSON");
         assert!(json.contains("iroha-bootle-lantern-anoncred-v1"));
+        assert!(json.contains("zk_x509_identity_presentation_v1"));
+        assert!(json.contains("missing-distribution-wide-knowledge-soundness-evidence"));
         assert!(!json.contains("iroha-bootle-genisis-ac-stark-v0"));
         assert!(!json.contains("production_ready"));
         assert!(!json.contains("production_gate"));
 
-        let archive = norito::to_bytes(&snapshot).expect("snapshot Norito");
-        let decoded: iroha_data_model::privacy::PrivacyCapabilitySnapshotV1 =
-            norito::decode_from_bytes(&archive).expect("decode snapshot Norito");
-        assert_eq!(decoded, snapshot);
-        decoded.validate().expect("decoded snapshot validates");
+        let archive = manifest
+            .canonical_bytes()
+            .expect("canonical manifest Norito");
+        assert_eq!(
+            archive,
+            norito::to_bytes(&manifest).expect("Torii manifest Norito")
+        );
+        let decoded: iroha_data_model::privacy::PrivacyExact12CapabilityManifestV1 =
+            norito::decode_from_bytes(&archive).expect("decode manifest Norito");
+        assert_eq!(decoded, manifest);
+        decoded.validate().expect("decoded manifest validates");
+
+        let (parts, body) =
+            crate::utils::respond_with_format(manifest, crate::utils::ResponseFormat::Norito)
+                .into_parts();
+        assert_eq!(
+            parts
+                .headers
+                .get(http::header::CONTENT_TYPE)
+                .expect("Torii capability content type"),
+            crate::utils::NORITO_MIME_TYPE
+        );
+        let response_bytes = body
+            .collect()
+            .await
+            .expect("collect Torii capability response")
+            .to_bytes();
+        assert_eq!(response_bytes.as_ref(), archive.as_slice());
     }
 
     #[tokio::test]

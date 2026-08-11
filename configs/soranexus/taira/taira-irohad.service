@@ -13,7 +13,7 @@ RuntimeDirectoryMode=0700
 WorkingDirectory=/opt/iroha
 Environment=RUST_LOG=info
 Environment=ZK_HALO2_ENABLED=true
-Environment=IROHA_TAIRA_IROHAD_BIN=/usr/local/bin/irohad
+Environment=IROHA_TAIRA_IROHAD_BIN=/usr/local/bin/iroha3d
 Environment=IROHA_TAIRA_GENESIS=/opt/iroha/configs/soranexus/taira/genesis.json
 Environment=IROHA_TAIRA_INROU_PREREQ_CHECK=/opt/iroha/configs/soranexus/taira/check_inrou_host_prereqs.sh
 Environment=KURA_STORE_DIR=/var/lib/iroha/taira-validator-1

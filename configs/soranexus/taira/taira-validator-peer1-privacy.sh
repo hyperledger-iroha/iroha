@@ -7,10 +7,16 @@ readonly readiness=/opt/iroha/configs/soranexus/taira/wait_taira_bootle_lantern_
 readonly credentials=/run/credentials/taira-bootle-lantern
 
 for required in \
+    TAIRA_NETWORK_ID \
     TAIRA_BOOTLE_LANTERN_EXPECTED_POLICY_RECORD_DIGEST \
     TAIRA_BOOTLE_LANTERN_EXPECTED_QUALIFICATION_POLICY_DIGEST; do
     value="${!required:-}"
-    if [[ ! "$value" =~ ^[0-9a-f]{64}$ || "$value" == "$(printf '00%.0s' {1..32})" ]]; then
+    if [[ "$required" == TAIRA_NETWORK_ID ]]; then
+        if [[ -z "$value" ]]; then
+            printf 'missing public peer-1 broker binding: %s\n' "$required" >&2
+            exit 1
+        fi
+    elif [[ ! "$value" =~ ^[0-9a-f]{64}$ || "$value" == "$(printf '00%.0s' {1..32})" ]]; then
         printf 'missing or invalid public peer-1 broker binding: %s\n' "$required" >&2
         exit 1
     fi
@@ -34,6 +40,7 @@ trap terminate_children INT TERM HUP
 
 "$broker" serve \
     --chain-id fc56984b-2be7-431d-840e-21514d1883f0 \
+    --network-id "$TAIRA_NETWORK_ID" \
     --handle runtime://privacy/bootle-lantern/taira-primary \
     --revision 1 \
     --issuer-id 1da91b272fd76bb535968aac9c2f203a341de02caad2069759953eb4e2bf2e6e \

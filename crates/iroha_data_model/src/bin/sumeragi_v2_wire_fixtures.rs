@@ -19,21 +19,23 @@ use std::{
 
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     block::consensus_v2::{
         BlockSubject, CertifiedBodyRequest, CertifiedBodyResponse, CommitCertificateRequest,
         CommitCertificateResponse, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode,
         ConsensusRound, DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase,
-        HeightContext, HeightContextId, PROTOCOL_VERSION, PayloadChunk, PayloadEncoding,
-        PayloadManifest, Proposal, ProposalJustification, QuorumCertificate, SumeragiV2BodyState,
-        SumeragiV2HeightContextStatus, SumeragiV2IgnoreCount, SumeragiV2IgnoreReason,
-        SumeragiV2LivenessBlocker, SumeragiV2LivenessStatus, SumeragiV2LocalWorkStage,
-        SumeragiV2OutboundIntentKind, SumeragiV2OutboundIntentStage,
-        SumeragiV2OutboundIntentStatus, SumeragiV2ProgressTransition,
-        SumeragiV2ProgressTransitionStatus, SumeragiV2QueueKind, SumeragiV2QueueStatus,
-        SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2TimeoutQuorumStatus,
-        SumeragiV2VoteQuorumStatus, SumeragiV2WorkStatus, TimeoutCertificate, TimeoutJustification,
-        TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote, encode_payload_chunks,
+        HeightContext, HeightContextId, MERGE_CARRIER_COMMITMENT_VERSION_V1,
+        MergeCarrierCommitmentV1, NATIVE_AMX_APPLICATION_MANIFEST_VERSION, PROTOCOL_VERSION,
+        PayloadChunk, PayloadEncoding, PayloadManifest, Proposal, ProposalJustification,
+        QuorumCertificate, SumeragiV2BodyState, SumeragiV2HeightContextStatus,
+        SumeragiV2IgnoreCount, SumeragiV2IgnoreReason, SumeragiV2LivenessBlocker,
+        SumeragiV2LivenessStatus, SumeragiV2LocalWorkStage, SumeragiV2OutboundIntentKind,
+        SumeragiV2OutboundIntentStage, SumeragiV2OutboundIntentStatus,
+        SumeragiV2ProgressTransition, SumeragiV2ProgressTransitionStatus, SumeragiV2QueueKind,
+        SumeragiV2QueueStatus, SumeragiV2Status, SumeragiV2StatusPhase,
+        SumeragiV2TimeoutQuorumStatus, SumeragiV2VoteQuorumStatus, SumeragiV2WorkStatus,
+        TimeoutCertificate, TimeoutJustification, TimeoutVote, TimeoutVoteGroup, ValidatorPower,
+        Vote, encode_payload_chunks, native_amx_application_manifest_empty_root,
     },
     merge::MergeLedgerEntry,
     peer::PeerId,
@@ -134,6 +136,14 @@ fn peer(seed: u8) -> PeerId {
     PeerId::new(key_pair.public_key().clone())
 }
 
+fn network_id(seed: u8) -> NetworkId {
+    NetworkId::from_genesis_hash(
+        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [seed; Hash::LENGTH],
+        )),
+    )
+}
+
 fn context() -> HeightContext {
     let mut peers = (1..=4).map(peer).collect::<Vec<_>>();
     peers.sort();
@@ -145,7 +155,7 @@ fn context() -> HeightContext {
         })
         .collect::<Vec<_>>();
     HeightContext {
-        chain_id: ChainId::from("sumeragi-v2-test"),
+        network_id: network_id(0x71),
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 2,
@@ -292,7 +302,7 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
     };
     let commit_request = CommitCertificateRequest {
         protocol_version: PROTOCOL_VERSION,
-        chain_id: context.chain_id.clone(),
+        network_id: context.network_id,
         context_id: context.id(),
         height: context.height,
         requester: peer(99),
@@ -715,12 +725,14 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
     };
     certificate.proposal_round = round(&values.context, 1);
 
-    let mut invalid_chain_utf8 = canonical_request.encode();
+    let mut invalid_network_id = *values.context.network_id.as_bytes();
+    invalid_network_id[Hash::LENGTH - 1] &= !1;
+    let mut invalid_network_id_message = canonical_request.encode();
     replace_first_guarded(
-        &mut invalid_chain_utf8,
-        b"sumeragi-v2-test",
-        b"\xffumeragi-v2-test",
-        "commit-request chain id",
+        &mut invalid_network_id_message,
+        values.context.network_id.as_bytes(),
+        &invalid_network_id,
+        "commit-request network id",
     )?;
 
     rows.extend([
@@ -853,8 +865,8 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         ),
         FixtureRow::rejected(
             "negative_message",
-            "commit_request_invalid_chain_utf8",
-            invalid_chain_utf8,
+            "commit_request_invalid_network_id",
+            invalid_network_id_message,
         ),
     ]);
 
@@ -1046,7 +1058,7 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
         "unknown_payload_tag",
         "commit_request_truncated_signature",
         "commit_response_truncated_signature",
-        "commit_request_invalid_chain_utf8",
+        "commit_request_invalid_network_id",
         "execution_commitment_missing_merge_carrier_field",
     ] {
         if decode_message(&row(rows, "negative_message", name)?.bytes).is_ok() {

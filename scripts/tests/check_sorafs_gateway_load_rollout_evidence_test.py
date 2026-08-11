@@ -58,8 +58,11 @@ def write_topology_qualification(
             "deployment": {
                 "deployment_id": deployment_id,
                 "environment": environment,
+                "network": "taira",
+                "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0",
+                "chain_discriminant": 369,
             },
-            "validator_count": 4,
+            "validator_count": 4, "validator_ids": ["taira-validator-1", "taira-validator-2", "taira-validator-3", "taira-validator-4"],
             "storage_provider_count": 2,
             "gateway_count": 2,
             "governance_dag_instance_count": 2,

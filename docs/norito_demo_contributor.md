@@ -11,13 +11,15 @@ Norito bridge/Connect stack into Xcode projects, see the
 1. Install the Rust toolchain defined in `rust-toolchain.toml`.
 2. Install Swift 5.9+ and Xcode command line tools on macOS.
 3. (Optional) Install [SwiftLint](https://github.com/realm/SwiftLint) for linting.
-4. Run `cargo build -p irohad` to ensure the node compiles on your host.
+4. Run `cargo build -p irohad --bin iroha3d` to ensure the node compiles on your host.
 5. Copy `examples/ios/NoritoDemoXcode/Configs/demo.env.example` to `.env` and adjust the
    values to match your environment. The app reads these variables on launch:
    - `TORII_NODE_URL` — base REST URL (WebSocket URLs are derived from it).
-   - `CONNECT_SESSION_ID` — 32-byte session identifier (base64/base64url).
-   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — tokens returned by `/v1/connect/session`.
-   - `CONNECT_CHAIN_ID` — chain identifier announced during the control handshake.
+   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` / `CONNECT_TOKEN_RELAY` — role and relay tokens returned by `/v1/connect/session`.
+   - `CONNECT_NETWORK_ID` — exact canonical checksummed genesis-derived network identity.
+   - The app generates a fresh 32-byte app key and non-zero 16-byte nonce, derives
+     `sid = BLAKE2b-256("iroha-connect|sid|" || NetworkId_bytes || app_pk || nonce)`,
+     and rejects a Torii response that substitutes any launch identity field.
    - `CONNECT_ROLE` — default role pre-selected in the UI (`app` or `wallet`).
    - Optional helpers for manual testing: `CONNECT_PEER_PUB_B64`, `CONNECT_SHARED_KEY_B64`,
      `CONNECT_APPROVE_ACCOUNT_ID`, `CONNECT_APPROVE_PRIVATE_KEY_B64`,
@@ -63,8 +65,8 @@ Each entry in `SampleAccounts.json` supports the following fields:
 2. Open the `NoritoDemoXcode` project in Xcode.
 3. Select the `NoritoDemo` scheme and target an iOS simulator or device.
 4. Ensure the `.env` file is referenced through the scheme's environment variables.
-   Populate the `CONNECT_*` values exported by `/v1/connect/session` so the UI is
-   pre-filled when the app launches.
+   Populate the exact `CONNECT_NETWORK_ID` and token values exported by
+   `/v1/connect/session`; the app key, nonce, and SID remain freshly derived in memory.
 5. Verify hardware acceleration defaults: `App.swift` calls
    `DemoAccelerationConfig.load().apply()` so the demo picks up either the
    `NORITO_ACCEL_CONFIG_PATH` environment override or a bundled

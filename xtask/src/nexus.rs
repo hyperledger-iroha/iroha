@@ -3,8 +3,11 @@ use std::{
     error::Error,
     fmt::Write,
     fs,
-    path::{Path, PathBuf},
+    io::{self, Write as _},
+    num::NonZeroU32,
+    path::{Component, Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
 use arrow_array::{
@@ -12,23 +15,458 @@ use arrow_array::{
 };
 use arrow_schema::{DataType, Field, Schema};
 use hex::decode;
+use iroha::nexus_app::{
+    NexusAppClient, NexusAppConfig, NexusAppError, NexusFinalizeOptions, NexusSignatureAlgorithm,
+    NexusToriiSubmitter, NexusTransferInput, NexusTransferReceipt, NexusWalletSignature,
+    UnsupportedConnectTransport,
+};
+use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::{
+    account::{AccountId, address::ChainDiscriminantGuard},
+    asset::{AssetDefinitionId, AssetId},
     block::consensus::{
         LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
         LaneVolatilityClass,
     },
+    name::Name,
     nexus::{DataSpaceId, LaneCompliancePolicy, LaneId},
+    prelude::{Metadata, NetworkId},
+    transaction::{FeePaymentIntent, SignedTransaction, TransactionPayload},
 };
-use iroha_primitives::numeric::Quantity;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_telemetry::metrics::Status;
 use norito::{
     core::NoritoDeserialize as _,
     derive::{JsonDeserialize, JsonSerialize},
     json,
-    json::{self as serde_json, Value as JsonValue},
+    json::{self as serde_json, Map as JsonMap, Value as JsonValue},
 };
 use parquet::{arrow::ArrowWriter, basic::Compression, file::properties::WriterProperties};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+
+const NEXUS_CONNECT_FIXTURE_OUTPUT: &str = "fixtures/sdk/nexus_connect_transfer_v1.json";
+const NEXUS_CONNECT_FIXTURE_NETWORK_ID: &str =
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+const NEXUS_CONNECT_FIXTURE_CHAIN_ID: &str = "test-chain";
+const NEXUS_CONNECT_FIXTURE_CHAIN_DISCRIMINANT: u16 = 369;
+const NEXUS_CONNECT_FIXTURE_CREATION_TIME_MS: u64 = 1_700_000_000_000;
+const NEXUS_CONNECT_FIXTURE_TTL_MS: u64 = 30_000;
+const NEXUS_CONNECT_FIXTURE_NONCE: u32 = 7;
+const NEXUS_CONNECT_FIXTURE_AUTHORITY_SEED: [u8; 32] = [0x51; 32];
+const NEXUS_CONNECT_FIXTURE_DESTINATION_SEED: [u8; 32] = [0x52; 32];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Requested operation for the Rust-owned Nexus Connect fixture.
+pub enum NexusConnectFixtureMode {
+    /// Render into an external, non-Git staging directory.
+    Write,
+    /// Compare the rendered bytes with an existing output tree.
+    Check,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+/// Closed command-line options for the Nexus Connect fixture owner.
+pub struct NexusConnectFixtureOptions {
+    /// Exactly one requested operation.
+    pub mode: NexusConnectFixtureMode,
+    /// Absolute root containing `fixtures/sdk/nexus_connect_transfer_v1.json`.
+    pub output_root: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NexusConnectFixtureSubmitter;
+
+impl NexusToriiSubmitter for NexusConnectFixtureSubmitter {
+    fn quote_fee_payment(
+        &self,
+        payload: &TransactionPayload,
+    ) -> Result<FeePaymentIntent, NexusAppError> {
+        Ok(payload.fee_payment.clone())
+    }
+
+    fn submit_and_wait(
+        &self,
+        transaction: &SignedTransaction,
+        _options: NexusFinalizeOptions,
+    ) -> Result<NexusTransferReceipt, NexusAppError> {
+        Ok(NexusTransferReceipt {
+            signed_transaction: transaction.clone(),
+            signed_transaction_hash_hex: hex::encode(transaction.hash().as_ref()),
+            status: None,
+        })
+    }
+}
+
+/// Parse the exact `--write|--check --output-root <absolute>` surface.
+pub fn parse_nexus_connect_fixture_options(
+    arguments: impl IntoIterator<Item = String>,
+) -> Result<NexusConnectFixtureOptions, Box<dyn Error>> {
+    let mut mode = None;
+    let mut output_root = None;
+    let mut arguments = arguments.into_iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--write" | "--check" => {
+                let requested = if argument == "--write" {
+                    NexusConnectFixtureMode::Write
+                } else {
+                    NexusConnectFixtureMode::Check
+                };
+                if mode.replace(requested).is_some() {
+                    return Err("expected exactly one of --write or --check".into());
+                }
+            }
+            "--output-root" if output_root.is_none() => {
+                let value = arguments
+                    .next()
+                    .ok_or("--output-root requires one absolute directory path")?;
+                let path = PathBuf::from(value);
+                if !path.is_absolute()
+                    || path.components().any(|component| {
+                        matches!(component, Component::CurDir | Component::ParentDir)
+                    })
+                {
+                    return Err(
+                        "--output-root must be one normalized absolute directory path".into(),
+                    );
+                }
+                output_root = Some(path);
+            }
+            "--output-root" => return Err("--output-root was supplied more than once".into()),
+            _ => {
+                return Err(format!(
+                    "unknown argument `{argument}`; usage: --write|--check --output-root <absolute-directory>"
+                )
+                .into());
+            }
+        }
+    }
+
+    Ok(NexusConnectFixtureOptions {
+        mode: mode.ok_or("expected exactly one of --write or --check")?,
+        output_root: output_root.ok_or("--output-root is required")?,
+    })
+}
+
+/// Build and either stage or verify the Rust-owned Nexus Connect fixture.
+pub fn run_nexus_connect_fixture(
+    options: &NexusConnectFixtureOptions,
+) -> Result<(), Box<dyn Error>> {
+    let output_root = match options.mode {
+        NexusConnectFixtureMode::Write => nexus_connect_staging_root(&options.output_root)?,
+        NexusConnectFixtureMode::Check => options.output_root.clone(),
+    };
+    let output = output_root.join(NEXUS_CONNECT_FIXTURE_OUTPUT);
+    let rendered = build_nexus_connect_fixture()?;
+    sync_nexus_connect_fixture(&output, &rendered, options.mode)
+}
+
+fn nexus_connect_workspace_root() -> Result<&'static Path, Box<dyn Error>> {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .ok_or_else(|| "xtask manifest directory has no workspace parent".into())
+}
+
+fn nexus_connect_staging_root(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "--write requires an existing staging directory at {}: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!(
+            "--write output root must be an existing non-symlink staging directory: {}",
+            path.display()
+        )
+        .into());
+    }
+
+    let canonical = fs::canonicalize(path)?;
+    let workspace = fs::canonicalize(nexus_connect_workspace_root()?)?;
+    if canonical.starts_with(&workspace) {
+        return Err(format!(
+            "--write refuses the live workspace; use an external staging directory: {}",
+            canonical.display()
+        )
+        .into());
+    }
+    if canonical
+        .ancestors()
+        .any(|ancestor| fs::symlink_metadata(ancestor.join(".git")).is_ok())
+    {
+        return Err(format!(
+            "--write output root must not be inside a Git checkout: {}",
+            canonical.display()
+        )
+        .into());
+    }
+    Ok(canonical)
+}
+
+fn nexus_connect_json_object(
+    fields: impl IntoIterator<Item = (&'static str, JsonValue)>,
+) -> JsonValue {
+    let mut map = JsonMap::new();
+    for (key, value) in fields {
+        map.insert(key.to_owned(), value);
+    }
+    JsonValue::Object(map)
+}
+
+fn nexus_connect_network_id() -> Result<NetworkId, Box<dyn Error>> {
+    let network_id: NetworkId = NEXUS_CONNECT_FIXTURE_NETWORK_ID.parse()?;
+    if network_id.to_string() != NEXUS_CONNECT_FIXTURE_NETWORK_ID {
+        return Err("canonical Nexus fixture NetworkId did not round-trip byte-for-byte".into());
+    }
+    Ok(network_id)
+}
+
+fn nexus_connect_fixture_account(seed: [u8; 32]) -> Result<(KeyPair, AccountId), Box<dyn Error>> {
+    let key_pair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)?;
+    let account = AccountId::new(key_pair.public_key().clone());
+    Ok((key_pair, account))
+}
+
+fn build_nexus_connect_fixture() -> Result<Vec<u8>, Box<dyn Error>> {
+    let _chain_discriminant =
+        ChainDiscriminantGuard::enter(NEXUS_CONNECT_FIXTURE_CHAIN_DISCRIMINANT);
+    let network_id = nexus_connect_network_id()?;
+    let (authority_key_pair, authority) =
+        nexus_connect_fixture_account(NEXUS_CONNECT_FIXTURE_AUTHORITY_SEED)?;
+    let (_, destination) = nexus_connect_fixture_account(NEXUS_CONNECT_FIXTURE_DESTINATION_SEED)?;
+    let asset_definition = AssetDefinitionId::from_uuid_bytes([
+        0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x42, 0x22, 0x82, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22,
+        0x22,
+    ])?;
+    let source_asset = AssetId::new(asset_definition, authority.clone());
+    let quantity: Quantity = "12.34".parse()?;
+    let mut metadata = Metadata::default();
+    metadata.insert("purpose".parse::<Name>()?, Json::from("nexus-app-fixture"));
+    let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
+
+    let config = NexusAppConfig {
+        signing_public_key: Some(authority_key_pair.public_key().clone()),
+        ..NexusAppConfig::new(NEXUS_CONNECT_FIXTURE_CHAIN_ID.into(), network_id)
+    };
+    let client = NexusAppClient::new(
+        config,
+        UnsupportedConnectTransport,
+        NexusConnectFixtureSubmitter,
+    );
+    let draft = client.build_transfer_draft(NexusTransferInput {
+        source_asset_id: source_asset.clone(),
+        quantity: quantity.clone(),
+        destination_account_id: destination.clone(),
+        authority: Some(authority.clone()),
+        metadata,
+        fee_payment,
+        creation_time_ms: Some(NEXUS_CONNECT_FIXTURE_CREATION_TIME_MS),
+        ttl: Some(Duration::from_millis(NEXUS_CONNECT_FIXTURE_TTL_MS)),
+        nonce: Some(
+            NonZeroU32::new(NEXUS_CONNECT_FIXTURE_NONCE).expect("Nexus fixture nonce is non-zero"),
+        ),
+    })?;
+    let payload_bytes_hex = hex::encode(&draft.signable.payload_bytes);
+    let payload_hash_hex = draft.signable.payload_hash_hex.clone();
+    let payload_hash = hex::decode(&payload_hash_hex)?;
+    let wallet_signature = Signature::try_new(authority_key_pair.private_key(), &payload_hash)?;
+    let wallet_signature_hex = hex::encode(wallet_signature.payload());
+    let receipt = client.finalize_and_submit(
+        draft.signable,
+        NexusWalletSignature {
+            algorithm: NexusSignatureAlgorithm::Ed25519,
+            signature: wallet_signature.payload().to_vec(),
+        },
+        NexusFinalizeOptions::default(),
+    )?;
+
+    let (_, public_key_bytes) = authority_key_pair.public_key().to_bytes();
+    let authority_text = authority.to_string();
+    let destination_text = destination.to_string();
+
+    let approval_frame = nexus_connect_json_object([
+        ("account_id", authority_text.clone().into()),
+        (
+            "signing_public_key_hex",
+            hex::encode(public_key_bytes).into(),
+        ),
+        ("signature_algorithm", "ed25519".into()),
+    ]);
+    let connect = nexus_connect_json_object([
+        ("app_id", "fixture-app".into()),
+        ("sid", "sid-fixture-1".into()),
+        (
+            "wallet_launch_uri",
+            "iroha://connect?sid=sid-fixture-1&role=wallet".into(),
+        ),
+        ("chain_id", NEXUS_CONNECT_FIXTURE_CHAIN_ID.into()),
+        ("approval_frame", approval_frame),
+    ]);
+    let fee_value = nexus_connect_json_object([
+        ("charge_limits", JsonValue::Array(Vec::new())),
+        ("gas_limit", JsonValue::Null),
+    ]);
+    let fee_payment =
+        nexus_connect_json_object([("payer", "authority".into()), ("value", fee_value)]);
+    let metadata = nexus_connect_json_object([("purpose", "nexus-app-fixture".into())]);
+    let transfer_input = nexus_connect_json_object([
+        ("network_id", NEXUS_CONNECT_FIXTURE_NETWORK_ID.into()),
+        ("source_asset_id", source_asset.to_string().into()),
+        ("quantity", quantity.to_string().into()),
+        ("destination_account_id", destination_text.clone().into()),
+        ("authority", authority_text.clone().into()),
+        (
+            "creation_time_ms",
+            NEXUS_CONNECT_FIXTURE_CREATION_TIME_MS.into(),
+        ),
+        ("ttl_ms", NEXUS_CONNECT_FIXTURE_TTL_MS.into()),
+        ("nonce", NEXUS_CONNECT_FIXTURE_NONCE.into()),
+        ("fee_payment", fee_payment),
+        ("metadata", metadata),
+    ]);
+    let expected = nexus_connect_json_object([
+        ("payload_bytes_hex", payload_bytes_hex.into()),
+        ("payload_hash_hex", payload_hash_hex.into()),
+        ("wallet_signature_hex", wallet_signature_hex.into()),
+        (
+            "signed_transaction_hash_hex",
+            receipt.signed_transaction_hash_hex.into(),
+        ),
+        (
+            "status_sequence",
+            JsonValue::Array(vec!["Submitted".into(), "Applied".into()]),
+        ),
+    ]);
+    let error_cases = JsonValue::Array(vec![
+        nexus_connect_json_object([
+            ("name", "unsupported signature algorithm".into()),
+            ("signature_algorithm", "secp256k1".into()),
+            ("expected_code", "unsupported_signature_algorithm".into()),
+        ]),
+        nexus_connect_json_object([
+            ("name", "approval without signing key".into()),
+            (
+                "approval_frame",
+                nexus_connect_json_object([("account_id", authority_text.clone().into())]),
+            ),
+            ("expected_code", "missing_signing_public_key".into()),
+        ]),
+        nexus_connect_json_object([
+            ("name", "authority mismatch".into()),
+            ("transfer_authority", destination_text.into()),
+            ("expected_code", "approval_account_mismatch".into()),
+        ]),
+        nexus_connect_json_object([
+            ("name", "connect transport unavailable".into()),
+            ("expected_code", "connect_transport_unavailable".into()),
+        ]),
+        nexus_connect_json_object([
+            ("name", "missing authority".into()),
+            ("expected_code", "missing_authority".into()),
+        ]),
+        nexus_connect_json_object([
+            ("name", "invalid signing public key".into()),
+            ("expected_code", "invalid_signing_public_key".into()),
+        ]),
+        nexus_connect_json_object([
+            ("name", "invalid signature length".into()),
+            ("signature_bytes_hex", "07".repeat(63).into()),
+            ("expected_code", "invalid_signature".into()),
+        ]),
+        nexus_connect_json_object([
+            ("name", "torii client unavailable".into()),
+            ("expected_code", "torii_client_unavailable".into()),
+        ]),
+        nexus_connect_json_object([
+            ("name", "transaction hash mismatch".into()),
+            ("submitted_transaction_hash_hex", "ff".repeat(32).into()),
+            ("expected_code", "transaction_hash_mismatch".into()),
+        ]),
+        nexus_connect_json_object([
+            ("name", "submit failure".into()),
+            ("expected_code", "submit_failed".into()),
+        ]),
+        nexus_connect_json_object([
+            ("name", "status wait failure".into()),
+            ("expected_code", "status_wait_failed".into()),
+        ]),
+    ]);
+
+    let root = nexus_connect_json_object([
+        ("fixture", "nexus_connect_transfer_v1".into()),
+        ("version", 1_u64.into()),
+        (
+            "description",
+            "Deterministic SORA Nexus app facade transfer fixture for SDK parity tests.".into(),
+        ),
+        ("connect", connect),
+        ("transfer_input", transfer_input),
+        ("expected", expected),
+        ("error_cases", error_cases),
+    ]);
+    let rendered = json::to_json_pretty(&root)?;
+    Ok(format!("{rendered}\n").into_bytes())
+}
+
+fn sync_nexus_connect_fixture(
+    path: &Path,
+    expected: &[u8],
+    mode: NexusConnectFixtureMode,
+) -> Result<(), Box<dyn Error>> {
+    match mode {
+        NexusConnectFixtureMode::Check => {
+            let actual = fs::read(path).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "failed to read generated Nexus fixture {}: {error}",
+                        path.display()
+                    ),
+                )
+            })?;
+            if actual != expected {
+                return Err(format!(
+                    "generated Nexus fixture {} is stale; rerun nexus-connect-fixture --write against an external staging root",
+                    path.display()
+                )
+                .into());
+            }
+        }
+        NexusConnectFixtureMode::Write => {
+            if fs::read(path).is_ok_and(|actual| actual == expected) {
+                return Ok(());
+            }
+            let parent = path
+                .parent()
+                .ok_or("generated Nexus fixture has no parent")?;
+            fs::create_dir_all(parent)?;
+            let temporary = parent.join(format!(
+                ".{}.{}.tmp",
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or("generated Nexus fixture name is not UTF-8")?,
+                std::process::id()
+            ));
+            let write_result = (|| -> Result<(), Box<dyn Error>> {
+                let mut file = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&temporary)?;
+                file.write_all(expected)?;
+                file.sync_all()?;
+                drop(file);
+                fs::rename(&temporary, path)?;
+                Ok(())
+            })();
+            if write_result.is_err() {
+                let _ = fs::remove_file(&temporary);
+            }
+            write_result?;
+        }
+    }
+    Ok(())
+}
 
 pub fn write_lane_commitment_fixtures(output: &Path) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(output)?;
@@ -1024,6 +1462,164 @@ mod tests {
         );
         let parsed: LaneBlockCommitment = json::from_str(&rendered).expect("parse canonical JSON");
         assert_eq!(parsed, fixture.payload);
+    }
+
+    #[test]
+    fn nexus_connect_fixture_options_require_one_mode_and_absolute_root() {
+        let staging = tempdir().expect("temporary staging root");
+        let root = staging.path().to_string_lossy().into_owned();
+        assert_eq!(
+            parse_nexus_connect_fixture_options([
+                "--write".to_owned(),
+                "--output-root".to_owned(),
+                root.clone(),
+            ])
+            .expect("valid Nexus fixture options"),
+            NexusConnectFixtureOptions {
+                mode: NexusConnectFixtureMode::Write,
+                output_root: PathBuf::from(&root),
+            }
+        );
+
+        for invalid in [
+            vec![],
+            vec!["--write".to_owned()],
+            vec![
+                "--write".to_owned(),
+                "--check".to_owned(),
+                "--output-root".to_owned(),
+                root.clone(),
+            ],
+            vec![
+                "--check".to_owned(),
+                "--output-root".to_owned(),
+                "relative".to_owned(),
+            ],
+            vec![
+                "--check".to_owned(),
+                "--output-root".to_owned(),
+                root.clone(),
+                "unexpected".to_owned(),
+            ],
+        ] {
+            assert!(parse_nexus_connect_fixture_options(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn nexus_connect_fixture_is_deterministic_and_has_closed_domain_fields() {
+        let first = build_nexus_connect_fixture().expect("build Nexus fixture once");
+        let second = build_nexus_connect_fixture().expect("build Nexus fixture twice");
+        assert_eq!(first, second);
+
+        let parsed: JsonValue = json::from_slice(&first).expect("parse generated Nexus fixture");
+        let root = parsed.as_object().expect("Nexus fixture root object");
+        assert_eq!(
+            root.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "connect",
+                "description",
+                "error_cases",
+                "expected",
+                "fixture",
+                "transfer_input",
+                "version",
+            ])
+        );
+
+        let connect = root
+            .get("connect")
+            .and_then(JsonValue::as_object)
+            .expect("closed Connect descriptor");
+        assert_eq!(
+            connect.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "app_id",
+                "approval_frame",
+                "chain_id",
+                "sid",
+                "wallet_launch_uri",
+            ])
+        );
+        assert_eq!(
+            connect.get("chain_id").and_then(JsonValue::as_str),
+            Some(NEXUS_CONNECT_FIXTURE_CHAIN_ID)
+        );
+
+        let transfer = root
+            .get("transfer_input")
+            .and_then(JsonValue::as_object)
+            .expect("closed transfer input");
+        assert_eq!(
+            transfer.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "authority",
+                "creation_time_ms",
+                "destination_account_id",
+                "fee_payment",
+                "metadata",
+                "network_id",
+                "nonce",
+                "quantity",
+                "source_asset_id",
+                "ttl_ms",
+            ])
+        );
+        assert_eq!(
+            transfer.get("network_id").and_then(JsonValue::as_str),
+            Some(NEXUS_CONNECT_FIXTURE_NETWORK_ID)
+        );
+        for retired in ["chain", "chainId", "chain_id"] {
+            assert!(!transfer.contains_key(retired));
+        }
+
+        let expected = root
+            .get("expected")
+            .and_then(JsonValue::as_object)
+            .expect("closed expected vectors");
+        assert_eq!(
+            expected.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "payload_bytes_hex",
+                "payload_hash_hex",
+                "signed_transaction_hash_hex",
+                "status_sequence",
+                "wallet_signature_hex",
+            ])
+        );
+        assert_eq!(
+            root.get("error_cases")
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(11)
+        );
+    }
+
+    #[test]
+    fn nexus_connect_fixture_writes_only_to_external_staging_root() {
+        let staging = tempdir().expect("temporary staging root");
+        let write = NexusConnectFixtureOptions {
+            mode: NexusConnectFixtureMode::Write,
+            output_root: staging.path().to_path_buf(),
+        };
+        run_nexus_connect_fixture(&write).expect("write staged Nexus fixture");
+        let output = staging.path().join(NEXUS_CONNECT_FIXTURE_OUTPUT);
+        assert!(output.is_file());
+
+        run_nexus_connect_fixture(&NexusConnectFixtureOptions {
+            mode: NexusConnectFixtureMode::Check,
+            output_root: staging.path().to_path_buf(),
+        })
+        .expect("check staged Nexus fixture");
+
+        let error = run_nexus_connect_fixture(&NexusConnectFixtureOptions {
+            mode: NexusConnectFixtureMode::Write,
+            output_root: nexus_connect_workspace_root()
+                .expect("workspace root")
+                .to_path_buf(),
+        })
+        .expect_err("write mode must refuse the live workspace");
+        assert!(error.to_string().contains("refuses the live workspace"));
     }
 
     fn sample_compliance(lane_id: u32, dataspace_id: u64) -> LaneComplianceEvidence {

@@ -120,7 +120,7 @@ fn validate_canonical_executed_block_need(
             && state.committed_block_hash_at_height(need.height - 1) != header.prev_block_hash())
         || (need.height == 1 && header.prev_block_hash().is_some())
         || finality.commit_qc.execution_commitment != need.execution_commitment
-        || finality.height_context.chain_id != context.chain_id
+        || finality.height_context.network_id != context.network_id
     {
         return Err("canonical executed-block need differs from exact local finality".to_owned());
     }
@@ -1109,7 +1109,7 @@ pub(crate) fn plan_lane_application_evidence_repair(
             ),
         );
     }
-    let chain_hash = Hash::new(context.chain_id.clone().into_inner().as_bytes());
+    let network_id = context.network_id;
     let mut merge_carrier_repair_authorizations = Vec::new();
     merge_carrier_repair_authorizations
         .try_reserve_exact(merge_carriers.len())
@@ -1142,7 +1142,7 @@ pub(crate) fn plan_lane_application_evidence_repair(
             post_carrier_evidence_repair_authorizations(
                 reference,
                 entry,
-                chain_hash,
+                network_id,
                 height,
                 block.hash(),
             )

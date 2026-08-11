@@ -19,9 +19,10 @@ use std::os::unix::fs::{
 };
 
 use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production_runtime_handle};
-use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature as IrohaSignature};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature as IrohaSignature};
 use iroha_data_model::{
     account::{AccountId, ParsedAccountId},
+    block::BlockHeader,
     events::data::sorafs::SorafsModerationLedgerEventKind,
     isi::{
         InstructionBox,
@@ -479,13 +480,13 @@ impl ModerationNativeActionV1 {
 
     fn operation_id(
         &self,
-        chain_id: &iroha_data_model::ChainId,
+        network_id: &iroha_data_model::NetworkId,
         authority: &AccountId,
     ) -> Result<[u8; 32], ModerationOrchestratorError> {
         let material = self.semantic_material(authority)?;
         Ok(domain_hash(
             OPERATION_ID_DOMAIN_V1,
-            &[chain_id.as_str().as_bytes(), material.as_slice()],
+            &[network_id.as_bytes(), material.as_slice()],
         ))
     }
 }
@@ -904,8 +905,8 @@ impl ModerationOrchestratorConfigV1 {
 /// Canonical request forwarded to the runtime-only HSM transaction service.
 #[derive(Debug, Clone)]
 pub struct ModerationTransactionRequestV1 {
-    /// Exact ledger chain bound into the signed transaction and operation id.
-    pub chain_id: iroha_data_model::ChainId,
+    /// Exact genesis-derived network identity signed into the transaction.
+    pub network_id: iroha_data_model::NetworkId,
     /// Durable signed-envelope generation; semantic operation identity remains stable.
     pub envelope_generation: u32,
     /// Stable, replica-independent semantic operation identity.
@@ -935,7 +936,7 @@ impl ModerationTransactionRequestV1 {
     /// cannot be canonically encoded, the request binding is inert, or the
     /// finalized baseline is invalid.
     pub fn new(
-        chain_id: iroha_data_model::ChainId,
+        network_id: iroha_data_model::NetworkId,
         envelope_generation: u32,
         authority: AccountId,
         action: ModerationNativeActionV1,
@@ -946,19 +947,14 @@ impl ModerationTransactionRequestV1 {
         action.validate_authority(&authority)?;
         let canonical_action = action.canonical_bytes()?;
         let action_digest = action.action_digest()?;
-        if chain_id.as_str().is_empty() || chain_id.as_str() != chain_id.as_str().trim() {
-            return Err(ModerationOrchestratorError::InvalidAction(
-                "submission chain id must be non-empty and canonical".to_owned(),
-            ));
-        }
         if envelope_generation == 0 {
             return Err(ModerationOrchestratorError::InvalidAction(
                 "submission envelope generation must be non-zero".to_owned(),
             ));
         }
-        let operation_id = action.operation_id(&chain_id, &authority)?;
+        let operation_id = action.operation_id(&network_id, &authority)?;
         let request = Self {
-            chain_id,
+            network_id,
             envelope_generation,
             operation_id,
             authority,
@@ -1004,19 +1000,14 @@ impl ModerationTransactionRequestV1 {
                 "submission action digest does not match the native action".to_owned(),
             ));
         }
-        if self.chain_id.as_str().is_empty()
-            || self.chain_id.as_str() != self.chain_id.as_str().trim()
-        {
-            return Err(ModerationOrchestratorError::InvalidAction(
-                "submission chain id must be non-empty and canonical".to_owned(),
-            ));
-        }
         if self.envelope_generation == 0 {
             return Err(ModerationOrchestratorError::InvalidAction(
                 "submission envelope generation must be non-zero".to_owned(),
             ));
         }
-        let operation_id = self.action.operation_id(&self.chain_id, &self.authority)?;
+        let operation_id = self
+            .action
+            .operation_id(&self.network_id, &self.authority)?;
         if operation_id == [0; 32] || operation_id != self.operation_id {
             return Err(ModerationOrchestratorError::InvalidAction(
                 "submission operation identity does not match the authority and native action"
@@ -1166,11 +1157,8 @@ pub trait ModerationTransactionSubmitterV1: Send + Sync {
     /// Return the exact strict-ingress provider qualified by this submitter.
     fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1;
 
-    /// Exact ledger chain implemented by this runtime boundary.
-    ///
-    /// The orchestrator freezes this value at open and rejects every retained
-    /// or newly signed envelope whose chain differs.
-    fn chain_id(&self) -> iroha_data_model::ChainId;
+    /// Exact genesis-derived network identity implemented by this runtime boundary.
+    fn network_id(&self) -> iroha_data_model::NetworkId;
 
     /// Sign exactly one native action without exposing it to transaction ingress.
     ///
@@ -1235,8 +1223,10 @@ pub enum ModerationTerminalHandoffKindV1 {
 /// Payload-free terminal handoff derived only from finalized ledger state.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationTerminalHandoffV1 {
-    /// Stable sink-specific handoff identity bound to the exact ledger chain.
+    /// Stable sink-specific handoff identity bound to the exact genesis-derived network.
     pub handoff_id: [u8; 32],
+    /// Exact genesis-derived network owning this handoff.
+    pub network_id: iroha_data_model::NetworkId,
     /// Destination.
     pub kind: ModerationTerminalHandoffKindV1,
     /// Case identifier.
@@ -1251,6 +1241,26 @@ pub struct ModerationTerminalHandoffV1 {
     pub finalized_cursor: ModerationFinalizedEventCursorV1,
     /// Sealed minimal committed-event witness retained across bounded event-window eviction.
     pub source_event_witness: ModerationFinalizedEventV1,
+}
+
+impl ModerationTerminalHandoffV1 {
+    /// Derive the canonical handoff identity from this record's exact network and scope.
+    #[must_use]
+    pub fn canonical_id(&self) -> [u8; 32] {
+        terminal_handoff_id(
+            &self.network_id,
+            self.kind,
+            &self.case_id,
+            &self.round_id,
+            self.outcome_digest,
+        )
+    }
+
+    /// Return whether the handoff identity is canonical for `network_id`.
+    #[must_use]
+    pub fn is_bound_to_network(&self, network_id: &iroha_data_model::NetworkId) -> bool {
+        self.network_id == *network_id && self.handoff_id == self.canonical_id()
+    }
 }
 
 /// Exactly-once terminal settlement/publication adapter.
@@ -1324,6 +1334,8 @@ impl ModerationPanelNotificationKindV1 {
 pub struct ModerationPanelNotificationV1 {
     /// Stable delivery identity used for sink-side idempotency.
     pub notification_id: [u8; 32],
+    /// Exact genesis-derived network owning this notification.
+    pub network_id: iroha_data_model::NetworkId,
     /// Semantic native-operation identity that caused the notification.
     pub source_operation_id: [u8; 32],
     /// Digest of the case/round scope; the raw scope is deliberately not retained.
@@ -1336,6 +1348,28 @@ pub struct ModerationPanelNotificationV1 {
     pub finalized_event_cursor: ModerationFinalizedEventCursorV1,
     /// Consensus timestamp of the source event.
     pub source_occurred_at_unix_ms: u64,
+}
+
+impl ModerationPanelNotificationV1 {
+    /// Derive the canonical notification identity from this record's exact network and scope.
+    #[must_use]
+    pub fn canonical_id(&self) -> [u8; 32] {
+        panel_notification_id(
+            &self.network_id,
+            self.source_operation_id,
+            self.scope_digest,
+            self.kind,
+            &self.recipient,
+            self.finalized_event_cursor,
+            self.source_occurred_at_unix_ms,
+        )
+    }
+
+    /// Return whether the notification identity is canonical for `network_id`.
+    #[must_use]
+    pub fn is_bound_to_network(&self, network_id: &iroha_data_model::NetworkId) -> bool {
+        self.network_id == *network_id && self.notification_id == self.canonical_id()
+    }
 }
 
 /// Lease returned to a notification worker after the claim is durable.
@@ -1427,8 +1461,8 @@ impl ModerationDeadLetterResolutionActionV1 {
 pub struct ModerationDeadLetterResolutionV1 {
     /// Resolution schema version.
     pub version: u16,
-    /// Exact ledger chain.
-    pub chain_id: String,
+    /// Exact genesis-derived network identity.
+    pub network_id: iroha_data_model::NetworkId,
     /// Exact sealed checkpoint namespace.
     pub checkpoint_namespace_digest: [u8; 32],
     /// Exact source checkpoint generation.
@@ -1506,9 +1540,9 @@ pub struct ModerationPanelNotificationSourceAttestationV1 {
     pub version: u16,
     /// Exact checkpoint-attestor runtime-provider slot.
     pub attestor_slot: u16,
-    /// Ledger chain containing the authoritative notification state.
-    pub chain_id: String,
-    /// Chain-bound sealed-checkpoint namespace.
+    /// Exact genesis-derived network containing the authoritative notification state.
+    pub network_id: iroha_data_model::NetworkId,
+    /// Network-bound sealed-checkpoint namespace.
     pub checkpoint_namespace_digest: [u8; 32],
     /// Exact sealed checkpoint generation.
     pub checkpoint_generation: u64,
@@ -1646,7 +1680,7 @@ impl ModerationPanelNotificationArchiveSignerEpochV1 {
     ///
     /// This method is safe to use before the two signatures and `epoch_digest`
     /// are populated: neither signature nor the self-digest is part of the
-    /// authorization message. The returned digest is chain-bound and commits
+    /// authorization message. The returned digest is network-bound and commits
     /// the new provider binding, key, predecessor epoch, and inclusive
     /// predecessor revocation generation.
     ///
@@ -1656,11 +1690,9 @@ impl ModerationPanelNotificationArchiveSignerEpochV1 {
     /// coordinates.
     pub fn rotation_authorization_message(
         &self,
-        chain_id: &iroha_data_model::ChainId,
+        network_id: &iroha_data_model::NetworkId,
     ) -> Result<[u8; 32], ModerationOrchestratorError> {
-        if chain_id.as_str().is_empty()
-            || chain_id.as_str() != chain_id.as_str().trim()
-            || self.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
+        if self.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
             || self.epoch < 2
             || self.activated_at_generation == 0
             || self.archive_id == [0; 32]
@@ -1683,7 +1715,7 @@ impl ModerationPanelNotificationArchiveSignerEpochV1 {
             return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
         }
         Ok(panel_notification_archive_signer_rotation_message(
-            chain_id, self,
+            network_id, self,
         ))
     }
 
@@ -1695,9 +1727,9 @@ impl ModerationPanelNotificationArchiveSignerEpochV1 {
     /// [`Self::rotation_authorization_message`].
     pub fn new_key_possession_message(
         &self,
-        chain_id: &iroha_data_model::ChainId,
+        network_id: &iroha_data_model::NetworkId,
     ) -> Result<[u8; 32], ModerationOrchestratorError> {
-        self.rotation_authorization_message(chain_id)
+        self.rotation_authorization_message(network_id)
             .map(panel_notification_archive_signer_pop_message)
     }
 }
@@ -1707,8 +1739,8 @@ impl ModerationPanelNotificationArchiveSignerEpochV1 {
 pub struct ModerationPanelNotificationArchiveHeadV1 {
     /// Archive schema version.
     pub version: u16,
-    /// Exact ledger chain whose terminal notifications are archived.
-    pub chain_id: String,
+    /// Exact genesis-derived network whose terminal notifications are archived.
+    pub network_id: iroha_data_model::NetworkId,
     /// Monotonic archive generation beginning at one.
     pub generation: u64,
     /// Exact predecessor head digest, absent only at generation one.
@@ -1719,7 +1751,7 @@ pub struct ModerationPanelNotificationArchiveHeadV1 {
     pub predecessor_chain_commitment: Option<[u8; 32]>,
     /// Exact sealed checkpoint generation from which receipts were selected.
     pub source_checkpoint_generation: u64,
-    /// Chain-bound namespace of the authoritative sealed checkpoint.
+    /// Network-bound namespace of the authoritative sealed checkpoint.
     pub source_checkpoint_namespace_digest: [u8; 32],
     /// Exact sealed checkpoint revision from which receipts were selected.
     pub source_checkpoint_revision: [u8; 32],
@@ -1727,7 +1759,7 @@ pub struct ModerationPanelNotificationArchiveHeadV1 {
     pub source_checkpoint_digest: [u8; 32],
     /// Digest of the payload-minimal source manifest carried by the artifact.
     pub source_manifest_digest: [u8; 32],
-    /// Digest binding the chain and exact sealed source checkpoint coordinates.
+    /// Digest binding the network and exact sealed source checkpoint coordinates.
     pub source_binding_digest: [u8; 32],
     /// Exact qualified checkpoint authority that attested the terminal set.
     pub source_attestor_handle: String,
@@ -1838,8 +1870,8 @@ pub struct ModerationPanelNotificationArchiveBrokerValidationV1 {
 /// Stable public expectations used by the slot-55 archive broker validator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationPanelNotificationArchiveBrokerExpectationV1<'a> {
-    /// Exact ledger chain accepted by this deployment.
-    pub chain_id: &'a iroha_data_model::ChainId,
+    /// Exact genesis-derived network accepted by this deployment.
+    pub network_id: &'a iroha_data_model::NetworkId,
     /// Qualified archive provider handle.
     pub archive_handle: &'a str,
     /// Qualified archive provider revision and public-policy digest.
@@ -1871,8 +1903,8 @@ pub struct ModerationPanelNotificationArchiveBrokerExpectationV1<'a> {
 #[doc(hidden)]
 #[derive(Debug, Clone)]
 pub struct ModerationPanelNotificationArchiveBrokerFixtureV1 {
-    /// Exact fixture chain.
-    pub chain_id: iroha_data_model::ChainId,
+    /// Exact fixture network.
+    pub network_id: iroha_data_model::NetworkId,
     /// Qualified archive provider handle.
     pub archive_handle: String,
     /// Qualified archive provider revision and policy.
@@ -1914,7 +1946,7 @@ impl ModerationPanelNotificationArchiveBrokerFixtureV1 {
     #[must_use]
     pub fn expectation(&self) -> ModerationPanelNotificationArchiveBrokerExpectationV1<'_> {
         ModerationPanelNotificationArchiveBrokerExpectationV1 {
-            chain_id: &self.chain_id,
+            network_id: &self.network_id,
             archive_handle: &self.archive_handle,
             archive_qualification: self.archive_qualification,
             archive_id: self.archive_id,
@@ -2083,15 +2115,15 @@ impl QualifiedModerationTransactionSubmitterV1 {
         )
     }
 
-    fn chain_id(
+    fn network_id(
         &self,
-    ) -> Result<iroha_data_model::ChainId, ModerationRuntimeProviderQualificationErrorV1> {
+    ) -> Result<iroha_data_model::NetworkId, ModerationRuntimeProviderQualificationErrorV1> {
         self.revalidate_transaction_signer()?;
         self.revalidate_strict_ingress()?;
-        let chain_id = self.submitter.chain_id();
+        let network_id = self.submitter.network_id();
         self.revalidate_transaction_signer()?;
         self.revalidate_strict_ingress()?;
-        Ok(chain_id)
+        Ok(network_id)
     }
 
     fn sign(
@@ -2818,7 +2850,7 @@ struct ModerationPanelNotificationArchivePayloadV1 {
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationPanelNotificationArchiveSourceManifestV1 {
     version: u16,
-    chain_id: String,
+    network_id: iroha_data_model::NetworkId,
     checkpoint_namespace_digest: [u8; 32],
     checkpoint_generation: u64,
     checkpoint_revision: [u8; 32],
@@ -2853,7 +2885,7 @@ struct ModerationPanelNotificationArchiveAuditCursorV1 {
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationOrchestratorCheckpointV1 {
     version: u16,
-    chain_id: String,
+    network_id: iroha_data_model::NetworkId,
     generation: u64,
     panel_notification_clock_unix_ms: u64,
     panel_notification_scanned_cursor: Option<ModerationFinalizedEventCursorV1>,
@@ -2934,7 +2966,7 @@ impl PreparedExternalWorkV1 {
 /// Finalized-chain moderation orchestrator.
 pub struct ModerationOrchestratorV1 {
     config: ModerationOrchestratorConfigV1,
-    chain_id: iroha_data_model::ChainId,
+    network_id: iroha_data_model::NetworkId,
     deps: QualifiedModerationOrchestratorDepsV1,
     state: Mutex<ModerationOrchestratorCheckpointV1>,
     checkpoint_record: Mutex<ModerationCheckpointStoreRecordV1>,
@@ -2972,25 +3004,20 @@ impl ModerationOrchestratorV1 {
         // test-marked boundary therefore cannot influence durable state.
         let deps = QualifiedModerationOrchestratorDepsV1::try_new(&config, deps)
             .map_err(map_runtime_provider_qualification_error)?;
-        let chain_id = deps
+        let network_id = deps
             .submitter
-            .chain_id()
+            .network_id()
             .map_err(map_runtime_provider_qualification_error)?;
-        if chain_id.as_str().is_empty() || chain_id.as_str() != chain_id.as_str().trim() {
-            return Err(ModerationOrchestratorError::InvalidConfiguration(
-                "moderation submitter chain id must be non-empty and canonical".to_owned(),
-            ));
-        }
         let (mut state, mut checkpoint_record) = checkpoint_store::open_authoritative_checkpoint(
             &config,
-            &chain_id,
+            &network_id,
             &deps.checkpoint_store,
         )?;
         let signer_epochs_changed =
-            reconcile_panel_notification_archive_signer_epochs(&config, &chain_id, &mut state)?;
+            reconcile_panel_notification_archive_signer_epochs(&config, &network_id, &mut state)?;
         verify_current_panel_notification_archive_readback(
             &config,
-            &chain_id,
+            &network_id,
             &deps.panel_notification_archive,
             state.panel_notification_archive_head.as_ref(),
         )?;
@@ -3002,7 +3029,7 @@ impl ModerationOrchestratorV1 {
         if signer_epochs_changed || expired_work_recovered {
             checkpoint_store::persist_authoritative_checkpoint(
                 &config,
-                &chain_id,
+                &network_id,
                 &deps.checkpoint_store,
                 &mut checkpoint_record,
                 &mut state,
@@ -3010,7 +3037,7 @@ impl ModerationOrchestratorV1 {
         }
         Ok(Self {
             config,
-            chain_id,
+            network_id,
             deps,
             state: Mutex::new(state),
             checkpoint_record: Mutex::new(checkpoint_record),
@@ -3062,7 +3089,7 @@ impl ModerationOrchestratorV1 {
         action.validate_authority(&authority)?;
         action.canonical_bytes()?;
         let action_digest = action.action_digest()?;
-        let operation_id = action.operation_id(&self.chain_id, &authority)?;
+        let operation_id = action.operation_id(&self.network_id, &authority)?;
         let (snapshot, digest) = self.read_validated_finalized_snapshot()?;
         let cursor = snapshot.anchor();
         let replay = {
@@ -3670,7 +3697,7 @@ impl ModerationOrchestratorV1 {
     /// deduplicate the stable notification identity, so a crash after the
     /// downstream effect but before receipt persistence replays the same
     /// payload-free notification safely. The worker identity is derived from
-    /// the exact chain and governed sink binding; no process-local randomness
+    /// the exact network and governed sink binding; no process-local randomness
     /// or secret material participates.
     ///
     /// # Errors
@@ -3689,7 +3716,7 @@ impl ModerationOrchestratorV1 {
             return Ok(0);
         }
         let worker_id = panel_notification_worker_id(
-            &self.chain_id,
+            &self.network_id,
             &self.config.panel_notification_handle,
             self.config.expected_panel_notification_qualification,
         );
@@ -3811,13 +3838,13 @@ impl ModerationOrchestratorV1 {
             .clone();
         if current_record.checkpoint_generation != state.generation
             || current_record.namespace_digest
-                != checkpoint_store::checkpoint_namespace(&self.chain_id)
+                != checkpoint_store::checkpoint_namespace(&self.network_id)
         {
             return Err(ModerationOrchestratorError::CheckpointStoreEquivocation);
         }
         Ok(ModerationDeadLetterResolutionV1 {
             version: 1,
-            chain_id: self.chain_id.as_str().to_owned(),
+            network_id: self.network_id,
             checkpoint_namespace_digest: current_record.namespace_digest,
             checkpoint_generation: current_record.checkpoint_generation,
             checkpoint_revision: current_record.revision,
@@ -3857,9 +3884,9 @@ impl ModerationOrchestratorV1 {
         signature: [u8; 64],
     ) -> Result<(), ModerationOrchestratorError> {
         verify_dead_letter_resolution_signature(&resolution, signature)?;
-        if resolution.chain_id != self.chain_id.as_str()
+        if resolution.network_id != self.network_id
             || resolution.checkpoint_namespace_digest
-                != checkpoint_store::checkpoint_namespace(&self.chain_id)
+                != checkpoint_store::checkpoint_namespace(&self.network_id)
             || resolution.attestor_handle != self.config.checkpoint_store_handle
             || resolution.attestor_revision
                 != self
@@ -4217,7 +4244,7 @@ impl ModerationOrchestratorV1 {
         }
         let source_manifest = ModerationPanelNotificationArchiveSourceManifestV1 {
             version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
-            chain_id: self.chain_id.as_str().to_owned(),
+            network_id: self.network_id,
             checkpoint_namespace_digest: source_record.namespace_digest,
             checkpoint_generation: source_record.checkpoint_generation,
             checkpoint_revision: source_record.revision,
@@ -4304,7 +4331,7 @@ impl ModerationOrchestratorV1 {
             let source_attestation = ModerationPanelNotificationSourceAttestationV1 {
                 version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
                 attestor_slot: MODERATION_PANEL_NOTIFICATION_SOURCE_ATTESTOR_BROKER_SLOT_V1,
-                chain_id: self.chain_id.as_str().to_owned(),
+                network_id: self.network_id,
                 checkpoint_namespace_digest: source_record.namespace_digest,
                 checkpoint_generation: source_record.checkpoint_generation,
                 checkpoint_revision: source_record.revision,
@@ -4321,7 +4348,7 @@ impl ModerationOrchestratorV1 {
             };
             let mut head = ModerationPanelNotificationArchiveHeadV1 {
                 version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
-                chain_id: self.chain_id.as_str().to_owned(),
+                network_id: self.network_id,
                 generation,
                 predecessor_head_digest,
                 predecessor_operation_id,
@@ -4416,13 +4443,13 @@ impl ModerationOrchestratorV1 {
         // after authenticated readback and before pruning.
         verify_current_panel_notification_archive_readback(
             &self.config,
-            &self.chain_id,
+            &self.network_id,
             &self.deps.panel_notification_archive,
             predecessor_head.as_ref(),
         )?;
         let verified = verify_panel_notification_archive_artifact(
             &self.config,
-            &self.chain_id,
+            &self.network_id,
             &artifact_bytes,
         )?;
         if verified != artifact {
@@ -4450,7 +4477,7 @@ impl ModerationOrchestratorV1 {
             return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
         }
         let (installed, installed_head) =
-            verify_panel_notification_archive_readback(&self.config, &self.chain_id, &readback)?;
+            verify_panel_notification_archive_readback(&self.config, &self.network_id, &readback)?;
         if installed != artifact {
             return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
         }
@@ -4646,7 +4673,7 @@ impl ModerationOrchestratorV1 {
         };
         verify_current_panel_notification_archive_readback(
             &self.config,
-            &self.chain_id,
+            &self.network_id,
             &self.deps.panel_notification_archive,
             Some(&head),
         )?;
@@ -4688,7 +4715,7 @@ impl ModerationOrchestratorV1 {
         drop(state);
         verify_current_panel_notification_archive_readback(
             &self.config,
-            &self.chain_id,
+            &self.network_id,
             &self.deps.panel_notification_archive,
             head.as_ref(),
         )?;
@@ -4719,7 +4746,7 @@ impl ModerationOrchestratorV1 {
             .clone();
         validate_panel_notification_archive_signer_epochs(
             &epochs,
-            &self.chain_id,
+            &self.network_id,
             self.config.panel_notification_archive_bootstrap_public_key,
             self.config.panel_notification_archive_id,
         )?;
@@ -4953,7 +4980,7 @@ impl ModerationOrchestratorV1 {
                 .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
             let head = load_verified_panel_notification_archive_head(
                 &self.config,
-                &self.chain_id,
+                &self.network_id,
                 &self.deps.panel_notification_archive,
                 operation_id,
             )?;
@@ -5085,7 +5112,7 @@ impl ModerationOrchestratorV1 {
             .map_err(|_| ModerationOrchestratorError::CheckpointStoreLockPoisoned)?;
         if let Err(error) = checkpoint_store::persist_authoritative_checkpoint(
             &self.config,
-            &self.chain_id,
+            &self.network_id,
             &self.deps.checkpoint_store,
             &mut checkpoint_record,
             state,
@@ -5306,7 +5333,7 @@ impl ModerationOrchestratorV1 {
                 && entry.signed_transaction_digest.is_some()
                 && entry.signed_transaction_bytes.is_some();
             let expired = if complete_transaction {
-                let request = moderation_transaction_request(&self.chain_id, entry)?;
+                let request = moderation_transaction_request(&self.network_id, entry)?;
                 let signed = moderation_signed_transaction(entry)?;
                 let transaction = signed.decode_for_request(&request).map_err(|_| {
                     ModerationOrchestratorError::CheckpointCorrupt(
@@ -5383,7 +5410,7 @@ impl ModerationOrchestratorV1 {
                     candidate.baseline_finalized_height = cursor.height;
                     candidate.baseline_finalized_block_hash = cursor.block_hash;
                     candidate.state = StoredOutboxStateV1::Signing;
-                    let request = moderation_transaction_request(&self.chain_id, &candidate)?;
+                    let request = moderation_transaction_request(&self.network_id, &candidate)?;
                     let work_digest = outbox_sign_work_digest(&candidate);
                     let identity = ExternalWorkIdentityV1 {
                         identity: candidate.operation_id,
@@ -5423,7 +5450,7 @@ impl ModerationOrchestratorV1 {
                         continue;
                     }
                     let mut candidate = entry.clone();
-                    let request = moderation_transaction_request(&self.chain_id, &candidate)?;
+                    let request = moderation_transaction_request(&self.network_id, &candidate)?;
                     let signed = moderation_signed_transaction(&candidate)?;
                     signed.decode_for_request(&request).map_err(|_| {
                         ModerationOrchestratorError::CheckpointCorrupt(
@@ -5788,7 +5815,7 @@ impl ModerationOrchestratorV1 {
             state.outbox[position] = candidate;
             return self.persist_checkpoint_locked(&mut state);
         };
-        let request = moderation_transaction_request(&self.chain_id, &candidate)?;
+        let request = moderation_transaction_request(&self.network_id, &candidate)?;
         let signed = moderation_signed_transaction(&candidate)?;
         let transaction = signed.decode_for_request(&request).map_err(|_| {
             ModerationOrchestratorError::CheckpointCorrupt(
@@ -6105,7 +6132,7 @@ impl ModerationOrchestratorV1 {
                         ),
                     );
                     let source_operation_id =
-                        action.operation_id(&self.chain_id, event.event.authority())?;
+                        action.operation_id(&self.network_id, event.event.authority())?;
                     for (kind, recipients) in [
                         (
                             ModerationPanelNotificationKindV1::PrimaryAssignment,
@@ -6118,7 +6145,7 @@ impl ModerationOrchestratorV1 {
                     ] {
                         for recipient in recipients {
                             let entry = new_panel_notification_entry(
-                                &self.chain_id,
+                                &self.network_id,
                                 source_operation_id,
                                 scope_digest,
                                 kind,
@@ -6167,10 +6194,10 @@ impl ModerationOrchestratorV1 {
                             selection.sortition_digest,
                         ));
                     let source_operation_id =
-                        action.operation_id(&self.chain_id, event.event.authority())?;
+                        action.operation_id(&self.network_id, event.event.authority())?;
                     for recipient in &case.case.spec.jurors {
                         let entry = new_panel_notification_entry(
-                            &self.chain_id,
+                            &self.network_id,
                             source_operation_id,
                             scope_digest,
                             ModerationPanelNotificationKindV1::BallotActivated,
@@ -6307,7 +6334,7 @@ impl ModerationOrchestratorV1 {
                 (
                     kind,
                     terminal_handoff_id(
-                        &self.chain_id,
+                        &self.network_id,
                         kind,
                         &outcome.case_id,
                         &outcome.round_id,
@@ -6331,6 +6358,7 @@ impl ModerationOrchestratorV1 {
                     additions.push(StoredHandoffV1 {
                         handoff: ModerationTerminalHandoffV1 {
                             handoff_id,
+                            network_id: self.network_id,
                             kind,
                             case_id: outcome.case_id.clone(),
                             round_id: outcome.round_id.clone(),
@@ -7520,8 +7548,13 @@ fn validate_panel_notification_source_provenance(
 fn validate_retained_panel_notification_source(
     notification: &ModerationPanelNotificationV1,
     snapshot: &ModerationFinalizedLedgerSnapshotV1,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
 ) -> Result<(), ModerationOrchestratorError> {
+    if !notification.is_bound_to_network(network_id) {
+        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "panel notification belongs to a different network".to_owned(),
+        ));
+    }
     let Some(event) = snapshot
         .events
         .iter()
@@ -7582,7 +7615,7 @@ fn validate_retained_panel_notification_source(
                 selection.jurors.clone(),
                 selection.waitlist.clone(),
             ))
-            .operation_id(chain_id, event.event.authority())
+            .operation_id(network_id, event.event.authority())
             .map_err(|_| {
                 ModerationOrchestratorError::CheckpointCorrupt(
                     "assignment notification operation identity cannot be reconstructed".to_owned(),
@@ -7620,7 +7653,7 @@ fn validate_retained_panel_notification_source(
                 round_id.to_owned(),
                 selection.sortition_digest,
             ))
-            .operation_id(chain_id, event.event.authority())
+            .operation_id(network_id, event.event.authority())
             .map_err(|_| {
                 ModerationOrchestratorError::CheckpointCorrupt(
                     "activation notification operation identity cannot be reconstructed".to_owned(),
@@ -7687,7 +7720,7 @@ fn validate_retained_dead_letter_resolution(
     expected: RetainedDeadLetterResolutionExpectationV1,
     state: &ModerationOrchestratorCheckpointV1,
     config: &ModerationOrchestratorConfigV1,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
 ) -> Result<(), ModerationOrchestratorError> {
     verify_dead_letter_resolution_signature(resolution, expected.signature)?;
     let finalized_time = state
@@ -7699,9 +7732,9 @@ fn validate_retained_dead_letter_resolution(
             )
         })?
         .finalized_at_unix_ms;
-    if resolution.chain_id != chain_id.as_str()
+    if resolution.network_id != *network_id
         || resolution.checkpoint_namespace_digest
-            != checkpoint_store::checkpoint_namespace(chain_id)
+            != checkpoint_store::checkpoint_namespace(network_id)
         || resolution.checkpoint_generation == 0
         || resolution.checkpoint_generation >= state.generation
         || resolution.identity != expected.identity
@@ -7727,16 +7760,16 @@ fn validate_retained_dead_letter_resolution(
 fn validate_checkpoint(
     state: &ModerationOrchestratorCheckpointV1,
     config: &ModerationOrchestratorConfigV1,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
 ) -> Result<(), ModerationOrchestratorError> {
     if state.version != MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1 {
         return Err(ModerationOrchestratorError::CheckpointCorrupt(
             "unsupported checkpoint version".to_owned(),
         ));
     }
-    if state.chain_id != chain_id.as_str() {
+    if state.network_id != *network_id {
         return Err(ModerationOrchestratorError::CheckpointCorrupt(
-            "checkpoint chain binding differs from the qualified runtime".to_owned(),
+            "checkpoint network binding differs from the qualified runtime".to_owned(),
         ));
     }
     if state.operations.len() > config.max_idempotency_records
@@ -7775,7 +7808,7 @@ fn validate_checkpoint(
     } else {
         validate_panel_notification_archive_signer_epochs(
             &state.panel_notification_archive_signer_epochs,
-            chain_id,
+            network_id,
             config.panel_notification_archive_bootstrap_public_key,
             config.panel_notification_archive_id,
         )
@@ -8088,7 +8121,7 @@ fn validate_checkpoint(
             ));
         }
         entry.action.validate_authority(&entry.authority)?;
-        if entry.action.operation_id(chain_id, &entry.authority)? != entry.operation_id {
+        if entry.action.operation_id(network_id, &entry.authority)? != entry.operation_id {
             return Err(ModerationOrchestratorError::CheckpointCorrupt(
                 "outbox semantic identity mismatch".to_owned(),
             ));
@@ -8172,7 +8205,7 @@ fn validate_checkpoint(
             ));
         }
         if !empty_cursor {
-            let request = moderation_transaction_request(chain_id, entry)?;
+            let request = moderation_transaction_request(network_id, entry)?;
             if complete_transaction {
                 let signed = moderation_signed_transaction(entry)?;
                 let transaction = signed.decode_for_request(&request).map_err(|_| {
@@ -8205,7 +8238,7 @@ fn validate_checkpoint(
         validate_retained_terminal_handoff(
             &completed.handoff,
             state.finalized_snapshot.as_ref(),
-            chain_id,
+            network_id,
         )?;
         if !handoffs.insert(completed.handoff.handoff_id)
             || !external_work_cursor_is_valid(
@@ -8227,7 +8260,7 @@ fn validate_checkpoint(
         validate_retained_terminal_handoff(
             &entry.handoff,
             state.finalized_snapshot.as_ref(),
-            chain_id,
+            network_id,
         )?;
         let valid_claim = match entry.work_claim.as_ref() {
             None => true,
@@ -8314,7 +8347,7 @@ fn validate_checkpoint(
                 let action_digest = action.action_digest()?;
                 let operation = operations.get(&entry.identity).copied();
                 if *request_binding_digest == [0; 32]
-                    || action.operation_id(chain_id, authority)? != entry.identity
+                    || action.operation_id(network_id, authority)? != entry.identity
                     || action.label() != entry.action_label
                     || (entry.resolution.is_none() && operation.is_none())
                     || operation.is_some_and(|operation| {
@@ -8337,7 +8370,7 @@ fn validate_checkpoint(
                 validate_retained_terminal_handoff(
                     handoff,
                     state.finalized_snapshot.as_ref(),
-                    chain_id,
+                    network_id,
                 )?;
                 if handoff.handoff_id != entry.identity
                     || handoff_label(handoff.kind) != entry.action_label
@@ -8371,7 +8404,7 @@ fn validate_checkpoint(
                     },
                     state,
                     config,
-                    chain_id,
+                    network_id,
                 )?;
             }
             _ => {
@@ -8398,16 +8431,7 @@ fn validate_checkpoint(
             || notification.finalized_event_cursor.block_height == 0
             || notification.finalized_event_cursor.block_hash == [0; 32]
             || notification.source_occurred_at_unix_ms == 0
-            || notification_id
-                != panel_notification_id(
-                    chain_id,
-                    notification.source_operation_id,
-                    notification.scope_digest,
-                    notification.kind,
-                    &notification.recipient,
-                    notification.finalized_event_cursor,
-                    notification.source_occurred_at_unix_ms,
-                )
+            || !notification.is_bound_to_network(network_id)
             || entry.attempt_limit == 0
             || entry.attempts > entry.attempt_limit
             || entry.claim_generation != entry.attempts
@@ -8428,7 +8452,7 @@ fn validate_checkpoint(
             ));
         }
         if let Some(snapshot) = state.finalized_snapshot.as_ref() {
-            validate_retained_panel_notification_source(notification, snapshot, chain_id)?;
+            validate_retained_panel_notification_source(notification, snapshot, network_id)?;
         }
         let claim_fields = (
             entry.claimed_by,
@@ -8585,7 +8609,7 @@ fn validate_checkpoint(
             },
             state,
             config,
-            chain_id,
+            network_id,
         )?;
     }
 
@@ -8721,11 +8745,11 @@ fn finalized_snapshot_digest(
 }
 
 fn moderation_transaction_request(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     entry: &StoredOutboxEntryV1,
 ) -> Result<ModerationTransactionRequestV1, ModerationOrchestratorError> {
     ModerationTransactionRequestV1::new(
-        chain_id.clone(),
+        *network_id,
         entry.envelope_generation,
         entry.authority.clone(),
         entry.action.clone(),
@@ -8917,7 +8941,7 @@ fn validate_signed_transaction_for_request(
     let canonical_envelope = norito::to_bytes(transaction)
         .map_err(|_| ModerationSubmissionFailureV1::PermanentRejection)?;
     if transaction.verify_signature().is_err()
-        || transaction.chain() != &request.chain_id
+        || transaction.network_id() != Some(&request.network_id)
         || transaction.authority() != &request.authority
         || *transaction.hash().as_ref() == [0; 32]
         || transaction.creation_time().is_zero()
@@ -9417,14 +9441,14 @@ fn panel_notification_scope_digest(case_id: &str, round_id: &str) -> [u8; 32] {
 }
 
 fn panel_notification_worker_id(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     handle: &str,
     qualification: ModerationRuntimeProviderQualificationV1,
 ) -> [u8; 32] {
     domain_hash(
         PANEL_NOTIFICATION_WORKER_DOMAIN_V1,
         &[
-            chain_id.as_str().as_bytes(),
+            network_id.as_bytes(),
             handle.as_bytes(),
             &qualification.revision().to_le_bytes(),
             &qualification.policy_digest(),
@@ -9433,7 +9457,7 @@ fn panel_notification_worker_id(
 }
 
 fn panel_notification_id(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     source_operation_id: [u8; 32],
     scope_digest: [u8; 32],
     kind: ModerationPanelNotificationKindV1,
@@ -9450,7 +9474,7 @@ fn panel_notification_id(
     domain_hash(
         PANEL_NOTIFICATION_ID_DOMAIN_V1,
         &[
-            chain_id.as_str().as_bytes(),
+            network_id.as_bytes(),
             &source_operation_id,
             &scope_digest,
             &kind,
@@ -9465,7 +9489,7 @@ fn panel_notification_id(
 }
 
 fn new_panel_notification_entry(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     source_operation_id: [u8; 32],
     scope_digest: [u8; 32],
     kind: ModerationPanelNotificationKindV1,
@@ -9476,7 +9500,7 @@ fn new_panel_notification_entry(
     let cursor = event.cursor();
     let available_at_unix_ms = *event.event.occurred_at_unix_ms();
     let notification_id = panel_notification_id(
-        chain_id,
+        network_id,
         source_operation_id,
         scope_digest,
         kind,
@@ -9487,6 +9511,7 @@ fn new_panel_notification_entry(
     let mut entry = StoredPanelNotificationV1 {
         notification: ModerationPanelNotificationV1 {
             notification_id,
+            network_id: *network_id,
             source_operation_id,
             scope_digest,
             kind,
@@ -9899,7 +9924,6 @@ fn validate_dead_letter_resolution_shape(
         resolution.attestor_policy_digest,
     );
     if resolution.version != 1
-        || resolution.chain_id.is_empty()
         || resolution.checkpoint_namespace_digest == [0; 32]
         || resolution.checkpoint_generation == 0
         || resolution.checkpoint_revision == [0; 32]
@@ -9921,7 +9945,7 @@ fn dead_letter_resolution_message(resolution: &ModerationDeadLetterResolutionV1)
         DEAD_LETTER_RESOLUTION_DOMAIN_V1,
         &[
             &resolution.version.to_le_bytes(),
-            resolution.chain_id.as_bytes(),
+            resolution.network_id.as_bytes(),
             &resolution.checkpoint_namespace_digest,
             &resolution.checkpoint_generation.to_le_bytes(),
             &resolution.checkpoint_revision,
@@ -10216,7 +10240,7 @@ fn verify_panel_notification_archive_artifact_with_bounds(
     max_bytes: usize,
     _checkpoint_max_bytes: u64,
     max_records: usize,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     bytes: &[u8],
 ) -> Result<ModerationPanelNotificationArchiveArtifactV1, ModerationOrchestratorError> {
     if bytes.is_empty() || bytes.len() > max_bytes || max_records == 0 {
@@ -10247,7 +10271,7 @@ fn verify_panel_notification_archive_artifact_with_bounds(
     let source_manifest = &artifact.source_manifest;
     if artifact.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
         || artifact.payload.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
-        || artifact.head.chain_id != chain_id.as_str()
+        || artifact.head.network_id != *network_id
         || artifact.head.archive_signature != [0; 64]
         || terminal_record_count == 0
         || terminal_record_count != artifact.head.terminal_record_count
@@ -10270,7 +10294,7 @@ fn verify_panel_notification_archive_artifact_with_bounds(
         || panel_notification_archive_payload_digest(&artifact.payload)?
             != artifact.head.payload_digest
         || source_manifest.version != MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1
-        || source_manifest.chain_id != chain_id.as_str()
+        || source_manifest.network_id != *network_id
         || source_manifest.checkpoint_namespace_digest
             != artifact.head.source_checkpoint_namespace_digest
         || source_manifest.checkpoint_generation != artifact.head.source_checkpoint_generation
@@ -10329,7 +10353,7 @@ fn verify_panel_notification_archive_artifact_with_bounds(
         .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
     validate_panel_notification_archive_signer_epochs(
         &source_manifest.archive_signer_epochs,
-        chain_id,
+        network_id,
         source_bootstrap_public_key,
         artifact.head.archive_id,
     )?;
@@ -10371,7 +10395,7 @@ fn verify_panel_notification_archive_artifact_with_bounds(
 /// Strictly validate a canonical archive artifact at the dedicated slot-55 broker boundary.
 ///
 /// All signable values are derived internally from canonical bytes. The caller cannot supply
-/// an alternative operation identifier, receipt message, chain binding, or source claim.
+/// an alternative operation identifier, receipt message, network binding, or source claim.
 ///
 /// # Errors
 ///
@@ -10387,7 +10411,7 @@ pub fn validate_moderation_panel_notification_archive_artifact_for_broker_v1(
         archive_max_bytes,
         expected.checkpoint_max_bytes,
         expected.max_records,
-        expected.chain_id,
+        expected.network_id,
         canonical_artifact,
     )?;
     verify_panel_notification_archive_head_core_is_current(
@@ -10417,7 +10441,7 @@ fn validate_moderation_panel_notification_archive_artifact_source_for_broker_v1(
 ) -> Result<(), ModerationOrchestratorError> {
     if artifact.head.archive_id != expected.archive_id
         || artifact.head.source_checkpoint_namespace_digest
-            != checkpoint_store::checkpoint_namespace(expected.chain_id)
+            != checkpoint_store::checkpoint_namespace(expected.network_id)
         || artifact.head.source_attestor_handle != expected.checkpoint_handle
         || artifact.head.source_attestor_revision != expected.checkpoint_qualification.revision()
         || artifact.head.source_attestor_policy_digest
@@ -10457,7 +10481,7 @@ pub fn validate_moderation_panel_notification_archive_readback_for_broker_v1(
         archive_max_bytes,
         expected.checkpoint_max_bytes,
         expected.max_records,
-        expected.chain_id,
+        expected.network_id,
         canonical_artifact,
     )?;
     validate_moderation_panel_notification_archive_artifact_source_for_broker_v1(
@@ -10479,7 +10503,7 @@ pub fn validate_moderation_panel_notification_archive_readback_for_broker_v1(
 ///
 /// # Errors
 ///
-/// Rejects noncanonical bytes, any chain/provider/source substitution, invalid source or
+/// Rejects noncanonical bytes, any network/provider/source substitution, invalid source or
 /// archive signatures, and inconsistent operation, head, or chain-accumulator derivations.
 pub fn validate_moderation_panel_notification_archive_head_for_broker_v1(
     canonical_head: &[u8],
@@ -10504,9 +10528,9 @@ pub fn validate_moderation_panel_notification_archive_head_for_broker_v1(
     if norito::to_bytes(&head)
         .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?
         != canonical_head
-        || head.chain_id != expected.chain_id.as_str()
+        || head.network_id != *expected.network_id
         || head.source_checkpoint_namespace_digest
-            != checkpoint_store::checkpoint_namespace(expected.chain_id)
+            != checkpoint_store::checkpoint_namespace(expected.network_id)
         || head.source_attestor_handle != expected.checkpoint_handle
         || head.source_attestor_revision != expected.checkpoint_qualification.revision()
         || head.source_attestor_policy_digest != expected.checkpoint_qualification.policy_digest()
@@ -10571,7 +10595,11 @@ pub fn moderation_panel_notification_archive_broker_fixture_v1()
     .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
     let archive_public_key = public_key_bytes(&archive_key)?;
     let checkpoint_attestation_public_key = public_key_bytes(&checkpoint_key)?;
-    let chain_id = iroha_data_model::ChainId::from("moderation-archive-broker-fixture-v1");
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"moderation-archive-broker-fixture-v1-genesis",
+        )),
+    );
     let archive_handle = "immutable.moderation-archive.fixture-v1".to_owned();
     let archive_qualification = ModerationRuntimeProviderQualificationV1::new(7, [0x71; 32]);
     let archive_id = [0xA7; 32];
@@ -10585,7 +10613,7 @@ pub fn moderation_panel_notification_archive_broker_fixture_v1()
     };
     let recipient = AccountId::new(checkpoint_key.public_key().clone());
     let notification_id = panel_notification_id(
-        &chain_id,
+        &network_id,
         [0x31; 32],
         [0x32; 32],
         ModerationPanelNotificationKindV1::PrimaryAssignment,
@@ -10607,6 +10635,7 @@ pub fn moderation_panel_notification_archive_broker_fixture_v1()
     let mut stored = StoredPanelNotificationV1 {
         notification: ModerationPanelNotificationV1 {
             notification_id,
+            network_id,
             source_operation_id: [0x31; 32],
             scope_digest: [0x32; 32],
             kind: ModerationPanelNotificationKindV1::PrimaryAssignment,
@@ -10637,7 +10666,7 @@ pub fn moderation_panel_notification_archive_broker_fixture_v1()
         event_index: 1,
     };
     let second_notification_id = panel_notification_id(
-        &chain_id,
+        &network_id,
         [0x33; 32],
         [0x34; 32],
         ModerationPanelNotificationKindV1::PrimaryAssignment,
@@ -10678,7 +10707,7 @@ pub fn moderation_panel_notification_archive_broker_fixture_v1()
         epoch_digest: [0; 32],
     };
     signer_epoch.epoch_digest = panel_notification_archive_signer_epoch_digest(&signer_epoch);
-    let mut source = ModerationOrchestratorCheckpointV1::new(&chain_id);
+    let mut source = ModerationOrchestratorCheckpointV1::new(&network_id);
     source.generation = 1;
     source.panel_notification_clock_unix_ms = 1_200;
     source.panel_notification_scanned_cursor = Some(second_cursor);
@@ -10701,7 +10730,8 @@ pub fn moderation_panel_notification_archive_broker_fixture_v1()
     );
     let mut current_checkpoint_record = ModerationCheckpointStoreRecordV1 {
         version: MODERATION_CHECKPOINT_STORE_RECORD_VERSION_V1,
-        namespace_digest: checkpoint_store::checkpoint_namespace(&chain_id),
+        network_id,
+        namespace_digest: checkpoint_store::checkpoint_namespace(&network_id),
         checkpoint_generation: 1,
         predecessor_revision: Some([0x11; 32]),
         predecessor_checkpoint_digest: Some([0x12; 32]),
@@ -10716,7 +10746,7 @@ pub fn moderation_panel_notification_archive_broker_fixture_v1()
         checkpoint_store::record_revision(&current_checkpoint_record);
     let source_manifest = ModerationPanelNotificationArchiveSourceManifestV1 {
         version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
-        chain_id: chain_id.as_str().to_owned(),
+        network_id,
         checkpoint_namespace_digest: current_checkpoint_record.namespace_digest,
         checkpoint_generation: current_checkpoint_record.checkpoint_generation,
         checkpoint_revision: current_checkpoint_record.revision,
@@ -10739,7 +10769,7 @@ pub fn moderation_panel_notification_archive_broker_fixture_v1()
     let source_attestation = ModerationPanelNotificationSourceAttestationV1 {
         version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
         attestor_slot: MODERATION_PANEL_NOTIFICATION_SOURCE_ATTESTOR_BROKER_SLOT_V1,
-        chain_id: chain_id.as_str().to_owned(),
+        network_id,
         checkpoint_namespace_digest: current_checkpoint_record.namespace_digest,
         checkpoint_generation: current_checkpoint_record.checkpoint_generation,
         checkpoint_revision: current_checkpoint_record.revision,
@@ -10760,7 +10790,7 @@ pub fn moderation_panel_notification_archive_broker_fixture_v1()
     )?;
     let mut head = ModerationPanelNotificationArchiveHeadV1 {
         version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_VERSION_V1,
-        chain_id: chain_id.as_str().to_owned(),
+        network_id,
         generation: 1,
         predecessor_head_digest: None,
         predecessor_operation_id: None,
@@ -10827,7 +10857,7 @@ pub fn moderation_panel_notification_archive_broker_fixture_v1()
         source_attestation_digest: head.source_attestation_digest,
     };
     Ok(ModerationPanelNotificationArchiveBrokerFixtureV1 {
-        chain_id,
+        network_id,
         archive_handle,
         archive_qualification,
         archive_id,
@@ -10851,7 +10881,7 @@ pub fn moderation_panel_notification_archive_broker_fixture_v1()
 
 fn verify_panel_notification_archive_artifact(
     config: &ModerationOrchestratorConfigV1,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     bytes: &[u8],
 ) -> Result<ModerationPanelNotificationArchiveArtifactV1, ModerationOrchestratorError> {
     let max_bytes = usize::try_from(config.panel_notification_archive_max_bytes).map_err(|_| {
@@ -10863,12 +10893,12 @@ fn verify_panel_notification_archive_artifact(
         max_bytes,
         config.checkpoint_max_bytes,
         config.max_handoffs,
-        chain_id,
+        network_id,
         bytes,
     )?;
     if artifact.head.archive_id != config.panel_notification_archive_id
         || artifact.head.source_checkpoint_namespace_digest
-            != checkpoint_store::checkpoint_namespace(chain_id)
+            != checkpoint_store::checkpoint_namespace(network_id)
         || artifact.head.source_attestor_handle != config.checkpoint_store_handle
         || artifact.head.source_attestor_revision
             != config.expected_checkpoint_store_qualification.revision()
@@ -10892,7 +10922,7 @@ fn verify_panel_notification_archive_artifact(
 
 fn verify_panel_notification_archive_readback(
     config: &ModerationOrchestratorConfigV1,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     readback: &ModerationPanelNotificationArchiveReadbackV1,
 ) -> Result<
     (
@@ -10901,8 +10931,11 @@ fn verify_panel_notification_archive_readback(
     ),
     ModerationOrchestratorError,
 > {
-    let artifact =
-        verify_panel_notification_archive_artifact(config, chain_id, &readback.canonical_artifact)?;
+    let artifact = verify_panel_notification_archive_artifact(
+        config,
+        network_id,
+        &readback.canonical_artifact,
+    )?;
     let mut head = artifact.head.clone();
     head.archive_signature = readback.signature;
     verify_panel_notification_archive_head(&head)?;
@@ -10911,7 +10944,7 @@ fn verify_panel_notification_archive_readback(
 
 fn load_verified_panel_notification_archive_head(
     config: &ModerationOrchestratorConfigV1,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     archive: &QualifiedModerationPanelNotificationArchiveV1,
     operation_id: [u8; 32],
 ) -> Result<ModerationPanelNotificationArchiveHeadV1, ModerationOrchestratorError> {
@@ -10919,7 +10952,7 @@ fn load_verified_panel_notification_archive_head(
         .read(operation_id)
         .map_err(map_panel_notification_archive_error)?
         .ok_or(ModerationOrchestratorError::PanelNotificationArchiveInvalid)?;
-    let (_, head) = verify_panel_notification_archive_readback(config, chain_id, &readback)?;
+    let (_, head) = verify_panel_notification_archive_readback(config, network_id, &readback)?;
     if head.operation_id != operation_id {
         return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
     }
@@ -10928,7 +10961,7 @@ fn load_verified_panel_notification_archive_head(
 
 fn verify_current_panel_notification_archive_readback(
     config: &ModerationOrchestratorConfigV1,
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     archive: &QualifiedModerationPanelNotificationArchiveV1,
     head: Option<&ModerationPanelNotificationArchiveHeadV1>,
 ) -> Result<(), ModerationOrchestratorError> {
@@ -10938,7 +10971,7 @@ fn verify_current_panel_notification_archive_readback(
     verify_panel_notification_archive_head(head)?;
     let installed = load_verified_panel_notification_archive_head(
         config,
-        chain_id,
+        network_id,
         archive,
         head.operation_id,
     )?;
@@ -10950,7 +10983,7 @@ fn verify_current_panel_notification_archive_readback(
         (2.., Some(predecessor_operation_id)) => {
             let predecessor = load_verified_panel_notification_archive_head(
                 config,
-                chain_id,
+                network_id,
                 archive,
                 predecessor_operation_id,
             )?;
@@ -11502,6 +11535,7 @@ pub enum ModerationOrchestratorError {
 #[cfg(test)]
 mod tests {
     include!("moderation_orchestrator/support_and_provider_tests.rs");
+    include!("moderation_orchestrator/network_domain_tests.rs");
     include!("moderation_orchestrator/operation_tests.rs");
     include!("moderation_orchestrator/panel_notification_tests.rs");
 }

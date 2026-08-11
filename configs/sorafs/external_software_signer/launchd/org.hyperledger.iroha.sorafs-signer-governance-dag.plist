@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>org.hyperledger.iroha.sorafs-signer-governance-dag</string>
+  <key>ProgramArguments</key><array>
+    <string>/usr/local/libexec/sorafs-external-software-signer-launchd-v1</string>
+    <string>governance-dag</string>
+  </array>
+  <key>StandardInPath</key><string>/private/var/run/iroha-signer-credentials/governance-dag.wrapping-key</string>
+  <key>WorkingDirectory</key><string>/private/var/empty</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>UserName</key><string>sorafs-signer-governance-dag</string>
+  <key>GroupName</key><string>sorafs-signer-governance-dag</string>
+  <key>Umask</key><integer>63</integer>
+  <key>SoftResourceLimits</key><dict><key>Core</key><integer>0</integer></dict>
+  <key>HardResourceLimits</key><dict><key>Core</key><integer>0</integer></dict>
+</dict></plist>

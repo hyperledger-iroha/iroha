@@ -6,6 +6,7 @@ use iroha_config_base::{read::ConfigReader, toml::TomlSource};
 fn config_with_ttl(ttl_ms: u64, timeout_ms: u64) -> toml::Table {
     toml::toml! {
         chain = "00000000-0000-0000-0000-000000000000"
+        network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
         torii_url = "http://127.0.0.1:8080/"
         [account]
         domain = "wonderland.universal"

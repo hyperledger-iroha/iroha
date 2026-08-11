@@ -6,12 +6,46 @@ import hashlib
 import json
 import tempfile
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 from sorafs_topology_qualification import (
     CANONICAL_READINESS_LANES,
+    SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
     SUMMARY_SCHEMA,
+    load_topology_qualification_binding,
+    topology_qualification_envelope_signing_bytes,
 )
+from sorafs_resilience_test_support import public_key_from_seed, sign
+
+
+TOPOLOGY_SIGNING_SEED = hashlib.sha256(b"sorafs-topology-test-key").digest()
+TOPOLOGY_VERIFICATION_PUBLIC_KEY = public_key_from_seed(TOPOLOGY_SIGNING_SEED)
+TOPOLOGY_SIGNER_SERVICE_ID = "sorafs-topology-signer-a"
+TOPOLOGY_SIGNER_ADMINISTRATOR_ID = "sorafs-topology-admin-b"
+TOPOLOGY_SIGNER_KEY_REVISION = 3
+TOPOLOGY_SIGNER_POLICY_REVISION = 5
+TOPOLOGY_SIGNER_POLICY_DIGEST = hashlib.sha256(
+    b"sorafs-topology-test-policy-v1"
+).hexdigest()
+TOPOLOGY_MAX_REVIEW_AGE_SECS = 3_600
+
+
+def authenticated_topology_binding(binding: dict[str, Any]) -> dict[str, Any]:
+    """Attach the test topology signer's payload-free public provenance."""
+
+    return {
+        **binding,
+        "signer_authentication_kind": "external-ed25519",
+        "signer_backend": "software",
+        "signer_service_id": TOPOLOGY_SIGNER_SERVICE_ID,
+        "signer_administrator_id": TOPOLOGY_SIGNER_ADMINISTRATOR_ID,
+        "signer_key_revision": TOPOLOGY_SIGNER_KEY_REVISION,
+        "signer_policy_revision": TOPOLOGY_SIGNER_POLICY_REVISION,
+        "signer_policy_digest_sha256": TOPOLOGY_SIGNER_POLICY_DIGEST,
+        "signer_public_key_fingerprint_sha256": hashlib.sha256(
+            TOPOLOGY_VERIFICATION_PUBLIC_KEY
+        ).hexdigest(),
+    }
 
 
 def write_topology_qualification(
@@ -38,8 +72,11 @@ def write_topology_qualification(
         "deployment": {
             "deployment_id": deployment_id,
             "environment": environment,
+            "network": "taira",
+            "chain_id": "fc56984b-2be7-431d-840e-21514d1883f0",
+            "chain_discriminant": 369,
         },
-        "validator_count": 4,
+        "validator_count": 4, "validator_ids": ["taira-validator-1", "taira-validator-2", "taira-validator-3", "taira-validator-4"],
         "storage_provider_count": 2,
         "gateway_count": 2,
         "governance_dag_instance_count": 2,
@@ -56,6 +93,53 @@ def write_topology_qualification(
         encoding="utf-8",
     )
     return path
+
+
+def signed_topology_cli_args(
+    qualification_path: Path,
+    *,
+    deployment_id: str,
+    environment: str,
+    now_unix: int,
+) -> list[str]:
+    """Sign an existing valid topology summary and return its public trust tuple."""
+
+    binding, errors = load_topology_qualification_binding(
+        qualification_path,
+        expected_deployment_id=deployment_id,
+        expected_environment=environment,
+    )
+    envelope_path = qualification_path.with_name(
+        f"{qualification_path.name}.ed25519"
+    )
+    envelope: dict[str, Any] = {}
+    if not errors and binding is not None:
+        envelope = {
+            "schema": SIGNED_QUALIFICATION_ENVELOPE_SCHEMA,
+            **authenticated_topology_binding(binding),
+            "reviewed_at_unix": now_unix - 60,
+            "signature_algorithm": "ed25519",
+            "signature_hex": "00" * 64,
+        }
+        envelope["signature_hex"] = sign(
+            TOPOLOGY_SIGNING_SEED,
+            topology_qualification_envelope_signing_bytes(envelope),
+        ).hex()
+    envelope_path.write_text(
+        json.dumps(envelope, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return [
+        "--topology-qualification-summary", str(qualification_path),
+        "--topology-qualification-envelope", str(envelope_path),
+        "--topology-qualification-verification-public-key-hex", TOPOLOGY_VERIFICATION_PUBLIC_KEY.hex(),
+        "--topology-qualification-signer-service-id", TOPOLOGY_SIGNER_SERVICE_ID,
+        "--topology-qualification-signer-administrator-id", TOPOLOGY_SIGNER_ADMINISTRATOR_ID,
+        "--topology-qualification-signer-key-revision", str(TOPOLOGY_SIGNER_KEY_REVISION),
+        "--topology-qualification-signer-policy-revision", str(TOPOLOGY_SIGNER_POLICY_REVISION),
+        "--topology-qualification-signer-policy-digest-hex", TOPOLOGY_SIGNER_POLICY_DIGEST,
+        "--max-topology-qualification-review-age-secs", str(TOPOLOGY_MAX_REVIEW_AGE_SECS),
+    ]
 
 
 class TopologyBoundChecker:

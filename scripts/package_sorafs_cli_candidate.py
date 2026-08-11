@@ -38,6 +38,23 @@ MAX_TOTAL_BYTES = 8 * 1024 * 1024 * 1024
 SMOKE_TIMEOUT_SECONDS = 30
 MAX_SMOKE_OUTPUT_BYTES = 1024 * 1024
 VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,127}\Z")
+SIGNER_BINARY = "sorafs_external_software_signer"
+BROKER_ALIAS = "libexec/iroha-runtime-provider-broker-v1"
+WINDOWS_SIGNER_POLICY = "WINDOWS-UNSUPPORTED-EXTERNAL-SOFTWARE-SIGNER.md"
+SIGNER_ASSET_ROOT = "share/iroha/sorafs"
+MACOS_SIGNER_ROLES = (
+    "proof-outcome",
+    "repair",
+    "reserve",
+    "orderbook",
+    "governance-dag",
+    "potr-gateway",
+    "potr-provider",
+    "billing",
+    "evidence-viewer",
+    "stream-token",
+    "pop-credentials",
+)
 
 
 class CandidateError(ValueError):
@@ -146,6 +163,36 @@ def _normalized_mode(relative: str, suffix: str, source_mode: int) -> int:
     return 0o644
 
 
+def _signer_inventory(target: str) -> set[str]:
+    if target.endswith("windows-msvc"):
+        return {WINDOWS_SIGNER_POLICY}
+    common = {
+        SIGNER_BINARY,
+        f"{SIGNER_BINARY}.help.txt",
+        BROKER_ALIAS,
+        "iroha-runtime-provider-broker-v1.help.txt",
+        f"{SIGNER_ASSET_ROOT}/external_software_signer/README.md",
+        f"{SIGNER_ASSET_ROOT}/runtime_provider_broker/README.md",
+    }
+    if target.endswith("linux-gnu"):
+        return common | {
+            f"{SIGNER_ASSET_ROOT}/external_software_signer/sorafs-external-software-signer@.service",
+            f"{SIGNER_ASSET_ROOT}/external_software_signer/systemd/iroha-runtime-provider-broker-v1.service.d/20-external-software-signers.conf",
+            f"{SIGNER_ASSET_ROOT}/runtime_provider_broker/systemd/iroha-runtime-provider-broker-v1.service",
+            f"{SIGNER_ASSET_ROOT}/runtime_provider_broker/systemd/sorafs-governance-dag@.service.d/20-runtime-provider-broker-v1.conf",
+            f"{SIGNER_ASSET_ROOT}/runtime_provider_broker/systemd/taira-irohad.service.d/20-runtime-provider-broker-v1.conf",
+        }
+    launchd_assets = {
+        f"{SIGNER_ASSET_ROOT}/external_software_signer/launchd/sorafs-external-software-signer-launchd-v1",
+        f"{SIGNER_ASSET_ROOT}/runtime_provider_broker/launchd/org.hyperledger.iroha.runtime-provider-broker-v1.plist",
+    }
+    launchd_assets.update(
+        f"{SIGNER_ASSET_ROOT}/external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-{role}.plist"
+        for role in MACOS_SIGNER_ROLES
+    )
+    return common | launchd_assets
+
+
 def _scan_candidate(input_dir: Path, *, version: str, target: str) -> list[FileRecord]:
     suffix = TARGET_SUFFIXES[target]
     _reject_symlink_components(input_dir, label="candidate input directory")
@@ -252,6 +299,7 @@ def _scan_candidate(input_dir: Path, *, version: str, target: str) -> list[FileR
     optional_files = {
         f"reference-validator/{validator_name}.manifest.json.sig"
     }
+    required_files |= _signer_inventory(target)
     present = {record.relative for record in records}
     missing = sorted(required_files - present)
     if missing:
@@ -266,6 +314,10 @@ def _scan_candidate(input_dir: Path, *, version: str, target: str) -> list[FileR
     )
     if empty_required:
         _fail("candidate release files must not be empty: " + ", ".join(empty_required))
+    if not target.endswith("windows-msvc"):
+        records_by_path = {record.relative: record for record in records}
+        if records_by_path[SIGNER_BINARY].sha256 != records_by_path[BROKER_ALIAS].sha256:
+            _fail("runtime-provider broker alias is not byte-identical to the signer")
     return records
 
 
@@ -277,6 +329,15 @@ def _manifest_bytes(
         "package": "sorafs-cli",
         "version": version,
         "target": target,
+        "external_software_signer": {
+            "backend": "software" if not target.endswith("windows-msvc") else None,
+            "broker_alias": BROKER_ALIAS if not target.endswith("windows-msvc") else None,
+            "binary": SIGNER_BINARY if not target.endswith("windows-msvc") else None,
+            "qualification": "software-key-qualified"
+            if not target.endswith("windows-msvc")
+            else "unsupported-windows",
+            "windows_supported": False,
+        },
         "payload_file_count": len(records),
         "payload_total_bytes": sum(record.size for record in records),
         "files": [
@@ -502,11 +563,14 @@ def _safe_extract_and_smoke(
 
         suffix = TARGET_SUFFIXES[target]
         package_root = extract_root / package_name
-        for binary_name in (
+        smoke_binaries = [
             f"sorafs_cli{suffix}",
             f"sorafs_fetch{suffix}",
             f"sorafs-validate{suffix}",
-        ):
+        ]
+        if not target.endswith("windows-msvc"):
+            smoke_binaries.extend((SIGNER_BINARY, BROKER_ALIAS))
+        for binary_name in smoke_binaries:
             binary = package_root / binary_name
             try:
                 with tempfile.TemporaryFile() as smoke_output:
@@ -648,7 +712,9 @@ def package_candidate(
         "manifest": manifest_path.name,
         "manifest_sha256": manifest_digest,
         "payload_file_count": len(records),
-        "clean_smoke_binary_count": 3,
+        "clean_smoke_binary_count": 3
+        if target.endswith("windows-msvc")
+        else 5,
     }
     return summary
 

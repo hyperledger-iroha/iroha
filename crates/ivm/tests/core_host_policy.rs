@@ -131,6 +131,8 @@ fn make_handle(
         manifest_view_root: manifest_root.to_vec(),
         expiry_slot,
         max_clock_skew_ms: Some(0),
+        issuer_context: Default::default(),
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
     }
 }
 
@@ -138,8 +140,8 @@ fn make_policy_snapshot(
     dsid: DataSpaceId,
     manifest_root: [u8; 32],
     target_lane: LaneId,
-    min_handle_era: u64,
-    min_sub_nonce: u64,
+    active_handle_era: u64,
+    next_handle_counter: u64,
     current_slot: u64,
 ) -> AxtPolicySnapshot {
     let entries = vec![AxtPolicyBinding {
@@ -147,8 +149,8 @@ fn make_policy_snapshot(
         policy: AxtPolicyEntry {
             manifest_root,
             target_lane,
-            min_handle_era,
-            min_sub_nonce,
+            active_handle_era,
+            next_handle_counter,
             current_slot,
         },
     }];
@@ -230,7 +232,7 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
     let ds_bytes = norito::to_bytes(&dsid).expect("encode dsid");
     let ds_ptr = store_tlv(&mut vm, PointerType::DataSpaceId, &ds_bytes);
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let handle = make_handle(binding, LaneId::new(0), manifest_root, 1, 42, 10);
+    let handle = make_handle(binding, LaneId::new(0), manifest_root, 1, 1, 10);
     let handle_bytes = norito::to_bytes(&handle).expect("encode handle");
     let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &handle_bytes);
     let manifest = TouchManifest {
@@ -440,8 +442,8 @@ fn core_host_enforces_space_directory_policy_on_handles() {
         DataspaceAxtPolicy {
             manifest_root: [1; 32],
             target_lane: LaneId::new(2),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 3,
         },
     );
@@ -469,7 +471,7 @@ fn core_host_enforces_space_directory_policy_on_handles() {
     );
 
     // Lane/manifest match → allowed.
-    let handle = make_handle(binding, LaneId::new(2), [1; 32], 2, 2, 10);
+    let handle = make_handle(binding, LaneId::new(2), [1; 32], 1, 1, 10);
     let handle_bytes = norito::to_bytes(&handle).expect("encode handle");
     let handle_ptr = store_tlv(&mut vm, PointerType::AssetHandle, &handle_bytes);
     let intent = RemoteSpendIntent {
@@ -492,7 +494,7 @@ fn core_host_enforces_space_directory_policy_on_handles() {
     );
 
     // Lane mismatch → denied.
-    let bad_handle = make_handle(binding, LaneId::new(3), [1; 32], 2, 3, 10);
+    let bad_handle = make_handle(binding, LaneId::new(3), [1; 32], 1, 1, 10);
     let bad_handle_ptr = store_tlv(
         &mut vm,
         PointerType::AssetHandle,
@@ -556,6 +558,8 @@ fn convert_handle(model: &model::AssetHandle) -> AssetHandle {
         manifest_view_root: model.manifest_view_root.to_vec(),
         expiry_slot: model.expiry_slot,
         max_clock_skew_ms: model.max_clock_skew_ms,
+        issuer_context: Default::default(),
+        issuer_signature: model.issuer_signature.clone(),
     }
 }
 
@@ -606,8 +610,8 @@ fn run_policy_snapshot_case(
         binding,
         policy_entry.map_or_else(|| LaneId::new(0), |entry| entry.target_lane),
         policy_entry.map_or([0; 32], |entry| entry.manifest_root),
-        policy_entry.map_or(1, |entry| core::cmp::max(entry.min_handle_era, 1)),
-        policy_entry.map_or(1, |entry| core::cmp::max(entry.min_sub_nonce, 1)),
+        policy_entry.map_or(1, |entry| core::cmp::max(entry.active_handle_era, 1)),
+        policy_entry.map_or(1, |entry| core::cmp::max(entry.next_handle_counter, 1)),
         policy_entry.map_or(10, |entry| {
             core::cmp::max(entry.current_slot.saturating_add(5), 1)
         }),
@@ -672,10 +676,20 @@ fn core_host_policy_snapshot_rejects_policy_mismatches() {
     });
     assert!(matches!(low_handle_era, Err(VMError::PermissionDenied)));
 
+    let future_handle_era = run_policy_snapshot_case(&snapshot, dsid, |handle| {
+        handle.handle_era = 6;
+    });
+    assert!(matches!(future_handle_era, Err(VMError::PermissionDenied)));
+
     let low_sub_nonce = run_policy_snapshot_case(&snapshot, dsid, |handle| {
         handle.sub_nonce = 8;
     });
     assert!(matches!(low_sub_nonce, Err(VMError::PermissionDenied)));
+
+    let future_sub_nonce = run_policy_snapshot_case(&snapshot, dsid, |handle| {
+        handle.sub_nonce = 10;
+    });
+    assert!(matches!(future_sub_nonce, Err(VMError::PermissionDenied)));
 }
 
 #[test]
@@ -727,8 +741,8 @@ fn run_wsv_policy_case(
         binding,
         policy.target_lane,
         policy.manifest_root,
-        policy.min_handle_era.max(1),
-        policy.min_sub_nonce.max(1),
+        policy.active_handle_era.max(1),
+        policy.next_handle_counter.max(1),
         wsv.current_slot().saturating_add(5),
     );
     mutate_handle(&mut handle);
@@ -769,8 +783,8 @@ fn core_host_builds_policy_from_wsv_snapshot() {
         DataspaceAxtPolicy {
             manifest_root: [0x99; 32],
             target_lane: LaneId::new(4),
-            min_handle_era: 2,
-            min_sub_nonce: 3,
+            active_handle_era: 2,
+            next_handle_counter: 3,
             current_slot: 0,
         },
     );
@@ -790,8 +804,8 @@ fn core_host_wsv_policy_rejects_lane_and_expiry_mismatches() {
         DataspaceAxtPolicy {
             manifest_root: [0x55; 32],
             target_lane: LaneId::new(2),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     );
@@ -817,8 +831,8 @@ fn core_host_wsv_policy_respects_explicit_current_slot() {
         DataspaceAxtPolicy {
             manifest_root: [0x33; 32],
             target_lane: LaneId::new(2),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 5,
         },
     );
@@ -839,8 +853,8 @@ fn core_host_enforces_policy_snapshot() {
         policy: AxtPolicyEntry {
             manifest_root,
             target_lane: LaneId::new(2),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 0,
         },
     }];
@@ -968,7 +982,7 @@ fn core_host_rejects_inline_proof_manifest_mismatch() {
     );
 
     let binding = axt::compute_binding(&descriptor).expect("binding");
-    let handle = make_handle(binding, LaneId::new(0), manifest_root, 1, 2, 8);
+    let handle = make_handle(binding, LaneId::new(0), manifest_root, 1, 1, 8);
     let intent = RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
@@ -1280,14 +1294,14 @@ fn core_host_enforces_fixture_snapshot_fields() {
     ));
 
     let mut low_handle_era = base_handle.clone();
-    low_handle_era.handle_era = policy_entry.policy.min_handle_era - 1;
+    low_handle_era.handle_era = policy_entry.policy.active_handle_era - 1;
     assert!(matches!(
         exercise_fixture_handle(&descriptor, &snapshot, &low_handle_era, &base_intent),
         Err(VMError::PermissionDenied)
     ));
 
     let mut low_sub_nonce = base_handle.clone();
-    low_sub_nonce.sub_nonce = policy_entry.policy.min_sub_nonce - 1;
+    low_sub_nonce.sub_nonce = policy_entry.policy.next_handle_counter - 1;
     assert!(matches!(
         exercise_fixture_handle(&descriptor, &snapshot, &low_sub_nonce, &base_intent),
         Err(VMError::PermissionDenied)
@@ -1475,8 +1489,8 @@ fn core_host_fails_closed_multi_dataspace_axt_flow_without_verifier() {
         policy: AxtPolicyEntry {
             manifest_root: [0xA1; 32],
             target_lane: LaneId::new(3),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 12,
         },
     };
@@ -1485,8 +1499,8 @@ fn core_host_fails_closed_multi_dataspace_axt_flow_without_verifier() {
         policy: AxtPolicyEntry {
             manifest_root: [0xB2; 32],
             target_lane: LaneId::new(3),
-            min_handle_era: 1,
-            min_sub_nonce: 1,
+            active_handle_era: 1,
+            next_handle_counter: 1,
             current_slot: 12,
         },
     };

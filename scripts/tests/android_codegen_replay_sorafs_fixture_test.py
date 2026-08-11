@@ -644,8 +644,8 @@ def test_build_fixture_example_uses_reviewed_metadata_timestamp() -> None:
     )
 
     assert example["generated_at"] == "2024-08-30T06:40:00Z"
-    assert example["instruction"]["submitted_epoch"] == 1_725_000_000
     assert example["instruction"]["manifest_payload_base64"] == "AQID"
+    assert "submitted_epoch" not in example["instruction"]
     assert "digest_hex" not in example["instruction"]
     assert "chunk_digest_sha3_256_hex" not in example["instruction"]
 

@@ -9,10 +9,9 @@ use eyre::Result;
 use hex::encode as hex_encode;
 use integration_tests::sandbox::start_network_async_or_skip;
 use iroha_config::parameters::actual::DaReplicationPolicy;
-use iroha_crypto::Signature;
 use iroha_data_model::{
     da::{
-        ingest::{DaIngestReceipt, DaIngestRequest},
+        ingest::{DaIngestReceipt, DaIngestRequest, DaIngestRequestIntentV1},
         manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
         types::{
             BlobClass, BlobCodec, BlobDigest, Compression, DaRentPolicyV1, DaRentQuote,
@@ -97,14 +96,13 @@ async fn da_replication_policy_is_enforced() -> Result<()> {
     Ok(())
 }
 
-fn build_da_request(retention_policy: RetentionPolicy) -> DaIngestRequest {
+fn build_da_request(network: &Network, retention_policy: RetentionPolicy) -> DaIngestRequest {
     let payload = b"da retention regression vector payload".to_vec();
     let client_blob_id = BlobDigest::from_hash(blake3::hash(&payload));
-    let submitter = ALICE_KEYPAIR.public_key().clone();
-    let signature =
-        Signature::try_new(ALICE_KEYPAIR.private_key(), &payload).expect("DA ingest signature");
 
-    DaIngestRequest {
+    DaIngestRequestIntentV1 {
+        network_id: network.client().network_id,
+        owner: network.client().account.clone(),
         client_blob_id,
         lane_id: LaneId::SINGLE,
         epoch: 7,
@@ -115,13 +113,14 @@ fn build_da_request(retention_policy: RetentionPolicy) -> DaIngestRequest {
         retention_policy,
         chunk_size: 1024,
         total_size: payload.len() as u64,
+        payload_hash: BlobDigest::from_hash(blake3::hash(&payload)),
         compression: Compression::Identity,
         norito_manifest: None,
         payload,
         metadata: ExtraMetadata::default(),
-        submitter,
-        signature,
     }
+    .try_sign(&ALICE_KEYPAIR)
+    .expect("sign canonical DA ingest request")
 }
 
 struct ManifestFetchOutcome {
@@ -135,7 +134,7 @@ async fn ingest_and_fetch_manifest(
     http: &Client,
     caller_policy: RetentionPolicy,
 ) -> Result<ManifestFetchOutcome> {
-    let ingest_request = build_da_request(caller_policy);
+    let ingest_request = build_da_request(network, caller_policy);
     let request_value =
         json::to_value(&ingest_request).expect("serialize DA ingest request to JSON");
     let request_json =

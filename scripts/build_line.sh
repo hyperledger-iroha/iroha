@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build the canonical first-release daemon, Governance DAG service, and client.
+# Build the canonical daemon, Governance DAG, external signer, and client.
 #
 # Prerequisites: the repository Rust toolchain and Cargo dependencies. Set
 # BUILD_PROFILE to select a non-default Cargo profile (for example `deploy`).
@@ -10,8 +10,9 @@ usage() {
   cat <<'EOF'
 Usage: build_line.sh [-h|--help]
 
-Build the canonical `irohad` daemon, `sorafs_governance_dag` service, and
-`iroha` client. Set BUILD_PROFILE to select a Cargo profile.
+Build the canonical `iroha3d` daemon, `sorafs_governance_dag`, the Unix-only
+`sorafs_external_software_signer`, and `iroha`. Set BUILD_PROFILE to select a
+Cargo profile. Windows software-signer packaging is explicitly unsupported.
 EOF
 }
 
@@ -33,8 +34,9 @@ case "${1-}" in
     ;;
 esac
 
-echo "Building canonical binaries (iroha, irohad, sorafs_governance_dag)..."
+echo "Building canonical binaries (iroha, iroha3d, sorafs_governance_dag, external signer)..."
 cargo build "${profile_flag[@]}" -p irohad --no-default-features \
-  --features daemon --bin irohad --bin sorafs_governance_dag
+  --features daemon --bin iroha3d --bin sorafs_governance_dag \
+  --bin sorafs_external_software_signer
 cargo build "${profile_flag[@]}" -p iroha_cli --no-default-features \
   --features cli --bin iroha

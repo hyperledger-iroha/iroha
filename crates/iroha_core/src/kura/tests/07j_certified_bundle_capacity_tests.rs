@@ -1,5 +1,5 @@
 struct PreparedAutonomousCertification {
-    chain_id_hash: Hash,
+    network_id: iroha_data_model::NetworkId,
     epoch: u64,
     session: crate::lane_consensus::CommittedLaneBlockSession,
     signer_pops: BTreeMap<PublicKey, Vec<u8>>,
@@ -14,8 +14,7 @@ fn prepare_autonomous_certification_for_capacity(
 ) -> PreparedAutonomousCertification {
     let lane = lane_config.entry(lane_id).expect("capacity lane");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (_, _, payload) =
-        autonomous_lane_payload_for_kura(lane_id, lane.dataspace_id, 1, &signer);
+    let (_, _, payload) = autonomous_lane_payload_for_kura(lane_id, lane.dataspace_id, 1, &signer);
     prepare_autonomous_certification_for_capacity_payload(kura, lane_config, &payload, &signer)
 }
 
@@ -28,13 +27,13 @@ fn prepare_autonomous_certification_for_capacity_payload(
     let descriptor = &payload.origin_proposal.descriptor;
     let lane_id = descriptor.lane_id;
     let lane_block_height = descriptor.lane_block_height;
-    let chain_id_hash = payload.chain_id_hash;
+    let network_id = payload.network_id;
     let epoch = payload.epoch;
     install_autonomous_lane_marker_for_kura(kura, lane_config, payload);
-    kura.persist_lane_executable_payload(payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(payload, network_id, epoch)
         .expect("persist composite-capacity payload");
     let recovered = kura
-        .recover_autonomous_lane_block_payload(&payload.origin_proposal, chain_id_hash, epoch)
+        .recover_autonomous_lane_block_payload(&payload.origin_proposal, network_id, epoch)
         .expect("recover composite-capacity input");
     kura.persist_lane_block_execution_input(&recovered)
         .expect("persist composite-capacity input");
@@ -44,7 +43,7 @@ fn prepare_autonomous_certification_for_capacity_payload(
         lane_id,
         lane_block_height,
         availability.clone(),
-        chain_id_hash,
+        network_id,
         epoch,
     )
     .expect("persist composite-capacity READY evidence");
@@ -57,7 +56,7 @@ fn prepare_autonomous_certification_for_capacity_payload(
         kura.durable_autonomous_lane_merge_source_under_prune_guard(
             lane_id,
             lane_block_height,
-            chain_id_hash,
+            network_id,
             epoch,
             Some(&artifact),
             false,
@@ -66,13 +65,15 @@ fn prepare_autonomous_certification_for_capacity_payload(
     };
     let plan = {
         let _geometry_guard = kura.lane_geometry_lock.lock();
-        let entry = kura.lane_storage_entry(lane_id).expect("capacity plan lane");
+        let entry = kura
+            .lane_storage_entry(lane_id)
+            .expect("capacity plan lane");
         let _sidecar_guard = kura.sidecar_lock.lock();
         kura.certified_bundle_capacity_plan(&entry, &artifact, &source)
             .expect("construct exact composite byte plan")
     };
     PreparedAutonomousCertification {
-        chain_id_hash,
+        network_id,
         epoch,
         session,
         signer_pops,
@@ -111,14 +112,12 @@ fn prepare_certified_bundle_reset_fixture(
         autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 90, &signer);
     let old_tip_payload =
         autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 513, 100, &signer);
-    let fresh_payload =
-        autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 101, &signer);
+    let fresh_payload = autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 101, &signer);
     install_autonomous_lane_marker_for_kura(kura, lane_config, &fresh_payload);
 
     let (old_slot_session, old_slot_pops) =
         committed_lane_block_session_for_kura_proposal(&old_slot_payload.origin_proposal, &signer);
-    let old_slot =
-        CertifiedLaneBlockArtifact::new(old_slot_session.clone(), old_slot_pops.clone());
+    let old_slot = CertifiedLaneBlockArtifact::new(old_slot_session.clone(), old_slot_pops.clone());
     kura.persist_committed_lane_block_session(&old_slot_session, &old_slot_pops)
         .expect("persist occupied pre-reset certified slot");
 
@@ -172,8 +171,7 @@ fn certified_bundle_reservation_rejects_a_missing_outstanding_transient_entry() 
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
     let (kura, _) = Kura::new(&config, &lane_config).expect("missing transient-entry Kura");
-    let mut plan =
-        prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id).plan;
+    let mut plan = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id).plan;
     let component = plan
         .component_transient_bytes
         .keys()
@@ -267,7 +265,7 @@ fn certified_bundle_authorized_active_slot_reset_publishes_exact_bundle() {
         kura.durable_autonomous_lane_merge_source(
             lane_id,
             1,
-            fixture.prepared.chain_id_hash,
+            fixture.prepared.network_id,
             fixture.prepared.epoch,
         )
         .expect("authorized reset publishes an exact durable bundle"),
@@ -313,7 +311,9 @@ fn certified_bundle_regressed_proposal_height_rejects_before_reserving() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let lane = lane_config.entry(lane_id).expect("proposal regression lane");
+    let lane = lane_config
+        .entry(lane_id)
+        .expect("proposal regression lane");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let incoming_payload =
         autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 2, 99, &signer);
@@ -326,12 +326,9 @@ fn certified_bundle_regressed_proposal_height_rejects_before_reserving() {
     );
     let existing_payload =
         autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 100, &signer);
-    let (existing_session, existing_pops) = committed_lane_block_session_for_kura_proposal(
-        &existing_payload.origin_proposal,
-        &signer,
-    );
-    let existing =
-        CertifiedLaneBlockArtifact::new(existing_session.clone(), existing_pops.clone());
+    let (existing_session, existing_pops) =
+        committed_lane_block_session_for_kura_proposal(&existing_payload.origin_proposal, &signer);
+    let existing = CertifiedLaneBlockArtifact::new(existing_session.clone(), existing_pops.clone());
     kura.persist_committed_lane_block_session(&existing_session, &existing_pops)
         .expect("persist higher-proposal lower-lane-height frontier");
     let tree_before = snapshot_regular_test_tree(temp_dir.path());
@@ -435,12 +432,7 @@ fn certified_bundle_composite_exact_limit_is_atomic_and_retry_leaks_nothing() {
         0
     );
     let published = kura
-        .durable_autonomous_lane_merge_source(
-            lane_id,
-            1,
-            prepared.chain_id_hash,
-            prepared.epoch,
-        )
+        .durable_autonomous_lane_merge_source(lane_id, 1, prepared.network_id, prepared.epoch)
         .expect("exact bundle is merge eligible");
     assert_eq!(published, prepared.source);
     let completed_tree = snapshot_regular_test_tree(temp_dir.path());
@@ -477,7 +469,10 @@ fn certified_bundle_frontier_crash_rebuilds_exact_remaining_obligation() {
             .expect("frontier-crash reservation"),
         expected
     );
-    assert!(kura.read_certified_lane_block_artifact(lane_id, 1).is_none());
+    assert!(
+        kura.read_certified_lane_block_artifact(lane_id, 1)
+            .is_none()
+    );
     let reservation_before = kura.certified_bundle_capacity_reservations.lock().clone();
     kura.rebuild_certified_bundle_capacity_reservations_on_startup()
         .expect("rebuild frontier-crash obligation");
@@ -500,7 +495,9 @@ fn certified_frontier_build_only_restart_promotes_then_rebuilds_remaining_obliga
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let lane = lane_config.entry(lane_id).expect("frontier build-only lane");
+    let lane = lane_config
+        .entry(lane_id)
+        .expect("frontier build-only lane");
     let (kura, _) = Kura::new(&config, &lane_config).expect("frontier build-only Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     fail_after_next_certified_frontier_build_for_tests();
@@ -541,7 +538,9 @@ fn certified_frontier_build_conflict_fails_before_rebuild_map_publication() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let lane = lane_config.entry(lane_id).expect("frontier build conflict lane");
+    let lane = lane_config
+        .entry(lane_id)
+        .expect("frontier build conflict lane");
     let (kura, _) = Kura::new(&config, &lane_config).expect("frontier build conflict Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     fail_after_next_certified_frontier_build_for_tests();
@@ -639,7 +638,7 @@ fn durable_bundle_pair_crash_rebuild_consumes_obligation_from_exact_readback() {
         kura.durable_autonomous_lane_merge_source(
             lane_id,
             1,
-            prepared.chain_id_hash,
+            prepared.network_id,
             prepared.epoch,
         )
         .expect("durable bundle remains exact after rebuild"),
@@ -653,7 +652,9 @@ fn bundle_pair_append_intent_rebuilds_then_repairs_exact_obligation() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let lane = lane_config.entry(lane_id).expect("bundle append-intent lane");
+    let lane = lane_config
+        .entry(lane_id)
+        .expect("bundle append-intent lane");
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("bundle append-intent Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     let exact_limit = exact_certified_bundle_limit(&kura, &prepared.plan);
@@ -683,7 +684,10 @@ fn bundle_pair_append_intent_rebuilds_then_repairs_exact_obligation() {
             .expect("rebuilt bundle append-intent reservation"),
         expected
     );
-    assert!(intent_path.exists(), "rebuild is read-only for pair intents");
+    assert!(
+        intent_path.exists(),
+        "rebuild is read-only for pair intents"
+    );
     kura.repair_autonomous_lane_merge_bundles_on_startup()
         .expect("recover exact bundle append intent");
     assert!(!intent_path.exists());
@@ -696,7 +700,7 @@ fn bundle_pair_append_intent_rebuilds_then_repairs_exact_obligation() {
         kura.durable_autonomous_lane_merge_source(
             lane_id,
             1,
-            prepared.chain_id_hash,
+            prepared.network_id,
             prepared.epoch,
         )
         .expect("repaired bundle source is exact"),
@@ -710,7 +714,9 @@ fn certified_pair_append_intent_rebuilds_and_repairs_at_original_exact_limit() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let lane = lane_config.entry(lane_id).expect("certified append-intent lane");
+    let lane = lane_config
+        .entry(lane_id)
+        .expect("certified append-intent lane");
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("certified append-intent Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     let exact_limit = exact_certified_bundle_limit(&kura, &prepared.plan);
@@ -744,7 +750,7 @@ fn certified_pair_append_intent_rebuilds_and_repairs_at_original_exact_limit() {
         kura.durable_autonomous_lane_merge_source(
             lane_id,
             1,
-            prepared.chain_id_hash,
+            prepared.network_id,
             prepared.epoch,
         )
         .expect("certified append repair source is exact"),
@@ -760,7 +766,9 @@ fn assert_authenticated_append_build_restart_at_exact_limit(
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let lane = lane_config.entry(lane_id).expect("authenticated build lane");
+    let lane = lane_config
+        .entry(lane_id)
+        .expect("authenticated build lane");
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("authenticated build Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     let exact_limit = exact_certified_bundle_limit(&kura, &prepared.plan);
@@ -785,7 +793,10 @@ fn assert_authenticated_append_build_restart_at_exact_limit(
 
     kura.rebuild_certified_bundle_capacity_reservations_on_startup()
         .expect("authenticated append build is admitted at its original exact limit");
-    assert!(build_path.exists(), "capacity rebuild must remain read-only");
+    assert!(
+        build_path.exists(),
+        "capacity rebuild must remain read-only"
+    );
     let expected = if bundle_role {
         certified_bundle_reserved_for(
             &prepared.plan,
@@ -817,7 +828,7 @@ fn assert_authenticated_append_build_restart_at_exact_limit(
         kura.durable_autonomous_lane_merge_source(
             lane_id,
             1,
-            prepared.chain_id_hash,
+            prepared.network_id,
             prepared.epoch,
         )
         .expect("authenticated build repair source is exact"),
@@ -942,7 +953,9 @@ fn certified_bundle_preflight_rejects_authenticated_mismatched_append_build() {
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let lane_config = two_lane_runtime_config();
     let lane_id = LaneId::new(1);
-    let lane = lane_config.entry(lane_id).expect("mismatched append-build lane");
+    let lane = lane_config
+        .entry(lane_id)
+        .expect("mismatched append-build lane");
     let (kura, _) = Kura::new(&config, &lane_config).expect("mismatched append-build Kura");
     let prepared = prepare_autonomous_certification_for_capacity(&kura, &lane_config, lane_id);
     fail_after_bound_progress_append_build_for_tests(0);
@@ -989,8 +1002,7 @@ fn certified_bundle_preflight_checks_bad_older_history_beneath_exact_append_inte
     fail_next_bound_progress_append_data_sync_for_tests();
     kura.persist_committed_lane_block_session(&second, &second_pops)
         .expect_err("leave exact current certified append intent");
-    let (data_path, index_path) =
-        Kura::certified_lane_block_paths_for_entry(lane, temp_dir.path());
+    let (data_path, index_path) = Kura::certified_lane_block_paths_for_entry(lane, temp_dir.path());
     let intent_path = Kura::bound_progress_append_intent_path(&index_path);
     assert!(intent_path.exists());
     let mut data = fs::read(&data_path).expect("read certified pair with append suffix");
@@ -1054,8 +1066,8 @@ fn certified_bundle_startup_rebuild_publishes_nothing_on_late_route_error() {
         alias: "gamma".to_owned(),
         ..ModelLaneConfig::default()
     };
-    let catalog = LaneCatalog::new(nonzero!(3_u32), vec![lane0, lane1, lane2])
-        .expect("three-lane catalog");
+    let catalog =
+        LaneCatalog::new(nonzero!(3_u32), vec![lane0, lane1, lane2]).expect("three-lane catalog");
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let (kura, _) = Kura::new(&config, &lane_config).expect("late-route rebuild Kura");
     let prepared =
@@ -1065,7 +1077,9 @@ fn certified_bundle_startup_rebuild_publishes_nothing_on_late_route_error() {
         .expect_err("leave a valid first-route frontier obligation");
     let reservations_before = kura.certified_bundle_capacity_reservations.lock().clone();
     assert_eq!(reservations_before.len(), 1);
-    let lane2 = lane_config.entry(LaneId::new(2)).expect("late failing lane");
+    let lane2 = lane_config
+        .entry(LaneId::new(2))
+        .expect("late failing lane");
     let (late_frontier_path, _) =
         Kura::latest_certified_lane_block_frontier_paths_for_entry(lane2, temp_dir.path());
     fs::write(&late_frontier_path, b"malformed late-route frontier")

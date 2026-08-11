@@ -6,6 +6,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { AccountAddress } from "../src/address.js";
 import { buildCancelSmartContractCodeUploadInstruction } from "../src/instructionBuilders.js";
 import { getNativeBinding } from "../src/native.js";
+import { NetworkId } from "../src/networkId.js";
 import { feePaymentIntentToNoritoJson } from "../src/transaction.js";
 import {
   browserTransactionPayloadHashHex,
@@ -26,6 +27,9 @@ const AUTHORITY = AccountAddress.fromAccount({
 }).toI105(753);
 const CONTRACT_ADDRESS =
   "irohac1qyqqqqqqqqqqqq9rdnnncuwseflztqwhmppl0fyvc37w8gq9q6pxl";
+const NETWORK_ID = NetworkId.parse(
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
 const INVALID_CONTRACT_ADDRESSES = Object.freeze([
   "abc",
   ` ${CONTRACT_ADDRESS}`,
@@ -89,7 +93,7 @@ test("browser executable batch preserves mixed order, tag, and copied bytes", ()
     codeHash: hash.toString("hex"),
   });
   const input = {
-    chainId: "pk3",
+    networkId: NETWORK_ID,
     authority: AUTHORITY,
     chainDiscriminant: 753,
     entries: [
@@ -136,6 +140,7 @@ test("browser executable batch preserves mixed order, tag, and copied bytes", ()
 
   const hashHex = browserTransactionPayloadHashHex(payload);
   const signable = validateBrowserExecutableBatchSignable({
+    networkId: NETWORK_ID,
     payloadBytes: payload,
     payloadHashHex: hashHex,
     authority: AUTHORITY,
@@ -153,12 +158,12 @@ test("browser executable batch preserves mixed order, tag, and copied bytes", ()
   assert.equal(finalized.signedTransaction[0], 1);
 });
 
-test("legacy browser instruction transactions retain executable tag zero", () => {
+test("canonical browser instruction transactions use native-instruction tag zero", () => {
   const instruction = buildCancelSmartContractCodeUploadInstruction({
     codeHash: "41".repeat(32),
   });
   const payload = buildBrowserInstructionTransactionPayload({
-    chainId: "pk3",
+    networkId: NETWORK_ID,
     authority: AUTHORITY,
     chainDiscriminant: 753,
     instructions: [instruction],
@@ -191,7 +196,7 @@ test("browser executable batch bytes match the native Rust builder", () => {
     gasLimit: 10_000,
   };
   const browser = buildBrowserExecutableBatchPayload({
-    chainId: "pk3",
+    networkId: NETWORK_ID,
     authority: AUTHORITY,
     chainDiscriminant: 753,
     entries,
@@ -202,7 +207,7 @@ test("browser executable batch bytes match the native Rust builder", () => {
   const native = getNativeBinding();
   assert.equal(typeof native.buildExecutableBatchTransactionPayload, "function");
   const nativePayload = native.buildExecutableBatchTransactionPayload(
-    "pk3",
+    NETWORK_ID.toBytes(),
     AUTHORITY,
     entries.map((entry) =>
       entry.kind === "instruction"
@@ -227,7 +232,7 @@ test("browser executable batch rejects invalid calls before encoding", () => {
     codeHash: "41".repeat(32),
   });
   const base = {
-    chainId: "pk3",
+    networkId: NETWORK_ID,
     authority: AUTHORITY,
     chainDiscriminant: 753,
     entries: [
@@ -302,7 +307,7 @@ test("external executable batch validation rejects a noncanonical address", () =
     codeHash: "41".repeat(32),
   });
   const payload = buildBrowserExecutableBatchPayload({
-    chainId: "pk3",
+    networkId: NETWORK_ID,
     authority: AUTHORITY,
     chainDiscriminant: 753,
     entries: [
@@ -328,6 +333,7 @@ test("external executable batch validation rejects a noncanonical address", () =
   assert.throws(
     () =>
       validateBrowserExecutableBatchSignable({
+        networkId: NETWORK_ID,
         payloadBytes: tampered,
         payloadHashHex: browserTransactionPayloadHashHex(tampered),
         authority: AUTHORITY,

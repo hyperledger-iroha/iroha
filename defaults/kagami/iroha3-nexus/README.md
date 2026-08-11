@@ -15,10 +15,12 @@ Files:
 - `sumeragi_v2.nexus_amx_context_hash` is the config-only template projection; the production signer replaces it with the exact staged roster commitment only after the operator supplies that XOR identity
 - `sumeragi_v2.execution_policy_hash` is likewise a template value; the production signer replaces it with the exact staged V1 execution-policy commitment before refreshing the fingerprint and signing
 - verify.txt — policy note; profile verification requires a regenerated genesis with the operator-supplied canonical XOR id
-- config.toml — non-deployable Nexus configuration template
+- config.toml — non-deployable public-only Nexus configuration template; validator, SoraNet transport, and streaming signing keys must be supplied through the named per-peer files under `/run/secrets/iroha`
 - docker-compose.yml — inert marker; no validator service is emitted until the
   operator supplies the canonical Nexus XOR identity and regenerates the
   complete signed four-validator bundle
+
+Runtime keys are deliberately absent. A regenerated deployable bundle fails closed until every file named by its validator configs is provisioned by the operator.
 
 Regenerate:
 - cargo xtask kagami-profiles --profile iroha3-nexus --nexus-xor-asset-definition-id <BASE58>

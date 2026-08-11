@@ -68,7 +68,7 @@ fn scheduler_layer_metrics_and_utilization_populated() {
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-    let chain_id = state.chain_id.clone();
+    let network_id = *state.network_id_ref();
 
     // Build 3 txs with trivial conflicts to force at least two layers:
     // 1) Mint to Alice (independent)
@@ -81,14 +81,14 @@ fn scheduler_layer_metrics_and_utilization_populated() {
         );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let tx1 = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Mint::asset_quantity(10_u32, a_coin.clone())])
     .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
     let tx2 = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -99,7 +99,7 @@ fn scheduler_layer_metrics_and_utilization_populated() {
     )])
     .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
     let tx3 = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         carol_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

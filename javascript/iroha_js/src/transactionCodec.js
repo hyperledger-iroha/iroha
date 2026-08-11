@@ -14,12 +14,12 @@ import {
   NumericV1,
   NumericV1Error,
 } from "./numericV1.js";
+import { networkIdBytes } from "./networkId.js";
 
 const COMPACT_LEN_FLAG = 0x02;
 const UINT16_MAX = 0xffffn;
 const UINT32_MAX = 0xffff_ffffn;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
-const MAX_CHAIN_ID_BYTES = 1024;
 const MAX_METADATA_JSON_BYTES = 64 * 1024;
 const MAX_METADATA_ENTRIES = 64;
 const MAX_METADATA_DEPTH = 32;
@@ -77,7 +77,7 @@ const CRC64_TABLE = (() => {
   return table;
 })();
 const TRANSFER_INPUT_FIELDS = new Set([
-  "chainId",
+  "networkId",
   "authority",
   "sourceAssetHoldingId",
   "sourceAssetId",
@@ -92,7 +92,7 @@ const TRANSFER_INPUT_FIELDS = new Set([
   "chainDiscriminant",
 ]);
 const INSTRUCTION_INPUT_FIELDS = new Set([
-  "chainId",
+  "networkId",
   "authority",
   "instructions",
   "metadata",
@@ -104,7 +104,7 @@ const INSTRUCTION_INPUT_FIELDS = new Set([
   "chainDiscriminant",
 ]);
 const EXECUTABLE_BATCH_INPUT_FIELDS = new Set([
-  "chainId",
+  "networkId",
   "authority",
   "entries",
   "metadata",
@@ -145,6 +145,7 @@ const LEGACY_FEE_METADATA_KEYS = Object.freeze([
   "gas_asset_id",
 ]);
 const SIGNABLE_FIELDS = new Set([
+  "networkId",
   "payloadBytes",
   "payloadHashHex",
   "authority",
@@ -152,6 +153,7 @@ const SIGNABLE_FIELDS = new Set([
   "signatureAlgorithm",
 ]);
 const SIGNABLE_CONSTRAINT_FIELDS = new Set([
+  "networkId",
   "authority",
   "signingPublicKey",
 ]);
@@ -253,6 +255,26 @@ class Reader {
 
 function fail(code, message) {
   throw new BrowserTransactionCodecError(code, message);
+}
+
+function exactNetworkId(value, context = "networkId") {
+  try {
+    return Buffer.from(networkIdBytes(value, context));
+  } catch (error) {
+    fail(
+      "invalid_input",
+      error instanceof Error ? error.message : `${context} must be a NetworkId`,
+    );
+  }
+}
+
+function requireExpectedNetworkId(actual, expected, context) {
+  if (!actual.equals(expected)) {
+    fail(
+      "network_id_mismatch",
+      `${context} does not match the application-pinned NetworkId`,
+    );
+  }
 }
 
 function isPlainDataObject(value) {
@@ -903,8 +925,8 @@ function stringValue(value) {
   return field(Buffer.from(value, "utf8"));
 }
 
-function chainIdArchive(value) {
-  return struct([stringValue(value)]);
+function networkTransactionDomainArchive(value) {
+  return Buffer.concat([u32(0), field(Buffer.from(value))]);
 }
 
 function struct(fields) {
@@ -1100,9 +1122,7 @@ function transferInstructionArchive(source, quantity, destination) {
 
 function normalizeTransferInput(input, now) {
   input = snapshotAllowedFields(input, TRANSFER_INPUT_FIELDS, "transfer input");
-  const chainId = exactString(input.chainId, "chainId", {
-    maxBytes: MAX_CHAIN_ID_BYTES,
-  });
+  const networkId = exactNetworkId(input.networkId);
   const requestedDiscriminant =
     input.networkPrefix !== undefined && input.chainDiscriminant !== undefined
       ? fail(
@@ -1182,7 +1202,7 @@ function normalizeTransferInput(input, now) {
     nonZero: true,
   });
   return {
-    chainId,
+    networkId,
     authority,
     source,
     quantity,
@@ -1203,7 +1223,7 @@ function encodeTransferPayload(normalized) {
   );
   const executable = Buffer.concat([u32(0), field(vector([instruction]))]);
   const payload = struct([
-    chainIdArchive(normalized.chainId),
+    networkTransactionDomainArchive(normalized.networkId),
     accountArchive(normalized.authority),
     u64(normalized.creationTimeMs),
     executable,
@@ -1225,9 +1245,7 @@ function normalizeInstructionTransactionInput(input, now) {
     INSTRUCTION_INPUT_FIELDS,
     "instruction transaction input",
   );
-  const chainId = exactString(input.chainId, "chainId", {
-    maxBytes: MAX_CHAIN_ID_BYTES,
-  });
+  const networkId = exactNetworkId(input.networkId);
   const requestedDiscriminant =
     input.networkPrefix !== undefined && input.chainDiscriminant !== undefined
       ? fail(
@@ -1280,7 +1298,7 @@ function normalizeInstructionTransactionInput(input, now) {
     nonZero: true,
   });
   return {
-    chainId,
+    networkId,
     authority,
     instructions,
     feePayment,
@@ -1297,7 +1315,7 @@ function encodeInstructionTransactionPayload(normalized) {
     field(vector(normalized.instructions)),
   ]);
   const payload = struct([
-    chainIdArchive(normalized.chainId),
+    networkTransactionDomainArchive(normalized.networkId),
     accountArchive(normalized.authority),
     u64(normalized.creationTimeMs),
     executable,
@@ -1319,9 +1337,7 @@ function normalizeExecutableBatchTransactionInput(input, now) {
     EXECUTABLE_BATCH_INPUT_FIELDS,
     "executable batch input",
   );
-  const chainId = exactString(input.chainId, "chainId", {
-    maxBytes: MAX_CHAIN_ID_BYTES,
-  });
+  const networkId = exactNetworkId(input.networkId);
   const requestedDiscriminant =
     input.networkPrefix !== undefined && input.chainDiscriminant !== undefined
       ? fail(
@@ -1457,7 +1473,7 @@ function normalizeExecutableBatchTransactionInput(input, now) {
     nonZero: true,
   });
   return {
-    chainId,
+    networkId,
     authority,
     entries,
     feePayment,
@@ -1494,7 +1510,7 @@ function encodeExecutableBatchTransactionPayload(normalized) {
     field(vector(normalized.entries.map(executableBatchEntryArchive))),
   ]);
   const payload = struct([
-    chainIdArchive(normalized.chainId),
+    networkTransactionDomainArchive(normalized.networkId),
     accountArchive(normalized.authority),
     u64(normalized.creationTimeMs),
     executable,
@@ -1584,15 +1600,27 @@ function validateStringArchive(payload, context, { maxBytes } = {}) {
   return decoded;
 }
 
-function validateChainIdArchive(payload, context) {
+function validateNetworkTransactionDomainArchive(payload, context) {
   const reader = new Reader(payload, context);
-  const chainId = validateStringArchive(
-    reader.readField("value"),
-    `${context}.value`,
-    { maxBytes: MAX_CHAIN_ID_BYTES },
-  );
+  const variant = reader.readU32("variant");
+  if (variant !== 0) {
+    fail(
+      "unsupported_payload",
+      `${context} must be TransactionDomain::Network`,
+    );
+  }
+  const networkId = reader.readField("networkId");
+  if (networkId.length !== 32 || (networkId[31] & 1) === 0) {
+    fail(
+      "malformed_payload",
+      `${context}.networkId must contain exactly 32 marked Iroha hash bytes`,
+    );
+  }
   reader.assertEof();
-  return chainId;
+  if (!networkTransactionDomainArchive(networkId).equals(payload)) {
+    fail("malformed_payload", `${context} is not canonical`);
+  }
+  return networkId;
 }
 
 function validateConstVecBytes(payload, context, expectedLength) {
@@ -2168,7 +2196,11 @@ function validateMetadataArchive(payload, context) {
   return normalizedMetadata;
 }
 
-function validateTransactionPayload(payload, authorityLiteral) {
+function validateTransactionPayload(
+  payload,
+  authorityLiteral,
+  expectedNetworkId = null,
+) {
   if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
     fail("bounds_exceeded", `payloadBytes must contain 1..=${MAX_PAYLOAD_BYTES} bytes`);
   }
@@ -2177,11 +2209,17 @@ function validateTransactionPayload(payload, authorityLiteral) {
       ? null
       : accountInfo(authorityLiteral, "signable.authority");
   const reader = new Reader(payload, "transaction payload");
-  const chainId = validateChainIdArchive(
-    reader.readField("chain"),
-    "transaction payload.chain",
+  const networkId = validateNetworkTransactionDomainArchive(
+    reader.readField("domain"),
+    "transaction payload.domain",
   );
-  exactString(chainId, "transaction payload.chain", { maxBytes: MAX_CHAIN_ID_BYTES });
+  if (expectedNetworkId !== null) {
+    requireExpectedNetworkId(
+      networkId,
+      expectedNetworkId,
+      "transaction payload NetworkId",
+    );
+  }
   const authorityArchive = reader.readField("authority");
   const authorityPublicKey = validateAccountArchive(
     authorityArchive,
@@ -2230,7 +2268,11 @@ function validateTransactionPayload(payload, authorityLiteral) {
   return assertedAuthority ?? { publicKey: authorityPublicKey };
 }
 
-function validateInstructionTransactionPayload(payload, authorityLiteral) {
+function validateInstructionTransactionPayload(
+  payload,
+  authorityLiteral,
+  expectedNetworkId = null,
+) {
   if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
     fail("bounds_exceeded", `payloadBytes must contain 1..=${MAX_PAYLOAD_BYTES} bytes`);
   }
@@ -2239,13 +2281,17 @@ function validateInstructionTransactionPayload(payload, authorityLiteral) {
       ? null
       : accountInfo(authorityLiteral, "signable.authority");
   const reader = new Reader(payload, "transaction payload");
-  const chainId = validateChainIdArchive(
-    reader.readField("chain"),
-    "transaction payload.chain",
+  const networkId = validateNetworkTransactionDomainArchive(
+    reader.readField("domain"),
+    "transaction payload.domain",
   );
-  exactString(chainId, "transaction payload.chain", {
-    maxBytes: MAX_CHAIN_ID_BYTES,
-  });
+  if (expectedNetworkId !== null) {
+    requireExpectedNetworkId(
+      networkId,
+      expectedNetworkId,
+      "transaction payload NetworkId",
+    );
+  }
   const authorityArchive = reader.readField("authority");
   const authorityPublicKey = validateAccountArchive(
     authorityArchive,
@@ -2314,13 +2360,13 @@ function validateInstructionTransactionPayload(payload, authorityLiteral) {
  * Decode and bind one canonical unsigned verifying-key registry transaction.
  *
  * This is deliberately narrower than the general browser transaction decoder:
- * the payload must target the immutable chain and authority supplied by the
+ * the payload must target the immutable network and authority supplied by the
  * caller and contain exactly one requested registry instruction. The returned
  * instruction has already passed a byte-for-byte canonical Norito round trip.
  *
  * @param {ArrayBufferView | ArrayBuffer | Buffer} payloadBytes
  * @param {{
- *   expectedChainId: string,
+ *   expectedNetworkId: import("./networkId.js").NetworkId,
  *   expectedAuthority: string,
  *   operation: "register" | "update",
  * }} constraints
@@ -2342,10 +2388,9 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
       `verifying-key transaction payload must contain 1..=${MAX_VERIFYING_KEY_DRAFT_PAYLOAD_BYTES} bytes`,
     );
   }
-  const expectedChainId = exactString(
-    constraints?.expectedChainId,
-    "verifying-key signing context.chainId",
-    { maxBytes: MAX_CHAIN_ID_BYTES },
+  const expectedNetworkId = exactNetworkId(
+    constraints?.expectedNetworkId,
+    "verifying-key signing context.networkId",
   );
   const expectedAuthority = accountInfo(
     constraints?.expectedAuthority,
@@ -2360,14 +2405,14 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
   }
 
   const reader = new Reader(payload, "verifying-key transaction payload");
-  const chainId = validateChainIdArchive(
-    reader.readField("chain"),
-    "verifying-key transaction payload.chain",
+  const networkId = validateNetworkTransactionDomainArchive(
+    reader.readField("domain"),
+    "verifying-key transaction payload.domain",
   );
-  if (chainId !== expectedChainId) {
+  if (!networkId.equals(expectedNetworkId)) {
     fail(
-      "chain_mismatch",
-      "verifying-key transaction payload changed the configured chain ID",
+      "network_mismatch",
+      "verifying-key transaction payload changed the configured NetworkId",
     );
   }
   const authorityArchive = reader.readField("authority");
@@ -2540,7 +2585,11 @@ function transactionHashFromPayload(payload) {
 export function buildBrowserTransferPayload(input) {
   const normalized = normalizeTransferInput(input, Date.now);
   const payload = encodeTransferPayload(normalized);
-  validateTransactionPayload(payload, normalized.authority.literal);
+  validateTransactionPayload(
+    payload,
+    normalized.authority.literal,
+    normalized.networkId,
+  );
   return payload;
 }
 
@@ -2555,7 +2604,11 @@ export function buildBrowserTransferPayload(input) {
 export function buildBrowserInstructionTransactionPayload(input) {
   const normalized = normalizeInstructionTransactionInput(input, Date.now);
   const payload = encodeInstructionTransactionPayload(normalized);
-  validateInstructionTransactionPayload(payload, normalized.authority.literal);
+  validateInstructionTransactionPayload(
+    payload,
+    normalized.authority.literal,
+    normalized.networkId,
+  );
   return payload;
 }
 
@@ -2578,7 +2631,7 @@ export function buildBrowserVerifyingKeyTransactionPayload(input, operation) {
   }
   const payload = encodeInstructionTransactionPayload(normalized);
   decodeCanonicalVerifyingKeyTransactionPayload(payload, {
-    expectedChainId: normalized.chainId,
+    expectedNetworkId: input.networkId,
     expectedAuthority: normalized.authority.literal,
     operation,
   });
@@ -2595,7 +2648,11 @@ export function buildBrowserVerifyingKeyTransactionPayload(input, operation) {
 export function buildBrowserExecutableBatchPayload(input) {
   const normalized = normalizeExecutableBatchTransactionInput(input, Date.now);
   const payload = encodeExecutableBatchTransactionPayload(normalized);
-  validateInstructionTransactionPayload(payload, normalized.authority.literal);
+  validateInstructionTransactionPayload(
+    payload,
+    normalized.authority.literal,
+    normalized.networkId,
+  );
   return payload;
 }
 
@@ -2619,12 +2676,12 @@ export function browserTransactionPayloadHashHex(payloadBytes) {
  *
  * This is intended for wallet and hardware-signer trust boundaries: the
  * returned buffers are detached copies, the payload hash is recomputed, and
- * both the asserted and optional expected authority/public key are bound to
- * the authority encoded in the payload.
+ * the application-pinned nominal NetworkId and both the asserted and optional
+ * expected authority/public key are bound to the payload.
  *
  * @param {object} signable
- * @param {{authority?: string | null, signingPublicKey?: ArrayBufferView | ArrayBuffer | Buffer | string | null}} constraints
- * @returns {{payloadBytes: Buffer, payloadHashHex: string, authority: string, signingPublicKey: Buffer, signatureAlgorithm: "ed25519"}}
+ * @param {{networkId?: import("./networkId.js").NetworkId | null, authority?: string | null, signingPublicKey?: ArrayBufferView | ArrayBuffer | Buffer | string | null}} constraints
+ * @returns {{networkId: import("./networkId.js").NetworkId, payloadBytes: Buffer, payloadHashHex: string, authority: string, signingPublicKey: Buffer, signatureAlgorithm: "ed25519"}}
  */
 export function validateBrowserTransferSignable(signable, constraints = {}) {
   signable = snapshotAllowedFields(signable, SIGNABLE_FIELDS, "signable");
@@ -2644,10 +2701,18 @@ export function validateBrowserTransferSignable(signable, constraints = {}) {
   const payload = bytes(signable.payloadBytes, "signable.payloadBytes", {
     maxBytes: MAX_PAYLOAD_BYTES,
   });
+  const expectedNetworkId = exactNetworkId(
+    signable.networkId,
+    "signable.networkId",
+  );
   const authorityLiteral = exactString(signable.authority, "signable.authority", {
     maxBytes: 512,
   });
-  const authority = validateTransactionPayload(payload, authorityLiteral);
+  const authority = validateTransactionPayload(
+    payload,
+    authorityLiteral,
+    expectedNetworkId,
+  );
   const payloadHashHex = irohaHash(payload).toString("hex");
   const assertedPayloadHashHex = exactHashHex(
     signable.payloadHashHex,
@@ -2668,6 +2733,16 @@ export function validateBrowserTransferSignable(signable, constraints = {}) {
     fail(
       "authority_mismatch",
       "signable.signingPublicKey does not control signable.authority",
+    );
+  }
+  if (constraints.networkId !== undefined && constraints.networkId !== null) {
+    requireExpectedNetworkId(
+      expectedNetworkId,
+      exactNetworkId(
+        constraints.networkId,
+        "signable constraints.networkId",
+      ),
+      "signable.networkId",
     );
   }
   if (constraints.authority !== undefined && constraints.authority !== null) {
@@ -2699,6 +2774,7 @@ export function validateBrowserTransferSignable(signable, constraints = {}) {
     }
   }
   return Object.freeze({
+    networkId: signable.networkId,
     payloadBytes: payload,
     payloadHashHex,
     authority: authorityLiteral,
@@ -2729,10 +2805,18 @@ export function validateBrowserInstructionTransactionSignable(
   const payload = bytes(signable.payloadBytes, "signable.payloadBytes", {
     maxBytes: MAX_PAYLOAD_BYTES,
   });
+  const expectedNetworkId = exactNetworkId(
+    signable.networkId,
+    "signable.networkId",
+  );
   const authorityLiteral = exactString(signable.authority, "signable.authority", {
     maxBytes: 512,
   });
-  const authority = validateInstructionTransactionPayload(payload, authorityLiteral);
+  const authority = validateInstructionTransactionPayload(
+    payload,
+    authorityLiteral,
+    expectedNetworkId,
+  );
   const payloadHashHex = irohaHash(payload).toString("hex");
   const assertedPayloadHashHex = exactHashHex(
     signable.payloadHashHex,
@@ -2753,6 +2837,16 @@ export function validateBrowserInstructionTransactionSignable(
     fail(
       "authority_mismatch",
       "signable.signingPublicKey does not control signable.authority",
+    );
+  }
+  if (constraints.networkId !== undefined && constraints.networkId !== null) {
+    requireExpectedNetworkId(
+      expectedNetworkId,
+      exactNetworkId(
+        constraints.networkId,
+        "signable constraints.networkId",
+      ),
+      "signable.networkId",
     );
   }
   if (constraints.authority !== undefined && constraints.authority !== null) {
@@ -2787,6 +2881,7 @@ export function validateBrowserInstructionTransactionSignable(
     }
   }
   return Object.freeze({
+    networkId: signable.networkId,
     payloadBytes: payload,
     payloadHashHex,
     authority: authorityLiteral,
@@ -2819,7 +2914,15 @@ export function finalizeBrowserSignedTransaction(
   const payload = bytes(signable.payloadBytes, "signable.payloadBytes", {
     maxBytes: MAX_PAYLOAD_BYTES,
   });
-  const authority = validateTransactionPayload(payload, signable.authority);
+  const expectedNetworkId = exactNetworkId(
+    signable.networkId,
+    "signable.networkId",
+  );
+  const authority = validateTransactionPayload(
+    payload,
+    signable.authority,
+    expectedNetworkId,
+  );
   const publicKey = bytes(signingPublicKey, "signingPublicKey", {
     hex: true,
     maxBytes: 32,
@@ -2890,9 +2993,14 @@ export function finalizeBrowserInstructionTransaction(
   const payload = bytes(signable.payloadBytes, "signable.payloadBytes", {
     maxBytes: MAX_PAYLOAD_BYTES,
   });
+  const expectedNetworkId = exactNetworkId(
+    signable.networkId,
+    "signable.networkId",
+  );
   const authority = validateInstructionTransactionPayload(
     payload,
     signable.authority,
+    expectedNetworkId,
   );
   const publicKey = bytes(signingPublicKey, "signingPublicKey", {
     hex: true,

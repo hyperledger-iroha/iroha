@@ -24,17 +24,21 @@ maturin develop --release
 from iroha_python import (
     ToriiClient,
     Instruction,
+    NetworkId,
     build_signed_transaction,
     derive_ed25519_keypair_from_seed,
 )
 
 pair = derive_ed25519_keypair_from_seed(b"demo-seed")
 authority = pair.default_account_id("wonderland")  # Canonical I105 account id
+network_id = NetworkId.parse(
+    "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+)
 instruction = Instruction.register_domain("wonderland")
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
 envelope, status = client.build_and_submit_transaction(
-    chain_id="local",
+    network_id=network_id,
     authority=authority,
     private_key=pair.private_key,
     instructions=[instruction],
@@ -130,6 +134,23 @@ dispatcher, or legacy algorithm alias.
 `pq-masp-stark-v0`. The parser rejects unknown fields, duplicate JSON keys,
 non-finite numbers, aliases, reordered or duplicate rows, normalized labels,
 and malformed nested policy or profile data.
+
+The eleven generic privacy protocols are constructed only by the admitted
+Rust `iroha_privacy_wallet_worker`. `PrivacyWalletWorkerControllerV1` is the
+top-level Python controller: it sends an owner-only credential path to Rust,
+then uses only an opaque handle plus canonical public intent and execution-plan
+bytes. Python and PyO3 expose no generic owner-bundle, witness, polynomial,
+blinding, or secret constructor. ZK-X509 retains its separate authenticated
+profile-owned transport.
+
+Reserve-backed ZK-ACE, Orchard, and private-IVM actions always bind one exact
+transparent balance bucket. Their worker-owned public action requires
+`public_balance_scope`; its only accepted spellings are
+`"global"` and `"dataspace:<id>"`, where `<id>` is a canonical positive decimal
+`u64`. Dataspace zero is the universal coordinator route and is never a balance
+partition. Whitespace, case variants, leading zeroes, aliases, and unknown JSON
+fields fail before proving. Authenticated inspection returns
+`public_balance_scope` in that same canonical spelling.
 
 ### Exact12 typed fixture bundles
 
@@ -245,12 +266,16 @@ required `authority`, height ranges, and inline verifier-key commitments before
 requesting an unsigned transaction draft from Torii:
 
 ```python
-from iroha_python import LocalSigningContext, ToriiClient
+from iroha_python import LocalSigningContext, NetworkId, ToriiClient
+
+network_id = NetworkId.parse(
+    "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+)
 
 signing_client = ToriiClient(
     "https://taira.sora.org",
     # Immutable local-signing context. Read-only clients may omit this.
-    local_signing_context=LocalSigningContext("production-chain"),
+    local_signing_context=LocalSigningContext(network_id),
 )
 
 register_draft = signing_client.register_zk_verifying_key({
@@ -287,10 +312,10 @@ transaction. Both helpers return canonical padded-base64
 entirely inside the client wallet. Draft validation caps the transaction
 payload at 16 MiB and requires the 32-byte signing message to equal the
 canonical marker-adjusted Blake2b-256 Iroha hash of that payload. The native
-decoder then requires canonical Norito, the configured chain ID, the requested
+decoder then requires canonical Norito, the configured exact NetworkId, the requested
 authority, exactly one requested register/update instruction, and exact
 equality of all 17 verifying-key record fields. Register/update fail before the
-request when `local_signing_context` is absent; there is no raw chain-ID,
+request when `local_signing_context` is absent; there is no label, bare-hash,
 per-call, or server-derived fallback.
 
 Kagemusha-capable assets can be registered without shelling out to JavaScript
@@ -298,8 +323,7 @@ tooling. The `register_fee_payment` below is the recommended intent returned by
 `/v1/fees/quote` for that exact unsigned payload:
 
 ```python
-client.register_zk_asset_and_wait(
-    chain_id="local",
+signing_client.register_zk_asset_and_wait(
     authority="<asset-owner>",
     fee_payment=register_fee_payment,
     private_key_hex="<64-hex-private-key>",
@@ -312,8 +336,10 @@ client.register_zk_asset_and_wait(
 The first-release SDK exposes no generic confidential transfer or withdrawal
 instruction. Public-to-confidential ingress and public redemption use the
 proof-bound Kagemusha V4 top-up/redemption protocol so escrow provenance and
-drawdown remain inseparable from settlement. `vk_shield` names the Kagemusha
-top-up verifier, and `vk_unshield` names its redemption verifier.
+drawdown remain inseparable from settlement. Asset registration binds only the
+optional shield and unshield verifier roles: `vk_shield` names the Kagemusha
+top-up verifier, and `vk_unshield` names its redemption verifier. Kagemusha
+owns its global transfer-v2 verifier independently.
 
 ## Dataspace lifecycle helpers
 
@@ -322,7 +348,18 @@ scripts. Planning is pure Python: it returns the manifest, config snippet, and
 rollout summary, and writing is explicit.
 
 ```python
-from iroha_python import DataspaceSpec, ToriiClient, plan_dataspace, write_dataspace_plan
+from iroha_python import (
+    DataspaceSpec,
+    LocalSigningContext,
+    NetworkId,
+    ToriiClient,
+    plan_dataspace,
+    write_dataspace_plan,
+)
+
+network_id = NetworkId.parse(
+    "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+)
 
 spec = DataspaceSpec(
     dataspace_alias="boi",
@@ -338,7 +375,10 @@ spec = DataspaceSpec(
 plan = plan_dataspace(spec)
 write_dataspace_plan(plan, "build/dataspaces", force=True)
 
-client = ToriiClient("http://127.0.0.1:8080")
+client = ToriiClient(
+    "http://127.0.0.1:8080",
+    local_signing_context=LocalSigningContext(network_id),
+)
 status = client.smoke_dataspace("boi")
 print(status.dataspace_id, status.ready)
 ```
@@ -379,7 +419,6 @@ asset_id = client.compose_asset_id(
 )
 
 client.mint_asset_and_wait(
-    chain_id="local",
     authority="<asset-owner>",
     fee_payment=mint_fee_payment,
     private_key_hex="<64-hex-private-key>",
@@ -388,7 +427,6 @@ client.mint_asset_and_wait(
 )
 
 client.transfer_assets_and_wait(
-    chain_id="local",
     authority="<payer>",
     fee_payment=transfer_fee_payment,
     private_key_hex="<64-hex-private-key>",
@@ -417,11 +455,13 @@ register/merge, lifecycle controls, and per-lot metadata updates.
 ```python
 from decimal import Decimal
 
-from iroha_python import TransactionConfig, TransactionDraft, authority_fee_payment
+from iroha_python import NetworkId, TransactionConfig, TransactionDraft, authority_fee_payment
 
 draft = TransactionDraft(
     TransactionConfig(
-        chain_id="local",
+        network_id=NetworkId.parse(
+            "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+        ),
         authority="<canonical_i105_account_id>",
         # The payer and gas bound are fixed before quoting; Torii supplies the
         # exact charge maxima for this payload.
@@ -568,7 +608,15 @@ terminal `event: stream_error`, the iterator raises `SseStreamError` with the st
 for explicitly replayable feeds such as the SoraFS event logs.
 
 ```python
-from iroha_python import create_torii_client, DataEventFilter, SseStreamError
+import os
+
+from iroha_python import (
+    DataEventFilter,
+    NetworkId,
+    SseStreamError,
+    ToriiCanonicalRequestAuth,
+    create_torii_client,
+)
 
 client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
 
@@ -700,6 +748,7 @@ for provider in ingestion.providers:
 # require per-request canonical account authentication, never retry or follow
 # redirects, and enforce the Torii 1 MiB JSON / 22 MiB statement response caps.
 billing_auth = ToriiCanonicalRequestAuth(
+    network_id=NetworkId.parse(os.environ["IROHA_NETWORK_ID"]).literal,
     account_id=os.environ["IROHA_ACCOUNT_ID"],
     signer=external_request_signer,
 )
@@ -846,20 +895,39 @@ print(assets, txs, query_txs)
 ```
 
 ```python
-# Create a Connect session with type-safe response
-from iroha_python import create_torii_client
+# Create an exact-network Connect session with a type-safe response
+import base64
+
+from iroha_python import NetworkId, create_torii_client
+from iroha_python.connect import create_connect_session_preview
 
 client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
-info = client.create_connect_session_info({"role": "app", "sid": "base64url-sid"})
+preview = create_connect_session_preview(
+    network_id=NetworkId.from_bytes(bytes([0xA5]) * 32),
+    node="node.example:443",
+)
+info = client.create_connect_session_info({
+    "sid": preview.sid_base64url,
+    "network_id": preview.network_id.literal,
+    "app_pk": base64.urlsafe_b64encode(preview.app_key_pair.public_key).rstrip(b"=").decode(),
+    "nonce": base64.urlsafe_b64encode(preview.nonce).rstrip(b"=").decode(),
+    "node": preview.node,
+})
 print(info.app_uri)
 print(info.wallet_token)
 ```
 # Connect URI helpers
 from iroha_python.connect import ConnectUri, build_connect_uri, parse_connect_uri
 
-uri = build_connect_uri(ConnectUri(sid="base64url", chain_id="local-testnet", node="node.example:443"))
+uri = build_connect_uri(ConnectUri(
+    sid=preview.sid_base64url,
+    network_id=preview.network_id,
+    app_public_key=preview.app_key_pair.public_key,
+    nonce=preview.nonce,
+    node="node.example:443",
+))
 parsed = parse_connect_uri(uri)
-assert parsed.sid == "base64url"
+assert parsed.sid == preview.sid_base64url
 
 
 ## Sora VPN native lease flow
@@ -870,8 +938,11 @@ app-facing Torii requests with a callback while keeping private keys in the
 caller-owned wallet/keystore.
 
 ```python
+import os
+
 from iroha_python import (
     Ed25519KeyPair,
+    NetworkId,
     ToriiCanonicalRequestAuth,
     VpnQuoteCreateRequest,
     VpnSessionCreateRequest,
@@ -880,7 +951,11 @@ from iroha_python import (
 
 client = create_torii_client("https://torii.example")
 wallet_key = Ed25519KeyPair.from_private_key_hex("<hex-private-key>")
-auth = ToriiCanonicalRequestAuth(account_id="merchant@paynet", signer=wallet_key.sign)
+auth = ToriiCanonicalRequestAuth(
+    network_id=NetworkId.parse(os.environ["IROHA_NETWORK_ID"]).literal,
+    account_id="merchant@paynet",
+    signer=wallet_key.sign,
+)
 
 quote = client.create_vpn_quote(
     VpnQuoteCreateRequest(
@@ -912,20 +987,32 @@ the optional `settle_lease_instruction` field.
 ## Transaction helpers
 
 Build transactions with ergonomic helpers that wrap the low-level `Instruction` APIs:
+Every signing configuration takes one typed, canonical `NetworkId` derived from
+the genesis-header hash. Ordinary transaction APIs reject operator-selected
+chain labels and bare hash bytes.
 
 ```python
 from iroha_python import (
     Ed25519KeyPair,
+    LocalSigningContext,
+    NetworkId,
+    ToriiClient,
     TransactionConfig,
     TransactionDraft,
     authority_fee_payment,
 )
 
 config = TransactionConfig(
-    chain_id="dev-chain",
+    network_id=NetworkId.parse(
+        "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+    ),
     authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
     fee_payment=authority_fee_payment(charge_limits=[]),
     ttl_ms=120_000,
+)
+client = ToriiClient(
+    "http://127.0.0.1:8080",
+    local_signing_context=LocalSigningContext(config.network_id),
 )
 draft = TransactionDraft(config)
 draft.register_domain("wonderland") \
@@ -950,15 +1037,36 @@ if isinstance(receipt, dict):
     print("Submitted tx:", receipt.get("payload", {}).get("tx_hash"))
 ```
 
+Public pipeline status is metadata-only. `get_transaction_status(...)` returns exactly the
+canonical hash, closed status kind, optional committed height, scope, and resolution source;
+retired rejection, diagnostic, trigger, and batch fields are rejected. An involved account or
+operator can request the committed transaction and trigger completions with a canonical signed
+query:
+
+```python
+details = client.get_pipeline_transaction_details(
+    transaction_hash,
+    authority=authority_account_id,
+    private_key=pair.private_key,
+)
+```
+
+The client uses its immutable typed `NetworkId` for the signed query and sends
+the nonce-bearing body once, with redirects and transport retries disabled. Torii verifies the
+exact transaction predicate, signature, freshness, nonce, and involved-account/operator
+authorization.
+
 Native instructions and deployed-contract calls can share one ordered, atomic
 batch. Any batch containing a contract call must bind a positive `gas_limit`
 in its fee intent:
 
 ```python
-from iroha_python import Instruction, TransactionConfig, TransactionDraft, authority_fee_payment
+from iroha_python import Instruction, NetworkId, TransactionConfig, TransactionDraft, authority_fee_payment
 
 mixed = TransactionDraft(TransactionConfig(
-    chain_id="dev-chain",
+    network_id=NetworkId.parse(
+        "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+    ),
     authority=authority_account_id,
     fee_payment=authority_fee_payment(charge_limits=[], gas_limit=500_000),
 ))
@@ -989,7 +1097,9 @@ requested_fee_payment = sponsor_fee_payment(
 )
 
 config = TransactionConfig(
-    chain_id="dev-chain",
+    network_id=NetworkId.parse(
+        "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+    ),
     authority=authority_account_id,
     fee_payment=requested_fee_payment,
     ttl_ms=120_000,
@@ -1026,7 +1136,6 @@ Create and operate native asset locks for escrow-style conditional payments:
 
 ```python
 client.open_asset_lock_and_wait(
-    chain_id="dev-chain",
     authority="<source-account-id>",
     private_key_hex="<source-private-key-hex>",
     escrow_id="merchant-lock-001",
@@ -1037,7 +1146,6 @@ client.open_asset_lock_and_wait(
     expires_at_ms=1_704_000_000_000,
 )
 client.drawdown_asset_lock_and_wait(
-    chain_id="dev-chain",
     authority="<trusted-release-account-id>",
     private_key_hex="<trusted-release-private-key-hex>",
     escrow_id="merchant-lock-001",
@@ -1045,7 +1153,6 @@ client.drawdown_asset_lock_and_wait(
     expected_remaining_amount="2500",
 )
 client.cancel_asset_lock_and_wait(
-    chain_id="dev-chain",
     authority="<source-account-id>",
     private_key_hex="<source-private-key-hex>",
     escrow_id="merchant-lock-001",
@@ -1222,8 +1329,10 @@ Run the end-to-end Connect CLI helper to stage a session, inspect policy limits,
 ```bash
 python -m iroha_python.examples.connect_flow \
   --base-url http://127.0.0.1:8080 \
-  --sid demo-session \
-  --chain-id dev-chain \
+  --network-id '<exact-checksummed-network-id>' \
+  --sid '<derived-base64url-sid>' \
+  --app-public-key '<32-byte-x25519-public-key-hex>' \
+  --nonce '<16-byte-nonce-hex>' \
   --auth-token admin-token \
   --app-name "Demo App" \
   --app-url https://demo.example \
@@ -1241,7 +1350,12 @@ Pass `--app-name` (optionally with `--app-url` and `--app-icon-hash`) to embed d
 Run `python -m iroha_python.examples.connect_flow --write-app-metadata-template connect_app_metadata.json` to write the sample metadata file without contacting a node. When you only need runtime telemetry, pass `--status-only` (optionally with `--status-json-output status.json`) to skip session creation entirely.
 
 ```python
-info = client.create_connect_session_info({"role": "app", "sid": "base64url-sid"})
+info = client.create_connect_session_info({
+    "sid": preview.sid_base64url,
+    "network_id": preview.network_id.literal,
+    "app_pk": base64.urlsafe_b64encode(preview.app_key_pair.public_key).rstrip(b"=").decode(),
+    "nonce": base64.urlsafe_b64encode(preview.nonce).rstrip(b"=").decode(),
+})
 print(info.expires_at)
 ```
 
@@ -1285,17 +1399,22 @@ from iroha_python import (
     ConnectControlOpen,
     ConnectDirection,
     ConnectPermissions,
+    NetworkId,
+    create_connect_session_preview,
     encode_connect_frame,
     decode_connect_frame,
 )
 
+preview = create_connect_session_preview(
+    network_id=NetworkId.from_bytes(bytes([0xA5]) * 32),
+)
 frame = ConnectFrame(
-    sid=b"\x01" * 32,
+    sid=preview.sid_bytes,
     direction=ConnectDirection.APP_TO_WALLET,
     sequence=1,
     control=ConnectControlOpen(
-        app_public_key=b"\x02" * 32,
-        chain_id="local",
+        app_public_key=preview.app_key_pair.public_key,
+        network_id=preview.network_id,
         permissions=ConnectPermissions(methods=["SIGN_REQUEST_TX"], events=[]),
     ),
 )
@@ -1342,8 +1461,10 @@ app_key, wallet_key = derive_connect_direction_keys(
 assert len(app_key) == len(wallet_key) == 32
 
 preimage = build_connect_approve_preimage(
-    sid=b"\xAA" * 32,
-    app_public_key=b"\xBB" * 32,
+    network_id=preview.network_id,
+    sid=preview.sid_bytes,
+    app_public_key=preview.app_key_pair.public_key,
+    nonce=preview.nonce,
     wallet_public_key=b"\xCC" * 32,
     account_id="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
     permissions=ConnectPermissions(methods=["SIGN_REQUEST_TX"], events=[]),
@@ -1354,12 +1475,18 @@ preimage = build_connect_approve_preimage(
         issued_at="2024-01-01T00:00:00Z",
         nonce="abcd",
     ),
+    relay_token="exact-relay-token-from-session-registration",
 )
 
 # Post a control frame via the Torii client
 from iroha_python import ConnectControlClose, create_torii_client
 
-info = client.create_connect_session_info({"role": "app", "sid": pair.public_key.hex()})
+info = client.create_connect_session_info({
+    "sid": preview.sid_base64url,
+    "network_id": preview.network_id.literal,
+    "app_pk": base64.urlsafe_b64encode(preview.app_key_pair.public_key).rstrip(b"=").decode(),
+    "nonce": base64.urlsafe_b64encode(preview.nonce).rstrip(b"=").decode(),
+})
 print(info.sid, info.app_uri)
 client = create_torii_client("http://localhost:8080", auth_token="admin-token")
 client.send_connect_control_frame(
@@ -1652,7 +1779,7 @@ NX-16 rollout with deterministic parsing.
 ## Trigger lifecycle walkthrough
 
 ```python
-from iroha_python import Instruction, ToriiClient
+from iroha_python import Instruction, NetworkId, ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="admin-token")
 trigger_id = "hourly-reward"
@@ -1672,9 +1799,11 @@ register = Instruction.register_time_trigger(
 
 # 2) Submit the transaction and wait for confirmation.
 envelope, status = client.build_and_submit_transaction(
-    chain_id="local",
+    network_id=NetworkId.parse(
+        "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
+    ),
     authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-    private_key="ed25519:...",
+    private_key=bytes.fromhex("11" * 32),
     instructions=[register],
     wait=True,
 )
@@ -1757,7 +1886,7 @@ Connect frame encoding and crypto helpers require the compiled
 directory before running tests that exercise Connect payloads.
 
 From the repository root, the SoraFS V1 native parity lane uses exact Python
-3.12 and rebuilds the ABI-21 extension from the current clean source revision:
+3.12 and rebuilds the ABI-22 extension from the current clean source revision:
 
 ```bash
 SORAFS_PYTHON_SDK_PYTHON_BIN=/path/to/python3.12 \
@@ -1895,7 +2024,7 @@ The workflow now:
 
 1. Builds exactly one wheel candidate with `python -m build` and seals and structurally preflights it before installation.
 2. Installs the wheel into a fresh virtualenv, authenticates the complete installed package and native-extension provenance against that seal, and rejects path or file aliases.
-3. Requires the installed native extension to expose bridge ABI 21 and a non-empty compiled-profile catalog accepted by its native validator, then runs the Norito RPC parity suite.
+3. Requires the installed native extension to expose bridge ABI 22 and a non-empty compiled-profile catalog accepted by its native validator, then runs the Norito RPC parity suite.
 4. Runs `twine check` followed by a `twine upload --dry-run` call so PyPI metadata and credentials are validated ahead of time.
 
 The smoke harness accepts no signing, provenance, key, or manifest-output
@@ -1911,7 +2040,7 @@ For details on choosing between binary bundles and container images, consult `sp
 
 For a production release, stage the reviewed package candidates and checksums
 through the protected aggregate release workflow. Authentication happens
-outside this harness with the external Ed25519/PKCS#11-HSM signer and is
+outside this harness with the external software Ed25519 signer and is
 verified with:
 
 ```bash
@@ -2003,6 +2132,7 @@ issue = IssueReplicationOrderInstruction(
     base64.b64encode(replication_order_bytes).decode("ascii"),
     issued_epoch=20,
     deadline_epoch=28,
+    musubi_archive=archive_id,  # omit for an ordinary non-Musubi order
 )
 complete = CompleteReplicationOrderInstruction(
     order_id,
@@ -2028,13 +2158,16 @@ expire = ExpireReplicationOrderInstruction(order_id, expiration_epoch=29)
 
 IDs are exact non-zero lowercase 64-hex strings. Issue validates bounded,
 canonical base64/Norito framing plus the embedded order ID, target, provider
-ordering, and deadline. Completion always requires the exact six-field hard cut:
+ordering, and deadline. Its fifth `musubi_archive` option is always present in
+the typed payload: `None` selects an ordinary order, while a non-zero ArchiveId
+creates the immutable Musubi purpose binding. The retired four-field shape is
+rejected. Completion always requires the exact six-field hard cut:
 `order_id`, `provider_id`, `completion_epoch`, `expected_authority`,
 `expected_assignment_revision`, and `finalized_anchor`. The authority retains
 the provider owner and four-part signer-policy chain; legacy, missing, and
-unknown fields fail decoding. Call `.to_payload()` for exact Rust/Norito JSON
-or `.to_instruction()` after rebuilding the native extension from the same
-source revision.
+unknown fields fail decoding. Call `.to_payload()` for the schema-closed SDK
+JSON model or `.to_instruction()` for canonical Norito after rebuilding the
+native extension from the same source revision.
 
 ## Configuration & overrides
 

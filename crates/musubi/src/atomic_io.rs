@@ -14,6 +14,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use std::os::fd::AsRawFd as _;
 #[cfg(unix)]
 use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
@@ -29,6 +31,55 @@ std::thread_local! {
     static TEST_DIRECTORY_SYNC_FAILURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TEST_IMMUTABLE_READ_FIFO_SUBSTITUTIONS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+std::thread_local! {
+    static TEST_AFTER_DESCRIPTOR_TARGET_BIND: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+    static TEST_BEFORE_DESCRIPTOR_ROOT_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+pub(crate) fn install_descriptor_root_read_test_hooks(
+    after_target_bind: impl FnOnce() + 'static,
+    before_revalidation: impl FnOnce() + 'static,
+) {
+    TEST_AFTER_DESCRIPTOR_TARGET_BIND.with(|hook| {
+        assert!(
+            hook.borrow_mut()
+                .replace(Box::new(after_target_bind))
+                .is_none(),
+            "descriptor-target after-bind hook must not already be installed"
+        );
+    });
+    TEST_BEFORE_DESCRIPTOR_ROOT_REVALIDATION.with(|hook| {
+        assert!(
+            hook.borrow_mut()
+                .replace(Box::new(before_revalidation))
+                .is_none(),
+            "descriptor-root before-revalidation hook must not already be installed"
+        );
+    });
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+fn run_test_after_descriptor_target_bind() {
+    TEST_AFTER_DESCRIPTOR_TARGET_BIND.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+fn run_test_before_descriptor_root_revalidation() {
+    TEST_BEFORE_DESCRIPTOR_ROOT_REVALIDATION.with(|hook| {
+        if let Some(hook) = hook.borrow_mut().take() {
+            hook();
+        }
+    });
 }
 
 /// Result of installing immutable bytes at a previously absent path.
@@ -176,6 +227,8 @@ impl std::error::Error for AtomicWriteError {
 pub struct AtomicWriteRoot {
     canonical_root: PathBuf,
     root_identity: FileIdentity,
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    root_handle: File,
 }
 
 impl AtomicWriteRoot {
@@ -254,9 +307,13 @@ impl AtomicWriteRoot {
                 "bind a stable write root",
             ));
         }
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        let root_handle = open_directory_no_follow(&canonical_root, &canonical_metadata)?;
         Ok(Self {
             canonical_root,
             root_identity: FileIdentity::from_metadata(&canonical_metadata),
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            root_handle,
         })
     }
 
@@ -424,6 +481,58 @@ impl AtomicWriteRoot {
                 &target,
                 "enforce the immutable source size bound",
             )),
+        }
+    }
+
+    /// Load one private immutable file through the retained root descriptor.
+    ///
+    /// Linux and Android expose an open directory descriptor as
+    /// `/proc/self/fd/<fd>`. Appending the validated relative name makes the final
+    /// file open resolve below the retained directory even if the canonical root
+    /// pathname is temporarily replaced. The descriptor anchor and canonical root
+    /// identity are checked before and after the read. Other platforms fail closed;
+    /// safe `std` does not expose `openat` or an equivalent descriptor-rooted open.
+    /// This requires a kernel-provided procfs at `/proc`; the procfs entry must
+    /// resolve to the retained directory inode or the read is rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns a categorized validation or filesystem error. The target must be a
+    /// single-link private regular file no larger than `max_bytes`.
+    pub(crate) fn load_private_descriptor_rooted(
+        &self,
+        relative: &Path,
+        max_bytes: usize,
+    ) -> Result<Option<Vec<u8>>, AtomicWriteError> {
+        validate_relative_path(relative)?;
+
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        {
+            let _ = max_bytes;
+            // TODO: Enable this read on other targets only after safe `std` or an approved
+            // workspace primitive provides a descriptor-rooted, no-follow final open.
+            return Err(AtomicWriteError::new(
+                AtomicWriteErrorCode::UnsupportedPlatform,
+                relative,
+                "load private bytes through a retained root descriptor",
+            ));
+        }
+
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            self.validate_retained_root()?;
+            let descriptor_root =
+                PathBuf::from("/proc/self/fd").join(self.root_handle.as_raw_fd().to_string());
+            self.validate_descriptor_root(&descriptor_root)?;
+            let target = descriptor_root.join(relative);
+            let read = read_private_immutable_target_bounded(&target, max_bytes);
+            #[cfg(test)]
+            run_test_before_descriptor_root_revalidation();
+            let revalidation = (|| {
+                self.validate_descriptor_root(&descriptor_root)?;
+                self.validate_retained_root()
+            })();
+            preserve_primary_result(read, revalidation)
         }
     }
 
@@ -635,6 +744,81 @@ impl AtomicWriteRoot {
                 AtomicWriteErrorCode::ConcurrentModification,
                 &self.canonical_root,
                 "revalidate the write root",
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn validate_retained_root(&self) -> Result<(), AtomicWriteError> {
+        let opened_before = self.root_handle.metadata().map_err(|error| {
+            AtomicWriteError::io(
+                &self.canonical_root,
+                "inspect the retained write-root directory",
+                error,
+            )
+        })?;
+        let current = fs::symlink_metadata(&self.canonical_root).map_err(|error| {
+            AtomicWriteError::io(&self.canonical_root, "revalidate the write root", error)
+        })?;
+        let opened_after = self.root_handle.metadata().map_err(|error| {
+            AtomicWriteError::io(
+                &self.canonical_root,
+                "reinspect the retained write-root directory",
+                error,
+            )
+        })?;
+        if !opened_before.is_dir()
+            || current.file_type().is_symlink()
+            || !current.is_dir()
+            || !opened_after.is_dir()
+            || !self.root_identity.matches(&opened_before)
+            || !self.root_identity.matches(&current)
+            || !self.root_identity.matches(&opened_after)
+        {
+            return Err(AtomicWriteError::new(
+                AtomicWriteErrorCode::ConcurrentModification,
+                &self.canonical_root,
+                "revalidate the retained write root",
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn validate_descriptor_root(&self, descriptor_root: &Path) -> Result<(), AtomicWriteError> {
+        let opened_before = self.root_handle.metadata().map_err(|error| {
+            AtomicWriteError::io(
+                descriptor_root,
+                "inspect the retained descriptor root",
+                error,
+            )
+        })?;
+        let anchored = fs::metadata(descriptor_root).map_err(|_| {
+            AtomicWriteError::new(
+                AtomicWriteErrorCode::UnsupportedPlatform,
+                descriptor_root,
+                "resolve the retained descriptor root through procfs",
+            )
+        })?;
+        let opened_after = self.root_handle.metadata().map_err(|error| {
+            AtomicWriteError::io(
+                descriptor_root,
+                "reinspect the retained descriptor root",
+                error,
+            )
+        })?;
+        if !opened_before.is_dir()
+            || !anchored.is_dir()
+            || !opened_after.is_dir()
+            || !self.root_identity.matches(&opened_before)
+            || !self.root_identity.matches(&anchored)
+            || !self.root_identity.matches(&opened_after)
+        {
+            return Err(AtomicWriteError::new(
+                AtomicWriteErrorCode::ConcurrentModification,
+                descriptor_root,
+                "bind the retained descriptor root",
             ));
         }
         Ok(())
@@ -895,6 +1079,43 @@ fn open_private_directory_no_follow(
             AtomicWriteErrorCode::ConcurrentModification,
             path,
             "bind an open private write-root directory",
+        ));
+    }
+    Ok(directory)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn open_directory_no_follow(path: &Path, linked: &fs::Metadata) -> Result<File, AtomicWriteError> {
+    let secure_open_flags = PLATFORM_SECURE_OPEN_FLAGS.ok_or_else(|| {
+        AtomicWriteError::new(
+            AtomicWriteErrorCode::UnsupportedPlatform,
+            path,
+            "retain a no-follow write-root directory handle",
+        )
+    })?;
+    let mut options = OpenOptions::new();
+    options.read(true).custom_flags(secure_open_flags);
+    let directory = options.open(path).map_err(|error| {
+        AtomicWriteError::io(path, "retain the write-root directory handle", error)
+    })?;
+    let opened = directory.metadata().map_err(|error| {
+        AtomicWriteError::io(path, "inspect the retained write-root directory", error)
+    })?;
+    let after = fs::symlink_metadata(path).map_err(|error| {
+        AtomicWriteError::io(path, "reinspect the retained write-root directory", error)
+    })?;
+    if linked.file_type().is_symlink()
+        || !linked.is_dir()
+        || !opened.is_dir()
+        || after.file_type().is_symlink()
+        || !after.is_dir()
+        || !same_file(linked, &opened)
+        || !same_file(&opened, &after)
+    {
+        return Err(AtomicWriteError::new(
+            AtomicWriteErrorCode::ConcurrentModification,
+            path,
+            "bind the retained write-root directory",
         ));
     }
     Ok(directory)
@@ -1285,6 +1506,98 @@ fn read_immutable_target_bounded(
         ));
     }
     Ok(ImmutableReadOutcome::Within(observed))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn read_private_immutable_target_bounded(
+    target: &Path,
+    max_bytes: usize,
+) -> Result<Option<Vec<u8>>, AtomicWriteError> {
+    let before = match fs::symlink_metadata(target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            match fs::symlink_metadata(target) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Ok(_) => {
+                    return Err(AtomicWriteError::new(
+                        AtomicWriteErrorCode::ConcurrentModification,
+                        target,
+                        "revalidate an absent descriptor-rooted target",
+                    ));
+                }
+                Err(error) => {
+                    return Err(AtomicWriteError::io(
+                        target,
+                        "reinspect an absent descriptor-rooted target",
+                        error,
+                    ));
+                }
+            }
+            #[cfg(test)]
+            run_test_after_descriptor_target_bind();
+            return match fs::symlink_metadata(target) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+                Ok(_) => Err(AtomicWriteError::new(
+                    AtomicWriteErrorCode::ConcurrentModification,
+                    target,
+                    "verify descriptor-rooted target absence",
+                )),
+                Err(error) => Err(AtomicWriteError::io(
+                    target,
+                    "verify descriptor-rooted target absence",
+                    error,
+                )),
+            };
+        }
+        Err(error) => {
+            return Err(AtomicWriteError::io(
+                target,
+                "inspect the descriptor-rooted target",
+                error,
+            ));
+        }
+    };
+    validate_single_link_immutable_metadata(target, &before)?;
+    if before.permissions().mode() & 0o077 != 0 {
+        return Err(AtomicWriteError::new(
+            AtomicWriteErrorCode::UnsafeTarget,
+            target,
+            "validate private descriptor-rooted target permissions",
+        ));
+    }
+    let identity = FileIdentity::from_metadata(&before);
+    #[cfg(test)]
+    run_test_after_descriptor_target_bind();
+    let read = read_immutable_target_bounded(target, max_bytes, Some(identity))?;
+    let after = inspect_single_link_immutable_target(target)?;
+    if after.permissions().mode() & 0o077 != 0 || !same_immutable_file_snapshot(&before, &after) {
+        return Err(AtomicWriteError::new(
+            AtomicWriteErrorCode::ConcurrentModification,
+            target,
+            "revalidate the private descriptor-rooted target",
+        ));
+    }
+    match read {
+        ImmutableReadOutcome::Within(bytes) => Ok(Some(bytes)),
+        ImmutableReadOutcome::Exceeded => Err(AtomicWriteError::new(
+            AtomicWriteErrorCode::UnsafeTarget,
+            target,
+            "enforce the descriptor-rooted target size bound",
+        )),
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn same_immutable_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+        && left.nlink() == right.nlink()
+        && left.mode() == right.mode()
 }
 
 fn inspect_single_link_immutable_target(target: &Path) -> Result<fs::Metadata, AtomicWriteError> {

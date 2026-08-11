@@ -69,11 +69,12 @@ so governance can schedule upgrades via
 - `crates/iroha_core/tests/zk_dedup.rs:1` proves that the `Preverify` cache
   rejects double-spends/double-proofs, including rotation scenarios where
   commitments differ.
-- Kagemusha suites cover proof-bound top-up/redemption, escrow drawdown, and
-  confidential events; native anonymous-escrow suites cover purpose-bound
-  internal transfer behavior. The release-surface regression in
+- Kagemusha suites cover proof-bound top-up/redemption, escrow drawdown, typed
+  receipts, authenticated tree state, and the protocol-global transfer-v2
+  recursive verifier. The release-surface regression in
   `integration_tests/tests/zk_confidential_localnet.rs` ensures the retired
-  generic `zk::Shield`, `zk::ZkTransfer`, and `zk::Unshield` wires cannot
+  generic `zk::Shield`, `zk::ZkTransfer`, and `zk::Unshield` wires, native
+  anonymous escrow, and producerless confidential event/filter wires cannot
   re-enter the registry.
 - `dashboards/grafana/confidential_assets.json` and
   `specs/confidential_assets.md:401` document the CommitmentTree &
@@ -82,8 +83,9 @@ so governance can schedule upgrades via
 ## Runbook Ownership
 
 - **DevRel / Wallet SDK Leads:** maintain SDK snippets + quickstarts that show
-  how to surface pending transitions and replay the mint → transfer → reveal
-  tests locally (tracked under `specs/project_tracker/confidential_assets_phase_c.md:M3.2`).
+  how to surface pending transitions and replay Kagemusha
+  top-up → recursive spend → redemption tests locally (tracked under
+  `specs/project_tracker/confidential_assets_phase_c.md:M3.2`).
 - **Program Mgmt / Confidential Assets TL:** approve transition requests, keep
   `status.md` updated with upcoming rotations, and ensure waivers (if any) are
   recorded alongside the calibration ledger.

@@ -13,11 +13,14 @@ PRIVACY_RELEASE_EVIDENCE_FEATURE="privacy-release-evidence"
 PRIVACY_RELEASE_RUNNER_PACKAGE="iroha_test_network"
 PRIVACY_RELEASE_RUNNER_BIN="taira_privacy_release_runner"
 BOOTLE_LANTERN_BROKER_BIN="taira_bootle_lantern_broker"
+SOFTWARE_SIGNER_BIN="sorafs_external_software_signer"
 KAGAMI_BIN="kagami"
 PRIVACY_BOOTSTRAP_PLAN_TEMPLATE="${SCRIPT_DIR}/privacy_bootstrap_plan.json"
 PRIVACY_BOOTSTRAP_CONFIG_TEMPLATE="${SCRIPT_DIR}/config.toml"
 PRIVACY_BOOTSTRAP_GENESIS_TEMPLATE="${SCRIPT_DIR}/genesis.json"
 PRIVACY_BOOTSTRAP_VALIDATOR="${SCRIPT_DIR}/validate_privacy_bootstrap.py"
+PRIVACY_ROLLOUT_PLAN="${SCRIPT_DIR}/privacy_rollout_plan_v1.json"
+PRIVACY_ROLLOUT_VALIDATOR="${REPO_ROOT}/scripts/taira_privacy_rollout_contract.py"
 TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR="${TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR:-}"
 PRIVACY_BOOTSTRAP_PLAN="$PRIVACY_BOOTSTRAP_PLAN_TEMPLATE"
 PRIVACY_BOOTSTRAP_CONFIG="$PRIVACY_BOOTSTRAP_CONFIG_TEMPLATE"
@@ -54,7 +57,7 @@ reviewed full Cargo lock, verifies its checksum and Rust toolchain, rejects a
 dirty source tree, and supplies reviewed build provenance to this script.
 
 The bundle contains:
-  - `irohad` and `iroha` from `target/<profile>/`
+  - `iroha3d` and `iroha` from `target/<profile>/`
   - the peer-1-only native `taira_bootle_lantern_broker`
   - `sorafs_manifest_builder` and `sorafs_tx_stdin_builder` from `target/<profile>/`
   - the feature-separated `taira_privacy_release_runner`
@@ -611,6 +614,8 @@ release_inputs=(
   "$PRIVACY_BOOTSTRAP_CONFIG"
   "$PRIVACY_BOOTSTRAP_GENESIS"
   "$PRIVACY_BOOTSTRAP_VALIDATOR"
+  "$PRIVACY_ROLLOUT_PLAN"
+  "$PRIVACY_ROLLOUT_VALIDATOR"
   "$PRIVACY_EXACT12_MATRIX"
   "$PRIVACY_EXPECTATIONS_NORITO"
   "$PRIVACY_EXPECTATIONS_JSON"
@@ -646,6 +651,8 @@ if [[ "$PROFILE" == "release" ]]; then
 fi
 python3 "$PRIVACY_BOOTSTRAP_VALIDATOR" \
   "${privacy_bootstrap_validator_args[@]}"
+python3 -I -S "$PRIVACY_ROLLOUT_VALIDATOR" verify-plan \
+  --plan "$PRIVACY_ROLLOUT_PLAN"
 
 workspace_source_manifest_sha256="$(compute_workspace_source_manifest)"
 require_canonical_sha256 "pre-build workspace source manifest" "$workspace_source_manifest_sha256"
@@ -718,7 +725,8 @@ bundle_dir="${OUTPUT_DIR}/${bundle_name}"
 archive_path="${OUTPUT_DIR}/${bundle_name}.tar.gz"
 binary_dir="${REPO_ROOT}/target/${PROFILE}"
 
-mkdir -p "$bundle_dir/bin" "$bundle_dir/configs/soranexus" "$bundle_dir/scripts" "$bundle_dir/provenance"
+mkdir -p "$bundle_dir/bin" "$bundle_dir/libexec" "$bundle_dir/configs/soranexus" \
+  "$bundle_dir/scripts" "$bundle_dir/provenance" "$bundle_dir/share/iroha/sorafs"
 
 if [[ $SKIP_BUILD -ne 1 ]]; then
   core_build_args=(
@@ -726,9 +734,10 @@ if [[ $SKIP_BUILD -ne 1 ]]; then
     --locked
     -p irohad
     -p iroha_cli
-    --bin irohad
+    --bin iroha3d
     --bin iroha
     --bin "$BOOTLE_LANTERN_BROKER_BIN"
+    --bin "$SOFTWARE_SIGNER_BIN"
     --features "$IROHAD_RELEASE_FEATURES"
   )
   sorafs_build_args=(build --locked -p sorafs_car --features cli --bin sorafs_manifest_builder --bin sorafs_tx_stdin_builder)
@@ -774,7 +783,7 @@ if [[ "$(sha256_file "$validator_lock_path")" != "$validator_lock_actual_sha" ]]
   exit 1
 fi
 
-for binary in irohad iroha "$BOOTLE_LANTERN_BROKER_BIN" sorafs_manifest_builder sorafs_tx_stdin_builder "$PRIVACY_RELEASE_RUNNER_BIN"; do
+for binary in iroha3d iroha "$BOOTLE_LANTERN_BROKER_BIN" "$SOFTWARE_SIGNER_BIN" sorafs_manifest_builder sorafs_tx_stdin_builder "$PRIVACY_RELEASE_RUNNER_BIN"; do
   if [[ ! -x "${binary_dir}/${binary}" ]]; then
     echo "missing built binary: ${binary_dir}/${binary}" >&2
     echo "run without --skip-build or build the ${PROFILE} profile first" >&2
@@ -874,7 +883,7 @@ privacy_runner_common_args=(
   --x509-resource-norito "$PRIVACY_X509_RESOURCE_NORITO"
   --x509-resource-json "$PRIVACY_X509_RESOURCE_JSON"
   --cargo-lock "$validator_lock_path"
-  --validator-binary "${binary_dir}/irohad"
+  --validator-binary "${binary_dir}/iroha3d"
 )
 "$privacy_runner_path" generate \
   "${privacy_runner_common_args[@]}" \
@@ -913,14 +922,37 @@ if [[ "$(sha256_file "$validator_lock_path")" != "$validator_lock_actual_sha" ]]
   exit 1
 fi
 
-for binary in irohad iroha "$BOOTLE_LANTERN_BROKER_BIN" sorafs_manifest_builder sorafs_tx_stdin_builder "$PRIVACY_RELEASE_RUNNER_BIN"; do
+for binary in iroha3d iroha "$BOOTLE_LANTERN_BROKER_BIN" "$SOFTWARE_SIGNER_BIN" sorafs_manifest_builder sorafs_tx_stdin_builder "$PRIVACY_RELEASE_RUNNER_BIN"; do
   cp "${binary_dir}/${binary}" "${bundle_dir}/bin/${binary}"
 done
+cp "${binary_dir}/${SOFTWARE_SIGNER_BIN}" \
+  "${bundle_dir}/libexec/iroha-runtime-provider-broker-v1"
+chmod 0755 "${bundle_dir}/bin/${SOFTWARE_SIGNER_BIN}" \
+  "${bundle_dir}/libexec/iroha-runtime-provider-broker-v1"
+cmp "${bundle_dir}/bin/${SOFTWARE_SIGNER_BIN}" \
+  "${bundle_dir}/libexec/iroha-runtime-provider-broker-v1"
+"${bundle_dir}/bin/${SOFTWARE_SIGNER_BIN}" --help >/dev/null
+"${bundle_dir}/libexec/iroha-runtime-provider-broker-v1" --help >/dev/null
+
+signer_asset_root="${bundle_dir}/share/iroha/sorafs"
+mkdir -p "$signer_asset_root/external_software_signer" \
+  "$signer_asset_root/runtime_provider_broker"
+cp "${REPO_ROOT}/configs/sorafs/external_software_signer/README.md" \
+  "$signer_asset_root/external_software_signer/README.md"
+cp "${REPO_ROOT}/configs/sorafs/external_software_signer/sorafs-external-software-signer@.service" \
+  "$signer_asset_root/external_software_signer/"
+cp -R "${REPO_ROOT}/configs/sorafs/external_software_signer/systemd" \
+  "$signer_asset_root/external_software_signer/"
+cp "${REPO_ROOT}/configs/sorafs/runtime_provider_broker/README.md" \
+  "$signer_asset_root/runtime_provider_broker/README.md"
+cp -R "${REPO_ROOT}/configs/sorafs/runtime_provider_broker/systemd" \
+  "$signer_asset_root/runtime_provider_broker/"
 
 cp -R "${REPO_ROOT}/configs/soranexus/taira" "${bundle_dir}/configs/soranexus/"
 cp "${REPO_ROOT}/scripts/render_taira_validator_bundle.py" "${bundle_dir}/scripts/"
 cp "${REPO_ROOT}/scripts/render_taira_edge_nginx_conf.py" "${bundle_dir}/scripts/"
 cp "${REPO_ROOT}/scripts/taira_faucet_canary.py" "${bundle_dir}/scripts/"
+cp "$PRIVACY_ROLLOUT_VALIDATOR" "${bundle_dir}/scripts/"
 cp "$TAIRA_RELEASE_AUTHORITY_SCRIPT" "${bundle_dir}/scripts/"
 cp "$RELEASE_ARTIFACT_CONTRACT_SCRIPT" "${bundle_dir}/scripts/"
 cp "$validator_lock_path" "${bundle_dir}/provenance/Cargo.lock"
@@ -960,6 +992,9 @@ if [[ "$PROFILE" == "release" ]]; then
     --genesis "${bundled_taira_dir}/genesis.json" \
     --matrix "$PRIVACY_EXACT12_MATRIX" \
     --broker-public "${bundle_dir}/${privacy_bootstrap_broker_public_relative_path}"
+  cmp "$PRIVACY_ROLLOUT_PLAN" "${bundled_taira_dir}/privacy_rollout_plan_v1.json"
+  python3 -I -S "${bundle_dir}/scripts/taira_privacy_rollout_contract.py" verify-plan \
+    --plan "${bundled_taira_dir}/privacy_rollout_plan_v1.json"
 
   privacy_bootstrap_plan_sha256="$(
     sha256_file "${bundle_dir}/${privacy_bootstrap_plan_relative_path}"
@@ -1015,9 +1050,15 @@ privacy_x509_resource_norito_sha256="$(sha256_file "${bundle_dir}/${privacy_x509
 privacy_x509_resource_json_sha256="$(sha256_file "${bundle_dir}/${privacy_x509_resource_json_relative_path}")"
 privacy_exact12_matrix_sha256="$(sha256_file "${bundle_dir}/${privacy_exact12_matrix_relative_path}")"
 privacy_workspace_source_manifest_file_sha256="$(sha256_file "${bundle_dir}/${privacy_workspace_source_manifest_relative_path}")"
-validator_binary_sha256="$(sha256_file "${bundle_dir}/bin/irohad")"
+validator_binary_sha256="$(sha256_file "${bundle_dir}/bin/iroha3d")"
 bootle_lantern_broker_binary_sha256="$(sha256_file "${bundle_dir}/bin/${BOOTLE_LANTERN_BROKER_BIN}")"
 privacy_runner_binary_sha256="$(sha256_file "${bundle_dir}/bin/${PRIVACY_RELEASE_RUNNER_BIN}")"
+software_signer_binary_sha256="$(sha256_file "${bundle_dir}/bin/${SOFTWARE_SIGNER_BIN}")"
+software_signer_broker_alias_sha256="$(sha256_file "${bundle_dir}/libexec/iroha-runtime-provider-broker-v1")"
+if [[ "$software_signer_binary_sha256" != "$software_signer_broker_alias_sha256" ]]; then
+  echo "external software signer and runtime-provider broker alias differ" >&2
+  exit 1
+fi
 
 bundled_privacy_runner_common_args=(
   --build-profile "$PROFILE"
@@ -1028,7 +1069,7 @@ bundled_privacy_runner_common_args=(
   --x509-resource-norito "${bundle_dir}/${privacy_x509_resource_norito_relative_path}"
   --x509-resource-json "${bundle_dir}/${privacy_x509_resource_json_relative_path}"
   --cargo-lock "${bundle_dir}/provenance/Cargo.lock"
-  --validator-binary "${bundle_dir}/bin/irohad"
+  --validator-binary "${bundle_dir}/bin/iroha3d"
 )
 "${bundle_dir}/bin/${PRIVACY_RELEASE_RUNNER_BIN}" verify \
   "${bundled_privacy_runner_common_args[@]}" \
@@ -1078,6 +1119,7 @@ IROHAD_RELEASE_FEATURES="$IROHAD_RELEASE_FEATURES" \
 PRIVACY_RELEASE_EVIDENCE_FEATURE="$PRIVACY_RELEASE_EVIDENCE_FEATURE" \
 PRIVACY_RELEASE_RUNNER_BIN="$PRIVACY_RELEASE_RUNNER_BIN" \
 BOOTLE_LANTERN_BROKER_BIN="$BOOTLE_LANTERN_BROKER_BIN" \
+SOFTWARE_SIGNER_BIN="$SOFTWARE_SIGNER_BIN" \
 WORKSPACE_SOURCE_MANIFEST_SHA256="$workspace_source_manifest_sha256" \
 PRIVACY_RELEASE_NORITO_PATH="$privacy_release_norito_relative_path" \
 PRIVACY_RELEASE_NORITO_SHA256="$privacy_release_norito_sha256" \
@@ -1116,6 +1158,8 @@ PRIVACY_BOOTSTRAP_BROKER_PUBLIC_SHA256="$privacy_bootstrap_broker_public_sha256"
 VALIDATOR_BINARY_SHA256="$validator_binary_sha256" \
 BOOTLE_LANTERN_BROKER_BINARY_SHA256="$bootle_lantern_broker_binary_sha256" \
 PRIVACY_RUNNER_BINARY_SHA256="$privacy_runner_binary_sha256" \
+SOFTWARE_SIGNER_BINARY_SHA256="$software_signer_binary_sha256" \
+SOFTWARE_SIGNER_BROKER_ALIAS_SHA256="$software_signer_broker_alias_sha256" \
 python3 - <<'PY' >"$manifest_path"
 import json
 import os
@@ -1140,6 +1184,8 @@ digest_names = (
     "VALIDATOR_BINARY_SHA256",
     "BOOTLE_LANTERN_BROKER_BINARY_SHA256",
     "PRIVACY_RUNNER_BINARY_SHA256",
+    "SOFTWARE_SIGNER_BINARY_SHA256",
+    "SOFTWARE_SIGNER_BROKER_ALIAS_SHA256",
 )
 if os.environ["PROFILE_NAME"] == "release":
     digest_names += (
@@ -1258,7 +1304,7 @@ payload = {
         },
         "binary_identities": {
             "validator": {
-                "path": "bin/irohad",
+                "path": "bin/iroha3d",
                 "sha256": os.environ["VALIDATOR_BINARY_SHA256"],
             },
             "bootle_lantern_broker": {
@@ -1276,6 +1322,25 @@ payload = {
             "evidence_runner": {
                 "path": f'bin/{os.environ["PRIVACY_RELEASE_RUNNER_BIN"]}',
                 "sha256": os.environ["PRIVACY_RUNNER_BINARY_SHA256"],
+            },
+            "external_software_signer": {
+                "backend": "software",
+                "path": f'bin/{os.environ["SOFTWARE_SIGNER_BIN"]}',
+                "sha256": os.environ["SOFTWARE_SIGNER_BINARY_SHA256"],
+                "broker_alias_path": "libexec/iroha-runtime-provider-broker-v1",
+                "broker_alias_sha256": os.environ[
+                    "SOFTWARE_SIGNER_BROKER_ALIAS_SHA256"
+                ],
+                "byte_identical_alias": True,
+                "native_help_smoke_passed": True,
+                "auto_launch_roles": [
+                    "proof-outcome",
+                    "repair",
+                    "reserve",
+                    "orderbook",
+                ],
+                "promotion_requires_separate_l2_host": True,
+                "windows_supported": False,
             },
             "validator_and_evidence_runner_bound_by_typed_receipt": True,
             "broker_binary_bound_by_release_manifest": True,
@@ -1312,12 +1377,14 @@ payload = {
     },
     "bundle_name": os.environ["BUNDLE_NAME"],
     "binaries": [
-        "bin/irohad",
+        "bin/iroha3d",
         "bin/iroha",
         f'bin/{os.environ["BOOTLE_LANTERN_BROKER_BIN"]}',
         "bin/sorafs_manifest_builder",
         "bin/sorafs_tx_stdin_builder",
         f'bin/{os.environ["PRIVACY_RELEASE_RUNNER_BIN"]}',
+        f'bin/{os.environ["SOFTWARE_SIGNER_BIN"]}',
+        "libexec/iroha-runtime-provider-broker-v1",
     ],
     "release_checks": [
         {
@@ -1377,11 +1444,14 @@ payload = {
         "scripts/render_taira_validator_bundle.py",
         "scripts/render_taira_edge_nginx_conf.py",
         "scripts/taira_faucet_canary.py",
+        "scripts/taira_privacy_rollout_contract.py",
         "scripts/taira_release_authority.py",
         "scripts/release_artifact_contract.py",
         "provenance/Cargo.lock",
         "provenance/dpn-validator-build.provenance.json",
         f'bin/{os.environ["PRIVACY_RELEASE_RUNNER_BIN"]}',
+        "share/iroha/sorafs/external_software_signer/",
+        "share/iroha/sorafs/runtime_provider_broker/",
         os.environ["PRIVACY_NATIVE_RELATIVE_DIR"] + "/",
         *(
             [os.environ["PRIVACY_BOOTSTRAP_RELATIVE_DIR"] + "/"]
@@ -1398,6 +1468,7 @@ payload = {
         "before installation, rerun the bundled native privacy verifier against provenance/privacy-native; the Norito files are authoritative and all JSON files are mandatory deterministic typed projections",
         "install the native Inrou prerequisites reported by configs/soranexus/taira/check_inrou_host_prereqs.sh or run the CONFIG_PROFILE=taira container image",
         "install the bundled binaries/config on each public Taira validator",
+        "install and qualify exactly the four native external-software-signer roles; promotion remains on a separately administered L2 host and is never auto-launched with validators",
         "render and install the shared-edge nginx config from the same validator roster before public cutover, preferably with "
         "configs/soranexus/taira/install_taira_edge_nginx_conf.sh and local-roster [[soracloud_alias_routes]] entries for dedicated runtime aliases such as solswap-indexer.sora",
         "restart the validator with the shipped taira-irohad.service or equivalent",

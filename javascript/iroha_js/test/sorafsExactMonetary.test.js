@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { ToriiClient } from "../src/toriiClient.js";
+import { AccountAddress } from "../src/address.js";
+import { NetworkId } from "../src/networkId.js";
 import {
   buildSignedOrderbookOrderRequest,
   validateOrderbookPayload,
@@ -10,6 +12,12 @@ import { makeNativeTest } from "./helpers/native.js";
 
 const BASE_URL = "https://localhost:8080";
 const PRIVATE_KEY = Buffer.alloc(32, 0xb7);
+const DA_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
+const DA_SIGNER =
+  "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
+const DA_OWNER = AccountAddress.fromAccount({
+  publicKey: Buffer.from(DA_SIGNER.slice(6), "hex"),
+}).toI105();
 const OWNER_ACCOUNT = Buffer.from("merchant@paynet", "utf8");
 const SIGNED_512_MAX = (1n << 511n) - 1n;
 const SIGNED_512_OVERFLOW = (1n << 511n).toString();
@@ -67,13 +75,14 @@ async function submitDaFixture(rentQuote) {
       ),
   });
   return client.submitDaBlob({
+    networkId: DA_NETWORK_ID,
+    owner: DA_OWNER,
     payload: Buffer.from("car-bytes"),
     codec: "nexus_lane_sidecar",
     laneId: 11,
     epoch: 22,
     sequence: 33,
-    submitterPublicKey:
-      "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245",
+    signerPublicKey: DA_SIGNER,
     signatureHex: "aa".repeat(64),
     clientBlobId: Buffer.alloc(32, 0x11),
   });

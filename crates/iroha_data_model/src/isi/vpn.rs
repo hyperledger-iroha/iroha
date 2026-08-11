@@ -145,7 +145,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RefundExpiredVpnLease {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::{codec::Encode as _, core::DecodeFromSlice};
 
@@ -177,6 +177,14 @@ mod tests {
     fn key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked VPN fixture keypair")
+    }
+
+    fn test_network_id(seed: u8) -> crate::NetworkId {
+        crate::NetworkId::from_genesis_hash(
+            HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [seed; Hash::LENGTH],
+            )),
+        )
     }
 
     fn asset_definition() -> AssetDefinitionId {
@@ -226,21 +234,21 @@ mod tests {
     }
 
     fn signed_quote() -> VpnSignedQuoteV1 {
-        let chain_id = crate::ChainId::from("vpn-isi-chain");
+        let network_id = test_network_id(0x31);
         let quote_id = [0x22; 32];
         let client_account_id = account(0x41);
         let operator = key_pair(0x42);
         let operator_account_id = AccountId::new(operator.public_key().clone());
         let address_slot = VpnAddressSlotV1::new(7).expect("fixture slot");
         let body = VpnQuoteBodyV1 {
-            lease_id: derive_vpn_lease_id_v1(&chain_id, quote_id, &client_account_id),
+            lease_id: derive_vpn_lease_id_v1(&network_id, quote_id, &client_account_id),
             session_id: derive_vpn_session_id_v1(
-                &chain_id,
+                &network_id,
                 quote_id,
                 &client_account_id,
                 address_slot,
             ),
-            chain_id,
+            network_id,
             quote_id,
             address_slot,
             client_account_id,
@@ -266,7 +274,7 @@ mod tests {
 
     #[derive(norito::codec::Encode)]
     struct ForgedVpnQuoteBody {
-        chain_id: crate::ChainId,
+        network_id: crate::NetworkId,
         quote_id: [u8; 32],
         lease_id: [u8; 32],
         session_id: [u8; 16],
@@ -300,7 +308,7 @@ mod tests {
         let forged = ForgedOpenVpnLeaseEscrow {
             quote: ForgedVpnSignedQuote {
                 body: ForgedVpnQuoteBody {
-                    chain_id: body.chain_id,
+                    network_id: body.network_id,
                     quote_id: body.quote_id,
                     lease_id: body.lease_id,
                     session_id: body.session_id,

@@ -122,8 +122,8 @@ public sealed record class ToriiAccountOnboardingPlanBody
     [JsonPropertyName("authority")]
     public string Authority { get; init; } = string.Empty;
 
-    [JsonPropertyName("chain_id")]
-    public string ChainId { get; init; } = string.Empty;
+    [JsonPropertyName("network_id")]
+    public NetworkId NetworkId { get; init; } = null!;
 
     [JsonPropertyName("anchor")]
     public JsonElement Anchor { get; init; }
@@ -5688,6 +5688,9 @@ public sealed record class ToriiFeeSponsorProgram
 {
     [JsonPropertyName("id")]
     public FeeSponsorProgramId Id { get; init; } = null!;
+
+    [JsonPropertyName("payout_account")]
+    public string PayoutAccount { get; init; } = string.Empty;
 
     [JsonPropertyName("lifecycle")]
     public ToriiFeeSponsorProgramLifecycle Lifecycle { get; init; } = null!;

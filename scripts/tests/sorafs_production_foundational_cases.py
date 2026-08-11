@@ -1,5 +1,7 @@
 # Aggregate and foundational-prerequisite cases for production readiness.
 
+import sccp_release_common as RELEASE_CRYPTO
+
 def test_complete_aggregate_readiness_passes(tmp_path: Path) -> None:
     write_all_gates(tmp_path)
     summary = tmp_path / "summary.json"
@@ -9,6 +11,7 @@ def test_complete_aggregate_readiness_passes(tmp_path: Path) -> None:
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["schema"] == MODULE.SUMMARY_SCHEMA
     assert payload["status"] == "ready"
+    assert payload["signer_qualification"] == "software-key-qualified"
     assert payload["recognized_summary_count"] == len(MODULE.DEFAULT_REQUIRED_GATES)
     assert payload["deployment"] == {
         "deployment_id": DEPLOYMENT_ID,
@@ -20,6 +23,18 @@ def test_complete_aggregate_readiness_passes(tmp_path: Path) -> None:
     )
     assert payload["foundational_prerequisites"]["prerequisite_count"] == len(
         MODULE.FOUNDATIONAL_PREREQUISITE_IDS
+    )
+    assert payload["foundational_prerequisites"]["signer_backend"] == "software"
+    assert payload["foundational_prerequisites"]["signer_service_id"] == (
+        FOUNDATIONAL_SIGNER_SERVICE_ID
+    )
+    assert payload["foundational_prerequisites"]["signer_administrator_id"] == (
+        FOUNDATIONAL_SIGNER_ADMINISTRATOR_ID
+    )
+    assert payload["foundational_prerequisites"]["signer_key_revision"] == 7
+    assert payload["foundational_prerequisites"]["signer_policy_revision"] == 11
+    assert payload["foundational_prerequisites"]["signer_policy_digest_sha256"] == (
+        FOUNDATIONAL_SIGNER_POLICY_DIGEST
     )
     grouped = payload["foundational_prerequisites"][
         "prerequisite_readiness_summary_sha256"
@@ -46,6 +61,23 @@ def test_complete_aggregate_readiness_passes(tmp_path: Path) -> None:
     assert payload["required"]["gateway_load"]["thresholds"] == {
         "max_evidence_bytes": 2_097_152,
     }
+
+
+def test_aggregate_rejects_hsm_qualification_claim(tmp_path: Path) -> None:
+    """The revised policy never permits an HSM-qualified readiness claim."""
+
+    write_all_gates(tmp_path)
+    summary_path = tmp_path / "aggregate.json"
+    assert run_gate(tmp_path, "--summary-out", str(summary_path)) == 0
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["signer_qualification"] = "hsm-qualified"
+    errors: list[str] = []
+    MODULE.validate_aggregate_summary_output(
+        summary,
+        MODULE.DEFAULT_REQUIRED_GATES,
+        errors,
+    )
+    assert any("must be software-key-qualified or unqualified" in error for error in errors)
 
 
 def test_aggregate_replay_cross_binds_foundational_and_required_lane_digests(
@@ -139,12 +171,9 @@ def test_complete_aggregate_without_topology_qualification_stays_blocked(
                 str(summary),
             ]
         )
-        == 1
+        == 2
     )
-    payload = json.loads(summary.read_text(encoding="utf-8"))
-    assert payload["status"] == "blocked"
-    assert payload["topology_qualification"] is None
-    assert "--topology-qualification-summary is required" in payload["errors"]
+    assert not summary.exists()
 
 
 def test_aggregate_rejects_lane_and_envelope_topology_substitution(
@@ -187,7 +216,7 @@ def test_aggregate_rejects_lane_and_envelope_topology_substitution(
 def test_full_aggregate_rejects_lane_summary_bytes_swapped_after_signing(
     tmp_path: Path,
 ) -> None:
-    """The HSM envelope must bind the exact reviewed lane summary byte set."""
+    """The software-signed envelope must bind the exact reviewed lane summary byte set."""
 
     write_all_gates(tmp_path)
     write_foundational_summary(tmp_path)
@@ -218,6 +247,7 @@ def test_foundational_prerequisite_schema_inventories_are_closed() -> None:
         "previous_envelope_sha256",
         "topology_qualification",
         "resilience_qualification",
+        "l1_lane_evidence_inventory_sha256",
         "prerequisites",
         "lane_summaries",
         "signature",
@@ -227,8 +257,14 @@ def test_foundational_prerequisite_schema_inventories_are_closed() -> None:
         "environment",
     }
     assert MODULE.FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS == {
+        "administrator_id",
         "algorithm",
+        "backend",
+        "key_revision",
+        "policy_digest_sha256",
+        "policy_revision",
         "public_key_fingerprint_sha256",
+        "service_id",
         "signature_hex",
     }
     assert MODULE.FOUNDATIONAL_PREREQUISITE_ROW_FIELDS == {
@@ -636,6 +672,43 @@ def test_foundational_prerequisites_reject_schema_set_freshness_and_context_atta
             "signature algorithm must be `ed25519`",
         )
     )
+    for name, field, value, expected_error in (
+        (
+            "hsm-backend",
+            "backend",
+            "hsm",
+            "signer backend must be `software`",
+        ),
+        (
+            "shared-administrator",
+            "administrator_id",
+            FOUNDATIONAL_SIGNER_SERVICE_ID,
+            "service_id and administrator_id must differ",
+        ),
+        (
+            "zero-key-revision",
+            "key_revision",
+            0,
+            "signer key_revision must be in 1..2^63-1",
+        ),
+        (
+            "zero-policy-digest",
+            "policy_digest_sha256",
+            "00" * 32,
+            "policy_digest_sha256 must be non-zero canonical lowercase SHA-256",
+        ),
+    ):
+        cases.append(
+            (
+                name,
+                signed_mutation(
+                    lambda payload, field=field, value=value: payload[
+                        "signature"
+                    ].__setitem__(field, value)
+                ),
+                expected_error,
+            )
+        )
 
     secret_path = "../../runtime-only-private-key-material"
 
@@ -683,9 +756,20 @@ def test_foundational_prerequisites_reject_signature_digest_and_trust_attacks(
 ) -> None:
     """Reject forgeries, self-selected signers, and non-canonical signatures."""
 
+    inventory_root = tmp_path / "signature-inventory-baseline"
+    inventory_root.mkdir()
+    write_gate(inventory_root, "gateway_load")
+    inventory_path, _lanes, _topology = lane_inventory_fixture(inventory_root)
+    inventory_sha256 = hashlib.sha256(inventory_path.read_bytes()).hexdigest()
+
+    def baseline() -> dict:
+        return foundational_summary(
+            l1_lane_evidence_inventory_sha256=inventory_sha256
+        )
+
     cases: list[tuple[str, dict, str]] = []
 
-    forged_signature = foundational_summary()
+    forged_signature = baseline()
     signature_hex = forged_signature["signature"]["signature_hex"]
     forged_signature["signature"]["signature_hex"] = (
         ("0" if signature_hex[0] != "0" else "1") + signature_hex[1:]
@@ -698,7 +782,7 @@ def test_foundational_prerequisites_reject_signature_digest_and_trust_attacks(
         )
     )
 
-    forged_digest = foundational_summary()
+    forged_digest = baseline()
     forged_digest["prerequisites"][0]["evidence_anchor_sha256"] = "33" * 32
     cases.append(
         (
@@ -708,7 +792,7 @@ def test_foundational_prerequisites_reject_signature_digest_and_trust_attacks(
         )
     )
 
-    malleable_signature = foundational_summary()
+    malleable_signature = baseline()
     signature = bytes.fromhex(malleable_signature["signature"]["signature_hex"])
     scalar = int.from_bytes(signature[32:], "little") + RELEASE_CRYPTO._ED_L  # noqa: SLF001
     malleable_signature["signature"]["signature_hex"] = (
@@ -722,7 +806,7 @@ def test_foundational_prerequisites_reject_signature_digest_and_trust_attacks(
         )
     )
 
-    alternate_signer = foundational_summary()
+    alternate_signer = baseline()
     resign_foundational_summary(alternate_signer, seed=bytes.fromhex("2f" * 32))
     cases.append(
         (
@@ -732,7 +816,7 @@ def test_foundational_prerequisites_reject_signature_digest_and_trust_attacks(
         )
     )
 
-    wrong_fingerprint = foundational_summary()
+    wrong_fingerprint = baseline()
     wrong_fingerprint["signature"]["public_key_fingerprint_sha256"] = "44" * 32
     wrong_fingerprint["signature"]["signature_hex"] = "00" * 64
     wrong_fingerprint["signature"]["signature_hex"] = ed25519_sign(
@@ -747,7 +831,7 @@ def test_foundational_prerequisites_reject_signature_digest_and_trust_attacks(
         )
     )
 
-    zero_signature = foundational_summary()
+    zero_signature = baseline()
     zero_signature["signature"]["signature_hex"] = "00" * 64
     cases.append(
         (
@@ -757,7 +841,7 @@ def test_foundational_prerequisites_reject_signature_digest_and_trust_attacks(
         )
     )
 
-    uppercase_signature = foundational_summary()
+    uppercase_signature = baseline()
     uppercase_signature["signature"]["signature_hex"] = uppercase_signature[
         "signature"
     ]["signature_hex"].upper()

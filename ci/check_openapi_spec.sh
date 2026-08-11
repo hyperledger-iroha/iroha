@@ -380,7 +380,8 @@ Refresh the canonical manifest before syncing snapshots:
                  --output-dir <absolute-private-tmp>/openapi \
                  --unsigned-manifest \
                  --signing-payload <absolute-operator-staging>/openapi-manifest-v2.payload
-  release attach after the Ed25519 HSM signs those exact bytes:
+  release attach after the authenticated external software Ed25519 signer signs
+  those exact bytes:
                bash ci/run_openapi_generator.sh \
                  --output-dir <absolute-private-tmp>/openapi \
                  --signature-envelope <absolute-operator-staging>/openapi-manifest-v2.signature.json
@@ -388,6 +389,10 @@ Refresh the canonical manifest before syncing snapshots:
                  --version=current --latest \
                  --allowed-signers=<absolute-operator-allowlist-path> \
                  --output-dir=<absolute-private-tmp>/openapi
+The V1 release policy fixes signing_provider=authenticated_external_signer and
+signing_backend=software; successfully verified release output is
+signer_qualification=software-key-qualified. The provider boundary remains
+compatible with a later HSM adapter, which requires new HSM-backed evidence.
 Local private-key signing is intentionally unavailable; release signing is detached-only.
 For an operator release, set OPENAPI_REQUIRE_SIGNED=1 and
 OPENAPI_ALLOWED_SIGNERS_FILE=<absolute-operator-allowlist-path> when running this gate.

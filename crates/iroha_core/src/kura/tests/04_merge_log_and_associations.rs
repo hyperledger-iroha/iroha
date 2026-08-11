@@ -1023,7 +1023,7 @@ fn store_block_rejects_when_single_block_exceeds_budget() {
 
     let make_block = |message: &str, prev: Option<&SignedBlock>| -> Arc<SignedBlock> {
         let tx = TransactionBuilder::new(
-            ChainId::from("test"),
+            test_network_id(b"test"),
             SAMPLE_GENESIS_ACCOUNT_ID.to_owned(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -1216,7 +1216,7 @@ fn replace_top_block_rejects_when_replacement_exceeds_budget() {
 
     let make_block = |message: &str| -> SignedBlock {
         let tx = TransactionBuilder::new(
-            ChainId::from("test"),
+            test_network_id(b"test"),
             SAMPLE_GENESIS_ACCOUNT_ID.to_owned(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

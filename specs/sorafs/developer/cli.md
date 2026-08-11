@@ -61,8 +61,11 @@ scripts/release_sorafs_cli.sh \
 
 - Release authenticity applies to the canonical aggregate release manifest, not
   an individual content `.to` manifest.
-- The signer adapter may use PKCS#11/HSM keys; private signing material remains
-  runtime-only.
+- The signer adapter uses `signing_provider=authenticated_external_signer` with
+  exact `signing_backend=software`; private signing material remains
+  runtime-only. Verified output is `signer_qualification=software-key-qualified`.
+- The provider boundary remains compatible with a future HSM adapter, which
+  requires new HSM-backed evidence and promotion signatures.
 - The raw 32-byte public key, reviewed fingerprint, native verifier path, and
   reviewed verifier SHA256 are all mandatory. Cosign/OIDC remains a separate
   provenance layer.

@@ -1049,7 +1049,7 @@ fn prepare_tombstoned_autonomous_archive(
     let retiring_entry = extended.entry(retiring_lane).expect("retiring lane");
     let retiring_incarnation = extended_incarnations[&retiring_lane];
     let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) = autonomous_retirement_payload_for_routes(
+    let (network_id, epoch, payload) = autonomous_retirement_payload_for_routes(
         retiring_lane,
         retiring_entry.dataspace_id,
         retiring_incarnation,
@@ -1059,7 +1059,7 @@ fn prepare_tombstoned_autonomous_archive(
         &producer,
     );
     let lane_block_height = payload.origin_proposal.descriptor.lane_block_height;
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist autonomous payload before terminal retirement");
     let pending_error = kura
         .first_release_lane_retirement_admissible_for_test(
@@ -1074,7 +1074,7 @@ fn prepare_tombstoned_autonomous_archive(
         "pending autonomous payload targets a retiring lane incarnation",
     );
     let retirement = crate::kura::AutonomousLaneSlotRetirementV1::from_payload(&payload);
-    kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
+    kura.persist_autonomous_lane_slot_retirement(&retirement, network_id, epoch)
         .expect("persist exact autonomous slot retirement");
     kura.first_release_lane_retirement_admissible_for_test(
         retiring_lane,
@@ -1173,7 +1173,7 @@ fn native_amx_archive_finality(
     let height = block.header().height().get();
     assert_eq!(height, 1, "Native archive fixture uses one global block");
     let context = HeightContext {
-        chain_id: ChainId::from("native-amx-lane-archive-test"),
+        network_id: crate::sumeragi::synthetic_network_id("native-amx-lane-archive-test"),
         protocol_version: PROTOCOL_VERSION,
         height,
         epoch: 0,
@@ -1654,7 +1654,7 @@ fn install_merge_applied_retirement_work(
     let dataspace_id = DataSpaceId::new(8);
     let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let transaction = TransactionBuilder::new(
-        ChainId::from("geometry-durability-merge"),
+        crate::sumeragi::synthetic_network_id("geometry-durability-merge"),
         (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1725,7 +1725,7 @@ fn install_merge_applied_retirement_work(
                 proof_of_possession: proof_of_possession.clone(),
             })
             .collect(),
-        autonomous_chain_id_hash: Hash::new(b"geometry-durability-merge-chain"),
+        autonomous_network_id: test_network_id(b"geometry-durability-merge-genesis"),
         autonomous_epoch: 1,
         autonomous_payload_hash: Hash::new(b"geometry-durability-merge-payload"),
         entrypoint_hashes: vec![Hash::from(entrypoint_hash)],
@@ -1793,7 +1793,9 @@ fn install_merge_applied_retirement_work(
             1,
             2,
             genesis.hash(),
-            Hash::new(b"geometry-durability-merge-chain"),
+            iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                Hash::new(b"geometry-durability-merge-chain"),
+            )),
             VALIDATOR_SET_HASH_VERSION_V1,
             HashOf::new(&validator_set),
             validator_set,
@@ -1946,7 +1948,7 @@ fn geometry_lane_proposal_and_ownership(
 }
 
 fn geometry_native_amx_receipt(
-    chain_id_hash: Hash,
+    network_id: iroha_data_model::NetworkId,
     source_id: [u8; Hash::LENGTH],
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     plan: &crate::queue::RoutingPlan,
@@ -1985,7 +1987,7 @@ fn geometry_native_amx_receipt(
             view: descriptor.lane_block_view,
         },
         epoch,
-        chain_id_hash,
+        network_id,
         source_id,
         tx_entrypoint_hash: entrypoint_hash,
         plan_digest: plan.digest(),
@@ -2041,7 +2043,7 @@ fn geometry_native_amx_receipt(
     NativeAmxReceipt {
         version: 2,
         source_id,
-        chain_id_hash,
+        network_id,
         plan_digest: plan.digest(),
         lane_id: descriptor.lane_id,
         dataspace_id: descriptor.dataspace_id,
@@ -2090,11 +2092,9 @@ fn autonomous_retirement_payload_for_routes(
     participant_incarnation: Hash,
     producer: &KeyPair,
 ) -> (Hash, u64, crate::lane_consensus::LaneExecutablePayloadV1) {
-    let chain: ChainId = "geometry-retirement-autonomous"
-        .parse()
-        .expect("geometry retirement chain id");
+    let network_id = crate::sumeragi::synthetic_network_id("geometry-retirement-autonomous");
     let transaction = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2126,10 +2126,10 @@ fn autonomous_retirement_payload_for_routes(
         Hash::from(entrypoint_hash),
         producer,
     );
-    let chain_id_hash = Hash::new(chain.into_inner().as_bytes());
+    let network_id = *network_id;
     let epoch = 9;
     let receipt = geometry_native_amx_receipt(
-        chain_id_hash,
+        network_id,
         source_id,
         entrypoint_hash,
         &plan,
@@ -2157,7 +2157,7 @@ fn autonomous_retirement_payload_for_routes(
         proposal_identity_hash: Hash::new(b"geometry-retirement-proposal-identity"),
     };
     let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
-        chain_id_hash,
+        network_id,
         epoch,
         proposal,
         vec![entrypoint],
@@ -2168,5 +2168,5 @@ fn autonomous_retirement_payload_for_routes(
         producer.private_key(),
     )
     .expect("geometry autonomous retirement payload");
-    (chain_id_hash, epoch, payload)
+    (network_id, epoch, payload)
 }

@@ -1,4 +1,4 @@
-use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use mv::cell::Cell;
 
 use super::*;
@@ -442,11 +442,6 @@ fn archive_registration_replay_requires_the_exact_original_receipt() {
     let broker = AccountId::new(broker_key.public_key().clone());
     let provider = iroha_data_model::sorafs::capacity::ProviderId::new([0x33; 32]);
     world.provider_owners.insert(provider, broker.clone());
-    let state = State::new_for_testing(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
     let genesis = iroha_data_model::block::BlockHeader::new(
         std::num::NonZeroU64::new(1).expect("genesis height"),
         None,
@@ -456,6 +451,13 @@ fn archive_registration_replay_requires_the_exact_original_receipt() {
         0,
     );
     let genesis_hash = genesis.hash();
+    let state = State::new_with_chain_and_network_id_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+        iroha_data_model::ChainId::from("archive-replay-test"),
+        iroha_data_model::NetworkId::from_genesis_hash(genesis_hash),
+    );
     {
         let mut block_hashes = state.block_hashes.block();
         block_hashes.push_for_tests(genesis_hash);
@@ -473,8 +475,7 @@ fn archive_registration_replay_requires_the_exact_original_receipt() {
     let mut transaction = block.transaction();
     let commitment = retention_archive(0x34).commitment;
     let binding = MusubiSeedIngressReceiptBindingV1 {
-        chain_id: transaction.chain_id().clone(),
-        genesis_block_hash: *genesis_hash.as_ref(),
+        network_id: *transaction.network_id(),
         publisher: publisher.clone(),
         ingress_broker: broker,
         seed_provider: provider,
@@ -723,8 +724,11 @@ fn retention_archive(seed: u8) -> MusubiArchiveRecordV1 {
     let receipt_payload = MusubiSeedIngressReceiptPayloadV1 {
         version: MUSUBI_REGISTRY_VERSION_V1,
         binding: MusubiSeedIngressReceiptBindingV1 {
-            chain_id: iroha_data_model::ChainId::from("retention-test"),
-            genesis_block_hash: [seed.wrapping_add(7); 32],
+            network_id: iroha_data_model::NetworkId::from_genesis_hash(
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                    [seed.wrapping_add(7); 32],
+                )),
+            ),
             publisher: publisher.clone(),
             ingress_broker: broker,
             seed_provider: iroha_data_model::sorafs::capacity::ProviderId::new(
@@ -858,10 +862,12 @@ fn exact_release_query_fixture(
             .musubi_resolver_index
             .insert(release_id.clone(), universal_release);
     }
-    let state = State::new_for_testing(
+    let state = State::new_with_chain_and_network_id_for_testing(
         world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
+        iroha_data_model::ChainId::from("exact-release-query-test"),
+        iroha_data_model::NetworkId::from_genesis_hash(genesis_hash),
     );
     {
         let mut block_hashes = state.block_hashes.block();
@@ -890,7 +896,7 @@ fn exact_release_query_returns_paired_projections_from_one_snapshot() {
         .expect("paired response validates for its request");
     assert_eq!(response.snapshot.finalized_height, 1);
     assert_eq!(response.snapshot.index_revision, 1);
-    assert_eq!(response.chain_id, state.chain_id_ref().clone());
+    assert_eq!(response.network_id, *state.network_id_ref());
     assert_eq!(response.home_release.manifest.release, request.release);
     assert_eq!(response.universal_release.release, request.release);
 }
@@ -975,7 +981,8 @@ fn archive_location_replay_fixture(
     let mut world = World::new();
     let mut archive = retention_archive(seed);
     let genesis_hash = archive_location_genesis_header().hash();
-    archive.staging_receipt.payload.binding.genesis_block_hash = *genesis_hash.as_ref();
+    archive.staging_receipt.payload.binding.network_id =
+        iroha_data_model::NetworkId::from_genesis_hash(genesis_hash);
     let broker_keypair = KeyPair::try_from_seed(vec![seed.wrapping_add(1); 32], Algorithm::Ed25519)
         .expect("fixture ingress broker keypair");
     archive.staging_receipt.approvals[0].signature = SignatureOf::try_from_hash(
@@ -1016,8 +1023,7 @@ fn archive_location_replay_fixture(
             },
         );
     let binding = MusubiProviderBundleVerificationBindingV1 {
-        chain_id: archive.staging_receipt.payload.binding.chain_id.clone(),
-        genesis_block_hash: archive.staging_receipt.payload.binding.genesis_block_hash,
+        network_id: archive.staging_receipt.payload.binding.network_id,
         provider_id,
         completed_by: provider_owner.clone(),
         completion_authority,
@@ -1107,6 +1113,7 @@ fn archive_location_replay_fixture(
             order_id: order,
             manifest_digest: pin,
             manifest_root_cid: archive.commitment.root_cid.clone(),
+            musubi_archive: Some(archive_id),
             issued_by: authority.clone(),
             issued_epoch: 1,
             deadline_epoch: location.expires_at_epoch,
@@ -1147,9 +1154,12 @@ fn archive_location_replay_fixture(
     world.musubi_locations_by_replication_order.insert(
         order,
         MusubiReplicationOrderLocationReferenceV1 {
-            replication_order: order,
-            location: key,
-            active: true,
+            binding: MusubiReplicationOrderArchiveBindingV1::new(
+                order,
+                archive_id,
+                archive.commitment.clone(),
+            ),
+            lifecycle: MusubiReplicationOrderLocationLifecycleV1::Active(key),
         },
     );
     world
@@ -1283,11 +1293,12 @@ fn archive_location_genesis_header() -> iroha_data_model::block::BlockHeader {
 }
 
 fn archive_location_replay_state(world: World) -> State {
-    let state = State::new_with_chain_for_testing(
+    let state = State::new_with_chain_and_network_id_for_testing(
         world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
         iroha_data_model::ChainId::from("retention-test"),
+        iroha_data_model::NetworkId::from_genesis_hash(archive_location_genesis_header().hash()),
     );
     {
         let mut block_hashes = state.block_hashes.block();
@@ -1777,9 +1788,9 @@ fn exact_archive_location_replay_rejects_an_inactive_order_reverse_reference() {
                 .musubi_locations_by_replication_order
                 .view()
                 .get(&instruction.replication_order)
-                .copied()
+                .cloned()
                 .expect("fixture order reverse reference");
-            reference.active = false;
+            reference.lifecycle = MusubiReplicationOrderLocationLifecycleV1::PreLocation;
             world
                 .musubi_locations_by_replication_order
                 .insert(instruction.replication_order, reference);
@@ -2668,8 +2679,9 @@ fn resolver_pagination_truncates_at_json_budget_and_continues_after_its_tail() {
     };
     let response = MusubiResolverIndexPageV1 {
         query: query.clone(),
-        chain_id: iroha_data_model::ChainId::from("resolver-budget-test"),
-        genesis_hash: [0x91; 32],
+        network_id: iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x91; 32])),
+        ),
         items: first,
         next_cursor: Some(next_cursor.clone()),
         snapshot: page_snapshot,

@@ -915,19 +915,21 @@ mod tests {
 
     #[test]
     fn test_zksnark() {
-        let _ = tracing_subscriber::fmt()
-            .with_target(false)
-            .with_ansi(true) // no bold colour codes
-            .with_env_filter(EnvFilter::from_default_env())
-            .try_init();
+        crate::iroha_rng::with_deterministic_test_seed(0x60, || {
+            let _ = tracing_subscriber::fmt()
+                .with_target(false)
+                .with_ansi(true) // no bold colour codes
+                .with_env_filter(EnvFilter::from_default_env())
+                .try_init();
 
-        type E = crate::provider::PallasHyraxEngine;
-        type S = VegaZkSNARK<E>;
-        test_zksnark_with::<E, S>();
+            type E = crate::provider::PallasHyraxEngine;
+            type S = VegaZkSNARK<E>;
+            test_zksnark_with::<E, S>();
 
-        type E2 = crate::provider::T256HyraxEngine;
-        type S2 = VegaZkSNARK<E2>;
-        test_zksnark_with::<E2, S2>();
+            type E2 = crate::provider::T256HyraxEngine;
+            type S2 = VegaZkSNARK<E2>;
+            test_zksnark_with::<E2, S2>();
+        });
     }
 
     fn test_zksnark_with<E: Engine, S: R1CSSNARKTrait<E>>() {

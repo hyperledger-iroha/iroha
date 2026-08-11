@@ -19,11 +19,12 @@ import org.hyperledger.iroha.android.client.transport.TransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.client.ZkMerklePathResponse;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.SchemaHash;
 
 /**
- * ABI-21 Kagemusha V4 artifact streaming and capability bridge.
+ * Native bridge ABI 22 for Kagemusha ABI-21/V4 artifact streaming and capabilities.
  *
  * <p>This is the sole first-release offline-cash surface. It authenticates the opaque eight-file proof
  * artifact set and validates exact typed request/payment/acknowledgement and proof-bound membership
@@ -58,7 +59,7 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  public static final int V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 21;
+  public static final int V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 22;
   public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
   /** Mandatory sender-final peer-cash handoff/finality contract. */
   public static final String CASH_HANDOFF_CAPABILITY_V1 = "cash_handoff_v1";
@@ -772,7 +773,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static TopUpPreparation prepareTopUp(
-      final String chainId,
+      final NetworkId networkId,
       final int chainDiscriminant,
       final String assetDefinitionId,
       final String payerAccountId,
@@ -800,7 +801,7 @@ public final class KagemushaRecursiveSpendProver {
           NoteOpening locallyOwnedOpening = null;
           try {
             fields = nativePrepareTopUpV4(
-                utf8(chainId, "chainId"),
+                Objects.requireNonNull(networkId, "networkId").bytes(),
                 requireChainDiscriminant(chainDiscriminant),
                 utf8(assetDefinitionId, "assetDefinitionId"),
                 utf8(payerAccountId, "payerAccountId"),
@@ -852,7 +853,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static RecipientRequestPreparation prepareRecipientPaymentRequest(
-      final String chainId,
+      final NetworkId networkId,
       final int chainDiscriminant,
       final String assetDefinitionId,
       final KagemushaScaledAmount amount,
@@ -879,7 +880,7 @@ public final class KagemushaRecursiveSpendProver {
           NoteOpening locallyOwnedOpening = null;
           try {
             fields = nativePrepareRecipientRequestV2(
-                utf8(chainId, "chainId"),
+                Objects.requireNonNull(networkId, "networkId").bytes(),
                 requireChainDiscriminant(chainDiscriminant),
                 utf8(assetDefinitionId, "assetDefinitionId"),
                 utf8(amount.atomicUnits(), "atomicUnits"),
@@ -1119,7 +1120,7 @@ public final class KagemushaRecursiveSpendProver {
 
   /** Create the request-independent selector used to prefetch portable receiver lineage. */
   public static RecipientLineageQueryV2 createRecipientLineageQueryV2(
-      final String chainId,
+      final NetworkId networkId,
       final int chainDiscriminant,
       final String recipientAccountId,
       final String receiverDeviceId,
@@ -1131,7 +1132,7 @@ public final class KagemushaRecursiveSpendProver {
     }
     return new RecipientLineageQueryV2(
         nativeCreateRecipientLineageQueryV2(
-            utf8(chainId, "chainId"),
+            Objects.requireNonNull(networkId, "networkId").bytes(),
             requireChainDiscriminant(chainDiscriminant),
             utf8(recipientAccountId, "recipientAccountId"),
             utf8(receiverDeviceId, "receiverDeviceId"),
@@ -1245,7 +1246,7 @@ public final class KagemushaRecursiveSpendProver {
         Objects.requireNonNull(request, "request").noritoEncoded());
     requireFieldCount(fields, 14, "recipient request projection");
     return new RecipientRequestProjection(
-        canonicalText(fields[0], "chainId"),
+        NetworkId.fromBytes(requireDigest(fields[0], "networkId")),
         canonicalText(fields[1], "assetDefinitionId"),
         amount(fields[2], fields[3]),
         canonicalText(fields[4], "recipientAccountId"),
@@ -3431,7 +3432,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static final class RecipientRequestProjection {
-    private final String chainId;
+    private final NetworkId networkId;
     private final String assetDefinitionId;
     private final KagemushaScaledAmount amount;
     private final String recipientAccountId;
@@ -3446,7 +3447,7 @@ public final class KagemushaRecursiveSpendProver {
     private final byte[] digest;
 
     private RecipientRequestProjection(
-        final String chainId,
+        final NetworkId networkId,
         final String assetDefinitionId,
         final KagemushaScaledAmount amount,
         final String recipientAccountId,
@@ -3459,7 +3460,7 @@ public final class KagemushaRecursiveSpendProver {
         final byte[] receiverKeyReference,
         final byte[] receiverPublicKey,
         final byte[] digest) {
-      this.chainId = chainId;
+      this.networkId = Objects.requireNonNull(networkId, "networkId");
       this.assetDefinitionId = assetDefinitionId;
       this.amount = amount;
       this.recipientAccountId = recipientAccountId;
@@ -3474,7 +3475,7 @@ public final class KagemushaRecursiveSpendProver {
       this.digest = requireDigest(digest, "requestDigest");
     }
 
-    public String chainId() { return chainId; }
+    public NetworkId networkId() { return networkId; }
     public String assetDefinitionId() { return assetDefinitionId; }
     public KagemushaScaledAmount amount() { return amount; }
     public String recipientAccountId() { return recipientAccountId; }
@@ -4008,7 +4009,7 @@ public final class KagemushaRecursiveSpendProver {
             "cashHandoffCapability must be the exact cash_handoff_v1 contract");
       }
       if (requiredBridgeAbiVersion != REQUIRED_NATIVE_BRIDGE_ABI_VERSION) {
-        throw new IllegalArgumentException("requiredBridgeAbiVersion must be 21");
+        throw new IllegalArgumentException("requiredBridgeAbiVersion must be 22");
       }
       if (maximumHops != MAXIMUM_PEER_HOPS) {
         throw new IllegalArgumentException(
@@ -4968,14 +4969,14 @@ public final class KagemushaRecursiveSpendProver {
   private static native byte[] nativeBuildRedeemV4(byte[] requestNorito);
 
   private static native byte[][] nativePrepareRecipientRequestV2(
-      byte[] chainId, int chainDiscriminant, byte[] asset, byte[] atomicUnits, int scale, byte[] recipient,
+      byte[] networkId, int chainDiscriminant, byte[] asset, byte[] atomicUnits, int scale, byte[] recipient,
       byte[] receiverDeviceId, byte[] receiverPublicKey, byte[] requestId,
       long issuedAtMilliseconds, long expiresAtMilliseconds, byte[] spendKey, byte[] rho,
       byte[] diversifier);
   private static native byte[] nativeCreateRecipientRequestV2(byte[] payload, byte[] signature);
   private static native byte[] nativeVerifyRecipientRequestV2(byte[] request, long verifiedAtMilliseconds);
   private static native byte[] nativeCreateRecipientLineageQueryV2(
-      byte[] chainId,
+      byte[] networkId,
       int chainDiscriminant,
       byte[] recipient,
       byte[] receiverDeviceId,
@@ -5048,7 +5049,7 @@ public final class KagemushaRecursiveSpendProver {
   private static native byte[] nativeFinalizeTopUpV4(byte[] unsigned, byte[] authorization);
   private static native byte[][] nativeFinalizeRedeemV4(byte[] buildResult, byte[] authorization);
   private static native byte[][] nativePrepareTopUpV4(
-      byte[] chainId, int chainDiscriminant, byte[] assetDefinition, byte[] payer, byte[] atomicUnits, int scale,
+      byte[] networkId, int chainDiscriminant, byte[] assetDefinition, byte[] payer, byte[] atomicUnits, int scale,
       byte[] operationId, byte[] spendKey, byte[] rho, byte[] diversifier, int leafIndex,
       byte[] flattenedSiblings, byte[] directions, byte[] root,
       byte[] shieldVerifierCommitment, byte[] artifactBinding);

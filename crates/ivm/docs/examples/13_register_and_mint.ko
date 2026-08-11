@@ -4,14 +4,14 @@ seiyaku RegisterAndMint {
         // name, symbol, quantity (precision or supply depending on host), mintable flag
         let asset = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
         let symbol = "ROSE";
-        let qty = 1000;
+        let supply_scale = 1000;
         // interpretation depends on data model (example only)
         let mintable = 1;
         // 1 = mintable, 0 = fixed
         ledger::asset::register(
             asset_definition: asset,
             name: symbol,
-            scale: qty,
+            scale: supply_scale,
             mintable: mintable,
         );
         // Mint 250 ROSE to Alice

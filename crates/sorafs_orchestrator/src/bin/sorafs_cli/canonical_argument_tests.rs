@@ -338,23 +338,24 @@ fn build_pin_register_transaction_signs_exact_native_instruction_locally() {
     let manifest = sample_manifest();
     let key_pair = fixture_keypair(0x9E);
     let authority = AccountId::new(key_pair.public_key().clone());
-    let chain_id: ChainId = "fc56984b-2be7-431d-840e-21514d1883f0"
-        .parse()
-        .expect("chain id");
+    let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+        iroha_data_model::block::BlockHeader,
+    >::from_untyped_unchecked(
+        iroha_crypto::Hash::prehashed([0x9A; iroha_crypto::Hash::LENGTH]),
+    ));
 
     let transaction = build_pin_register_transaction(
-        &chain_id,
+        &network_id,
         &authority,
         key_pair.private_key(),
         &manifest,
-        99,
         None,
         None,
     )
     .expect("build signed transaction");
 
     transaction.verify_signature().expect("signature verifies");
-    assert_eq!(transaction.chain(), &chain_id);
+    assert_eq!(transaction.network_id(), Some(&network_id));
     assert_eq!(transaction.authority(), &authority);
     let iroha_data_model::transaction::Executable::Instructions(instructions) =
         transaction.instructions()
@@ -372,7 +373,6 @@ fn build_pin_register_transaction_signs_exact_native_instruction_locally() {
         register.manifest_payload,
         manifest.encode().expect("canonical manifest payload")
     );
-    assert_eq!(register.submitted_epoch, 99);
 }
 
 #[test]
@@ -385,7 +385,6 @@ fn proposal_summary_contains_register_instruction() {
         manifest_digest: &digest,
         chunk_digest_sha3: [0xCD; 32],
         chunk_plan_label: Some("plan.json"),
-        submitted_epoch: 99,
         alias_hint: Some("docs.sora.link"),
         successor_bytes: None,
     })
@@ -410,6 +409,12 @@ fn proposal_summary_contains_register_instruction() {
             .expect("register instruction")
             .is_object(),
         "register instruction serialized as object"
+    );
+    assert!(summary.get("submitted_epoch").is_none());
+    assert!(
+        summary["register_instruction"]
+            .get("submitted_epoch")
+            .is_none()
     );
 }
 

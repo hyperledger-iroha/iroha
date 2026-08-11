@@ -77,10 +77,12 @@
         {
           "Register": {
             "AssetDefinition": {
+              "balance_scope_policy": "Global",
               "id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "logo": null,
               "metadata": {},
               "mintable": "Infinitely",
+              "owning_domain": null,
               "spec": {
                 "scale": null
               },
@@ -108,10 +110,12 @@
         {
           "Register": {
             "AssetDefinition": {
+              "balance_scope_policy": "Global",
               "id": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M",
               "logo": null,
               "metadata": {},
               "mintable": "Infinitely",
+              "owning_domain": null,
               "spec": {
                 "scale": null
               },
@@ -131,17 +135,12 @@
         {
           "Register": {
             "AssetDefinition": {
-              "confidential_policy": {
-                "mode": "Convertible",
-                "pedersen_params_id": null,
-                "pending_transition": null,
-                "poseidon_params_id": null,
-                "vk_set_hash": null
-              },
+              "balance_scope_policy": "Global",
               "id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
               "logo": null,
               "metadata": {},
               "mintable": "Infinitely",
+              "owning_domain": null,
               "spec": {
                 "scale": null
               },
@@ -159,6 +158,7 @@
         {
           "Register": {
             "AssetDefinition": {
+              "balance_scope_policy": "Global",
               "id": "7ZepsJTHCVLKsrFFNZGSRGZgvBhv",
               "logo": null,
               "metadata": {
@@ -167,6 +167,7 @@
                 "display_name": "Digital Solomon Islands Dollar"
               },
               "mintable": "Infinitely",
+              "owning_domain": null,
               "spec": {
                 "scale": 2
               },
@@ -201,10 +202,12 @@
         {
           "Register": {
             "AssetDefinition": {
+              "balance_scope_policy": "Global",
               "id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
               "logo": null,
               "metadata": {},
               "mintable": "Infinitely",
+              "owning_domain": null,
               "spec": {
                 "scale": 9
               },
@@ -352,6 +355,7 @@
                 "sponsor": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
                 "name": "cbsi_web"
               },
+              "payout_account": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
               "lifecycle": {
                 "state": "staged"
               }

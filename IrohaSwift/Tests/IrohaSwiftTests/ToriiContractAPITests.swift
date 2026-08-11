@@ -28,7 +28,7 @@ final class ToriiContractAPITests: XCTestCase {
             request: detachedRequest(),
             contractAddress: contractAddress,
             codeHashHex: codeHash,
-            chainId: "contract-test"
+            networkId: TestNetworkIds.canonical
         )
     }
     private var txHash: String {
@@ -49,6 +49,9 @@ final class ToriiContractAPITests: XCTestCase {
         return ToriiClient(
             baseURL: URL(string: "https://contracts.example")!,
             session: URLSession(configuration: configuration),
+            localSigningContext: ToriiLocalSigningContext(
+                networkId: TestNetworkIds.canonical
+            ),
             currentTimeMilliseconds: { 4_102_444_801_000 }
         )
     }
@@ -334,6 +337,7 @@ final class ToriiContractAPITests: XCTestCase {
         let draft = try await client.prepareDetachedContractCall(detachedRequest())
         XCTAssertEqual(draft.transactionPayload, contractTransactionPayload)
         XCTAssertEqual(draft.signingMessage, IrohaHash.hash(contractTransactionPayload))
+        XCTAssertEqual(draft.networkId, TestNetworkIds.canonical)
         XCTAssertEqual(draft.resolvedContractAddress, contractAddress)
         let submitted = try await client.submitDetachedContractCall(
             draft,
@@ -439,6 +443,16 @@ final class ToriiContractAPITests: XCTestCase {
             { $0["code_hash_hex"] = "0x" + self.codeHash },
             { $0["abi_hash_hex"] = self.abiHash.uppercased() },
             { $0["transaction_ttl_ms"] = 0 },
+            {
+                let payload = try! CanonicalUnsignedTransactionTestSupport.contractPayload(
+                    request: self.detachedRequest(),
+                    contractAddress: self.contractAddress,
+                    codeHashHex: self.codeHash,
+                    networkId: TestNetworkIds.other
+                )
+                $0["transaction_payload_b64"] = payload.base64EncodedString()
+                $0["signing_message_b64"] = IrohaHash.hash(payload).base64EncodedString()
+            },
             {
                 var receipt = $0["operation_receipt"] as! [String: Any]
                 receipt["transport"] = "legacy"

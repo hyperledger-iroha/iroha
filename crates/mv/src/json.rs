@@ -36,6 +36,9 @@ pub trait ValueSeed: Clone {
 
     /// Convert a Norito JSON `Value` into `Self::Value`.
     fn parse_value(&self, value: json::Value) -> Result<Self::Value, json::Error>;
+
+    /// Decode one value directly from the streaming Norito JSON parser.
+    fn parse_parser(&self, parser: &mut json::Parser<'_>) -> Result<Self::Value, json::Error>;
 }
 
 /// Helper trait for converting storage keys to and from their JSON string representation.
@@ -288,7 +291,7 @@ where
     }
 }
 
-/// Value seed that delegates to `JsonDeserialize` via the in-memory DOM.
+/// Value seed that delegates directly to `JsonDeserialize`.
 #[derive(Debug, Default)]
 pub struct ValueFromJson<T>(PhantomData<T>);
 
@@ -315,6 +318,10 @@ where
 
     fn parse_value(&self, value: json::Value) -> Result<Self::Value, json::Error> {
         json::value::from_value(value)
+    }
+
+    fn parse_parser(&self, parser: &mut json::Parser<'_>) -> Result<Self::Value, json::Error> {
+        T::json_deserialize(parser)
     }
 }
 
@@ -349,15 +356,13 @@ where
                     if revert.is_some() {
                         return Err(json::MapVisitor::duplicate_field("revert"));
                     }
-                    let value = map.parse_value::<json::Value>()?;
-                    revert = Some(self.parse_revert(value)?);
+                    revert = Some(map.parse_value_with_parser(|parser| self.parse_revert(parser))?);
                 }
                 "blocks" => {
                     if blocks.is_some() {
                         return Err(json::MapVisitor::duplicate_field("blocks"));
                     }
-                    let value = map.parse_value::<json::Value>()?;
-                    blocks = Some(self.parse_blocks(value)?);
+                    blocks = Some(map.parse_value_with_parser(|parser| self.parse_blocks(parser))?);
                 }
                 other => {
                     return Err(json::MapVisitor::unknown_field(other));
@@ -377,43 +382,44 @@ where
 
     fn parse_revert(
         &self,
-        value: json::Value,
+        parser: &mut json::Parser<'_>,
     ) -> Result<BTreeMap<KS::Key, Option<VS::Value>>, json::Error> {
-        let json::Value::Object(map) = value else {
-            return Err(json::Error::Message("expected object for `revert`".into()));
-        };
-
+        let mut map = json::MapVisitor::new(parser)?;
         let mut out = BTreeMap::new();
-        for (key_str, raw_value) in map.into_iter() {
+        while let Some(key_ref) = map.next_key()? {
+            let key_str = key_ref.as_str().to_owned();
             let key = self.kseed.parse_key(&key_str)?;
-            let parsed = if matches!(raw_value, json::Value::Null) {
-                None
-            } else {
-                Some(self.vseed.parse_value(raw_value)?)
-            };
+            let parsed = map.parse_value_with_parser(|parser| {
+                parser.skip_ws();
+                if parser.try_consume_null()? {
+                    Ok(None)
+                } else {
+                    self.vseed.parse_parser(parser).map(Some)
+                }
+            })?;
             if out.insert(key, parsed).is_some() {
                 return Err(json::Error::DuplicateField { field: key_str });
             }
         }
+        map.finish()?;
         Ok(out)
     }
 
     fn parse_blocks(
         &self,
-        value: json::Value,
+        parser: &mut json::Parser<'_>,
     ) -> Result<BptreeMap<KS::Key, VS::Value>, json::Error> {
-        let json::Value::Object(map) = value else {
-            return Err(json::Error::Message("expected object for `blocks`".into()));
-        };
-
+        let mut map = json::MapVisitor::new(parser)?;
         let mut entries = BTreeMap::new();
-        for (key_str, raw_value) in map.into_iter() {
+        while let Some(key_ref) = map.next_key()? {
+            let key_str = key_ref.as_str().to_owned();
             let key = self.kseed.parse_key(&key_str)?;
-            let value = self.vseed.parse_value(raw_value)?;
+            let value = map.parse_value_with_parser(|parser| self.vseed.parse_parser(parser))?;
             if entries.insert(key, value).is_some() {
                 return Err(json::Error::DuplicateField { field: key_str });
             }
         }
+        map.finish()?;
         Ok(BptreeMap::from_iter(entries))
     }
 }
@@ -445,15 +451,21 @@ where
                     if revert.is_some() {
                         return Err(json::MapVisitor::duplicate_field("revert"));
                     }
-                    let value = map.parse_value::<json::Value>()?;
-                    revert = Some(self.parse_optional(value)?);
+                    revert = Some(map.parse_value_with_parser(|parser| {
+                        parser.skip_ws();
+                        if parser.try_consume_null()? {
+                            Ok(None)
+                        } else {
+                            self.seed.parse_parser(parser).map(Some)
+                        }
+                    })?);
                 }
                 "blocks" => {
                     if blocks.is_some() {
                         return Err(json::MapVisitor::duplicate_field("blocks"));
                     }
-                    let value = map.parse_value::<json::Value>()?;
-                    blocks = Some(self.seed.parse_value(value)?);
+                    blocks =
+                        Some(map.parse_value_with_parser(|parser| self.seed.parse_parser(parser))?);
                 }
                 other => {
                     return Err(json::MapVisitor::unknown_field(other));
@@ -469,14 +481,6 @@ where
             revert: EbrCell::new(revert),
             blocks: EbrCell::new(blocks),
         })
-    }
-
-    fn parse_optional(&self, value: json::Value) -> Result<Option<S::Value>, json::Error> {
-        if matches!(value, json::Value::Null) {
-            Ok(None)
-        } else {
-            self.seed.parse_value(value).map(Some)
-        }
     }
 }
 
@@ -646,6 +650,48 @@ mod tests {
             block.commit();
         }
         storage
+    }
+
+    #[derive(Clone, Copy)]
+    struct StreamingOnlyValueSeed;
+
+    impl ValueSeed for StreamingOnlyValueSeed {
+        type Value = i32;
+
+        fn parse_value(&self, _value: json::Value) -> Result<Self::Value, json::Error> {
+            Err(json::Error::Message(
+                "streaming-only test seed received an owned JSON value".to_owned(),
+            ))
+        }
+
+        fn parse_parser(&self, parser: &mut json::Parser<'_>) -> Result<Self::Value, json::Error> {
+            i32::json_deserialize(parser)
+        }
+    }
+
+    #[test]
+    fn storage_and_cell_seeded_decode_stream_values_directly() {
+        let mut parser =
+            json::Parser::new(r#"{"revert":{"stale":3,"gone":null},"blocks":{"live":7}}"#);
+        let storage = StorageSeeded {
+            kseed: CodecKeySeed::<String>::new(),
+            vseed: StreamingOnlyValueSeed,
+        }
+        .deserialize(&mut parser)
+        .expect("storage values decode through the streaming seed");
+        parser.skip_ws();
+        assert!(parser.eof());
+        assert_eq!(storage.view().get("live"), Some(&7));
+
+        let mut parser = json::Parser::new(r#"{"revert":1,"blocks":2}"#);
+        let cell = CellSeeded {
+            seed: StreamingOnlyValueSeed,
+        }
+        .deserialize(&mut parser)
+        .expect("cell values decode through the streaming seed");
+        parser.skip_ws();
+        assert!(parser.eof());
+        assert_eq!(*cell.view(), 2);
     }
 
     #[test]

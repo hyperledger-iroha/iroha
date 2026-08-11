@@ -74,7 +74,7 @@ expectations.
 | Connect aliases & sessions | Rust nodes do not hash Connect session metadata. | `session_alias_hash` + `torii_domain_hash` emitted; alias secrets stored only in Norito overrides. | Show `swift.connect.session_event` entries and reference §“Connect telemetry” in `telemetry_redaction.md`. |
 | Device/profile metadata | Rust exports raw model identifiers. | Buckets (`simulator`, `iphone_small`, `iphone_large`, `ipad`, `mac_catalyst`) with SDK major version only. | Cite device profile mapping in `specs/sdk/mobile_device_profile_alignment.md` and screenshots captured during Lab Scenario C. |
 | Overrides & redaction failures | Rust lacks override ledger. | Overrides Norito-signed via `scripts/swift_status_export.py telemetry-override …`; failures recorded as `swift.telemetry.redaction.failure`. | Walk through override log sample + support playbook guidance. |
-| Offline queue telemetry | Rust nodes expose pending queue depth + Torii retries. | `swift.offline.queue_depth` gauges per queue kind (`connect`, `pipeline`) plus hashed authority for correlation. | Replay Scenario D to show parity between Android + Swift queue dashboards. |
+| Ambiguous submission telemetry | Rust nodes expose pipeline status by transaction hash. | `swift.torii.http.ambiguous` records a truncated hash for one-shot outcome reconciliation; pipeline bodies are never retried or automatically queued. | Run Scenario D to show the ambiguous event followed by a hash/status resolution and no second POST. |
 
 ## Lab Rehearsal Plan
 
@@ -90,9 +90,9 @@ Swift-specific instructions live in
    entries plus exporter counters.
 3. **Scenario C — Exporter outage:** Pause the local OTEL collector, capture
    buffered queue telemetry, and verify alert suppression/resolution flow.
-4. **Scenario D — Offline queue replay:** Run `IrohaSwift` pending queue replay
-   tests, submit demo transfers, enable airplane mode on simulator, then confirm
-   queue drains and metrics update when connectivity returns.
+4. **Scenario D — One-shot ambiguity:** Submit a demo transfer while inducing a
+   transport break, confirm only one POST occurred, then reconcile its hash through
+   pipeline status without draining or replaying a queue.
 5. **Scenario E — Connect session fault:** Inject `connect.frame_latency`
    regressions using the mock dApp harness, observe alerting, and capture
    dashboards/screenshots under `readiness/screenshots/`.

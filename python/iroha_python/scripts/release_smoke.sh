@@ -108,7 +108,7 @@ import iroha_python as sdk
 
 print(f"iroha_python version: {sdk.__version__}")
 assert hasattr(sdk, "ToriiClient")
-assert sdk.PRIVACY_REQUIRED_BRIDGE_ABI_VERSION == 21
+assert sdk.PRIVACY_REQUIRED_BRIDGE_ABI_VERSION == 22
 assert sdk.privacy_bridge_abi_version() == sdk.PRIVACY_REQUIRED_BRIDGE_ABI_VERSION
 assert sdk.is_privacy_native_available() is True
 catalog = sdk.privacy_compiled_profile_catalog_v1()
@@ -133,6 +133,6 @@ TWINE_USERNAME="__token__" TWINE_PASSWORD="pypi-dry-run-token" \
 
 # This harness deliberately performs no signing. Stage reviewed release
 # candidates through scripts/release_manifest_signing.py and the protected
-# external Ed25519/HSM workflow after this smoke test passes.
+# external software Ed25519 workflow after this smoke test passes.
 
 printf '%s\n' "${WHEEL}"

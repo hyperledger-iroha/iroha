@@ -10,6 +10,7 @@ import org.hyperledger.iroha.android.connect.ConnectProtocolException;
 import org.hyperledger.iroha.android.multisig.MultisigSpec;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
+import org.hyperledger.iroha.android.testing.TestNetworkIds;
 import org.junit.Test;
 
 /** Regression tests for strict encoded-only account/asset literal handling. */
@@ -91,13 +92,26 @@ public final class AccountLiteralHardCutTests {
     final byte[] sessionId = fill(0x10, 32);
     final byte[] appPublic = fill(0x20, 32);
     final byte[] walletPublic = fill(0x30, 32);
+    final byte[] relayAuth = fill(0x55, 32);
     final String account = sampleI105(0x44);
 
     final byte[] preimage =
-        ConnectCrypto.buildApprovePreimage(sessionId, appPublic, walletPublic, account, null, null);
+        ConnectCrypto.buildApprovePreimage(
+            TestNetworkIds.canonical(),
+            sessionId,
+            appPublic,
+            walletPublic,
+            account,
+            null,
+            null,
+            relayAuth);
     final ByteBuffer preimageReader = ByteBuffer.wrap(preimage).order(ByteOrder.LITTLE_ENDIAN);
     assert "iroha-connect|approve|v1".equals(readTaggedUtf8(preimageReader, "domain"))
         : "preimage domain mismatch";
+    assert Arrays.equals(TestNetworkIds.canonical().bytes(), readTagged(preimageReader, "network_id"))
+        : "preimage network id mismatch";
+    assert readTagged(preimageReader, "constraints").length == 32
+        : "preimage constraints hash mismatch";
     assert Arrays.equals(sessionId, readTagged(preimageReader, "sid"))
         : "preimage session id mismatch";
     assert Arrays.equals(appPublic, readTagged(preimageReader, "app_pk"))
@@ -106,11 +120,20 @@ public final class AccountLiteralHardCutTests {
         : "preimage wallet key mismatch";
     assert account.equals(readTaggedUtf8(preimageReader, "account_id"))
         : "preimage account mismatch";
+    assert Arrays.equals(relayAuth, readTagged(preimageReader, "relay_auth"))
+        : "preimage relay auth mismatch";
     assert !preimageReader.hasRemaining() : "preimage has unexpected trailing fields";
 
     try {
       ConnectCrypto.buildApprovePreimage(
-          sessionId, appPublic, walletPublic, account + "@banka.dataspace", null, null);
+          TestNetworkIds.canonical(),
+          sessionId,
+          appPublic,
+          walletPublic,
+          account + "@banka.dataspace",
+          null,
+          null,
+          relayAuth);
       throw new AssertionError("expected ConnectProtocolException");
     } catch (final ConnectProtocolException expected) {
       assert expected.getMessage().contains("canonical I105 encoded")

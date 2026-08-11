@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
-  ToriiClient,
+  LocalSigningContext,
+  NetworkId,
+  ToriiClient as BaseToriiClient,
   ValidationErrorCode,
   canonicalRequestSignatureMessage,
   generateKeyPair,
@@ -12,6 +14,14 @@ import {
 import { AccountAddress } from "../src/address.js";
 
 const AUTH_ALIAS = "operator-1@hbl.sbp";
+const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
+const LOCAL_SIGNING_CONTEXT = new LocalSigningContext(NETWORK_ID);
+
+class ToriiClient extends BaseToriiClient {
+  constructor(baseUrl, options = {}) {
+    super(baseUrl, { localSigningContext: LOCAL_SIGNING_CONTEXT, ...options });
+  }
+}
 
 test("ToriiClient emits an exact ASCII alias credential and a verifiable signature", async () => {
   const captured = [];
@@ -42,6 +52,7 @@ test("ToriiClient emits an exact ASCII alias credential and a verifiable signatu
   const timestampMs = Number(init.headers["X-Iroha-Timestamp-Ms"]);
   const nonce = init.headers["X-Iroha-Nonce"];
   const message = canonicalRequestSignatureMessage({
+    networkId: NETWORK_ID,
     method: init.method,
     path: parsed.pathname,
     query: parsed.search ? parsed.search.slice(1) : "",

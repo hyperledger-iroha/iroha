@@ -49,7 +49,7 @@ use iroha::{
     data_model::{prelude::*, transaction::IvmBytecode},
 };
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_torii_shared::{ErrorEnvelope, FeeQuoteResponse};
 use std::num::NonZeroU64;
 use thiserror::Error;
@@ -1538,6 +1538,12 @@ fn apply_transaction_overrides(config: &mut Config, raw: &toml::Value) {
 
 fn try_fallback_config() -> Result<Config> {
     let chain = ChainId::from("offline-cli");
+    // Offline-only commands still share the complete client configuration type.
+    // Use an explicit sentinel that cannot authenticate a request to a deployed
+    // network; commands allowed to use this fallback never perform network I/O.
+    let network_id = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"iroha:offline-cli:no-network:v1"),
+    ));
     let seed = b"iroha-cli-offline-fallback-ed25519-v1".to_vec();
     let key_pair = KeyPair::try_from_seed(seed, Algorithm::Ed25519)
         .wrap_err("failed to derive offline fallback Ed25519 key pair")?;
@@ -1554,6 +1560,7 @@ fn try_fallback_config() -> Result<Config> {
     );
     Ok(Config {
         chain,
+        network_id,
         account,
         account_chain_discriminant: defaults::common::chain_discriminant(),
         key_pair,
@@ -1588,6 +1595,7 @@ static WORKSPACE_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
 fn config_to_json(config: &Config) -> Result<norito::json::Value> {
     json_utils::json_object(vec![
         ("chain", json_utils::json_value(&config.chain)?),
+        ("network_id", json_utils::json_value(&config.network_id)?),
         ("account", json_utils::json_value(&config.account)?),
         (
             "account_chain_discriminant",
@@ -2691,39 +2699,13 @@ mod asset {
     }
 
     mod definition {
-        use std::str::FromStr;
-
-        use clap::ValueEnum;
         use iroha::{
-            crypto::Hash,
-            data_model::asset::{
-                AssetDefinition, AssetDefinitionAlias, AssetDefinitionId,
-                definition::{AssetConfidentialPolicy, ConfidentialPolicyMode},
-            },
+            data_model::asset::{AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
             data_model::sorafs_uri::SorafsUri,
         };
         use iroha_primitives::numeric::MAX_DECIMAL_SCALE;
 
         use super::*;
-
-        #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-        pub enum ConfidentialPolicyModeArg {
-            TransparentOnly,
-            ShieldedOnly,
-            Convertible,
-        }
-
-        impl From<ConfidentialPolicyModeArg> for ConfidentialPolicyMode {
-            fn from(value: ConfidentialPolicyModeArg) -> Self {
-                match value {
-                    ConfidentialPolicyModeArg::TransparentOnly => {
-                        ConfidentialPolicyMode::TransparentOnly
-                    }
-                    ConfidentialPolicyModeArg::ShieldedOnly => ConfidentialPolicyMode::ShieldedOnly,
-                    ConfidentialPolicyModeArg::Convertible => ConfidentialPolicyMode::Convertible,
-                }
-            }
-        }
 
         fn numeric_spec_from_scale(scale: Option<u32>) -> Result<NumericSpec> {
             scale.map_or_else(
@@ -2777,12 +2759,15 @@ mod asset {
                         context.print_data(&entry)
                     }
                     Register(args) => {
-                        let policy = confidential_policy_from_args(&args)
-                            .wrap_err("invalid confidential policy arguments")?;
                         let alias = register_alias_from_args(&args)?;
                         let spec = numeric_spec_from_scale(args.scale)?;
-                        let mut entry =
-                            AssetDefinition::new(args.id, args.name, spec, iroha_data_model::asset::AssetBalancePolicy::Global, None);
+                        let mut entry = AssetDefinition::new(
+                            args.id,
+                            args.name,
+                            spec,
+                            iroha_data_model::asset::AssetBalancePolicy::Global,
+                            None,
+                        );
                         if let Some(description) = args.description {
                             entry = entry.with_description(Some(description));
                         }
@@ -2795,7 +2780,6 @@ mod asset {
                         if args.mint_once {
                             entry = entry.mintable_once();
                         }
-                        entry = entry.confidential_policy(policy);
                         let instruction = iroha::data_model::isi::Register::asset_definition(entry);
                         context
                             .finish([instruction])
@@ -2860,22 +2844,6 @@ mod asset {
             /// Numeric scale of the asset. No value means unconstrained.
             #[arg(short, long)]
             pub scale: Option<u32>,
-            /// Confidential policy mode for this asset definition.
-            #[arg(
-                long,
-                value_enum,
-                default_value_t = ConfidentialPolicyModeArg::TransparentOnly
-            )]
-            pub confidential_mode: ConfidentialPolicyModeArg,
-            /// Hex-encoded hash summarising the expected verifying key set.
-            #[arg(long)]
-            pub confidential_vk_set_hash: Option<String>,
-            /// Poseidon parameter set identifier expected for confidential proofs.
-            #[arg(long)]
-            pub confidential_poseidon_params: Option<u32>,
-            /// Pedersen parameter set identifier expected for confidential commitments.
-            #[arg(long)]
-            pub confidential_pedersen_params: Option<u32>,
         }
 
         #[derive(clap::Args, Debug)]
@@ -2990,28 +2958,6 @@ mod asset {
             Ok(builder)
         }
 
-        fn confidential_policy_from_args(args: &Register) -> Result<AssetConfidentialPolicy> {
-            let mode = ConfidentialPolicyMode::from(args.confidential_mode);
-            let vk_set_hash = args
-                .confidential_vk_set_hash
-                .as_deref()
-                .map(parse_vk_set_hash)
-                .transpose()?;
-            Ok(AssetConfidentialPolicy {
-                mode,
-                vk_set_hash,
-                poseidon_params_id: args.confidential_poseidon_params,
-                pedersen_params_id: args.confidential_pedersen_params,
-                pending_transition: None,
-            })
-        }
-
-        fn parse_vk_set_hash(input: &str) -> Result<Hash> {
-            let trimmed = input.trim();
-            Hash::from_str(trimmed)
-                .wrap_err_with(|| format!("invalid hash literal `{trimmed}` for vk-set hash"))
-        }
-
         fn register_alias_from_args(args: &Register) -> Result<Option<AssetDefinitionAlias>> {
             match (&args.alias, &args.alias_domain, &args.alias_dataspace) {
                 (Some(alias), None, None) => Ok(Some(alias.clone())),
@@ -3064,7 +3010,6 @@ mod asset {
         #[cfg(test)]
         mod tests {
             use super::*;
-            use iroha::data_model::asset::definition::ConfidentialPolicyMode;
 
             fn base_register_args() -> Register {
                 Register {
@@ -3080,10 +3025,6 @@ mod asset {
                     logo: None,
                     mint_once: false,
                     scale: None,
-                    confidential_mode: ConfidentialPolicyModeArg::TransparentOnly,
-                    confidential_vk_set_hash: None,
-                    confidential_poseidon_params: None,
-                    confidential_pedersen_params: None,
                 }
             }
 
@@ -3115,43 +3056,6 @@ mod asset {
                         .to_string()
                         .contains(&format!("between 0 and {MAX_DECIMAL_SCALE}")),
                     "{error:?}"
-                );
-            }
-
-            #[test]
-            fn confidential_policy_defaults_to_transparent() {
-                let args = base_register_args();
-                let policy = confidential_policy_from_args(&args).expect("policy should build");
-                assert_eq!(policy.mode, ConfidentialPolicyMode::TransparentOnly);
-                assert!(policy.vk_set_hash.is_none());
-                assert!(policy.poseidon_params_id.is_none());
-                assert!(policy.pedersen_params_id.is_none());
-            }
-
-            #[test]
-            fn confidential_policy_parses_hash_and_params() {
-                let mut args = base_register_args();
-                args.confidential_mode = ConfidentialPolicyModeArg::ShieldedOnly;
-                let hash = Hash::new(b"vk-digest");
-                args.confidential_vk_set_hash = Some(hash.to_string());
-                args.confidential_poseidon_params = Some(7);
-                args.confidential_pedersen_params = Some(9);
-
-                let policy = confidential_policy_from_args(&args).expect("policy should build");
-                assert_eq!(policy.mode, ConfidentialPolicyMode::ShieldedOnly);
-                assert_eq!(policy.vk_set_hash, Some(hash));
-                assert_eq!(policy.poseidon_params_id, Some(7));
-                assert_eq!(policy.pedersen_params_id, Some(9));
-            }
-
-            #[test]
-            fn confidential_policy_rejects_invalid_hash() {
-                let mut args = base_register_args();
-                args.confidential_vk_set_hash = Some("not-a-hash".to_string());
-                let err = confidential_policy_from_args(&args).expect_err("must fail");
-                assert!(
-                    err.to_string().contains("invalid hash literal"),
-                    "unexpected error: {err}"
                 );
             }
 
@@ -4942,14 +4846,10 @@ mod query {
             std::io::stdin().read_to_string(&mut buf)?;
             let envelope: QueryEnvelopeJson =
                 norito::json::from_str(&buf).wrap_err("decode query envelope")?;
-            let with_auth = envelope
-                .into_signed_request(client.account.clone())
+            let request = envelope
+                .into_request()
                 .map_err(|err| eyre!(format!("invalid query JSON: {err}")))?;
-            let signed = with_auth
-                .try_sign(&client.key_pair)
-                .wrap_err("sign query request")?;
-            let payload = norito::codec::Encode::encode(&signed);
-            let resp = client.execute_signed_query_raw(&payload)?;
+            let resp = client.execute_query_request(request)?;
             match resp {
                 iroha::data_model::query::QueryResponse::Singular(out) => context.print_data(&out),
                 iroha::data_model::query::QueryResponse::Iterable(out) => context.print_data(&out),
@@ -4966,7 +4866,7 @@ mod query {
 
     impl Run for ContinueArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            use iroha::data_model::query::{QueryRequest, QueryRequestWithAuthority};
+            use iroha::data_model::query::QueryRequest;
             let client = context.client_from_config();
             let bytes = decode_base64_or_hex(
                 &self.cursor,
@@ -4975,16 +4875,8 @@ mod query {
             )?;
             let cursor: iroha::data_model::query::parameters::ForwardCursor =
                 norito::decode_from_bytes(&bytes).wrap_err("decode ForwardCursor")?;
-            let req = QueryRequest::Continue(cursor);
-            let with_auth = QueryRequestWithAuthority {
-                authority: client.account.clone(),
-                request: req,
-            };
-            let signed = with_auth
-                .try_sign(&client.key_pair)
-                .wrap_err("sign query continuation request")?;
-            let payload = norito::codec::Encode::encode(&signed);
-            let resp = client.execute_signed_query_raw(&payload)?;
+            let request = QueryRequest::Continue(cursor);
+            let resp = client.execute_query_request(request)?;
             match resp {
                 iroha::data_model::query::QueryResponse::Singular(out) => context.print_data(&out),
                 iroha::data_model::query::QueryResponse::Iterable(out) => context.print_data(&out),
@@ -5977,20 +5869,10 @@ mod trigger {
                     "block_height",
                     json_utils::json_value(&status.block_height)?,
                 ));
-                pairs.push((
-                    "rejection_reason",
-                    json_utils::json_value(&status.rejection_reason)?,
-                ));
                 pairs.push(("scope", json_utils::json_value(&status.scope)?));
                 pairs.push((
                     "resolved_from",
                     json_utils::json_value(&status.resolved_from)?,
-                ));
-                pairs.push(("summary", json_utils::json_value(&status.summary)?));
-                pairs.push(("diagnostics", json_utils::json_value(&status.diagnostics)?));
-                pairs.push((
-                    "trigger_completions",
-                    json_utils::json_value(&status.trigger_completions)?,
                 ));
                 if self.trace {
                     let trace = if let Some(height) = status.block_height {
@@ -7365,13 +7247,15 @@ mod settlement {
         isi::{
             InstructionBox,
             settlement::{
-                DvpIsi, FxCorridorPolicy, FxCorridorSource, PvpIsi, SetFxCorridorPolicy,
-                SettleFxCorridor, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
-                SettlementInstructionBox, SettlementLeg, SettlementPlan,
+                DvpIsi, FundFxCorridorEscrow, FxCorridorOracleEvidence, FxCorridorPolicy, PvpIsi,
+                RefundFxCorridorEscrow, SetFxCorridorPolicy, SettleFxCorridor, SettlementAtomicity,
+                SettlementExecutionOrder, SettlementId, SettlementInstructionBox, SettlementLeg,
+                SettlementPlan,
             },
         },
         metadata::Metadata,
         nexus::DataSpaceId,
+        oracle::{FeedConfigVersion, FeedEvent, FeedId},
         prelude::{AssetDefinitionId, Name},
         query::settlement::prelude::{FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry},
     };
@@ -7384,6 +7268,10 @@ mod settlement {
         Pvp(PvpArgs),
         /// Register or replace a governed native FX corridor policy
         SetFxCorridorPolicy(SetFxCorridorPolicyArgs),
+        /// Fund a corridor's isolated reserve from its immutable owner
+        FundFxCorridorEscrow(FxCorridorEscrowArgs),
+        /// Refund an inactive corridor reserve to its immutable owner
+        RefundFxCorridorEscrow(FxCorridorEscrowArgs),
         /// Execute one policy-backed native FX corridor settlement
         SettleFxCorridor(SettleFxCorridorArgs),
         /// Read one governed native FX corridor policy
@@ -7392,20 +7280,14 @@ mod settlement {
         ListFxCorridorPolicies,
     }
 
-    #[derive(Clone, Copy, Debug, ValueEnum)]
-    pub enum FxCorridorSourceMode {
-        /// Debit one fixed policy account; that account must authorize settlement.
-        FixedAccount,
-        /// Debit the signed transaction authority without a corridor-settle grant.
-        TransactionAuthority,
-    }
-
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             match self {
                 Command::Dvp(args) => args.run(context),
                 Command::Pvp(args) => args.run(context),
                 Command::SetFxCorridorPolicy(args) => args.run(context),
+                Command::FundFxCorridorEscrow(args) => args.run_fund(context),
+                Command::RefundFxCorridorEscrow(args) => args.run_refund(context),
                 Command::SettleFxCorridor(args) => args.run(context),
                 Command::GetFxCorridorPolicy(args) => args.run(context),
                 Command::ListFxCorridorPolicies => {
@@ -7426,27 +7308,18 @@ mod settlement {
         /// Monotonic policy revision (first revision is 1)
         #[arg(long)]
         pub revision: u64,
+        /// Immutable owner that funds reserve liquidity and receives source currency
+        #[arg(long)]
+        pub owner: String,
         /// Private dataspace holding the source balance
         #[arg(long)]
         pub source_dataspace: DataSpaceId,
-        /// Select the source-account resolution policy.
-        #[arg(long, value_enum)]
-        pub source_mode: FxCorridorSourceMode,
-        /// Fixed account funding the source leg (required only in fixed-account mode).
-        #[arg(long)]
-        pub source_account: Option<String>,
         /// Source-currency asset definition
         #[arg(long)]
         pub source_asset: AssetDefinitionId,
-        /// Fixed account receiving collected source currency
-        #[arg(long)]
-        pub source_sink: String,
         /// Private dataspace holding the destination reserve
         #[arg(long)]
         pub destination_dataspace: DataSpaceId,
-        /// Fixed reserve funding destination payouts
-        #[arg(long)]
-        pub destination_reserve: String,
         /// Destination-currency asset definition
         #[arg(long)]
         pub destination_asset: AssetDefinitionId,
@@ -7457,12 +7330,30 @@ mod settlement {
             value_parser = parse_domain_id_literal
         )]
         pub allowed_destination_alias_domains: Vec<DomainId>,
-        /// Destination/source rate numerator
+        /// Governed oracle feed supplying the destination/source rate
         #[arg(long)]
-        pub rate_numerator: u64,
-        /// Destination/source rate denominator
+        pub oracle_feed_id: FeedId,
+        /// Maximum accepted oracle-event age in milliseconds
         #[arg(long)]
-        pub rate_denominator: u64,
+        pub max_oracle_age_ms: u64,
+        /// Maximum source amount per settlement
+        #[arg(long)]
+        pub max_source_amount_per_settlement: iroha_primitives::numeric::Quantity,
+        /// Maximum destination amount per settlement
+        #[arg(long)]
+        pub max_destination_amount_per_settlement: iroha_primitives::numeric::Quantity,
+        /// Fixed velocity-window length in milliseconds
+        #[arg(long)]
+        pub velocity_window_ms: u64,
+        /// Maximum settlements per velocity window
+        #[arg(long)]
+        pub max_settlements_per_window: u64,
+        /// Maximum source amount per velocity window
+        #[arg(long)]
+        pub max_source_amount_per_window: iroha_primitives::numeric::Quantity,
+        /// Maximum destination amount per velocity window
+        #[arg(long)]
+        pub max_destination_amount_per_window: iroha_primitives::numeric::Quantity,
         /// Register the policy disabled
         #[arg(long)]
         pub disabled: bool,
@@ -7486,27 +7377,6 @@ mod settlement {
 
     impl SetFxCorridorPolicyArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let source = match (self.source_mode, self.source_account.as_deref()) {
-                (FxCorridorSourceMode::FixedAccount, Some(account)) => {
-                    FxCorridorSource::FixedAccount(
-                        resolve_account_id(context, account)
-                            .wrap_err("failed to resolve --source-account")?,
-                    )
-                }
-                (FxCorridorSourceMode::FixedAccount, None) => {
-                    return Err(eyre!(
-                        "--source-account is required with --source-mode fixed-account"
-                    ));
-                }
-                (FxCorridorSourceMode::TransactionAuthority, None) => {
-                    FxCorridorSource::TransactionAuthority
-                }
-                (FxCorridorSourceMode::TransactionAuthority, Some(_)) => {
-                    return Err(eyre!(
-                        "--source-account is not allowed with --source-mode transaction-authority"
-                    ));
-                }
-            };
             let allowed_domain_count = self.allowed_destination_alias_domains.len();
             let allowed_destination_alias_domains = self
                 .allowed_destination_alias_domains
@@ -7520,24 +7390,67 @@ mod settlement {
             let policy = FxCorridorPolicy {
                 policy_id: self.policy_id,
                 revision: self.revision,
+                owner: resolve_account_id(context, &self.owner)
+                    .wrap_err("failed to resolve --owner")?,
                 source_dataspace: self.source_dataspace,
-                source,
                 source_asset_definition_id: self.source_asset,
-                source_sink: resolve_account_id(context, &self.source_sink)
-                    .wrap_err("failed to resolve --source-sink")?,
                 destination_dataspace: self.destination_dataspace,
-                destination_reserve: resolve_account_id(context, &self.destination_reserve)
-                    .wrap_err("failed to resolve --destination-reserve")?,
                 destination_asset_definition_id: self.destination_asset,
                 allowed_destination_alias_domains,
-                rate_numerator: self.rate_numerator,
-                rate_denominator: self.rate_denominator,
+                oracle_feed_id: self.oracle_feed_id,
+                max_oracle_age_ms: self.max_oracle_age_ms,
+                max_source_amount_per_settlement: self.max_source_amount_per_settlement,
+                max_destination_amount_per_settlement: self.max_destination_amount_per_settlement,
+                velocity_window_ms: self.velocity_window_ms,
+                max_settlements_per_window: self.max_settlements_per_window,
+                max_source_amount_per_window: self.max_source_amount_per_window,
+                max_destination_amount_per_window: self.max_destination_amount_per_window,
                 enabled: !self.disabled,
             };
             if let Some(error) = policy.invariant_error() {
                 return Err(eyre!(error));
             }
             let instruction: SettlementInstructionBox = SetFxCorridorPolicy { policy }.into();
+            context.finish([InstructionBox::from(instruction)])
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct FxCorridorEscrowArgs {
+        /// Stable corridor policy identifier
+        #[arg(long)]
+        pub policy_id: Name,
+        /// Exact active policy revision
+        #[arg(long)]
+        pub expected_policy_revision: u64,
+        /// Exact destination asset from the active policy
+        #[arg(long)]
+        pub destination_asset: AssetDefinitionId,
+        /// Positive reserve quantity
+        #[arg(long)]
+        pub amount: iroha_primitives::numeric::Quantity,
+    }
+
+    impl FxCorridorEscrowArgs {
+        fn run_fund<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let instruction: SettlementInstructionBox = FundFxCorridorEscrow {
+                policy_id: self.policy_id,
+                expected_policy_revision: self.expected_policy_revision,
+                destination_asset_definition_id: self.destination_asset,
+                amount: self.amount,
+            }
+            .into();
+            context.finish([InstructionBox::from(instruction)])
+        }
+
+        fn run_refund<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let instruction: SettlementInstructionBox = RefundFxCorridorEscrow {
+                policy_id: self.policy_id,
+                expected_policy_revision: self.expected_policy_revision,
+                destination_asset_definition_id: self.destination_asset,
+                amount: self.amount,
+            }
+            .into();
             context.finish([InstructionBox::from(instruction)])
         }
     }
@@ -7565,6 +7478,24 @@ mod settlement {
         /// Positive source-currency quantity
         #[arg(long)]
         pub source_amount: iroha_primitives::numeric::Quantity,
+        /// Exact destination amount expected from the selected oracle event
+        #[arg(long)]
+        pub expected_destination_amount: iroha_primitives::numeric::Quantity,
+        /// Exact oracle feed identifier
+        #[arg(long)]
+        pub oracle_feed_id: FeedId,
+        /// Exact active oracle feed configuration version
+        #[arg(long)]
+        pub oracle_feed_config_version: u32,
+        /// Exact oracle slot
+        #[arg(long)]
+        pub oracle_slot: u64,
+        /// Exact oracle request hash
+        #[arg(long)]
+        pub oracle_request_hash: Hash,
+        /// Typed hash of the complete retained oracle event
+        #[arg(long)]
+        pub oracle_event_hash: HashOf<FeedEvent>,
     }
 
     impl SettleFxCorridorArgs {
@@ -7586,6 +7517,14 @@ mod settlement {
                 recipient: resolve_account_id(context, &self.recipient)
                     .wrap_err("failed to resolve --recipient")?,
                 source_amount: self.source_amount,
+                expected_destination_amount: self.expected_destination_amount,
+                oracle_evidence: FxCorridorOracleEvidence {
+                    feed_id: self.oracle_feed_id,
+                    feed_config_version: FeedConfigVersion(self.oracle_feed_config_version),
+                    slot: self.oracle_slot,
+                    request_hash: self.oracle_request_hash,
+                    event_hash: self.oracle_event_hash,
+                },
             };
             let instruction: SettlementInstructionBox = instruction.into();
             context.finish([InstructionBox::from(instruction)])
@@ -10162,6 +10101,10 @@ transaction_status_timeout = "77s"
             let key_pair = fixture_key_pair(0xA5);
             let cfg = iroha::config::Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+                network_id:
+                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                        .parse()
+                        .expect("network id"),
                 account,
                 account_chain_discriminant:
                     iroha_config::parameters::defaults::common::chain_discriminant(),
@@ -13936,7 +13879,13 @@ mod cli_integration_harness {
                         DomainId::try_new("w", "universal").unwrap(),
                         "rose".parse().unwrap(),
                     );
-                AssetDefinition::new(__asset_definition_id.clone(), "rose".to_owned(), NumericSpec::default(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
+                AssetDefinition::new(
+                    __asset_definition_id.clone(),
+                    "rose".to_owned(),
+                    NumericSpec::default(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(owner_w.account()),
             {
@@ -13945,7 +13894,13 @@ mod cli_integration_harness {
                         DomainId::try_new("w", "universal").unwrap(),
                         "tulip".parse().unwrap(),
                     );
-                AssetDefinition::new(__asset_definition_id.clone(), "tulip".to_owned(), NumericSpec::default(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
+                AssetDefinition::new(
+                    __asset_definition_id.clone(),
+                    "tulip".to_owned(),
+                    NumericSpec::default(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(owner_w.account()),
         ];
@@ -13994,7 +13949,13 @@ mod cli_integration_harness {
                         DomainId::try_new("w", "universal").unwrap(),
                         "rose".parse().unwrap(),
                     );
-                AssetDefinition::new(__asset_definition_id.clone(), "rose".to_owned(), NumericSpec::default(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
+                AssetDefinition::new(
+                    __asset_definition_id.clone(),
+                    "rose".to_owned(),
+                    NumericSpec::default(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(owner_w.account()),
             {
@@ -14003,7 +13964,13 @@ mod cli_integration_harness {
                         DomainId::try_new("w", "universal").unwrap(),
                         "tulip".parse().unwrap(),
                     );
-                AssetDefinition::new(__asset_definition_id.clone(), "tulip".to_owned(), NumericSpec::default(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
+                AssetDefinition::new(
+                    __asset_definition_id.clone(),
+                    "tulip".to_owned(),
+                    NumericSpec::default(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(owner_w.account()),
             {
@@ -14012,7 +13979,13 @@ mod cli_integration_harness {
                         DomainId::try_new("w", "universal").unwrap(),
                         "peony".parse().unwrap(),
                     );
-                AssetDefinition::new(__asset_definition_id.clone(), "peony".to_owned(), NumericSpec::default(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
+                AssetDefinition::new(
+                    __asset_definition_id.clone(),
+                    "peony".to_owned(),
+                    NumericSpec::default(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
             }
             .build(owner_w.account()),
         ];

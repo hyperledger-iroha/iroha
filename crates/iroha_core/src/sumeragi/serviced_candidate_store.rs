@@ -3030,7 +3030,7 @@ mod tests {
 
     fn context_with_roster_len(roster_len: usize) -> wire::HeightContext {
         use iroha_crypto::{Algorithm, KeyPair};
-        use iroha_data_model::peer::PeerId;
+        use iroha_data_model::{NetworkId, block::BlockHeader, peer::PeerId};
 
         assert!((4..=31).contains(&roster_len) && (roster_len - 1) % 3 == 0);
         let mut roster = (0..roster_len)
@@ -3046,7 +3046,11 @@ mod tests {
             .collect::<Vec<_>>();
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let context = wire::HeightContext {
-            chain_id: "serviced-candidate-test".into(),
+            network_id: NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                    [0x95; Hash::LENGTH],
+                )),
+            ),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 7,
             epoch: 1,

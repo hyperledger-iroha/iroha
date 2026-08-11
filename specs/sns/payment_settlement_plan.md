@@ -34,7 +34,8 @@ lease. Native execution and the committed world state are authoritative.
 Treasury and governance reporting should derive evidence from canonical
 ledger data:
 
-1. canonical alias plan hash, chain id, block anchor, and expiry;
+1. canonical alias plan hash, exact genesis-derived `NetworkId`, block anchor,
+   and expiry;
 2. transaction hash, authority, ordered framed instructions, and final status;
 3. resource disposition, policy version, payment asset, and exact native
    charge;

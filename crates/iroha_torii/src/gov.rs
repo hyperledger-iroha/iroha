@@ -260,8 +260,8 @@ pub enum MinistryAgendaProposalDraftOutcome {
 pub struct PlainBallotDto {
     /// Authority as canonical I105 or on-chain account alias.
     pub authority: String,
-    /// Chain id to build the transaction skeleton for
-    pub chain_id: String,
+    /// Exact genesis-derived network to build the transaction skeleton for.
+    pub network_id: iroha_data_model::NetworkId,
     pub referendum_id: String,
     /// Owner as canonical I105 or on-chain account alias.
     pub owner: String,
@@ -279,8 +279,8 @@ pub struct PlainBallotDto {
 pub struct ParliamentBallotDto {
     /// Authority as canonical I105 or on-chain account alias.
     pub authority: String,
-    /// Chain id to build the transaction skeleton for.
-    pub chain_id: String,
+    /// Exact genesis-derived network to build the transaction skeleton for.
+    pub network_id: iroha_data_model::NetworkId,
     /// Proposal id as 32-byte hex, optionally prefixed with `0x` or `blake2b32:`.
     pub proposal_id: String,
     /// Parliament body casting the stage ballot.
@@ -522,8 +522,8 @@ fn parse_canonical_u64_decimal(field: &str, value: &str) -> Result<u64, String> 
 pub struct ZkBallotV1Dto {
     /// Authority submitting the ballot (AccountId string)
     pub authority: String,
-    /// Chain id to build the transaction skeleton for
-    pub chain_id: String,
+    /// Exact genesis-derived network to build the transaction skeleton for.
+    pub network_id: iroha_data_model::NetworkId,
     pub election_id: String,
     /// Backend tag for the proof (e.g., halo2/ipa)
     pub backend: String,
@@ -554,7 +554,8 @@ pub struct ZkBallotV1Dto {
 /// Request body that carries a BallotProof directly along with transaction context.
 pub struct ZkBallotV1BallotProofDto {
     pub authority: String,
-    pub chain_id: String,
+    /// Exact genesis-derived network to build the transaction skeleton for.
+    pub network_id: iroha_data_model::NetworkId,
     pub election_id: String,
     pub ballot: iroha_data_model::isi::governance::BallotProof,
 }
@@ -564,14 +565,22 @@ pub struct ZkBallotV1BallotProofDto {
 /// The request schema excludes private signing material; callers submit locally signed transactions.
 ///
 /// # Errors
-/// Returns `crate::Error::Query` for invalid chain id or authority. Invalid payloads are
+/// Returns `crate::Error::Query` for a foreign network or invalid authority. Invalid payloads are
 /// reflected in the response body.
 pub async fn handle_gov_ballot_zk_v1(
-    chain_id: Arc<iroha_data_model::ChainId>,
     state: Arc<iroha_core::state::State>,
+    authenticated_account: &iroha_data_model::account::AccountId,
     telemetry: MaybeTelemetry,
     NoritoJsonWithBytes { value: body, raw }: NoritoJsonWithBytes<ZkBallotV1Dto>,
 ) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
+    ensure_network_id_matches(state.as_ref(), &body.network_id)?;
+    let authority_id = parse_authority_literal(
+        state.as_ref(),
+        body.authority.as_str(),
+        &telemetry,
+        CONTEXT_GOV_BALLOT_ZK_V1_AUTHORITY,
+    )?;
+    ensure_authenticated_authority(authenticated_account, &authority_id)?;
     if let Err(reason) = reject_zk_v1_aliases_from_raw(raw.as_ref()) {
         return Ok(ballot_rejection(&reason));
     }
@@ -595,13 +604,6 @@ pub async fn handle_gov_ballot_zk_v1(
             tx_instructions: Vec::new(),
         }));
     }
-    ensure_chain_id_matches(chain_id.as_ref(), &body.chain_id)?;
-    let _authority_id = parse_authority_literal(
-        state.as_ref(),
-        body.authority.as_str(),
-        &telemetry,
-        CONTEXT_GOV_BALLOT_ZK_V1_AUTHORITY,
-    )?;
     let has_owner = body.owner.is_some();
     let has_amount = body.amount.is_some();
     let has_duration = body.duration_blocks.is_some();
@@ -675,14 +677,22 @@ pub async fn handle_gov_ballot_zk_v1(
 /// The request schema excludes private signing material; callers submit locally signed transactions.
 ///
 /// # Errors
-/// Returns `crate::Error::Query` for invalid chain id or authority. Malformed payloads are
+/// Returns `crate::Error::Query` for a foreign network or invalid authority. Malformed payloads are
 /// reported via the response payload.
 pub async fn handle_gov_ballot_zk_v1_ballotproof(
-    chain_id: Arc<iroha_data_model::ChainId>,
     state: Arc<iroha_core::state::State>,
+    authenticated_account: &iroha_data_model::account::AccountId,
     telemetry: MaybeTelemetry,
     NoritoJsonWithBytes { value: body, raw }: NoritoJsonWithBytes<ZkBallotV1BallotProofDto>,
 ) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
+    ensure_network_id_matches(state.as_ref(), &body.network_id)?;
+    let authority_id = parse_authority_literal(
+        state.as_ref(),
+        body.authority.as_str(),
+        &telemetry,
+        CONTEXT_GOV_BALLOT_ZK_V1_BALLOT_PROOF_AUTHORITY,
+    )?;
+    ensure_authenticated_authority(authenticated_account, &authority_id)?;
     if let Err(reason) = reject_zk_v1_ballotproof_aliases_from_raw(raw.as_ref()) {
         return Ok(ballot_rejection(&reason));
     }
@@ -700,13 +710,6 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
             tx_instructions: Vec::new(),
         }));
     }
-    ensure_chain_id_matches(chain_id.as_ref(), &body.chain_id)?;
-    let _authority_id = parse_authority_literal(
-        state.as_ref(),
-        body.authority.as_str(),
-        &telemetry,
-        CONTEXT_GOV_BALLOT_ZK_V1_BALLOT_PROOF_AUTHORITY,
-    )?;
     let has_owner = body.ballot.owner.is_some();
     let has_amount = body.ballot.amount.is_some();
     let has_duration = body.ballot.duration_blocks.is_some();
@@ -860,10 +863,8 @@ pub struct GovernanceCapabilitiesV1 {
     pub schema: String,
     /// Projection layout version.
     pub version: u16,
-    /// Exact chain identifier.
-    pub chain_id: String,
-    /// Lowercase committed genesis block hash.
-    pub genesis_hash: String,
+    /// Exact genesis-derived network identity.
+    pub network_id: iroha_data_model::NetworkId,
     /// Latest committed block height.
     pub current_height: String,
     /// I105 network prefix used by this chain.
@@ -946,23 +947,20 @@ fn governance_approval_mode(state: &iroha_core::state::State) -> String {
 pub async fn handle_gov_capabilities(
     state: Arc<iroha_core::state::State>,
 ) -> Result<JsonBody<GovernanceCapabilitiesV1>, crate::Error> {
-    let genesis_hash = state
-        .committed_block_hashes_snapshot()
-        .first()
-        .copied()
-        .ok_or_else(|| {
-            crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
+    if state.committed_block_hashes_snapshot().first().is_none() {
+        return Err(crate::Error::Query(
+            iroha_data_model::ValidationFail::InternalError(
                 "governance capabilities are unavailable before committed genesis".into(),
-            ))
-        })?;
+            ),
+        ));
+    }
     let gov = state.governance_snapshot();
     let validation_fee_plain_electorate_rules = validation_fee_plain_electorate_rules(&gov);
     let world = state.world_view();
     Ok(JsonBody(GovernanceCapabilitiesV1 {
         schema: GOVERNANCE_CAPABILITIES_SCHEMA_V1.to_owned(),
         version: GOVERNANCE_CAPABILITIES_VERSION_V1,
-        chain_id: state.chain_id_ref().to_string(),
-        genesis_hash: hex::encode(genesis_hash.as_ref()),
+        network_id: *state.network_id_ref(),
         current_height: u64::try_from(state.committed_height())
             .unwrap_or(u64::MAX)
             .to_string(),
@@ -1121,7 +1119,7 @@ pub async fn handle_gov_citizen_status(
 /// Response with lock/unlock statistics.
 #[derive(Copy, Clone, Debug, JsonSerialize)]
 pub struct UnlockStatsResponse {
-    /// Current height used for evaluation
+    /// Current committed State height.
     pub height_current: u64,
     /// Number of locks that would be expired at current height across all referenda
     pub expired_locks_now: u64,
@@ -1138,11 +1136,11 @@ pub struct UnlockStatsResponse {
 pub async fn handle_gov_unlock_stats(
     state: Arc<iroha_core::state::State>,
 ) -> Result<JsonBody<UnlockStatsResponse>, crate::Error> {
-    let world = state.world_view();
-    let snapshot = *world.governance_unlock_stats();
-    let last_sweep_height = *world.governance_last_unlock_sweep_height();
+    let view = state.query_view();
+    let snapshot = *view.world().governance_unlock_stats();
+    let last_sweep_height = *view.world().governance_last_unlock_sweep_height();
     Ok(JsonBody(UnlockStatsResponse {
-        height_current: snapshot.evaluated_height,
+        height_current: u64::try_from(view.height()).unwrap_or(u64::MAX),
         expired_locks_now: snapshot.expired_locks_now,
         referenda_with_expired: snapshot.referenda_with_expired,
         last_sweep_height,
@@ -1173,18 +1171,30 @@ fn tx_instr_from_box(boxed: iroha_data_model::isi::InstructionBox) -> TxInstr {
     }
 }
 
-fn ensure_chain_id_matches(
-    chain_id: &iroha_data_model::ChainId,
-    provided: &str,
+fn ensure_network_id_matches(
+    state: &iroha_core::state::State,
+    provided: &iroha_data_model::NetworkId,
 ) -> Result<(), crate::Error> {
-    validate_exact_nonempty_token("chain_id", provided)
-        .map_err(|message| crate::routing::conversion_error(message.into()))?;
-    if chain_id.as_str() != provided {
-        return Err(crate::routing::conversion_error(format!(
-            "chain_id mismatch: expected {}, got {}",
-            chain_id.as_str(),
-            provided
-        )));
+    if state.network_id_ref() != provided {
+        return Err(crate::Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "governance ballot targets a different network".to_owned(),
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_authenticated_authority(
+    authenticated_account: &iroha_data_model::account::AccountId,
+    authority: &iroha_data_model::account::AccountId,
+) -> Result<(), crate::Error> {
+    if authenticated_account != authority {
+        return Err(crate::Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "authenticated account must equal the governance ballot authority".to_owned(),
+            ),
+        ));
     }
     Ok(())
 }
@@ -1242,12 +1252,12 @@ fn instruction_skeleton_for_sccp_route_governance_propose(
 }
 
 fn build_signable_transaction_b64(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     authority: &iroha_data_model::account::AccountId,
     instructions: Vec<iroha_data_model::isi::InstructionBox>,
 ) -> String {
     let builder = iroha_data_model::transaction::signed::TransactionBuilder::new(
-        chain_id.clone(),
+        *network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -1326,9 +1336,9 @@ fn compute_proposal_id(
 }
 
 fn compute_sccp_route_governance_proposal_id(
-    action: &iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1,
+    anchor: &iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1,
 ) -> Result<[u8; 32], crate::Error> {
-    let canonical = action.encode();
+    let canonical = anchor.encode();
     let action_len: u32 = canonical.len().try_into().map_err(|_| {
         crate::routing::conversion_error(
             "SCCP route governance action length exceeds 2^32 bytes".into(),
@@ -1866,7 +1876,6 @@ pub struct ProtectedNamespacesApplyResponse {
 /// Returns `crate::Error::Query` when the namespaces cannot be serialized into
 /// the custom parameter or the optional authority cannot be resolved.
 pub async fn handle_gov_protected_set(
-    chain_id: Arc<iroha_data_model::ChainId>,
     state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
     NoritoJson(body): NoritoJson<ProtectedNamespacesDto>,
@@ -1917,7 +1926,7 @@ pub async fn handle_gov_protected_set(
             CONTEXT_GOV_PROTECTED_AUTHORITY,
         )?;
         Some(build_signable_transaction_b64(
-            chain_id.as_ref(),
+            state.network_id_ref(),
             &authority_id,
             vec![instruction],
         ))
@@ -2256,6 +2265,7 @@ pub async fn handle_gov_propose_deploy(
 /// # Errors
 /// Returns `crate::Error::Query` when the request options fail validation.
 pub async fn handle_gov_propose_sccp_route_governance(
+    state: Arc<iroha_core::state::State>,
     NoritoJson(body): NoritoJson<ProposeSccpRouteGovernanceDto>,
 ) -> Result<JsonBody<ProposeSccpRouteGovernanceResponse>, crate::Error> {
     use iroha_data_model::isi::governance as gov;
@@ -2283,12 +2293,15 @@ pub async fn handle_gov_propose_sccp_route_governance(
     })?;
 
     let instr = gov::ProposeSccpRouteGovernance {
-        action: body.action,
+        anchor: iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
+            network_id: *state.network_id_ref(),
+            action: body.action,
+        },
         window,
         mode,
     };
 
-    let proposal_id = hex::encode(compute_sccp_route_governance_proposal_id(&instr.action)?);
+    let proposal_id = hex::encode(compute_sccp_route_governance_proposal_id(&instr.anchor)?);
 
     Ok(JsonBody(ProposeSccpRouteGovernanceResponse {
         ok: true,
@@ -2303,7 +2316,6 @@ pub async fn handle_gov_propose_sccp_route_governance(
 /// state; callers must submit the resulting signed transaction through the normal Torii `/v1/pipeline/transactions`
 /// route.
 pub async fn handle_ministry_agenda_proposal_draft(
-    chain_id: Arc<iroha_data_model::ChainId>,
     state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
     NoritoJson(body): NoritoJson<MinistryAgendaProposalDraftDto>,
@@ -2336,7 +2348,7 @@ pub async fn handle_ministry_agenda_proposal_draft(
     };
     let tx_instructions = vec![tx_instr_from_box(instr.clone().into())];
     let signable_transaction_b64 = build_signable_transaction_b64(
-        chain_id.as_ref(),
+        state.network_id_ref(),
         &authority_id,
         vec![iroha_data_model::isi::InstructionBox::from(instr)],
     );
@@ -2380,15 +2392,15 @@ pub async fn handle_ministry_agenda_proposal_get(
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when the ballot fields fail validation (direction, authority,
-/// owner, amount parsing, or chain id mismatch).
+/// owner, amount parsing, or exact network mismatch).
 pub async fn handle_gov_ballot_plain(
-    chain_id: Arc<iroha_data_model::ChainId>,
     state: Arc<iroha_core::state::State>,
+    authenticated_account: &iroha_data_model::account::AccountId,
     NoritoJson(body): NoritoJson<PlainBallotDto>,
 ) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
     handle_gov_ballot_plain_with_policy(
-        chain_id,
         state,
+        authenticated_account,
         NoritoJson(body),
         MaybeTelemetry::disabled(),
     )
@@ -2398,19 +2410,12 @@ pub async fn handle_gov_ballot_plain(
 /// Variant of [`handle_gov_ballot_plain`] that allows callers to inject telemetry
 /// policy, enabling address parsing coverage across Torii and tests.
 pub async fn handle_gov_ballot_plain_with_policy(
-    chain_id: Arc<iroha_data_model::ChainId>,
     state: Arc<iroha_core::state::State>,
+    authenticated_account: &iroha_data_model::account::AccountId,
     NoritoJson(body): NoritoJson<PlainBallotDto>,
     telemetry: MaybeTelemetry,
 ) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
-    ensure_chain_id_matches(chain_id.as_ref(), &body.chain_id)?;
-    validate_governance_selector_v1("referendum_id", &body.referendum_id)
-        .map_err(|message| crate::routing::conversion_error(message.into()))?;
-    // Basic shape validations
-    if !(body.direction == "Aye" || body.direction == "Nay" || body.direction == "Abstain") {
-        return Err(crate::routing::conversion_error("invalid direction".into()));
-    }
-    // Parse authority and owner; require equality for plain ballots
+    ensure_network_id_matches(state.as_ref(), &body.network_id)?;
     let authority_id = parse_account_literal_from_state(
         state.as_ref(),
         body.authority.as_str(),
@@ -2420,6 +2425,14 @@ pub async fn handle_gov_ballot_plain_with_policy(
     .map_err(|err| {
         crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
     })?;
+    ensure_authenticated_authority(authenticated_account, &authority_id)?;
+    validate_governance_selector_v1("referendum_id", &body.referendum_id)
+        .map_err(|message| crate::routing::conversion_error(message.into()))?;
+    // Basic shape validations
+    if !(body.direction == "Aye" || body.direction == "Nay" || body.direction == "Abstain") {
+        return Err(crate::routing::conversion_error("invalid direction".into()));
+    }
+    // Parse authority and owner; require equality for plain ballots
     let owner = parse_account_literal_from_state(
         state.as_ref(),
         body.owner.as_str(),
@@ -2457,15 +2470,15 @@ pub async fn handle_gov_ballot_plain_with_policy(
 /// POST /v1/gov/parliament/ballots — draft an equal Parliament stage ballot.
 ///
 /// # Errors
-/// Returns `crate::Error::Query` when the authority, chain id, or proposal id is invalid.
+/// Returns `crate::Error::Query` when the authority, exact network, or proposal id is invalid.
 pub async fn handle_gov_parliament_ballot(
-    chain_id: Arc<iroha_data_model::ChainId>,
     state: Arc<iroha_core::state::State>,
+    authenticated_account: &iroha_data_model::account::AccountId,
     telemetry: MaybeTelemetry,
     NoritoJson(body): NoritoJson<ParliamentBallotDto>,
 ) -> Result<JsonBody<BallotSubmitResponse>, crate::Error> {
-    ensure_chain_id_matches(chain_id.as_ref(), &body.chain_id)?;
-    let _authority_id = parse_account_literal_from_state(
+    ensure_network_id_matches(state.as_ref(), &body.network_id)?;
+    let authority_id = parse_account_literal_from_state(
         state.as_ref(),
         body.authority.as_str(),
         &telemetry,
@@ -2474,6 +2487,7 @@ pub async fn handle_gov_parliament_ballot(
     .map_err(|err| {
         crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
     })?;
+    ensure_authenticated_authority(authenticated_account, &authority_id)?;
     let (_proposal_hex, proposal_id) = canonical_hex32(&body.proposal_id, "proposal_id")?;
     let instr = iroha_data_model::isi::governance::CastParliamentBallot {
         body: body.body,
@@ -2570,7 +2584,6 @@ mod tests {
 
     const ACCOUNT_AUTHORITY: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const ACCOUNT_OWNER_ALT: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
-
     #[test]
     fn unlock_stats_handler_cannot_reintroduce_an_expiry_index_scan() {
         let source = include_str!("gov.rs");
@@ -2583,11 +2596,12 @@ mod tests {
             .expect("unlock stats handler terminator");
         let implementation = &tail[..end];
 
+        assert!(implementation.contains("let view = state.query_view();"));
+        assert!(implementation.contains("view.height()"));
         assert!(implementation.contains("governance_unlock_stats()"));
         assert!(!implementation.contains("governance_lock_expiry_index()"));
         assert!(!implementation.contains(".range("));
     }
-
     #[test]
     fn scalar_governance_handlers_cannot_reintroduce_history_scans() {
         let source = include_str!("gov.rs");
@@ -2677,6 +2691,12 @@ mod tests {
             .expect("literal parses")
             .canonical()
             .to_string()
+    }
+
+    fn canonical_account(raw: &str) -> AccountId {
+        AccountId::parse_encoded(raw)
+            .expect("literal parses")
+            .into_account_id()
     }
 
     fn noncanonical_literal(raw: &str) -> String {
@@ -2809,7 +2829,9 @@ mod tests {
         );
         if with_permissions {
             let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .expect("canonical test network id"),
                 &authority,
                 0,
                 iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -2940,7 +2962,9 @@ seiyaku GovernedReadFixture {
         );
         let signed_manifest = manifest.signed(&harness.authority_keypair);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &harness.authority,
             91,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -3031,7 +3055,7 @@ seiyaku GovernedReadFixture {
             .map(decode_tx_instruction)
             .collect::<Vec<_>>();
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
-            (*harness.chain_id).clone(),
+            *harness.state.network_id_ref(),
             harness.authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3040,7 +3064,7 @@ seiyaku GovernedReadFixture {
         let params = harness.state.view().world().parameters().clone();
         let accepted = iroha_core::tx::AcceptedTransaction::accept(
             tx,
-            harness.chain_id.as_ref(),
+            harness.state.network_id_ref(),
             params.sumeragi().max_clock_drift(),
             params.transaction(),
             harness.state.crypto().as_ref(),
@@ -3107,7 +3131,7 @@ seiyaku GovernedReadFixture {
             amount: Quantity::zero(),
         });
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
-            (*harness.chain_id).clone(),
+            *harness.state.network_id_ref(),
             harness.authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3116,7 +3140,7 @@ seiyaku GovernedReadFixture {
         let params = harness.state.view().world().parameters().clone();
         let accepted = iroha_core::tx::AcceptedTransaction::accept(
             tx,
-            harness.chain_id.as_ref(),
+            harness.state.network_id_ref(),
             params.sumeragi().max_clock_drift(),
             params.transaction(),
             harness.state.crypto().as_ref(),
@@ -3163,7 +3187,7 @@ seiyaku GovernedReadFixture {
             amount: Quantity::zero(),
         });
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
-            (*harness.chain_id).clone(),
+            *harness.state.network_id_ref(),
             harness.authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3172,7 +3196,7 @@ seiyaku GovernedReadFixture {
         let params = harness.state.view().world().parameters().clone();
         let accepted = iroha_core::tx::AcceptedTransaction::accept(
             tx,
-            harness.chain_id.as_ref(),
+            harness.state.network_id_ref(),
             params.sumeragi().max_clock_drift(),
             params.transaction(),
             harness.state.crypto().as_ref(),
@@ -3264,7 +3288,7 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn protected_namespaces_set_drafts_transaction_without_mutating_state() {
-        let (state, _queue, chain_id) = mk_basic_context();
+        let (state, _queue, _chain_id) = mk_basic_context();
 
         let before = handle_gov_protected_get(state.clone())
             .await
@@ -3274,7 +3298,6 @@ seiyaku GovernedReadFixture {
         assert!(before.namespaces.is_empty());
 
         let response = handle_gov_protected_set(
-            chain_id,
             state.clone(),
             MaybeTelemetry::disabled(),
             NoritoJson(ProtectedNamespacesDto {
@@ -3302,10 +3325,9 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn protected_namespaces_rejects_noncanonical_tokens_before_drafting() {
-        let (state, _queue, chain_id) = mk_basic_context();
+        let (state, _queue, _chain_id) = mk_basic_context();
         for namespace in ["", " system", "system ", "system namespace", "systèm"] {
             let error = handle_gov_protected_set(
-                chain_id.clone(),
                 state.clone(),
                 MaybeTelemetry::disabled(),
                 NoritoJson(ProtectedNamespacesDto {
@@ -3323,7 +3345,6 @@ seiyaku GovernedReadFixture {
     async fn protected_namespaces_set_returns_checked_signable_payload_for_authority() {
         let harness = mk_governance_harness(false);
         let response = handle_gov_protected_set(
-            harness.chain_id.clone(),
             harness.state.clone(),
             MaybeTelemetry::disabled(),
             NoritoJson(ProtectedNamespacesDto {
@@ -3467,20 +3488,27 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn propose_sccp_route_governance_builds_exact_instruction_and_proposal_id() {
+        let (state, _queue, _chain_id) = mk_basic_context();
         let action = sample_sccp_route_governance_action();
-        let expected_id = compute_sccp_route_governance_proposal_id(&action).expect("proposal id");
-        let response =
-            handle_gov_propose_sccp_route_governance(NoritoJson(ProposeSccpRouteGovernanceDto {
+        let anchor = iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
+            network_id: *state.network_id_ref(),
+            action: action.clone(),
+        };
+        let expected_id = compute_sccp_route_governance_proposal_id(&anchor).expect("proposal id");
+        let response = handle_gov_propose_sccp_route_governance(
+            state,
+            NoritoJson(ProposeSccpRouteGovernanceDto {
                 action: action.clone(),
                 window: Some(AtWindowDto {
                     lower: 10,
                     upper: 20,
                 }),
                 mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
-            }))
-            .await
-            .expect("valid SCCP governance draft")
-            .0;
+            }),
+        )
+        .await
+        .expect("valid SCCP governance draft")
+        .0;
 
         assert!(response.ok);
         assert_eq!(response.proposal_id, hex::encode(expected_id));
@@ -3490,7 +3518,7 @@ seiyaku GovernedReadFixture {
             .as_any()
             .downcast_ref::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>()
             .expect("exact SCCP governance instruction");
-        assert_eq!(decoded.action, action);
+        assert_eq!(decoded.anchor, anchor);
         assert_eq!(
             decoded.window,
             Some(AtWindow {
@@ -3506,6 +3534,7 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn propose_sccp_route_governance_rejects_invalid_action_before_drafting() {
+        let (state, _queue, _chain_id) = mk_basic_context();
         let mut action = sample_sccp_route_governance_action();
         let iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(key) = &mut action
         else {
@@ -3513,14 +3542,16 @@ seiyaku GovernedReadFixture {
         };
         key.revision = 0;
 
-        let error =
-            handle_gov_propose_sccp_route_governance(NoritoJson(ProposeSccpRouteGovernanceDto {
+        let error = handle_gov_propose_sccp_route_governance(
+            state,
+            NoritoJson(ProposeSccpRouteGovernanceDto {
                 action,
                 window: None,
                 mode: None,
-            }))
-            .await
-            .expect_err("invalid SCCP action must fail before returning a skeleton");
+            }),
+        )
+        .await
+        .expect_err("invalid SCCP action must fail before returning a skeleton");
         assert!(
             format!("{error:?}").contains("invalid SCCP route governance action"),
             "unexpected error: {error:?}"
@@ -3529,6 +3560,7 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn propose_sccp_route_governance_rejects_mode_aliases_and_reversed_window() {
+        let (state, _queue, _chain_id) = mk_basic_context();
         let action = sample_sccp_route_governance_action();
         let canonical = norito::json::to_json(&ProposeSccpRouteGovernanceDto {
             action: action.clone(),
@@ -3552,17 +3584,19 @@ seiyaku GovernedReadFixture {
             );
         }
 
-        let error =
-            handle_gov_propose_sccp_route_governance(NoritoJson(ProposeSccpRouteGovernanceDto {
+        let error = handle_gov_propose_sccp_route_governance(
+            state,
+            NoritoJson(ProposeSccpRouteGovernanceDto {
                 action,
                 window: Some(AtWindowDto {
                     lower: 21,
                     upper: 20,
                 }),
                 mode: None,
-            }))
-            .await
-            .expect_err("reversed SCCP governance window must reject");
+            }),
+        )
+        .await
+        .expect_err("reversed SCCP governance window must reject");
         assert!(format!("{error:?}").contains("window.upper"));
     }
 
@@ -3765,7 +3799,6 @@ seiyaku GovernedReadFixture {
         let harness = mk_governance_harness(true);
         let proposal = sample_agenda_proposal("AC-2026-241");
         let response = handle_ministry_agenda_proposal_draft(
-            harness.chain_id.clone(),
             harness.state.clone(),
             MaybeTelemetry::disabled(),
             NoritoJson(MinistryAgendaProposalDraftDto {
@@ -3801,7 +3834,6 @@ seiyaku GovernedReadFixture {
         let harness = mk_governance_harness(true);
         let authority = format!(" {}", harness.authority);
         let error = handle_ministry_agenda_proposal_draft(
-            harness.chain_id,
             harness.state,
             MaybeTelemetry::disabled(),
             NoritoJson(MinistryAgendaProposalDraftDto {
@@ -3843,7 +3875,6 @@ seiyaku GovernedReadFixture {
         assert!(missing.record.is_none());
 
         let draft = handle_ministry_agenda_proposal_draft(
-            harness.chain_id.clone(),
             harness.state.clone(),
             MaybeTelemetry::disabled(),
             NoritoJson(MinistryAgendaProposalDraftDto {
@@ -3885,7 +3916,6 @@ seiyaku GovernedReadFixture {
         let harness = mk_governance_harness(true);
         let proposal = sample_agenda_proposal("AC-2026-243");
         let draft = handle_ministry_agenda_proposal_draft(
-            harness.chain_id.clone(),
             harness.state.clone(),
             MaybeTelemetry::disabled(),
             NoritoJson(MinistryAgendaProposalDraftDto {
@@ -3908,7 +3938,6 @@ seiyaku GovernedReadFixture {
         assert_eq!(applied, 1);
 
         let duplicate = handle_ministry_agenda_proposal_draft(
-            harness.chain_id.clone(),
             harness.state.clone(),
             MaybeTelemetry::disabled(),
             NoritoJson(MinistryAgendaProposalDraftDto {
@@ -3932,13 +3961,13 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn ballot_plain_builds_instruction_skeleton() {
-        let (state, _queue, chain_id) = mk_basic_context();
+        let (state, _queue, _chain_id) = mk_basic_context();
+        let authenticated = canonical_account(ACCOUNT_AUTHORITY);
         let canonical = canonical_literal(ACCOUNT_AUTHORITY);
-        let chain_id_str = chain_id.as_str().to_string();
         // Build DTO via JSON to ensure serde shape is satisfied
         let body = crate::json_object(vec![
             crate::json_entry("authority", canonical.clone()),
-            crate::json_entry("chain_id", chain_id_str),
+            crate::json_entry("network_id", *state.network_id_ref()),
             crate::json_entry("referendum_id", "r1"),
             crate::json_entry("owner", canonical.clone()),
             crate::json_entry("amount", "100"),
@@ -3948,8 +3977,8 @@ seiyaku GovernedReadFixture {
         let parsed: PlainBallotDto =
             norito::json::from_str(&norito::json::to_json(&body).unwrap()).unwrap();
         let res = handle_gov_ballot_plain_with_policy(
-            chain_id,
             state,
+            &authenticated,
             NoritoJson(parsed),
             MaybeTelemetry::for_tests(),
         )
@@ -3963,15 +3992,14 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn ballot_plain_accepts_account_aliases() {
-        let (state, _queue, chain_id) = mk_basic_context();
+        let (state, _queue, _chain_id) = mk_basic_context();
         let authority = AccountId::parse_encoded(ACCOUNT_AUTHORITY)
             .expect("account parses")
             .into_account_id();
         bind_account_alias_for_test(&state, &authority, "ballot@universal");
-        let chain_id_str = chain_id.as_str().to_string();
         let body = crate::json_object(vec![
             crate::json_entry("authority", "ballot@universal"),
-            crate::json_entry("chain_id", chain_id_str),
+            crate::json_entry("network_id", *state.network_id_ref()),
             crate::json_entry("referendum_id", "r1"),
             crate::json_entry("owner", "ballot@universal"),
             crate::json_entry("amount", "100"),
@@ -3981,8 +4009,8 @@ seiyaku GovernedReadFixture {
         let parsed: PlainBallotDto =
             norito::json::from_str(&norito::json::to_json(&body).unwrap()).unwrap();
         let res = handle_gov_ballot_plain_with_policy(
-            chain_id,
             state,
+            &authority,
             NoritoJson(parsed),
             MaybeTelemetry::for_tests(),
         )
@@ -3995,13 +4023,13 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn ballot_plain_rejects_authority_mismatch() {
-        let (state, _queue, chain_id) = mk_basic_context();
+        let (state, _queue, _chain_id) = mk_basic_context();
+        let authenticated = canonical_account(ACCOUNT_AUTHORITY);
         let canonical_authority = canonical_literal(ACCOUNT_AUTHORITY);
         let canonical_owner = canonical_literal(ACCOUNT_OWNER_ALT);
-        let chain_id_str = chain_id.as_str().to_string();
         let body = crate::json_object(vec![
             crate::json_entry("authority", canonical_authority),
-            crate::json_entry("chain_id", chain_id_str),
+            crate::json_entry("network_id", *state.network_id_ref()),
             crate::json_entry("referendum_id", "r1"),
             crate::json_entry("owner", canonical_owner),
             crate::json_entry("amount", "100"),
@@ -4011,8 +4039,8 @@ seiyaku GovernedReadFixture {
         let parsed: PlainBallotDto =
             norito::json::from_str(&norito::json::to_json(&body).unwrap()).unwrap();
         let err = handle_gov_ballot_plain_with_policy(
-            chain_id,
             state,
+            &authenticated,
             NoritoJson(parsed),
             MaybeTelemetry::for_tests(),
         )
@@ -4024,11 +4052,11 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn ballot_plain_accepts_raw_public_key_literals() {
-        let (state, _queue, chain_id) = mk_basic_context();
-        let chain_id_str = chain_id.as_str().to_string();
+        let (state, _queue, _chain_id) = mk_basic_context();
+        let authenticated = canonical_account(ACCOUNT_AUTHORITY);
         let body = crate::json_object(vec![
             crate::json_entry("authority", ACCOUNT_AUTHORITY),
-            crate::json_entry("chain_id", chain_id_str),
+            crate::json_entry("network_id", *state.network_id_ref()),
             crate::json_entry("referendum_id", "r1"),
             crate::json_entry("owner", ACCOUNT_AUTHORITY),
             crate::json_entry("amount", "100"),
@@ -4038,8 +4066,8 @@ seiyaku GovernedReadFixture {
         let parsed: PlainBallotDto =
             norito::json::from_str(&norito::json::to_json(&body).unwrap()).unwrap();
         handle_gov_ballot_plain_with_policy(
-            chain_id,
             state,
+            &authenticated,
             NoritoJson(parsed),
             MaybeTelemetry::for_tests(),
         )
@@ -4049,18 +4077,19 @@ seiyaku GovernedReadFixture {
 
     #[tokio::test]
     async fn parliament_ballot_builds_instruction_skeleton() {
-        let (state, _queue, chain_id) = mk_basic_context();
+        let (state, _queue, _chain_id) = mk_basic_context();
+        let authenticated = canonical_account(ACCOUNT_AUTHORITY);
         let dto = ParliamentBallotDto {
             authority: canonical_literal(ACCOUNT_AUTHORITY),
-            chain_id: chain_id.as_str().to_owned(),
+            network_id: *state.network_id_ref(),
             proposal_id: "11".repeat(32),
             body: ParliamentBody::PolicyJury,
             decision: ParliamentDecision::Approve,
         };
 
         let response = handle_gov_parliament_ballot(
-            chain_id,
             state,
+            &authenticated,
             MaybeTelemetry::disabled(),
             NoritoJson(dto),
         )
@@ -4085,113 +4114,7 @@ seiyaku GovernedReadFixture {
         assert_eq!(ballot.decision, ParliamentDecision::Approve);
     }
 
-    #[tokio::test]
-    async fn governance_ballot_context_tokens_reject_whitespace_without_normalization() {
-        use iroha_data_model::isi::governance::BallotProof;
-
-        let (state, _queue, chain_id) = mk_basic_context();
-        let canonical_authority = canonical_literal(ACCOUNT_AUTHORITY);
-        let proof_b64 = base64::engine::general_purpose::STANDARD.encode(b"proof");
-
-        for invalid_chain in [
-            format!(" {}", chain_id.as_str()),
-            format!("{} ", chain_id.as_str()),
-        ] {
-            let error = ensure_chain_id_matches(chain_id.as_ref(), &invalid_chain)
-                .expect_err("chain aliases must fail closed");
-            assert!(format!("{error:?}").contains("chain_id"));
-        }
-        ensure_chain_id_matches(chain_id.as_ref(), chain_id.as_str())
-            .expect("exact chain id must remain valid");
-
-        let error = handle_gov_ballot_plain_with_policy(
-            chain_id.clone(),
-            state.clone(),
-            NoritoJson(PlainBallotDto {
-                authority: canonical_authority.clone(),
-                chain_id: chain_id.as_str().to_owned(),
-                referendum_id: "referendum-1 ".to_owned(),
-                owner: canonical_authority.clone(),
-                amount: 1_u64.into(),
-                duration_blocks: "0".to_owned(),
-                direction: "Aye".to_owned(),
-            }),
-            MaybeTelemetry::disabled(),
-        )
-        .await
-        .expect_err("PLAIN referendum aliases must fail before drafting");
-        assert!(format!("{error:?}").contains("referendum_id"));
-
-        let dto = ZkBallotV1Dto {
-            authority: canonical_authority.clone(),
-            chain_id: "deliberately-wrong-chain".to_owned(),
-            election_id: "election-1\n".to_owned(),
-            backend: "halo2/ipa".to_owned(),
-            envelope_b64: proof_b64,
-            root_hint: None,
-            owner: None,
-            amount: None,
-            duration_blocks: None,
-            direction: None,
-            nullifier: None,
-        };
-        let raw = Bytes::from(
-            norito::json::to_vec(&norito::json::to_value(&dto).expect("serialize dto"))
-                .expect("encode dto"),
-        );
-        let response = handle_gov_ballot_zk_v1(
-            chain_id.clone(),
-            state.clone(),
-            MaybeTelemetry::disabled(),
-            crate::NoritoJsonWithBytes { value: dto, raw },
-        )
-        .await
-        .expect("invalid election is a typed ballot rejection");
-        assert_eq!(
-            response.0.reason.as_deref(),
-            Some(concat!(
-                "election_id must match ",
-                "^[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,127}$"
-            ))
-        );
-        assert!(response.0.tx_instructions.is_empty());
-
-        let dto = ZkBallotV1BallotProofDto {
-            authority: canonical_authority,
-            chain_id: "deliberately-wrong-chain".to_owned(),
-            election_id: " election-1".to_owned(),
-            ballot: BallotProof {
-                backend: "halo2/ipa".into(),
-                envelope_bytes: vec![1, 2, 3],
-                root_hint: None,
-                owner: None,
-                nullifier: None,
-                amount: None,
-                duration_blocks: None,
-                direction: None,
-            },
-        };
-        let raw = Bytes::from(
-            norito::json::to_vec(&norito::json::to_value(&dto).expect("serialize dto"))
-                .expect("encode dto"),
-        );
-        let response = handle_gov_ballot_zk_v1_ballotproof(
-            chain_id,
-            state,
-            MaybeTelemetry::disabled(),
-            crate::NoritoJsonWithBytes { value: dto, raw },
-        )
-        .await
-        .expect("invalid election is a typed ballot rejection");
-        assert_eq!(
-            response.0.reason.as_deref(),
-            Some(concat!(
-                "election_id must match ",
-                "^[A-Za-z0-9_~-][A-Za-z0-9._~-]{0,127}$"
-            ))
-        );
-        assert!(response.0.tx_instructions.is_empty());
-    }
+    include!("gov/network_id_tests.rs");
 
     #[test]
     fn exact_governance_path_token_grammar_rejects_aliasing_characters() {
@@ -4427,8 +4350,7 @@ seiyaku GovernedReadFixture {
                 policy: iroha_data_model::validation_fee::ValidationFeePolicyV1 {
                     schema_version:
                         iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-                    chain_id: ChainId::from("chain"),
-                    genesis_hash: [7; 32],
+                    network_id: *state.network_id_ref(),
                     policy_version: 1,
                     previous_policy_hash: None,
                     ds_asset_id: plain_electorate_rules.voting_asset_id.clone(),
@@ -4624,7 +4546,9 @@ seiyaku GovernedReadFixture {
     async fn governed_contract_read_serializes_exact_inactive_shape() {
         let harness = mk_governance_harness(true);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &harness.authority,
             92,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -4714,7 +4638,9 @@ seiyaku GovernedReadFixture {
     async fn governed_contract_read_rejects_incomplete_active_state() {
         let harness = mk_governance_harness(true);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &harness.authority,
             93,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -4777,7 +4703,6 @@ seiyaku GovernedReadFixture {
     async fn gov_flow_submits_and_applies() {
         let harness = mk_governance_harness(true);
         let authority_str = harness.authority.to_string();
-        let chain_id_str = harness.chain_id.as_str().to_string();
 
         let (artifact, manifest) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest(
@@ -4888,7 +4813,7 @@ seiyaku GovernanceFlowFixture {
 
         let ballot = PlainBallotDto {
             authority: authority_str.clone(),
-            chain_id: chain_id_str.clone(),
+            network_id: *harness.state.network_id_ref(),
             referendum_id: proposal_id.clone(),
             owner: authority_str.clone(),
             amount: 100_u64.into(),
@@ -4896,8 +4821,8 @@ seiyaku GovernanceFlowFixture {
             direction: "Aye".to_string(),
         };
         let ballot = handle_gov_ballot_plain_with_policy(
-            harness.chain_id.clone(),
             harness.state.clone(),
+            &harness.authority,
             NoritoJson(ballot),
             MaybeTelemetry::disabled(),
         )
@@ -5047,29 +4972,29 @@ seiyaku GovernanceFlowFixture {
         use http_body_util::BodyExt as _;
         use tower::ServiceExt as _;
 
-        let (state, _queue, chain_id) = mk_basic_context();
-        let chain_id_str = chain_id.as_str().to_string();
+        let (state, _queue, _chain_id) = mk_basic_context();
+        let authenticated = canonical_account(ACCOUNT_AUTHORITY);
         // Route for zk-v1
-        let app =
-            Router::new().route(
-                "/v1/gov/ballots/zk-v1",
-                post({
-                    let state = state.clone();
-                    let chain_id = chain_id.clone();
-                    move |body: crate::NoritoJsonWithBytes<super::ZkBallotV1Dto>| {
-                        let telemetry = MaybeTelemetry::disabled();
-                        async move {
-                            super::handle_gov_ballot_zk_v1(chain_id, state, telemetry, body).await
-                        }
+        let app = Router::new().route(
+            "/v1/gov/ballots/zk-v1",
+            post({
+                let state = state.clone();
+                let authenticated = authenticated.clone();
+                move |body: crate::NoritoJsonWithBytes<super::ZkBallotV1Dto>| {
+                    let telemetry = MaybeTelemetry::disabled();
+                    let authenticated = authenticated.clone();
+                    async move {
+                        super::handle_gov_ballot_zk_v1(state, &authenticated, telemetry, body).await
                     }
-                }),
-            );
+                }
+            }),
+        );
 
         // Build DTO
         let owner = canonical_literal(ACCOUNT_AUTHORITY);
         let dto = super::ZkBallotV1Dto {
             authority: ACCOUNT_AUTHORITY.to_string(),
-            chain_id: chain_id_str,
+            network_id: *state.network_id_ref(),
             election_id: "ref-1".to_string(),
             backend: "halo2/ipa".to_string(),
             envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
@@ -5109,11 +5034,11 @@ seiyaku GovernanceFlowFixture {
 
     #[tokio::test]
     async fn ballot_zk_v1_rejects_invalid_root_hint() {
-        let (state, _queue, chain_id) = mk_basic_context();
-        let chain_id_str = chain_id.as_str().to_string();
+        let (state, _queue, _chain_id) = mk_basic_context();
+        let authenticated = canonical_account(ACCOUNT_AUTHORITY);
         let dto = super::ZkBallotV1Dto {
             authority: ACCOUNT_AUTHORITY.to_string(),
-            chain_id: chain_id_str,
+            network_id: *state.network_id_ref(),
             election_id: "ref-1".to_string(),
             backend: "halo2/ipa".to_string(),
             envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
@@ -5127,8 +5052,8 @@ seiyaku GovernanceFlowFixture {
         let raw =
             Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
         let res = super::handle_gov_ballot_zk_v1(
-            chain_id,
             state,
+            &authenticated,
             MaybeTelemetry::disabled(),
             crate::NoritoJsonWithBytes { value: dto, raw },
         )
@@ -5145,11 +5070,11 @@ seiyaku GovernanceFlowFixture {
 
     #[tokio::test]
     async fn ballot_zk_v1_rejects_partial_lock_hints() {
-        let (state, _queue, chain_id) = mk_basic_context();
-        let chain_id_str = chain_id.as_str().to_string();
+        let (state, _queue, _chain_id) = mk_basic_context();
+        let authenticated = canonical_account(ACCOUNT_AUTHORITY);
         let dto = super::ZkBallotV1Dto {
             authority: ACCOUNT_AUTHORITY.to_string(),
-            chain_id: chain_id_str,
+            network_id: *state.network_id_ref(),
             election_id: "ref-1".to_string(),
             backend: "halo2/ipa".to_string(),
             envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
@@ -5163,8 +5088,8 @@ seiyaku GovernanceFlowFixture {
         let raw =
             Bytes::from(norito::json::to_vec(&norito::json::to_value(&dto).unwrap()).unwrap());
         let res = super::handle_gov_ballot_zk_v1(
-            chain_id,
             state,
+            &authenticated,
             MaybeTelemetry::disabled(),
             crate::NoritoJsonWithBytes { value: dto, raw },
         )

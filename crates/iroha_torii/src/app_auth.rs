@@ -52,7 +52,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 use iroha_data_model::{
-    ValidationFail,
+    NetworkId, ValidationFail,
     account::{AccountController, AccountId, rekey::AccountAlias},
     query::{
         ErasedIterQuery, Query, QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
@@ -263,22 +263,48 @@ pub fn canonical_request_message(method: &Method, uri: &Uri, body: &[u8]) -> Vec
     .into_bytes()
 }
 
-/// Hash the canonical request bytes used by witness verification.
+/// Construct exact-network canonical request bytes for signing.
 #[must_use]
-pub fn canonical_request_hash(method: &Method, uri: &Uri, body: &[u8]) -> Hash {
-    Hash::new(canonical_request_message(method, uri, body))
+pub fn canonical_network_request_message(
+    network_id: &NetworkId,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+) -> Vec<u8> {
+    const DOMAIN: &[u8] = b"iroha.app.request.network.v1\0";
+    let request = canonical_request_message(method, uri, body);
+    let mut message =
+        Vec::with_capacity(DOMAIN.len() + network_id.as_bytes().len() + request.len());
+    message.extend_from_slice(DOMAIN);
+    message.extend_from_slice(network_id.as_bytes());
+    message.extend_from_slice(&request);
+    message
 }
 
-/// Construct canonical request bytes for signature verification with freshness metadata.
+/// Hash an exact-network canonical request for a multisig witness.
 #[must_use]
-pub fn canonical_request_signature_message(
+pub fn canonical_network_request_hash(
+    network_id: &NetworkId,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+) -> Hash {
+    Hash::new(canonical_network_request_message(
+        network_id, method, uri, body,
+    ))
+}
+
+/// Construct exact-network canonical request bytes with freshness metadata.
+#[must_use]
+pub fn canonical_network_request_signature_message(
+    network_id: &NetworkId,
     method: &Method,
     uri: &Uri,
     body: &[u8],
     timestamp_ms: u64,
     nonce: &str,
 ) -> Vec<u8> {
-    let mut msg = canonical_request_message(method, uri, body);
+    let mut msg = canonical_network_request_message(network_id, method, uri, body);
     msg.push(b'\n');
     msg.extend_from_slice(timestamp_ms.to_string().as_bytes());
     msg.push(b'\n');
@@ -773,7 +799,8 @@ pub(crate) fn verify_canonical_body_request(
     match auth.proof {
         CanonicalRequestBodyProof::SignatureBase64(signature_b64) => {
             let signature_bytes = decode_signature_bytes_value(signature_b64, "signature_base64")?;
-            let message = canonical_request_signature_message(
+            let message = canonical_network_request_signature_message(
+                state.network_id_ref(),
                 method,
                 uri,
                 unsigned_body,
@@ -812,7 +839,8 @@ pub(crate) fn verify_canonical_body_request(
                 )));
             }
 
-            let expected_hash = canonical_request_hash(method, uri, unsigned_body);
+            let expected_hash =
+                canonical_network_request_hash(state.network_id_ref(), method, uri, unsigned_body);
             if witness.canonical_request_hash != expected_hash {
                 return Err(crate::Error::Query(ValidationFail::NotPermitted(
                     "witness_base64 canonical request hash mismatch".to_owned(),
@@ -835,7 +863,7 @@ pub(crate) fn verify_canonical_body_request(
     }
 }
 
-/// Verify optional canonical request headers.
+/// Verify optional exact-network canonical request headers.
 ///
 /// Returns `Ok(Some(identity))` when a signature is present and valid, `Ok(None)` when
 /// no signing headers are provided, and an error when headers are malformed or verification fails.
@@ -846,6 +874,55 @@ pub fn verify_canonical_request(
     uri: &Uri,
     body: &[u8],
     expected_account: Option<&AccountId>,
+) -> Result<Option<VerifiedCanonicalRequest>, crate::Error> {
+    verify_canonical_request_for_network(
+        state,
+        headers,
+        method,
+        uri,
+        body,
+        expected_account,
+        state.network_id_ref(),
+    )
+}
+
+/// Verify required canonical request headers against an exact network identity.
+///
+/// A signature produced for a different genesis-derived [`NetworkId`] cannot
+/// authenticate on this network even when every HTTP field and body byte is identical.
+pub fn verify_canonical_network_request(
+    state: &Arc<CoreState>,
+    network_id: &NetworkId,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    expected_account: Option<&AccountId>,
+) -> Result<Option<VerifiedCanonicalRequest>, crate::Error> {
+    if network_id != state.network_id_ref() {
+        return Err(crate::Error::Query(ValidationFail::NotPermitted(
+            "request verifier NetworkId does not match Core state".to_owned(),
+        )));
+    }
+    verify_canonical_request_for_network(
+        state,
+        headers,
+        method,
+        uri,
+        body,
+        expected_account,
+        network_id,
+    )
+}
+
+fn verify_canonical_request_for_network(
+    state: &Arc<CoreState>,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    expected_account: Option<&AccountId>,
+    network_id: &NetworkId,
 ) -> Result<Option<VerifiedCanonicalRequest>, crate::Error> {
     let account_hdr = headers.get(HEADER_ACCOUNT);
     let signature_hdr = headers.get(HEADER_SIGNATURE);
@@ -914,7 +991,7 @@ pub fn verify_canonical_request(
             "X-Iroha-Nonce",
         )?;
 
-        let expected_hash = canonical_request_hash(method, uri, body);
+        let expected_hash = canonical_network_request_hash(network_id, method, uri, body);
         if witness.canonical_request_hash != expected_hash {
             return Err(crate::Error::Query(ValidationFail::NotPermitted(
                 "X-Iroha-Witness canonical request hash mismatch".to_owned(),
@@ -1031,7 +1108,14 @@ pub fn verify_canonical_request(
 
     let signature_b64 = parse_required_header_exact_text(headers, HEADER_SIGNATURE)?;
     let signature_bytes = decode_signature_bytes_value(&signature_b64, "X-Iroha-Signature")?;
-    let message = canonical_request_signature_message(method, uri, body, timestamp_ms, &nonce);
+    let message = canonical_network_request_signature_message(
+        network_id,
+        method,
+        uri,
+        body,
+        timestamp_ms,
+        &nonce,
+    );
 
     let world = state.world_view();
     let account_entry = world.account(&account).map_err(|_| {
@@ -1133,7 +1217,14 @@ pub(crate) fn verify_fee_quote_canonical_request(
         &signer,
         "X-Iroha-Signature payload",
     )?;
-    let message = canonical_request_signature_message(method, uri, body, timestamp_ms, &nonce);
+    let message = canonical_network_request_signature_message(
+        state.network_id_ref(),
+        method,
+        uri,
+        body,
+        timestamp_ms,
+        &nonce,
+    );
     verify_app_auth_signature(&signature, &signer, &message, "X-Iroha-Signature payload")?;
 
     // Decode only after proving the raw request bytes. Malformed bodies therefore cannot bypass
@@ -1169,10 +1260,11 @@ mod tests {
         state::{State, StateReadOnly, World},
         sumeragi::network_topology::Topology,
     };
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{
-        ChainId, Registrable,
+        Registrable,
         account::{Account, AccountAddress, MultisigMember, MultisigPolicy},
+        block::BlockHeader,
         domain::Domain,
         isi::Register,
         prelude::DomainId,
@@ -1206,6 +1298,22 @@ mod tests {
         ))
     }
 
+    fn minimal_state_with_account_and_network_id(
+        account: &AccountId,
+        network_id: NetworkId,
+    ) -> Arc<State> {
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(account);
+        let account_value = Account::new(account.clone()).build(account);
+        Arc::new(State::new_with_chain_and_network_id_for_testing(
+            World::with([domain], [account_value], []),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            "app-auth-tests".parse().expect("test chain name"),
+            network_id,
+        ))
+    }
+
     fn minimal_state_without_accounts() -> Arc<State> {
         Arc::new(State::new_for_testing(
             World::default(),
@@ -1214,9 +1322,19 @@ mod tests {
         ))
     }
 
+    fn minimal_state_without_accounts_for_network(network_id: NetworkId) -> Arc<State> {
+        Arc::new(State::new_with_chain_and_network_id_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            "app-auth-tests".parse().expect("test chain name"),
+            network_id,
+        ))
+    }
+
     fn fee_quote_body(authority: &AccountId, account_to_register: &AccountId) -> Vec<u8> {
         let payload = TransactionBuilder::new(
-            ChainId::from("app-auth-self-register-fee-quote"),
+            test_network_id(0x30),
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -1227,6 +1345,7 @@ mod tests {
     }
 
     fn signed_headers_for_test(
+        network_id: &NetworkId,
         account: &AccountId,
         key_pair: &KeyPair,
         method: &Method,
@@ -1235,7 +1354,65 @@ mod tests {
         nonce: &'static str,
     ) -> HeaderMap {
         let timestamp_ms = now_unix_ms();
-        let message = canonical_request_signature_message(method, uri, body, timestamp_ms, nonce);
+        let message = canonical_network_request_signature_message(
+            network_id,
+            method,
+            uri,
+            body,
+            timestamp_ms,
+            nonce,
+        );
+        let signature = checked_signature(key_pair.private_key(), &message);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_ACCOUNT,
+            account
+                .canonical_i105()
+                .expect("canonical account header")
+                .parse()
+                .expect("valid account header"),
+        );
+        headers.insert(
+            HEADER_SIGNATURE,
+            signature_header_value(&signature)
+                .parse()
+                .expect("valid signature header"),
+        );
+        headers.insert(
+            HEADER_TIMESTAMP_MS,
+            timestamp_ms
+                .to_string()
+                .parse()
+                .expect("valid timestamp header"),
+        );
+        headers.insert(HEADER_NONCE, nonce.parse().expect("valid nonce header"));
+        headers
+    }
+
+    fn test_network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([seed; Hash::LENGTH]),
+        ))
+    }
+
+    fn signed_network_headers_for_test(
+        network_id: &NetworkId,
+        account: &AccountId,
+        key_pair: &KeyPair,
+        method: &Method,
+        uri: &Uri,
+        body: &[u8],
+        nonce: &'static str,
+    ) -> HeaderMap {
+        let timestamp_ms = now_unix_ms();
+        let message = canonical_network_request_signature_message(
+            network_id,
+            method,
+            uri,
+            body,
+            timestamp_ms,
+            nonce,
+        );
         let signature = checked_signature(key_pair.private_key(), &message);
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1511,6 +1688,100 @@ mod tests {
     }
 
     #[test]
+    fn exact_network_auth_rejects_wrong_network_and_replay() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let account = ALICE_ID.clone();
+        let network_id = test_network_id(0x31);
+        let state = minimal_state_with_account_and_network_id(&account, network_id);
+        let wrong_network_id = test_network_id(0x32);
+        let method = Method::POST;
+        let uri: Uri = "/v1/da/ingest".parse().expect("DA ingest URI");
+        let body = br#"{"payload_public_key":"self-declared-only"}"#;
+        let headers = signed_network_headers_for_test(
+            &network_id,
+            &account,
+            &ALICE_KEYPAIR,
+            &method,
+            &uri,
+            body,
+            "exact-network-replay",
+        );
+
+        verify_canonical_network_request(
+            &state,
+            &wrong_network_id,
+            &headers,
+            &method,
+            &uri,
+            body,
+            None,
+        )
+        .expect_err("a request signed for a different genesis lineage must fail");
+
+        let verified = verify_canonical_network_request(
+            &state,
+            &network_id,
+            &headers,
+            &method,
+            &uri,
+            body,
+            None,
+        )
+        .expect("exact-network request verification")
+        .expect("signed identity");
+        assert_eq!(verified.account, account);
+
+        let replay = verify_canonical_network_request(
+            &state,
+            &network_id,
+            &headers,
+            &method,
+            &uri,
+            body,
+            None,
+        )
+        .expect_err("an accepted exact-network nonce must be one-shot");
+        assert!(matches!(
+            replay,
+            crate::Error::Query(ValidationFail::NotPermitted(message))
+                if message == "request nonce already used"
+        ));
+    }
+
+    #[test]
+    fn exact_network_auth_rejects_self_declared_unregistered_principal() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let key_pair = checked_app_auth_key_fixture();
+        let self_declared = AccountId::new(key_pair.public_key().clone());
+        let network_id = test_network_id(0x41);
+        let state = minimal_state_without_accounts_for_network(network_id);
+        let method = Method::POST;
+        let uri: Uri = "/v1/da/ingest".parse().expect("DA ingest URI");
+        let body = br#"{"payload_signature":"validity-does-not-establish-eligibility"}"#;
+        let headers = signed_network_headers_for_test(
+            &network_id,
+            &self_declared,
+            &key_pair,
+            &method,
+            &uri,
+            body,
+            "unregistered-self-declared-principal",
+        );
+
+        let error = verify_canonical_network_request(
+            &state,
+            &network_id,
+            &headers,
+            &method,
+            &uri,
+            body,
+            None,
+        )
+        .expect_err("a payload-declared key is not an eligible on-ledger principal");
+        assert_missing_account_rejection(error, &self_declared);
+    }
+
+    #[test]
     fn fee_quote_auth_accepts_exact_absent_self_registration_and_rejects_replay() {
         let _guard = test_guard(CanonicalRequestAuthConfig::default());
         let key_pair = checked_app_auth_key_fixture();
@@ -1520,6 +1791,7 @@ mod tests {
         let uri: Uri = "/v1/fees/quote".parse().expect("fee quote uri");
         let body = fee_quote_body(&authority, &authority);
         let headers = signed_headers_for_test(
+            state.network_id_ref(),
             &authority,
             &key_pair,
             &method,
@@ -1560,6 +1832,7 @@ mod tests {
 
         let registers_other = fee_quote_body(&authority, &other);
         let headers = signed_headers_for_test(
+            state.network_id_ref(),
             &authority,
             &key_pair,
             &method,
@@ -1579,6 +1852,7 @@ mod tests {
 
         let mismatched_authority = fee_quote_body(&other, &other);
         let headers = signed_headers_for_test(
+            state.network_id_ref(),
             &authority,
             &key_pair,
             &method,
@@ -1604,6 +1878,7 @@ mod tests {
         let multisig_authority = AccountId::new_multisig(multisig_policy);
         let multisig_body = fee_quote_body(&multisig_authority, &multisig_authority);
         let headers = signed_headers_for_test(
+            state.network_id_ref(),
             &multisig_authority,
             &key_pair,
             &method,
@@ -1623,6 +1898,7 @@ mod tests {
 
         let correct_body = fee_quote_body(&authority, &authority);
         let wrong_key_headers = signed_headers_for_test(
+            state.network_id_ref(),
             &authority,
             &other_key_pair,
             &method,
@@ -1648,6 +1924,7 @@ mod tests {
             .parse()
             .expect("other signed endpoint uri");
         let headers = signed_headers_for_test(
+            state.network_id_ref(),
             &authority,
             &key_pair,
             &method,
@@ -1667,6 +1944,7 @@ mod tests {
 
         let malformed_body = b"{";
         let headers = signed_headers_for_test(
+            state.network_id_ref(),
             &authority,
             &key_pair,
             &method,
@@ -1696,6 +1974,7 @@ mod tests {
         let uri: Uri = "/v1/fees/quote".parse().expect("fee quote uri");
         let body = fee_quote_body(&authority, &authority);
         let headers = signed_headers_for_test(
+            state.network_id_ref(),
             &authority,
             &wrong_key_pair,
             &method,
@@ -1724,7 +2003,14 @@ mod tests {
             .expect("uri");
         let timestamp_ms = now_unix_ms();
         let nonce = "accept-valid-signature";
-        let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, nonce);
+        let message = canonical_network_request_signature_message(
+            state.network_id_ref(),
+            &method,
+            &uri,
+            &[],
+            timestamp_ms,
+            nonce,
+        );
         let signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
         let mut headers = HeaderMap::new();
@@ -1767,7 +2053,14 @@ mod tests {
             .expect("uri");
         let timestamp_ms = now_unix_ms();
         let nonce = "reject-noncanonical-signature-header";
-        let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, nonce);
+        let message = canonical_network_request_signature_message(
+            state.network_id_ref(),
+            &method,
+            &uri,
+            &[],
+            timestamp_ms,
+            nonce,
+        );
         let signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
 
@@ -1819,7 +2112,14 @@ mod tests {
             .expect("uri");
         let timestamp_ms = now_unix_ms();
         let nonce = "accept-alias-account-header";
-        let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, nonce);
+        let message = canonical_network_request_signature_message(
+            state.network_id_ref(),
+            &method,
+            &uri,
+            &[],
+            timestamp_ms,
+            nonce,
+        );
         let signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1962,8 +2262,14 @@ mod tests {
             .parse()
             .expect("uri");
         let timestamp_ms = now_unix_ms();
-        let message =
-            canonical_request_signature_message(&method, &uri, &[], timestamp_ms, "invalid-r");
+        let message = canonical_network_request_signature_message(
+            state.network_id_ref(),
+            &method,
+            &uri,
+            &[],
+            timestamp_ms,
+            "invalid-r",
+        );
         let valid_signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
 
@@ -2024,8 +2330,14 @@ mod tests {
         let unsigned_body = br#"{"request":"refill"}"#;
         let timestamp_ms = now_unix_ms();
         let nonce = "body-auth-noncanonical-base64";
-        let message =
-            canonical_request_signature_message(&method, &uri, unsigned_body, timestamp_ms, nonce);
+        let message = canonical_network_request_signature_message(
+            state.network_id_ref(),
+            &method,
+            &uri,
+            unsigned_body,
+            timestamp_ms,
+            nonce,
+        );
         let signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
 
@@ -2073,8 +2385,14 @@ mod tests {
         let unsigned_body = br#"{"request":"refill"}"#;
         let timestamp_ms = now_unix_ms();
         let nonce = "body-auth-invalid-r";
-        let message =
-            canonical_request_signature_message(&method, &uri, unsigned_body, timestamp_ms, nonce);
+        let message = canonical_network_request_signature_message(
+            state.network_id_ref(),
+            &method,
+            &uri,
+            unsigned_body,
+            timestamp_ms,
+            nonce,
+        );
         let valid_signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
 
@@ -2133,7 +2451,14 @@ mod tests {
             .expect("uri");
         let timestamp_ms = now_unix_ms();
         let nonce = "mismatched-path-account";
-        let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, nonce);
+        let message = canonical_network_request_signature_message(
+            state.network_id_ref(),
+            &method,
+            &uri,
+            &[],
+            timestamp_ms,
+            nonce,
+        );
         let signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
         let mut headers = HeaderMap::new();
@@ -2206,7 +2531,14 @@ mod tests {
             .expect("uri");
         let timestamp_ms = now_unix_ms();
         let nonce = "replayed-nonce";
-        let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, nonce);
+        let message = canonical_network_request_signature_message(
+            state.network_id_ref(),
+            &method,
+            &uri,
+            &[],
+            timestamp_ms,
+            nonce,
+        );
         let signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
         let mut headers = HeaderMap::new();
@@ -2285,7 +2617,14 @@ mod tests {
             .expect("uri");
         let timestamp_ms = now_unix_ms();
         let nonce = format!("configure-preserves-replay-cache-{timestamp_ms}");
-        let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, &nonce);
+        let message = canonical_network_request_signature_message(
+            state.network_id_ref(),
+            &method,
+            &uri,
+            &[],
+            timestamp_ms,
+            &nonce,
+        );
         let signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
         let mut headers = HeaderMap::new();
@@ -2339,7 +2678,14 @@ mod tests {
             .expect("uri");
         let timestamp_ms = 1;
         let nonce = "stale-timestamp";
-        let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, nonce);
+        let message = canonical_network_request_signature_message(
+            state.network_id_ref(),
+            &method,
+            &uri,
+            &[],
+            timestamp_ms,
+            nonce,
+        );
         let signature = checked_signature(ALICE_KEYPAIR.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
         let mut headers = HeaderMap::new();
@@ -2389,7 +2735,14 @@ mod tests {
             .expect("uri");
         let timestamp_ms = now_unix_ms();
         let nonce = "multisig-http-auth";
-        let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, nonce);
+        let message = canonical_network_request_signature_message(
+            state.network_id_ref(),
+            &method,
+            &uri,
+            &[],
+            timestamp_ms,
+            nonce,
+        );
         let signature = checked_signature(signer_one.private_key(), &message);
         let account_literal = account.canonical_i105().expect("i105 account");
         let mut headers = HeaderMap::new();
@@ -2419,6 +2772,7 @@ mod tests {
     }
 
     fn multisig_witness(
+        network_id: &NetworkId,
         account: &AccountId,
         method: &Method,
         uri: &Uri,
@@ -2432,7 +2786,7 @@ mod tests {
             subject_account: account.clone(),
             timestamp_ms,
             nonce: nonce.to_owned(),
-            canonical_request_hash: canonical_request_hash(method, uri, body),
+            canonical_request_hash: canonical_network_request_hash(network_id, method, uri, body),
             signatures: Vec::new(),
         };
         let message = canonical_request_witness_message(&witness).expect("witness payload");
@@ -2483,6 +2837,7 @@ mod tests {
         let timestamp_ms = now_unix_ms();
         let nonce = "valid-multisig-witness";
         let witness = multisig_witness(
+            state.network_id_ref(),
             &account,
             &method,
             &uri,
@@ -2537,6 +2892,7 @@ mod tests {
             ),
         ] {
             let mut witness = multisig_witness(
+                state.network_id_ref(),
                 &account,
                 &method,
                 &uri,
@@ -2590,6 +2946,7 @@ mod tests {
         let uri: Uri = "/v1/soracloud/deploy".parse().expect("uri");
         let timestamp_ms = now_unix_ms();
         let witness = multisig_witness(
+            state.network_id_ref(),
             &account,
             &method,
             &uri,
@@ -2632,6 +2989,7 @@ mod tests {
         let method = Method::POST;
         let uri: Uri = "/v1/soracloud/deploy".parse().expect("uri");
         let witness = multisig_witness(
+            state.network_id_ref(),
             &account,
             &method,
             &uri,
@@ -2670,6 +3028,7 @@ mod tests {
         let method = Method::POST;
         let uri: Uri = "/v1/soracloud/deploy".parse().expect("uri");
         let witness = multisig_witness(
+            state.network_id_ref(),
             &account,
             &method,
             &uri,

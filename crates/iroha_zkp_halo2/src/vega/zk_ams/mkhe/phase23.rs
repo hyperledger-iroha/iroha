@@ -2,13 +2,19 @@
 //!
 //! The helpers here implement the field-level Equations (6), (8)--(11) that
 //! both the encrypted path and the final cleartext checker must share.  They do
-//! not claim that the encrypted sparse maps, malicious-secure contributions,
-//! or padding proof are complete; those obligations remain explicit false bits
-//! in the equation certificate and therefore cannot close the release gate.
+//! not treat the implemented encrypted and terminal mechanics as evidence for
+//! the still-missing hidden-mask opening relation.  The equation certificate
+//! binds both the implemented mechanics and the exact fail-closed mask-proof
+//! audit, so the release gate cannot be opened by stale coarse booleans.
 
 #[cfg(test)]
 use super::shake256;
-use super::{Scalar, ZkAmsMkheErrorV1, keccak256};
+use super::{
+    Scalar, ZkAmsMkheErrorV1, keccak256, manifest::release_profile_v1,
+    phase23_encrypted::zk_ams_phase23_encrypted_implementation_v1,
+    phase23_mask_proof::zk_ams_phase23_mask_proof_audit_v1,
+    terminal::zk_ams_phase3_terminal_implementation_v1,
+};
 
 const MAX_PHASE23_VECTOR_ELEMENTS_V1: usize = 1_048_576;
 const PHASE23_MAX_BATCH_SIZE_V1: u8 = 8;
@@ -69,16 +75,26 @@ pub struct ZkAmsPhase23EquationCertificateV1 {
     pub equation_11_digest: [u8; 32],
     /// Digest of the required padding/C1/C2 finalization relation.
     pub phase3_checker_digest: [u8; 32],
-    /// Packed encrypted A/B/C linear maps are implemented and KAT-verified.
+    /// Digest of the native encrypted Phase-II/III implementation identity.
+    pub encrypted_implementation_digest: [u8; 32],
+    /// Digest of the native Phase-III terminal implementation identity.
+    pub terminal_implementation_digest: [u8; 32],
+    /// Packed encrypted A/B/C linear maps have a native checked implementation.
     pub encrypted_sparse_maps_complete: bool,
-    /// Compact collective multiplication/relinearization is integrated.
+    /// Compact collective multiplication/relinearization has a native checked implementation.
     pub encrypted_cross_term_complete: bool,
-    /// Equation (7) module commitment is parameterized and integrated.
+    /// Equation (7) module commitment is parameterized and implemented.
     pub encrypted_commitment_complete: bool,
-    /// All six final accumulator families are materialized canonically.
+    /// All six final accumulator families have canonical checked materialization.
     pub accumulator_materialization_complete: bool,
-    /// Fixed padding, C1, and transcript-bound C2 finalization are integrated.
+    /// Fixed padding, C1, and transcript-bound C2 finalization are implemented.
     pub padding_and_final_proof_complete: bool,
+    /// The encrypted hidden masks have a complete release-sound opening proof.
+    pub hidden_mask_proof_complete: bool,
+    /// Exact blocker mask reported by the hidden-mask proof audit.
+    pub hidden_mask_proof_blocker_mask: u8,
+    /// Digest of the complete hidden-mask proof audit and its blockers.
+    pub hidden_mask_proof_audit_digest: [u8; 32],
 }
 
 impl ZkAmsPhase23EquationCertificateV1 {
@@ -87,16 +103,52 @@ impl ZkAmsPhase23EquationCertificateV1 {
     #[must_use]
     pub const fn is_complete(self) -> bool {
         self.encrypted_sparse_maps_complete
+            && digest_is_nonzero(self.encrypted_implementation_digest)
+            && digest_is_nonzero(self.terminal_implementation_digest)
             && self.encrypted_cross_term_complete
             && self.encrypted_commitment_complete
             && self.accumulator_materialization_complete
             && self.padding_and_final_proof_complete
+            && self.hidden_mask_proof_complete
+            && self.hidden_mask_proof_blocker_mask == 0
+            && digest_is_nonzero(self.hidden_mask_proof_audit_digest)
     }
 }
 
-/// Return a digestible description of the exact shared algebra and open gates.
+const fn digest_is_nonzero(digest: [u8; 32]) -> bool {
+    let mut index = 0;
+    while index < digest.len() {
+        if digest[index] != 0 {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+/// Return a digestible description of the exact shared algebra, implemented
+/// mechanics, and fail-closed hidden-mask proof gate.
 #[must_use]
 pub fn zk_ams_phase23_equation_certificate_v1() -> ZkAmsPhase23EquationCertificateV1 {
+    let encrypted_implementation = zk_ams_phase23_encrypted_implementation_v1();
+    let terminal_implementation = zk_ams_phase3_terminal_implementation_v1();
+    let encrypted_mechanics_complete = encrypted_implementation.version == 1
+        && encrypted_implementation.algebra_digest != [0; 32]
+        && encrypted_implementation.digest != [0; 32];
+    let terminal_mechanics_complete = terminal_implementation.version == 1
+        && terminal_implementation.c1_schema_digest != [0; 32]
+        && terminal_implementation.c2_schema_digest != [0; 32]
+        && terminal_implementation.digest != [0; 32];
+    let (
+        hidden_mask_proof_complete,
+        hidden_mask_proof_blocker_mask,
+        hidden_mask_proof_audit_digest,
+    ) = match zk_ams_phase23_mask_proof_audit_v1(&release_profile_v1()) {
+        Ok(audit) => (audit.release_available, audit.blocker_mask, audit.digest),
+        // A future malformed profile or audit failure must remain visibly
+        // distinct from a complete proof and can never open this gate.
+        Err(_) => (false, u8::MAX, [0; 32]),
+    };
     ZkAmsPhase23EquationCertificateV1 {
         version: 1,
         max_batch_size: PHASE23_MAX_BATCH_SIZE_V1,
@@ -107,11 +159,16 @@ pub fn zk_ams_phase23_equation_certificate_v1() -> ZkAmsPhase23EquationCertifica
         equations_9_10_digest: keccak256(EQUATIONS_9_10_SCHEMA_V1),
         equation_11_digest: keccak256(EQUATION_11_SCHEMA_V1),
         phase3_checker_digest: keccak256(PHASE3_CHECKER_SCHEMA_V1),
-        encrypted_sparse_maps_complete: false,
-        encrypted_cross_term_complete: false,
-        encrypted_commitment_complete: false,
-        accumulator_materialization_complete: false,
-        padding_and_final_proof_complete: false,
+        encrypted_implementation_digest: encrypted_implementation.digest,
+        terminal_implementation_digest: terminal_implementation.digest,
+        encrypted_sparse_maps_complete: encrypted_mechanics_complete,
+        encrypted_cross_term_complete: encrypted_mechanics_complete,
+        encrypted_commitment_complete: encrypted_mechanics_complete,
+        accumulator_materialization_complete: encrypted_mechanics_complete,
+        padding_and_final_proof_complete: terminal_mechanics_complete,
+        hidden_mask_proof_complete,
+        hidden_mask_proof_blocker_mask,
+        hidden_mask_proof_audit_digest,
     }
 }
 
@@ -130,13 +187,18 @@ pub fn zk_ams_phase23_equation_certificate_digest_v1() -> [u8; 32] {
     frame.extend_from_slice(&certificate.equations_9_10_digest);
     frame.extend_from_slice(&certificate.equation_11_digest);
     frame.extend_from_slice(&certificate.phase3_checker_digest);
+    frame.extend_from_slice(&certificate.encrypted_implementation_digest);
+    frame.extend_from_slice(&certificate.terminal_implementation_digest);
     frame.extend_from_slice(&[
         certificate.encrypted_sparse_maps_complete.into(),
         certificate.encrypted_cross_term_complete.into(),
         certificate.encrypted_commitment_complete.into(),
         certificate.accumulator_materialization_complete.into(),
         certificate.padding_and_final_proof_complete.into(),
+        certificate.hidden_mask_proof_complete.into(),
+        certificate.hidden_mask_proof_blocker_mask,
     ]);
+    frame.extend_from_slice(&certificate.hidden_mask_proof_audit_digest);
     keccak256(&frame)
 }
 
@@ -412,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn equation_certificate_never_confuses_shared_algebra_with_release_completion() {
+    fn equation_certificate_binds_implemented_mechanics_and_exact_mask_blockers() {
         let certificate = zk_ams_phase23_equation_certificate_v1();
         assert_eq!(certificate.assignment_columns, 524_378);
         assert_eq!(certificate.constraint_rows, 1_048_576);
@@ -425,6 +487,31 @@ mod tests {
         ] {
             assert_ne!(digest, [0; 32]);
         }
+        assert!(certificate.encrypted_sparse_maps_complete);
+        assert!(certificate.encrypted_cross_term_complete);
+        assert!(certificate.encrypted_commitment_complete);
+        assert!(certificate.accumulator_materialization_complete);
+        assert!(certificate.padding_and_final_proof_complete);
+        assert_eq!(
+            certificate.encrypted_implementation_digest,
+            zk_ams_phase23_encrypted_implementation_v1().digest
+        );
+        assert_eq!(
+            certificate.terminal_implementation_digest,
+            zk_ams_phase3_terminal_implementation_v1().digest
+        );
+        assert!(!certificate.hidden_mask_proof_complete);
+        assert_eq!(certificate.hidden_mask_proof_blocker_mask, 0b1111);
+        assert_ne!(certificate.hidden_mask_proof_audit_digest, [0; 32]);
+        let mask_audit = zk_ams_phase23_mask_proof_audit_v1(&release_profile_v1()).unwrap();
+        assert_eq!(
+            certificate.hidden_mask_proof_blocker_mask,
+            mask_audit.blocker_mask
+        );
+        assert_eq!(
+            certificate.hidden_mask_proof_audit_digest,
+            mask_audit.digest
+        );
         assert_ne!(zk_ams_phase23_equation_certificate_digest_v1(), [0; 32]);
         assert!(!certificate.is_complete());
     }

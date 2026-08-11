@@ -985,7 +985,7 @@ fn propose_sccp_route_governance_payload(instruction: &InstructionBox) -> Option
         .downcast_ref::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>(
     )?;
     let mut value = Map::new();
-    value.insert("action".to_owned(), json::to_value(&proposal.action).ok()?);
+    value.insert("anchor".to_owned(), json::to_value(&proposal.anchor).ok()?);
     value.insert("window".to_owned(), json::to_value(&proposal.window).ok()?);
     value.insert("mode".to_owned(), json::to_value(&proposal.mode).ok()?);
     Some(instruction_variant_value(
@@ -2335,7 +2335,7 @@ mod tests {
 
     use iroha_core::state::World;
     use iroha_data_model::{
-        ChainId, Registrable, ValidationFail,
+        NetworkId, Registrable, ValidationFail,
         account::{Account, AccountDetails},
         asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId, definition::MintabilityTokens},
         block::{BlockHeader, builder::BlockBuilder},
@@ -2355,6 +2355,12 @@ mod tests {
     };
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
+
+    fn test_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0xA1; iroha_crypto::Hash::LENGTH]),
+        ))
+    }
 
     #[test]
     fn legacy_world_offset_page_helpers_cannot_reenter() {
@@ -2800,9 +2806,8 @@ mod tests {
 
     #[test]
     fn block_dto_counts_rejections() {
-        let chain: ChainId = "test-chain".parse().expect("valid chain id");
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2848,9 +2853,9 @@ mod tests {
 
     #[test]
     fn block_dto_counts_sealed_commitment_entrypoints() {
-        let chain: ChainId = "test-chain".parse().expect("valid chain id");
+        let network_id = test_network_id();
         let tx = TransactionBuilder::new(
-            chain.clone(),
+            network_id,
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2858,13 +2863,13 @@ mod tests {
         let reveal_deadline_height = 5;
         let commitment =
             iroha_data_model::transaction::signed::compute_sealed_transaction_commitment(
-                &chain,
+                &network_id,
                 &tx,
                 [0x41; 32],
                 reveal_deadline_height,
             );
         let payload = iroha_data_model::transaction::signed::SealedTransactionCommitmentPayload {
-            chain_id: chain,
+            network_id,
             authority: ALICE_ID.clone(),
             commitment,
             reveal_after_height: 2,
@@ -2931,9 +2936,8 @@ mod tests {
 
     #[test]
     fn transaction_summary_reflects_status() {
-        let chain: ChainId = "test-chain".parse().expect("valid chain id");
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2948,14 +2952,13 @@ mod tests {
 
     #[test]
     fn transaction_detail_includes_rejection_reason() {
-        let chain: ChainId = "test-chain".parse().expect("valid chain id");
         let mut metadata = Metadata::default();
         metadata.insert(
             "purpose".parse().unwrap(),
             json::Value::String("test".into()),
         );
         let mut builder = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3006,9 +3009,8 @@ mod tests {
 
     #[test]
     fn transaction_detail_includes_repetition_error_context_in_message() {
-        let chain: ChainId = "test-chain".parse().expect("valid chain id");
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3042,13 +3044,13 @@ mod tests {
 
     #[test]
     fn transaction_detail_includes_contract_call_argument_record() {
-        let chain: ChainId = "test-chain".parse().expect("valid chain id");
+        let network_id = test_network_id();
         let contract_address =
-            ContractAddress::derive(&chain, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
+            ContractAddress::derive(&network_id, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
                 .expect("contract address");
         let arguments = vec![0x4b, 0x4f, 0x54, 0x4f];
         let tx = TransactionBuilder::new(
-            chain,
+            network_id,
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3161,9 +3163,8 @@ mod tests {
         let kind = instruction_kind(&instruction);
         assert_eq!(kind, ExplorerInstructionKind::Custom);
 
-        let chain: ChainId = "test-chain".parse().expect("chain id");
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3258,14 +3259,17 @@ mod tests {
             },
         );
         let proposal = iroha_data_model::isi::governance::ProposeSccpRouteGovernance {
-            action,
+            anchor: iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
+                network_id: test_network_id(),
+                action,
+            },
             window: None,
             mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
         };
         let mut expected = Map::new();
         expected.insert(
-            "action".to_owned(),
-            json::to_value(&proposal.action).expect("action should serialize"),
+            "anchor".to_owned(),
+            json::to_value(&proposal.anchor).expect("anchor should serialize"),
         );
         expected.insert(
             "window".to_owned(),
@@ -3306,9 +3310,8 @@ mod tests {
             DomainId::try_new("index_test", "universal").expect("domain id"),
         ));
         let instruction = InstructionBox::from(register);
-        let chain: ChainId = "test-chain".parse().expect("chain id");
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

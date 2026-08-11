@@ -41,9 +41,9 @@ NoritoDemoXcode/
 3. Copy `Configs/demo.env.example` to `.env` (or fill the same values directly inside the
    Xcode scheme). The app reads these variables on launch:
    - `TORII_NODE_URL` — base REST URL used for `/v1/connect` and `/v1/pipeline`.
-   - `CONNECT_SESSION_ID` — 32-byte session identifier (base64/base64url).
-   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — tokens returned by `/v1/connect/session`.
-   - `CONNECT_CHAIN_ID` — chain identifier announced in control frames (defaults to `testnet`).
+   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` / `CONNECT_TOKEN_RELAY` — role and relay tokens returned by `/v1/connect/session`.
+   - `CONNECT_NETWORK_ID` — exact canonical checksummed `NetworkId` bound into the SID and `Open` constraints.
+   - The app generates a fresh app key and non-zero 16-byte nonce, derives the SID from those inputs, and rejects substituted session responses; an arbitrary SID cannot be configured.
    - `CONNECT_ROLE` — default role selected in the UI (`app` or `wallet`).
    - Optional helpers: `CONNECT_PEER_PUB_B64`, `CONNECT_SHARED_KEY_B64`,
      `CONNECT_APPROVE_ACCOUNT_ID`, `CONNECT_APPROVE_PRIVATE_KEY_B64`, `CONNECT_APPROVE_SIGNATURE_B64`.

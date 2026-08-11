@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Freeze the fail-closed ABI-21 C# privacy test and workflow contract."""
+"""Freeze the fail-closed ABI-22 C# privacy test and workflow contract."""
 
 from __future__ import annotations
 
-import importlib.util
 import re
 import unittest
 from pathlib import Path
+
+from scripts import check_native_sdk_abi22_artifact as checker
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -38,7 +39,7 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
             "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs"
         )
         method_name = (
-            "Exact12FixtureBundleRoundTripsAndRejectsAdversarialBytes()"
+            "Exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22()"
         )
         start = source.index(method_name)
         native_assertion = source.index("var bundle =", start)
@@ -47,13 +48,13 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
         self.assertIn(
             "Assert.True(\n"
             "            PrivacyNative.IsAvailable(),\n"
-            "            \"ABI-21 connect_norito_bridge with exact-12 fixture "
+            "            \"ABI-22 connect_norito_bridge with exact-12 fixture "
             "symbols is required.\");",
             preflight,
         )
 
         catalog_method = (
-            "CompiledProfileCatalogRoundTripsAndRejectsAdversarialBytes()"
+            "CompiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi22()"
         )
         catalog_start = source.index(catalog_method)
         catalog_native_call = source.index("var catalog =", catalog_start)
@@ -61,7 +62,7 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
         self.assertIn(
             "Assert.True(\n"
             "            PrivacyNative.IsAvailable(),\n"
-            "            \"ABI-21 connect_norito_bridge with compiled-profile "
+            "            \"ABI-22 connect_norito_bridge with compiled-profile "
             "catalog symbols is required.\");",
             catalog_preflight,
         )
@@ -70,16 +71,6 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
         self.assertNotIn("if (!PrivacyNative.IsAvailable())", source)
 
     def test_csharp_artifact_manifest_requires_all_privacy_symbols(self) -> None:
-        checker_path = REPO_ROOT / "scripts/check_native_sdk_abi21_artifact.py"
-        spec = importlib.util.spec_from_file_location(
-            "privacy_csharp_abi21_checker",
-            checker_path,
-        )
-        self.assertIsNotNone(spec)
-        self.assertIsNotNone(spec.loader)
-        checker = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(checker)
-
         self.assertEqual(
             checker.REQUIRED_SYMBOLS["csharp"],
             (
@@ -100,8 +91,8 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
             '"${IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE:-}" != "1"',
             "PRIVACY_CSHARP_NATIVE_ARTIFACT",
             "PRIVACY_CSHARP_NATIVE_MANIFEST",
-            "scripts/check_native_sdk_abi21_artifact.py",
-            '"${PYTHON_BIN}" -I -B "${ABI21_ARTIFACT_CHECKER}" verify',
+            "scripts/check_native_sdk_abi22_artifact.py",
+            '"${PYTHON_BIN}" -I -B "${ABI22_ARTIFACT_CHECKER}" verify',
             '--artifact "${PRIVACY_CSHARP_NATIVE_ARTIFACT}"',
             '--manifest "${PRIVACY_CSHARP_NATIVE_MANIFEST}"',
             '--source-root "${ROOT_DIR}"',
@@ -115,33 +106,25 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
 
     def test_workflow_builds_authenticates_and_consumes_bridge(self) -> None:
         source = read(".github/workflows/pr_privacy_sdk_guard.yml")
-        native = workflow_job(source, "privacy_native_bridge_tests")
         csharp = workflow_job(source, "privacy_csharp_sdk_tests")
 
         for path in (
-            '      - "scripts/check_native_sdk_abi21_artifact.py"',
+            '      - "scripts/check_native_sdk_abi22_artifact.py"',
             '      - "scripts/tests/check_privacy_csharp_native_contract_test.py"',
         ):
             self.assertIn(path, source)
         for marker in (
-            "cargo build --locked --release -p connect_norito_bridge",
-            "scripts/check_native_sdk_abi21_artifact.py record",
-            "--sdk csharp",
-            "scripts/check_native_sdk_abi21_artifact.py verify",
-            "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
-            "privacy-csharp-native-${{ github.sha }}",
-        ):
-            self.assertIn(marker, native)
-        for marker in (
-            "needs: privacy_native_bridge_tests",
+            "needs: privacy_jvm_sdk_tests",
             "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
-            "python3 -I -B scripts/tests/check_privacy_csharp_native_contract_test.py",
+            "privacy-jvm-native-abi22-${{ github.sha }}",
+            "Authenticate exact ABI22 C# privacy input",
+            "scripts/check_native_sdk_abi22_artifact.py verify",
             'IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE: "1"',
-            "LD_LIBRARY_PATH: ${{ runner.temp }}/iroha-privacy-csharp-native",
+            "LD_LIBRARY_PATH: ${{ runner.temp }}/privacy-jvm-native-abi22",
             "PRIVACY_CSHARP_NATIVE_ARTIFACT: ${{ runner.temp }}/"
-            "iroha-privacy-csharp-native/libconnect_norito_bridge.so",
+            "privacy-jvm-native-abi22/libconnect_norito_bridge.so",
             "PRIVACY_CSHARP_NATIVE_MANIFEST: ${{ runner.temp }}/"
-            "iroha-privacy-csharp-native/native-sdk-abi21.json",
+            "privacy-jvm-native-abi22/native-sdk-abi22-csharp.json",
             "run: ci/check_privacy_csharp_sdk.sh",
         ):
             self.assertIn(marker, csharp)
@@ -149,7 +132,7 @@ class PrivacyCsharpNativeContractTests(unittest.TestCase):
         ordered = (
             csharp.index("actions/setup-dotnet@"),
             csharp.index("actions/download-artifact@"),
-            csharp.index("C# privacy native fail-closed contract"),
+            csharp.index("Authenticate exact ABI22 C# privacy input"),
             csharp.index("Privacy C# SDK tests"),
         )
         self.assertEqual(ordered, tuple(sorted(ordered)))

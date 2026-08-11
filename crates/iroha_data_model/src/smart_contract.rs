@@ -12,7 +12,7 @@ use thiserror::Error;
 use crate::{
     account::{AccountAddressError, AccountId, rekey::AccountAliasDomain},
     error::ParseError,
-    id::ChainId,
+    id::NetworkId,
     name::Name,
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
@@ -161,8 +161,9 @@ pub const CONTRACT_KAIZEN_PERMISSION_NAME: &str = "CanInvokeContractEntrypoint";
 
 /// Canonical human-readable prefix for every Bech32m contract address.
 ///
-/// Chain identity is committed inside the address digest. The presentation prefix is therefore
-/// deliberately network-independent and parsers reject every other prefix.
+/// Exact genesis-derived network identity is committed inside the address digest. The
+/// presentation prefix is therefore deliberately network-independent and parsers reject every
+/// other prefix.
 pub const CONTRACT_ADDRESS_HRP: &str = "irohac";
 
 const CONTRACT_ADDRESS_VERSION_V1: u8 = 1;
@@ -478,14 +479,14 @@ impl ContractAddress {
     /// The address payload is versioned and encoded as:
     /// `version || dataspace_id_be || blake3(preimage)[..20]`.
     ///
-    /// The preimage is domain-separated and length-prefixes the exact canonical chain identifier
-    /// and deployer bytes so the resulting address is unambiguous and chain-specific.
+    /// The preimage is domain-separated and commits the exact 32-byte genesis-lineage identity.
+    /// Deployer bytes remain length-prefixed so the framing is unambiguous.
     ///
     /// # Errors
     /// Returns an error when the derived HRP is invalid, the deployer account cannot be
     /// canonicalized into an address, or the final Bech32m literal cannot be encoded.
     pub fn derive(
-        chain_id: &ChainId,
+        network_id: &NetworkId,
         deployer: &AccountId,
         deploy_nonce: u64,
         dataspace_id: DataSpaceId,
@@ -500,9 +501,6 @@ impl ContractAddress {
                 ContractAddressError::InvalidDeployer(err.to_string())
             })?;
 
-        let chain_id_bytes = chain_id.as_str().as_bytes();
-        let chain_id_len = u16::try_from(chain_id_bytes.len())
-            .expect("validated ChainId length must fit the contract-address framing");
         let deployer_len = u32::try_from(deployer_bytes.len()).map_err(|_| {
             ContractAddressError::InvalidDeployer(
                 "canonical deployer bytes exceed the contract-address framing limit".to_owned(),
@@ -510,16 +508,14 @@ impl ContractAddress {
         })?;
         let mut preimage = Vec::with_capacity(
             CONTRACT_ADDRESS_TAG_V1.len()
-                + 2
-                + chain_id_bytes.len()
+                + iroha_crypto::Hash::LENGTH
                 + 8
                 + 8
                 + 4
                 + deployer_bytes.len(),
         );
         preimage.extend_from_slice(CONTRACT_ADDRESS_TAG_V1);
-        preimage.extend_from_slice(&chain_id_len.to_be_bytes());
-        preimage.extend_from_slice(chain_id_bytes);
+        preimage.extend_from_slice(network_id.as_bytes());
         preimage.extend_from_slice(&dataspace_id.as_u64().to_be_bytes());
         preimage.extend_from_slice(&deploy_nonce.to_be_bytes());
         preimage.extend_from_slice(&deployer_len.to_be_bytes());
@@ -703,9 +699,20 @@ pub mod prelude {
 
 #[cfg(test)]
 mod contract_address_tests {
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 
     use super::*;
+    use crate::{block::BlockHeader, id::ChainId};
+
+    fn network_id(seed: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(seed)))
+    }
+
+    fn cross_sdk_network_id() -> NetworkId {
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            .parse()
+            .expect("fixed network identity must be canonical")
+    }
 
     fn checked_random_account_id() -> AccountId {
         AccountId::new(
@@ -719,10 +726,10 @@ mod contract_address_tests {
     #[test]
     fn contract_address_derivation_is_deterministic() {
         let authority = checked_random_account_id();
-        let chain_id = ChainId::from("contract-address-determinism-test");
-        let first = ContractAddress::derive(&chain_id, &authority, 7, DataSpaceId::UNIVERSAL)
+        let network_id = network_id(b"contract-address-determinism-test");
+        let first = ContractAddress::derive(&network_id, &authority, 7, DataSpaceId::UNIVERSAL)
             .expect("derive contract address");
-        let second = ContractAddress::derive(&chain_id, &authority, 7, DataSpaceId::UNIVERSAL)
+        let second = ContractAddress::derive(&network_id, &authority, 7, DataSpaceId::UNIVERSAL)
             .expect("derive contract address");
         assert_eq!(first, second);
         assert_eq!(
@@ -744,28 +751,50 @@ mod contract_address_tests {
                 .clone(),
         );
 
-        let address =
-            ContractAddress::derive(&ChainId::from("pk3"), &authority, 7, DataSpaceId::UNIVERSAL)
-                .expect("derive pinned contract address");
+        let address = ContractAddress::derive(
+            &cross_sdk_network_id(),
+            &authority,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive pinned contract address");
 
         assert_eq!(
             address.as_str(),
-            "irohac1qyqqqqqqqqqqqqzr5t8frxcyg9020s5gfwugwtu7vmc8zdgmgza38"
+            "irohac1qyqqqqqqqqqqqq8y2pcrtkxvkrn5nt74kjjkjcst6kc56qcqa2dqp"
         );
     }
 
     #[test]
-    fn contract_address_derivation_changes_with_nonce_and_exact_chain_id() {
+    fn contract_address_derivation_changes_with_nonce_and_exact_network_id() {
         let authority = checked_random_account_id();
-        let first_chain = ChainId::from("contract-address-chain-alpha");
-        let second_chain = ChainId::from("contract-address-chain-beta");
-        let first = ContractAddress::derive(&first_chain, &authority, 0, DataSpaceId::UNIVERSAL)
-            .expect("first-chain address");
+        let first_deployment = (
+            ChainId::from("contract-address-shared-name"),
+            network_id(b"contract-address-genesis-alpha"),
+        );
+        let second_deployment = (
+            ChainId::from("contract-address-shared-name"),
+            network_id(b"contract-address-genesis-beta"),
+        );
+        assert_eq!(first_deployment.0, second_deployment.0);
+        assert_ne!(first_deployment.1, second_deployment.1);
+        let first = ContractAddress::derive(
+            &first_deployment.1,
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("first-network address");
         let next_nonce =
-            ContractAddress::derive(&first_chain, &authority, 1, DataSpaceId::UNIVERSAL)
+            ContractAddress::derive(&first_deployment.1, &authority, 1, DataSpaceId::UNIVERSAL)
                 .expect("nonce+1 address");
-        let second = ContractAddress::derive(&second_chain, &authority, 0, DataSpaceId::UNIVERSAL)
-            .expect("second-chain address");
+        let second = ContractAddress::derive(
+            &second_deployment.1,
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("second-network address");
 
         assert_ne!(first, next_nonce);
         assert_ne!(first, second);
@@ -775,16 +804,16 @@ mod contract_address_tests {
     #[test]
     fn contract_address_derivation_ignores_account_display_discriminant() {
         let authority = checked_random_account_id();
-        let chain_id = ChainId::from("contract-address-display-independence");
+        let network_id = network_id(b"contract-address-display-independence");
 
         let first = {
             let _display_prefix = crate::account::address::ChainDiscriminantGuard::enter(42);
-            ContractAddress::derive(&chain_id, &authority, 0, DataSpaceId::UNIVERSAL)
+            ContractAddress::derive(&network_id, &authority, 0, DataSpaceId::UNIVERSAL)
                 .expect("derive with first display prefix")
         };
         let second = {
             let _display_prefix = crate::account::address::ChainDiscriminantGuard::enter(73);
-            ContractAddress::derive(&chain_id, &authority, 0, DataSpaceId::UNIVERSAL)
+            ContractAddress::derive(&network_id, &authority, 0, DataSpaceId::UNIVERSAL)
                 .expect("derive with second display prefix")
         };
 
@@ -795,10 +824,10 @@ mod contract_address_tests {
     #[test]
     fn contract_address_subject_is_deterministic_and_unique_per_address() {
         let authority = checked_random_account_id();
-        let chain_id = ChainId::from("contract-address-subject-test");
-        let first = ContractAddress::derive(&chain_id, &authority, 0, DataSpaceId::UNIVERSAL)
+        let network_id = network_id(b"contract-address-subject-test");
+        let first = ContractAddress::derive(&network_id, &authority, 0, DataSpaceId::UNIVERSAL)
             .expect("first contract address");
-        let second = ContractAddress::derive(&chain_id, &authority, 1, DataSpaceId::UNIVERSAL)
+        let second = ContractAddress::derive(&network_id, &authority, 1, DataSpaceId::UNIVERSAL)
             .expect("second contract address");
 
         assert_eq!(first.subject_id(), first.subject_id());
@@ -836,7 +865,7 @@ mod contract_address_tests {
     fn contract_address_parser_rejects_a_valid_payload_with_the_wrong_hrp() {
         let authority = checked_random_account_id();
         let address = ContractAddress::derive(
-            &ChainId::from("contract-address-wrong-hrp-test"),
+            &network_id(b"contract-address-wrong-hrp-test"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -935,7 +964,7 @@ mod contract_address_tests {
     fn contract_address_norito_wire_is_validated_string_literal() {
         let authority = checked_random_account_id();
         let address = ContractAddress::derive(
-            &ChainId::from("contract-address-norito-test"),
+            &network_id(b"contract-address-norito-test"),
             &authority,
             12,
             DataSpaceId::UNIVERSAL,

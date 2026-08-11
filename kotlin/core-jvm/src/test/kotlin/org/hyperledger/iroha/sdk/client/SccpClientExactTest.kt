@@ -19,6 +19,7 @@ import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.CRC64
@@ -66,7 +67,7 @@ class SccpClientExactTest {
 
         val transactionBytes = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
             TransactionPayload(
-                chainId = TAIRA_CHAIN_ID,
+                networkId = TAIRA_NETWORK_ID,
                 authority = authority,
                 creationTimeMs = 7,
                 executable = Executable.instructions(emptyList()),
@@ -77,7 +78,7 @@ class SccpClientExactTest {
         val gasBoundTransaction = Base64.getEncoder().encodeToString(
             NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
                 TransactionPayload(
-                    chainId = TAIRA_CHAIN_ID,
+                networkId = TAIRA_NETWORK_ID,
                     authority = authority,
                     creationTimeMs = 7,
                     executable = Executable.instructions(emptyList()),
@@ -190,7 +191,7 @@ class SccpClientExactTest {
         fun transactionBytes(feePayment: FeePaymentIntent): ByteArray =
             codec.encodeTransaction(
                 TransactionPayload(
-                    chainId = TAIRA_CHAIN_ID,
+                networkId = TAIRA_NETWORK_ID,
                     authority = authority,
                     creationTimeMs = 7,
                     executable = Executable.instructions(emptyList()),
@@ -369,7 +370,7 @@ class SccpClientExactTest {
         val transaction = Base64.getEncoder().encodeToString(
             NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
                 TransactionPayload(
-                    chainId = TAIRA_CHAIN_ID,
+                networkId = TAIRA_NETWORK_ID,
                     authority = authority,
                     creationTimeMs = 7,
                     executable = Executable.instructions(emptyList()),
@@ -459,7 +460,7 @@ class SccpClientExactTest {
         val signature = Base64.getEncoder().encodeToString(ByteArray(64) { 1 })
         val transactionBytes = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
             TransactionPayload(
-                chainId = TAIRA_CHAIN_ID,
+                networkId = TAIRA_NETWORK_ID,
                 authority = authority,
                 creationTimeMs = 7,
                 executable = Executable.instructions(emptyList()),
@@ -503,7 +504,7 @@ class SccpClientExactTest {
         val wrongAuthorityTransaction = Base64.getEncoder().encodeToString(
             NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
                 TransactionPayload(
-                    chainId = TAIRA_CHAIN_ID,
+                networkId = TAIRA_NETWORK_ID,
                     authority = otherAuthority,
                     creationTimeMs = 7,
                     executable = Executable.instructions(emptyList()),
@@ -1466,7 +1467,7 @@ class SccpClientExactTest {
     fun detachedSigningResponseAcceptsBothClosedBackendsAndRejectsCrossFamilyLabels() {
         val transactionBytes = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1).encodeTransaction(
             TransactionPayload(
-                chainId = TAIRA_CHAIN_ID,
+                networkId = TAIRA_NETWORK_ID,
                 authority = authority,
                 creationTimeMs = 10,
                 executable = Executable.instructions(emptyList()),
@@ -1682,7 +1683,7 @@ class SccpClientExactTest {
             ),
             "settlement" to linkedMapOf(
                 "asset_definition_id" to "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                "custody_account_id" to "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "custody_owner" to "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "payload_amount_scale" to 9,
             ),
         )
@@ -2140,6 +2141,9 @@ class SccpClientExactTest {
 
     private companion object {
         const val TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
+        val TAIRA_NETWORK_ID = NetworkId.parse(
+            "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94",
+        )
         // These authenticate this fixture's semantic commitments and deployment code hashes.
         const val DEFAULT_ROUTE_CONFIG_HASH =
             "65ABF3081D137062860FD712B5414A17C3664FD42C7567373FF3302BA331EFDD"

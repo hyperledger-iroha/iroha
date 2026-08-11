@@ -57,10 +57,11 @@ It also requires the verifier contract:
 ```
 
 The external signer receives an owner-private snapshot of the final canonical
-`release_manifest.json` and a new signature-output path. It must use the runtime
-PKCS#11/HSM session to write exactly 64 raw Ed25519 signature bytes. Private
-keys, PINs, bearer tokens, and provider configuration remain outside the
-repository and artifact tree. `scripts/release_manifest_signing.py` writes
+`release_manifest.json` and a new signature-output path. The
+`authenticated_external_signer` provider must use its authenticated isolated
+service with exact `software` backend to write exactly 64 raw Ed25519 signature
+bytes. Private keys, bearer tokens, and provider configuration remain outside
+the repository and artifact tree. `scripts/release_manifest_signing.py` writes
 `release_manifest.json.sig` as exactly 64 raw signature bytes and
 `release_manifest.json.pub` as exactly 32 raw public-key bytes. It rejects
 malformed or noncanonical signatures, incompatible keys, unsafe permissions,
@@ -85,7 +86,7 @@ evidence.
 | Capability | Local source state | Evidence required for promotion |
 |------------|--------------------|---------------------------------|
 | Dual-profile bundle/image build | Implemented by the two builders and pipeline | Hosted Linux build and smoke records |
-| Ed25519 signature validation | Implemented once for the final aggregate manifest with strict positive/negative tests | HSM/PKCS#11 ceremony, reviewed fingerprint, rotation/revocation record |
+| Ed25519 signature validation | Implemented once for the final aggregate manifest with strict positive/negative tests | Independently administered external software-signing ceremony, reviewed fingerprint, rotation/revocation record |
 | Checksums and manifests | Deterministic aggregate generation, signing, and publish-plan binding are implemented locally | Independent replay and signed publication inventory |
 | SBOM and vulnerability scan | Not supplied by this generic local pipeline | Hosted SBOM plus zero critical/high scanner result |
 | Provenance | Not supplied by this generic local pipeline | OIDC/cosign attestation and verification receipt |
@@ -98,10 +99,15 @@ by this generic dual-track pipeline.
 
 ## External dependencies
 
-- Reviewed PKCS#11/HSM Ed25519 signer wrapper and runtime-only credentials.
+- Reviewed `authenticated_external_signer` Ed25519 adapter, exact `software`
+  backend, independently administered runtime-only credentials, and
+  `software-key-qualified` verification receipt.
 - Out-of-band approval of the raw public-key fingerprint.
 - Packaged `sorafs-validate` candidate plus independent approval of its exact
   executable path and lowercase SHA-256 digest.
 - OIDC/cosign identity and transparency-log availability for provenance.
 - Registry, bucket, or SoraFS publication authorization.
 - Hosted build, install, scan, publication, rollback, and yank receipts.
+
+The provider boundary remains compatible with a later HSM adapter, but an HSM
+qualification requires new deployment evidence and promotion signatures.

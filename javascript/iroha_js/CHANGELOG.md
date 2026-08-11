@@ -4,6 +4,10 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Hard-cut SoraFS pin listing to finalized, byte-bounded exclusive-keyset
+  pages. The client rejects `offset`, legacy attestation/full-record payloads,
+  forged or repeated continuation cursors, and anchor drift; list entries are
+  now strict summaries with consensus-maintained charged count/byte totals.
 - Closed every governance mutation request shape before network I/O and reject
   all retired private-key aliases, including inside ZK public inputs and the
   nested V1 ballot proof. Deploy proposals now expose exact typed public

@@ -10,6 +10,7 @@ import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 /** Canonical hash and onboarding-authority signature verification for stateless receipts. */
 object AccountOnboardingReceiptVerifier {
@@ -21,16 +22,14 @@ object AccountOnboardingReceiptVerifier {
     fun canonicalHash(body: AccountOnboardingPlanBodyV1): ByteArray =
         IrohaHash.prehash(HASH_DOMAIN + AliasNoritoCodec.encodeOnboardingPlanBody(body))
 
-    /** Verifies the canonical body hash and the signature of the authority embedded in the body. */
-    @JvmStatic
-    fun verify(receipt: AccountOnboardingPlanReceiptV1): Boolean = verify(receipt, null)
-
-    /** Verifies the receipt and optionally pins its signer to a configured onboarding authority. */
+    /** Verifies the receipt against the exact local network and optional onboarding authority. */
     @JvmStatic
     fun verify(
         receipt: AccountOnboardingPlanReceiptV1,
+        expectedNetworkId: NetworkId,
         expectedAuthority: String?,
     ): Boolean {
+        if (receipt.body.networkId != expectedNetworkId) return false
         if (expectedAuthority != null) {
             val canonicalExpected = try {
                 requireCanonicalI105Address(expectedAuthority, "expectedAuthority")
@@ -54,42 +53,31 @@ object AccountOnboardingReceiptVerifier {
         }
     }
 
-    /** Requires a valid hash and signature from the authority embedded in the receipt. */
-    @JvmStatic
-    fun requireValid(receipt: AccountOnboardingPlanReceiptV1): AccountOnboardingPlanReceiptV1 {
-        return requireValid(receipt, null)
-    }
-
-    /** Requires a valid receipt signed by the expected configured authority when supplied. */
+    /** Requires a valid receipt for the exact local network and optional authority. */
     @JvmStatic
     fun requireValid(
         receipt: AccountOnboardingPlanReceiptV1,
+        expectedNetworkId: NetworkId,
         expectedAuthority: String?,
     ): AccountOnboardingPlanReceiptV1 {
-        require(verify(receipt, expectedAuthority)) {
-            "account onboarding receipt hash or authority signature is invalid"
+        require(verify(receipt, expectedNetworkId, expectedAuthority)) {
+            "account onboarding receipt network, hash, or authority signature is invalid"
         }
         return receipt
     }
 
-    /** Also binds a verified receipt to the exact canonical request sent by the caller. */
+    /** Binds a network-pinned receipt to the exact canonical request sent by the caller. */
     @JvmStatic
     fun requireValidForRequest(
         request: AccountOnboardingPlanRequestV1,
         receipt: AccountOnboardingPlanReceiptV1,
-    ): AccountOnboardingPlanReceiptV1 = requireValidForRequest(request, receipt, null)
-
-    /** Binds a pinned receipt to the exact canonical request sent by the caller. */
-    @JvmStatic
-    fun requireValidForRequest(
-        request: AccountOnboardingPlanRequestV1,
-        receipt: AccountOnboardingPlanReceiptV1,
+        expectedNetworkId: NetworkId,
         expectedAuthority: String?,
     ): AccountOnboardingPlanReceiptV1 {
         require(receipt.body.request == request) {
             "account onboarding receipt does not match the exact normalized request"
         }
-        return requireValid(receipt, expectedAuthority)
+        return requireValid(receipt, expectedNetworkId, expectedAuthority)
     }
 
     private fun verifyEd25519(publicKey: ByteArray, message: ByteArray, signature: ByteArray): Boolean =

@@ -11,14 +11,15 @@ use std::{num::NonZeroU32, time::Duration};
 use iroha_crypto::PrivateKey;
 use iroha_data_model::{
     metadata::Metadata,
-    prelude::{AccountId, AssetDefinitionId, ChainId},
+    prelude::{AccountId, AssetDefinitionId, NetworkId},
     privacy::{
         OrchardHalo2ActionsStatementV1, PqMaspStarkStatementV1, PrivacyConsensusLimitsV1,
-        PrivacyNativeConsensusBindingV1, PrivacyOrchardActionV1, PrivacyOrchardPoolBootstrapV1,
-        PrivacyPoolIdV1, PrivacyPqMaspPoolBootstrapV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-        PrivacyProofManagedPoolBootstrapV1, PrivacyProofV1, PrivacyStatementContextV1,
-        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-        PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
+        PrivacyJindoFieldElementV1, PrivacyNativeConsensusBindingV1, PrivacyOrchardActionV1,
+        PrivacyOrchardPoolBootstrapV1, PrivacyPoolIdV1, PrivacyPqMaspPoolBootstrapV1,
+        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofManagedPoolBootstrapV1,
+        PrivacyProofV1, PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+        PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
+        PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1,
     },
     transaction::{FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload},
 };
@@ -39,19 +40,29 @@ pub use retained::{
 };
 
 use super::{
-    EvidenceRng09, PrivacyReleaseEvidenceErrorClassV1, authorize_orchard_bundle_v1,
+    EvidenceRng06, EvidenceRng09, PrivacyReleaseEvidenceErrorClassV1, authorize_orchard_bundle_v1,
     compiled_privacy_profile_v1, orchard_empty_root_v1, orchard_spending_key_v1,
     pq_masp_release_fixture_v1, pq_masp_release_successor_replay_fixture_v1,
     prepare_orchard_bundle_v1_with_rng, prove_pq_masp_v1_with_rng,
 };
-use crate::privacy_engines::orchard::{OrchardBundleDraftV1, OrchardChangeProverInputV1, Scope};
+use crate::privacy_engines::{
+    jindo::{
+        JindoPrivacyActionTransactionContextV1, JindoPrivacyActionWitnessV1,
+        build_signed_privacy_action_with_rng_v1,
+    },
+    orchard::{OrchardBundleDraftV1, OrchardChangeProverInputV1, Scope},
+    vega::{
+        VegaPrivacyActionTransactionContextV1, VegaPrivacyActionWitnessMaterialV1,
+        build_signed_vega_privacy_action_with_rng_v1,
+    },
+};
 
 /// Exact transaction and consensus context used by one non-shipping network
 /// action builder.
 #[derive(Clone, Debug)]
 pub struct PrivacyReleaseTransactionContextV1 {
-    /// Actual network chain identifier.
-    pub chain_id: ChainId,
+    /// Exact genesis-header-derived transaction security domain.
+    pub network_id: NetworkId,
     /// Actual submitting account.
     pub authority: AccountId,
     /// Canonical transaction creation time.
@@ -77,6 +88,22 @@ pub struct PrivacyReleaseOrchardNetworkActionV1 {
     pub bootstrap: PrivacyOrchardPoolBootstrapV1,
     /// Exact statement carried by `transaction`.
     pub statement: OrchardHalo2ActionsStatementV1,
+}
+
+/// One canonical verification-only revised-Jindo action.
+#[derive(Debug)]
+pub struct PrivacyReleaseJindoNetworkActionV1 {
+    /// Ordinary production transaction carrying exactly one revised-Jindo proof.
+    pub transaction: SignedTransaction,
+}
+
+/// One canonical verification-only Vega presentation and its issuer revision.
+#[derive(Debug)]
+pub struct PrivacyReleaseVegaNetworkActionV1 {
+    /// Ordinary production transaction carrying exactly one Vega proof.
+    pub transaction: SignedTransaction,
+    /// Exact active issuer record validators must register before submission.
+    pub issuer_record: PrivacyVegaIssuerRecordV1,
 }
 
 /// Four independently proved PQ-MASP actions consuming the same genesis note.
@@ -132,7 +159,7 @@ fn statement_context_v1(
     profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
 ) -> PrivacyStatementContextV1 {
     PrivacyStatementContextV1 {
-        chain_id: transaction.chain_id.clone(),
+        network_id: transaction.network_id,
         action_index: 0,
         transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0; 32]),
         parameter_id: profile.parameter_id,
@@ -147,8 +174,11 @@ fn transaction_payload_v1(
     context: &PrivacyReleaseTransactionContextV1,
     envelope: PrivacyProofEnvelopeV1,
 ) -> Result<TransactionPayload, PrivacyReleaseEvidenceErrorClassV1> {
+    if context.network_id.as_bytes() != &context.genesis_hash {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed);
+    }
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
@@ -230,6 +260,141 @@ fn orchard_statement_v1(
             .collect(),
         value_balance,
         expiry_height,
+    })
+}
+
+fn jindo_field_v1(value: u64) -> PrivacyJindoFieldElementV1 {
+    let mut encoding = [0_u8; 32];
+    encoding[..8].copy_from_slice(&value.to_le_bytes());
+    PrivacyJindoFieldElementV1::new(encoding)
+}
+
+fn vega_utc_date_from_timestamp_ms_v1(
+    timestamp_ms: u64,
+) -> Result<PrivacyVegaMdlDateV1, PrivacyReleaseEvidenceErrorClassV1> {
+    let days = i64::try_from(timestamp_ms / 86_400_000)
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let shifted = days
+        .checked_add(719_468)
+        .ok_or(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let era = if shifted >= 0 {
+        shifted
+    } else {
+        shifted - 146_096
+    } / 146_097;
+    let day_of_era = shifted - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    Ok(PrivacyVegaMdlDateV1 {
+        year: u16::try_from(year)
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?,
+        month: u8::try_from(month)
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?,
+        day: u8::try_from(day)
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?,
+    })
+}
+
+/// Build one canonical network-bound revised-Jindo action.
+///
+/// The polynomial coefficients, evaluation point, proof randomness, and
+/// transaction signing key remain native Rust values for their complete
+/// lifetime. This builder makes no claim about the deliberately exposed
+/// distribution-wide knowledge-soundness limitation.
+pub fn build_privacy_release_jindo_network_action_v1(
+    transaction_context: PrivacyReleaseTransactionContextV1,
+    fixture_seed: [u8; 32],
+    private_key: &PrivateKey,
+) -> Result<PrivacyReleaseJindoNetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
+    let context = JindoPrivacyActionTransactionContextV1 {
+        network_id: transaction_context.network_id,
+        authority: transaction_context.authority,
+        creation_time: transaction_context.creation_time,
+        time_to_live: transaction_context.time_to_live,
+        nonce: transaction_context.nonce,
+        fee_payment: transaction_context.fee_payment,
+        metadata: transaction_context.metadata,
+    };
+    let witness = JindoPrivacyActionWitnessV1::try_new(
+        vec![
+            vec![
+                jindo_field_v1(3),
+                jindo_field_v1(5),
+                jindo_field_v1(7),
+                jindo_field_v1(11),
+            ],
+            vec![jindo_field_v1(13), jindo_field_v1(17)],
+            vec![jindo_field_v1(19), jindo_field_v1(23)],
+            vec![jindo_field_v1(29), jindo_field_v1(31)],
+        ],
+        jindo_field_v1(37),
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let mut rng = EvidenceRng06::new(network_seed_v1(fixture_seed, b"jindo-proof", 0));
+    let signed = build_signed_privacy_action_with_rng_v1(
+        context,
+        witness,
+        transaction_context.genesis_hash,
+        private_key,
+        &mut rng,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    Ok(PrivacyReleaseJindoNetworkActionV1 {
+        transaction: signed.into_signed_transaction(),
+    })
+}
+
+/// Build one canonical network-bound Vega presentation.
+///
+/// The mDL document fragments, issuer signature, holder device key, proof
+/// randomness, and transaction signing key never cross this native boundary.
+pub fn build_privacy_release_vega_network_action_v1(
+    transaction_context: PrivacyReleaseTransactionContextV1,
+    fixture_seed: [u8; 32],
+    private_key: &PrivateKey,
+) -> Result<PrivacyReleaseVegaNetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
+    let mut fixture = super::vega::vega_release_fixture_v1()?;
+    let trusted_timestamp_ms = u64::try_from(transaction_context.creation_time.as_millis())
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    fixture.public_input.presentation_date =
+        vega_utc_date_from_timestamp_ms_v1(trusted_timestamp_ms)?;
+    let witness = VegaPrivacyActionWitnessMaterialV1::new(
+        fixture.issuer_authentication_sig_structure,
+        fixture.mobile_security_object_payload,
+        fixture.birth_date_issuer_signed_item,
+        &fixture.issuer_signature.to_bytes(),
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let context = VegaPrivacyActionTransactionContextV1 {
+        network_id: transaction_context.network_id,
+        authority: transaction_context.authority,
+        creation_time: transaction_context.creation_time,
+        time_to_live: transaction_context.time_to_live,
+        nonce: transaction_context.nonce,
+        fee_payment: transaction_context.fee_payment,
+        metadata: transaction_context.metadata,
+    };
+    let mut rng = EvidenceRng06::new(network_seed_v1(fixture_seed, b"vega-proof", 0));
+    let signed = build_signed_vega_privacy_action_with_rng_v1(
+        context,
+        fixture.public_input,
+        witness,
+        &fixture.device_signing_key,
+        transaction_context.genesis_hash,
+        trusted_timestamp_ms,
+        private_key,
+        &mut rng,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    Ok(PrivacyReleaseVegaNetworkActionV1 {
+        transaction: signed.into_signed_transaction(),
+        issuer_record: fixture.issuer_record,
     })
 }
 
@@ -442,13 +607,13 @@ pub fn build_privacy_release_pq_masp_network_actions_v1(
     fixture_seed: [u8; 32],
     private_key: &PrivateKey,
 ) -> Result<PrivacyReleasePqMaspNetworkActionsV1, PrivacyReleaseEvidenceErrorClassV1> {
-    if preactivation_context.chain_id != canonical_context.chain_id
+    if preactivation_context.network_id != canonical_context.network_id
         || preactivation_context.authority != canonical_context.authority
         || preactivation_context.genesis_hash != canonical_context.genesis_hash
-        || canonical_context.chain_id != replay_context.chain_id
+        || canonical_context.network_id != replay_context.network_id
         || canonical_context.authority != replay_context.authority
         || canonical_context.genesis_hash != replay_context.genesis_hash
-        || canonical_context.chain_id != post_restart_replay_context.chain_id
+        || canonical_context.network_id != post_restart_replay_context.network_id
         || canonical_context.authority != post_restart_replay_context.authority
         || canonical_context.genesis_hash != post_restart_replay_context.genesis_hash
     {

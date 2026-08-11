@@ -326,17 +326,17 @@ if [[ "$PROFILE" == "release" ]]; then
 fi
 
 PPROF_TARGET_DIR="${target_root}/pprof"
-PPROF_IROHAD_BIN="${PPROF_TARGET_DIR}/release/irohad"
+PPROF_IROHAD_BIN="${PPROF_TARGET_DIR}/release/iroha3d"
 if [[ "$PROFILE" != "release" ]]; then
-  PPROF_IROHAD_BIN="${PPROF_TARGET_DIR}/debug/irohad"
+  PPROF_IROHAD_BIN="${PPROF_TARGET_DIR}/debug/iroha3d"
 fi
 
 echo "Building irohad with profiling endpoint ($PROFILE)..."
 mkdir -p "$PPROF_TARGET_DIR"
 if [[ "$PROFILE" == "release" ]]; then
-  (cd "$IROHA_DIR" && CARGO_TARGET_DIR="$PPROF_TARGET_DIR" "${cargo_runner[@]}" -- build --release -p irohad --features profiling-endpoint)
+  (cd "$IROHA_DIR" && CARGO_TARGET_DIR="$PPROF_TARGET_DIR" "${cargo_runner[@]}" -- build --release -p irohad --bin iroha3d --features profiling-endpoint)
 else
-  (cd "$IROHA_DIR" && CARGO_TARGET_DIR="$PPROF_TARGET_DIR" "${cargo_runner[@]}" -- build -p irohad --features profiling-endpoint)
+  (cd "$IROHA_DIR" && CARGO_TARGET_DIR="$PPROF_TARGET_DIR" "${cargo_runner[@]}" -- build -p irohad --bin iroha3d --features profiling-endpoint)
 fi
 
 DEPLOY_ENV=()

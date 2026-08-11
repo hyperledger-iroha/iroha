@@ -9,6 +9,8 @@ PYTHON_BIN="${PRIVACY_SDK_GUARD_PYTHON_BIN:-python3}"
 from __future__ import annotations
 
 import ast
+import base64
+import binascii
 import hashlib
 import re
 import sys
@@ -21,6 +23,8 @@ mode = sys.argv[2]
 MATRIX_RELATIVE = "fixtures/privacy/exact12_v1.tsv"
 MATRIX_BYTES = (root / MATRIX_RELATIVE).read_bytes()
 MATRIX_TEXT = MATRIX_BYTES.decode("utf-8", errors="strict")
+BUNDLE_RELATIVE = "fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64"
+BUNDLE_FILE_BYTES = (root / BUNDLE_RELATIVE).read_bytes()
 
 
 def matrix_rows(kind: str) -> tuple[tuple[str, ...], ...]:
@@ -594,6 +598,17 @@ def _workflow_run_has_cargo_policy(run: str) -> bool:
             executable_lines,
         )
         is not None
+        or re.search(
+            r'(?<![A-Za-z0-9_])\$(?:\{)?CARGO(?:_BIN|_PATH)?(?:\})?(?=\s|"|$)',
+            executable_lines,
+        )
+        is not None
+        or re.search(
+            r"(?<![A-Za-z0-9_./-])(?:bash\s+)?ci/[A-Za-z0-9_./-]*cargo"
+            r"[A-Za-z0-9_./-]*\.sh(?=\s|$)",
+            executable_lines,
+        )
+        is not None
     )
 
 
@@ -695,6 +710,14 @@ def _check_cargo_workflow(
             ("update-environment", "false"),
         ),
     }
+    setup_python_ids = {
+        "privacy_swift_sdk_parse": "privacy-swift-python",
+        "privacy_jvm_sdk_tests": "privacy-jvm-python",
+        "privacy_csharp_sdk_tests": "privacy-csharp-python",
+        "privacy_javascript_sdk_tests": "privacy-js-python",
+        "privacy_python_sdk_tests": "privacy-python",
+        "privacy-sdk-guard": "privacy-python",
+    }
     mobile_python_binding_step = {
         "name": "Bind the canonical mobile Python",
         "env": (("SETUP_PYTHON_PATH", setup_python_path),),
@@ -739,71 +762,11 @@ def _check_cargo_workflow(
         "env": (("CARGO_NET_OFFLINE", '"false"'),),
         "run": "cargo fetch --locked",
     }
-    swift_toolchain_step = {
-        "name": "Install exact Apple Rust toolchain and targets",
-        "shell": "bash",
-        "run": "\n".join(
-            (
-                "env -i \\",
-                '  HOME="${HOME}" \\',
-                '  RUSTUP_DIST_SERVER="https://static.rust-lang.org" \\',
-                '  "${HOME}/.cargo/bin/rustup" toolchain install \\',
-                '    "1.93.1" \\',
-                "    --profile minimal \\",
-                "    --no-self-update",
-                "env -i \\",
-                '  HOME="${HOME}" \\',
-                '  RUSTUP_DIST_SERVER="https://static.rust-lang.org" \\',
-                '  "${HOME}/.cargo/bin/rustup" target add \\',
-                '    --toolchain "1.93.1" \\',
-                "    aarch64-apple-ios \\",
-                "    aarch64-apple-ios-sim \\",
-                "    x86_64-apple-ios \\",
-                "    aarch64-apple-darwin \\",
-                "    x86_64-apple-darwin",
-            )
-        ),
-    }
-    swift_fetch_step = {
-        "name": "Prime privacy Apple Cargo dependencies",
-        "run": "\n".join(
-            (
-                "env -i \\",
-                "  CARGO_NET_OFFLINE=false \\",
-                '  HOME="${HOME}" \\',
-                '  PATH="${HOME}/.cargo/bin:/usr/bin:/bin" \\',
-                '  "${HOME}/.cargo/bin/rustup" run "1.93.1" cargo fetch --locked',
-            )
-        ),
-    }
     native_consumer_step = {
         "name": "Privacy native bridge tests",
-        "run": "\n".join(
-            (
-                "cargo test -p connect_norito_bridge privacy_ --lib "
-                "-- --test-threads=1",
-                "cargo build --locked --release -p connect_norito_bridge",
-                'host_target="$(rustc -vV | sed -n \'s/^host: //p\')"',
-                'if [[ "${host_target}" != "x86_64-unknown-linux-gnu" ]]; then',
-                '  echo "privacy C# bridge host ${host_target} is not the required Linux x86_64 target" >&2',
-                "  exit 1",
-                "fi",
-                'artifact_dir="${RUNNER_TEMP}/iroha-privacy-csharp-native"',
-                'artifact="${artifact_dir}/libconnect_norito_bridge.so"',
-                'manifest="${artifact_dir}/native-sdk-abi21.json"',
-                'mkdir -p "${artifact_dir}"',
-                'cp "${CARGO_TARGET_DIR}/release/libconnect_norito_bridge.so" "${artifact}"',
-                "python3 -I -B scripts/check_native_sdk_abi21_artifact.py record \\",
-                '  --artifact "${artifact}" \\',
-                '  --manifest "${manifest}" \\',
-                '  --source-root "${GITHUB_WORKSPACE}" \\',
-                "  --sdk csharp \\",
-                '  --target "${host_target}"',
-                "python3 -I -B scripts/check_native_sdk_abi21_artifact.py verify \\",
-                '  --artifact "${artifact}" \\',
-                '  --manifest "${manifest}" \\',
-                '  --source-root "${GITHUB_WORKSPACE}"',
-            )
+        "run": (
+            "cargo test -p connect_norito_bridge privacy_ --lib "
+            "-- --test-threads=1"
         ),
     }
     python_consumer_step = {
@@ -866,6 +829,86 @@ def _check_cargo_workflow(
             "final_verify": python_final_verify_step,
         },
     }
+    swift_install_run = (
+        install_run.replace(
+            "1.93.1-x86_64-unknown-linux-gnu",
+            "1.93.1-aarch64-apple-darwin",
+        )
+        + '\necho "RUSTUP_TOOLCHAIN=1.93.1-aarch64-apple-darwin" '
+        '>> "$GITHUB_ENV"'
+    )
+    jvm_provision_run = (
+        native_provision_run.replace(
+            "iroha-privacy-sdk-cargo", "iroha-privacy-jvm-cargo"
+        )
+        + ' \\\n  "${{ steps.privacy-jvm-python.outputs.python-path }}"'
+    )
+    jvm_verify_run = (
+        'ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" '
+        '"${{ steps.privacy-jvm-python.outputs.python-path }}"'
+    )
+    swift_fetch_run = "\n".join(
+        (
+            "rustup target add --toolchain 1.93.1-aarch64-apple-darwin "
+            "aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios "
+            "aarch64-apple-darwin x86_64-apple-darwin",
+            "cargo fetch --locked",
+        )
+    )
+    additional_cargo_policies = {
+        "privacy_jvm_sdk_tests": (
+            {
+                **install_step,
+                "name": "Install host-qualified privacy JVM Rust toolchain",
+            },
+            {
+                "name": "Provision private privacy JVM Cargo lock",
+                "shell": "bash",
+                "run": jvm_provision_run,
+            },
+            {
+                "name": "Verify privacy JVM Cargo lock isolation",
+                "run": jvm_verify_run,
+            },
+            {
+                "name": "Prime privacy JVM native dependencies",
+                "env": (("CARGO_NET_OFFLINE", '"false"'),),
+                "run": "cargo fetch --locked",
+            },
+            {
+                "name": "Verify final privacy JVM Cargo lock isolation",
+                "if": "always()",
+                "run": jvm_verify_run,
+            },
+        ),
+        "privacy_javascript_sdk_tests": (
+            {
+                **install_step,
+                "name": "Install host-qualified privacy N-API Rust toolchain",
+            },
+            {
+                "name": "Prime privacy N-API dependencies from the frozen lock",
+                "run": "cargo fetch --locked",
+            },
+        ),
+        "privacy_swift_sdk_parse": (
+            {
+                "name": "Install host-qualified privacy Swift Rust toolchain",
+                "shell": "bash",
+                "run": swift_install_run,
+            },
+            {
+                "name": "Install Apple Rust targets and prime frozen dependencies",
+                "run": swift_fetch_run,
+            },
+        ),
+    }
+    native_lane_job_digests = {
+        "privacy_swift_sdk_parse": "2b374ca01219f9abab30726b9a46c57a7598926b889c4995ae762c9af6fd4d27",
+        "privacy_jvm_sdk_tests": "1f430f2e88d3c455e8ed0a5182308627d6657099093d6c6021c308bbf12aedcb",
+        "privacy_csharp_sdk_tests": "527591fa158d75bd9349106e6382dbbf09a87e77b4f60bb640fc2b871aa51b27",
+        "privacy_javascript_sdk_tests": "17b52dcc4caff1134d2b9e1731d76f39b71d33cc360038bcf81e8120cf93fbfc",
+    }
 
     require(
         workflow_source.endswith("\n") and "\r" not in workflow_source,
@@ -885,19 +928,19 @@ def _check_cargo_workflow(
         and step.fields["uses"].startswith("actions/setup-python@")
     )
     require(
-        len(setup_python_steps) == 3
+        len(setup_python_steps) == len(setup_python_ids)
         and {job_name for job_name, _, _ in setup_python_steps}
-        == {
-            "privacy_python_sdk_tests",
-            "privacy_swift_sdk_parse",
-            "privacy-sdk-guard",
-        }
+        == set(setup_python_ids)
         and all(
-            _exact_step(step, setup_python_step)
-            for _, _, step in setup_python_steps
+            _exact_step(
+                step,
+                {**setup_python_step, "id": setup_python_ids[job_name]},
+            )
+            for job_name, _, step in setup_python_steps
         ),
-        "all three reviewed Python consumers must use only the exact pinned "
-        "setup-python 3.12 step with update-environment false and no cache fields",
+        "all six native privacy jobs that consume Python must use only their "
+        "exact pinned setup-python 3.12 step with update-environment false "
+        "and no cache fields",
         errors,
     )
     uses_values = tuple(
@@ -919,6 +962,19 @@ def _check_cargo_workflow(
         "privacy Cargo jobs must use only the explicitly authenticated rustup installer",
         errors,
     )
+    for job_name, expected_digest in native_lane_job_digests.items():
+        job = workflow.jobs.get(job_name)
+        job_source = (
+            "\n".join(workflow.lines[job.start_line : job.end_line]) + "\n"
+            if job is not None
+            else ""
+        )
+        require(
+            hashlib.sha256(job_source.encode("utf-8")).hexdigest()
+            == expected_digest,
+            f"{job_name} must match its reviewed source-bound native lane",
+            errors,
+        )
 
     expected_cargo_step_indices: dict[str, set[int]] = {}
     for job_name, policy in policies.items():
@@ -1088,28 +1144,39 @@ def _check_cargo_workflow(
         )
         expected_cargo_step_indices[job_name] = policy_indices
 
-    swift_job = workflow.jobs.get("privacy_swift_sdk_parse")
-    require(
-        swift_job is not None,
-        "privacy workflow is missing the reviewed Apple Swift job",
-        errors,
-    )
-    swift_policy_indices: set[int] = set()
-    if swift_job is not None:
-        for label, expected_step in (
-            ("Apple Rust toolchain and targets", swift_toolchain_step),
-            ("locked Apple Cargo fetch", swift_fetch_step),
-        ):
-            matches = _steps_with_field(swift_job, "name", expected_step["name"])
+    for job_name, expected_steps in additional_cargo_policies.items():
+        job = workflow.jobs.get(job_name)
+        require(
+            job is not None,
+            f"privacy workflow is missing required native Cargo job {job_name}",
+            errors,
+        )
+        if job is None:
+            continue
+        ordered_indices: list[int] = []
+        for expected_step in expected_steps:
+            matches = _steps_with_field(job, "name", expected_step["name"])
             require(
                 len(matches) == 1
                 and _exact_step(matches[0][1], expected_step),
-                "privacy_swift_sdk_parse must contain exactly one exact " + label,
+                f"{job_name} must contain exactly one exact authenticated "
+                f"{expected_step['name']} step",
                 errors,
             )
             if len(matches) == 1:
-                swift_policy_indices.add(matches[0][0])
-    expected_cargo_step_indices["privacy_swift_sdk_parse"] = swift_policy_indices
+                ordered_indices.append(matches[0][0])
+        require(
+            len(ordered_indices) == len(expected_steps)
+            and all(
+                earlier < later
+                for earlier, later in zip(
+                    ordered_indices, ordered_indices[1:]
+                )
+            ),
+            f"{job_name} must keep its authenticated Cargo steps in canonical order",
+            errors,
+        )
+        expected_cargo_step_indices[job_name] = set(ordered_indices)
 
     semantic_python_path_run_count = sum(
         step.fields["run"].count(setup_python_path)
@@ -1125,22 +1192,43 @@ def _check_cargo_workflow(
             else ()
         )
     )
-    semantic_python_path_count = sum(
-        value.count(setup_python_path)
-        if isinstance(value, str)
-        else sum(
-            key.count(setup_python_path) + item.count(setup_python_path)
-            for key, item in value
+    def semantic_field_count(needle: str) -> int:
+        return sum(
+            value.count(needle)
+            if isinstance(value, str)
+            else sum(
+                key.count(needle) + item.count(needle)
+                for key, item in value
+            )
+            for _, _, step in all_steps
+            for value in step.fields.values()
         )
-        for _, _, step in all_steps
-        for value in step.fields.values()
-    )
+
+    semantic_python_path_count = semantic_field_count(setup_python_path)
     require(
         semantic_python_path_run_count == 7
-        and semantic_python_path_env_count == 2
-        and semantic_python_path_count == 9,
+        and semantic_python_path_env_count == 1
+        and semantic_python_path_count == 8,
         "setup-python output must be threaded into every Python provision, "
         "verification, self-test, and the canonical mobile Python binding",
+        errors,
+    )
+    expected_python_output_counts = {
+        "privacy-swift-python": 1,
+        "privacy-jvm-python": 4,
+        "privacy-csharp-python": 3,
+        "privacy-js-python": 2,
+        "privacy-python": 8,
+    }
+    require(
+        all(
+            semantic_field_count(
+                f"${{{{ steps.{step_id}.outputs.python-path }}}}"
+            )
+            == expected_count
+            for step_id, expected_count in expected_python_output_counts.items()
+        ),
+        "every native privacy lane must thread only its exact setup-python output",
         errors,
     )
 
@@ -1156,8 +1244,8 @@ def _check_cargo_workflow(
             unexpected_cargo_steps.append(f"{job_name}[{step_index}]")
     require(
         not rogue_cargo_jobs,
-        "Cargo policy commands may appear only in the four reviewed privacy "
-        "Cargo jobs; rogue jobs: "
+        "Cargo policy commands may appear only in the six authenticated "
+        "privacy Cargo jobs; rogue jobs: "
         + ", ".join(sorted(rogue_cargo_jobs)),
         errors,
     )
@@ -1284,6 +1372,31 @@ def check(overrides: dict[str, str] | None = None) -> None:
 
     version_rows = matrix_rows("matrix-version")
     registry_rows = matrix_rows("registry-sha256")
+    bundle_archive = b""
+    bundle_file_is_canonical = (
+        BUNDLE_FILE_BYTES.endswith(b"\n")
+        and not BUNDLE_FILE_BYTES.endswith(b"\n\n")
+        and b"\r" not in BUNDLE_FILE_BYTES
+        and b"\n" not in BUNDLE_FILE_BYTES[:-1]
+    )
+    if bundle_file_is_canonical:
+        encoded_bundle = BUNDLE_FILE_BYTES[:-1]
+        try:
+            bundle_archive = base64.b64decode(encoded_bundle, validate=True)
+        except (binascii.Error, ValueError):
+            bundle_file_is_canonical = False
+        else:
+            bundle_file_is_canonical = (
+                bool(bundle_archive)
+                and base64.b64encode(bundle_archive) == encoded_bundle
+            )
+    require(
+        bundle_file_is_canonical,
+        "exact12 typed fixture bundle must be one non-empty canonical padded "
+        "standard-Base64 line followed by exactly one LF",
+        errors,
+    )
+    canonical_bundle_digest = hashlib.sha256(bundle_archive).hexdigest()
     require(
         MATRIX_TEXT.endswith("\n")
         and "\r" not in MATRIX_TEXT
@@ -1342,6 +1455,13 @@ def check(overrides: dict[str, str] | None = None) -> None:
     rust_protocol = read(
         "crates/iroha_data_model/src/privacy/protocol.rs", overrides
     )
+    rust_capability_manifest = read(
+        "crates/iroha_data_model/src/privacy/capability_manifest.rs", overrides
+    )
+    rust_protocol_tests = read(
+        "crates/iroha_data_model/src/privacy/tests/protocol_and_proofs.rs",
+        overrides,
+    )
     js_crypto = read("javascript/iroha_js/src/crypto.js", overrides)
     py_crypto = read(
         "python/iroha_python/src/iroha_python/crypto.py", overrides
@@ -1349,6 +1469,18 @@ def check(overrides: dict[str, str] | None = None) -> None:
     py_native = read(
         "python/iroha_python/iroha_python_rs/src/lib.rs", overrides
     )
+
+    for relative in (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyExact12FixtureCodecV1.java",
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12FixtureCodecV1.kt",
+    ):
+        source = read(relative, overrides)
+        require(
+            source.count(canonical_bundle_digest) == 1,
+            f"{relative} must pin the SHA-256 of the canonical Rust-derived "
+            "exact-12 fixture archive exactly once",
+            errors,
+        )
 
     for relative, source, markers in (
         (
@@ -1390,49 +1522,49 @@ def check(overrides: dict[str, str] | None = None) -> None:
 
     require(
         re.search(
-            r"PRIVACY_REQUIRED_BRIDGE_ABI_VERSION\s*=\s*21\s*;",
+            r"PRIVACY_REQUIRED_BRIDGE_ABI_VERSION\s*=\s*22\s*;",
             js_crypto,
         )
         is not None
         and "abiVersion === PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" in js_crypto
         and "abiVersion >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" not in js_crypto,
-        "JavaScript privacy bridge must require exact first-release ABI 21",
+        "JavaScript privacy bridge must require exact first-release ABI 22",
         errors,
     )
     require(
-        literal_assignment(py_crypto, "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION") == 21
+        literal_assignment(py_crypto, "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION") == 22
         and "version == PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" in py_crypto
         and "version >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" not in py_crypto,
-        "Python privacy bridge must require exact first-release ABI 21",
+        "Python privacy bridge must require exact first-release ABI 22",
         errors,
     )
     require(
         "fn privacy_bridge_abi_version_py() -> u32" in py_native
         and "PRIVACY_BRIDGE_ABI_VERSION_V1" in py_native,
-        "Python native privacy bridge must report first-release ABI 21",
+        "Python native privacy bridge must report first-release bridge ABI 22",
         errors,
     )
     for relative, marker in (
         (
             "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java",
-            "REQUIRED_BRIDGE_ABI_VERSION = 21",
+            "REQUIRED_BRIDGE_ABI_VERSION = 22",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
-            "REQUIRED_BRIDGE_ABI_VERSION: Int = 21",
+            "REQUIRED_BRIDGE_ABI_VERSION: Int = 22",
         ),
         (
             "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
-            "requiredBridgeABIVersion: UInt32 = 21",
+            "requiredBridgeABIVersion: UInt32 = 22",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
-            "RequiredBridgeAbiVersion = 21",
+            "RequiredBridgeAbiVersion = 22",
         ),
     ):
         require(
             marker in read(relative, overrides),
-            f"{relative} must require exact first-release ABI 21",
+            f"{relative} must require exact first-release bridge ABI 22",
             errors,
         )
 
@@ -1635,12 +1767,19 @@ def check(overrides: dict[str, str] | None = None) -> None:
 
     require(
         "pub fn validate_privacy_capability_archive_v1" in rust_protocol
-        and "decode_canonical_with_limits::<PrivacyCapabilitySnapshotV1>"
+        and "decode_canonical_with_limits::<PrivacyExact12CapabilityManifestV1>"
         in rust_protocol
         and "PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1: usize = 256 * 1024"
         in rust_protocol
-        and "snapshot.validate().is_err()" in rust_protocol,
-        "Rust data model must own the bounded canonical typed capability validator",
+        and "manifest.validate().is_err()" in rust_protocol
+        and "pub fn exact12_capability_manifest_v1" in rust_capability_manifest
+        and "pub fn computed_manifest_digest" in rust_capability_manifest
+        and "pub fn canonical_bytes" in rust_capability_manifest
+        and "pub fn validate(&self)" in rust_capability_manifest
+        and "let legacy_snapshot" in rust_protocol_tests
+        and "the manifest validator must reject the old snapshot schema outright"
+        in rust_protocol_tests,
+        "Rust data model must own the bounded canonical Exact12 manifest validator and reject the legacy snapshot schema",
         errors,
     )
     require(
@@ -1729,7 +1868,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
     require(
         "loadedBridgeAbiVersion == PrivacyNativeBridge.requiredBridgeABIVersion"
         in swift_native_bridge,
-        "Swift privacy availability must require exact first-release ABI 21",
+        "Swift privacy availability must require exact first-release ABI 22",
         errors,
     )
 
@@ -1865,35 +2004,6 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "python/iroha_python/tests/package_import_fallback_test.py", overrides
     )
     python_pyproject_source = read("python/iroha_python/pyproject.toml", overrides)
-    csharp_privacy_test_source = read(
-        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/PrivacyNativeTests.cs",
-        overrides,
-    )
-    csharp_sdk_guard_source = read(
-        "ci/check_privacy_csharp_sdk.sh", overrides
-    )
-    kotlin_privacy_test_source = read(
-        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeTest.kt",
-        overrides,
-    )
-    java_privacy_test_source = read(
-        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java",
-        overrides,
-    )
-    jvm_sdk_guard_source = read("ci/check_privacy_jvm_sdk.sh", overrides)
-    swift_sdk_guard_source = read("ci/check_privacy_swift_sdk.sh", overrides)
-    swift_release_test_sources = tuple(
-        read(relative, overrides)
-        for relative in (
-            "IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift",
-            "IrohaSwift/Tests/IrohaSwiftTests/CancelAssetLockV1Tests.swift",
-            "IrohaSwift/Tests/IrohaSwiftTests/SorafsReferenceValidatorsTests.swift",
-            "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
-        )
-    )
-    native_artifact_checker_source = read(
-        "scripts/check_native_sdk_abi21_artifact.py", overrides
-    )
     workflow = _check_cargo_workflow(workflow_source, errors)
     required_workflow_paths = (
         ".gitignore",
@@ -1928,10 +2038,6 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "crates/sorafs_chunker/**",
         "crates/sorafs_orchestrator/**",
         "ci/verify_privacy_python_wheel.py",
-        "scripts/check_native_sdk_abi21_artifact.py",
-        "scripts/tests/check_privacy_csharp_native_contract_test.py",
-        "scripts/tests/check_privacy_jvm_native_contract_test.py",
-        "scripts/tests/check_privacy_swift_native_contract_test.py",
         "python/iroha_python/pyproject.toml",
         "python/iroha_python/iroha_python_rs/build.rs",
         "python/iroha_python/iroha_python_rs/src/**",
@@ -1949,190 +2055,20 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "python/iroha_torii_client/**",
         "python/iroha_torii_client/pyproject.toml",
         "python/iroha_torii_client/**/*.py",
+        "ci/check_privacy_csharp_sdk.sh",
+        "ci/check_privacy_js_sdk.sh",
+        "ci/check_privacy_jvm_sdk.sh",
+        "ci/check_privacy_swift_sdk.sh",
+        "scripts/check_native_sdk_abi22_artifact.py",
+        "scripts/check_privacy_python_witness_boundary.py",
+        "scripts/compute_workspace_source_manifest.py",
+        "scripts/tests/check_privacy_jvm_native_gate_test.py",
+        "scripts/tests/check_privacy_python_witness_boundary_test.py",
+        "javascript/iroha_js/test/privacyNative.integration.test.js",
+        "python/iroha_python/tests/privacy_native_integration_test.py",
+        "python/iroha_python/tests/privacy_wallet_worker_controller_test.py",
     )
     _check_workflow_trigger_paths(workflow, required_workflow_paths, errors)
-    require(
-        all("XCTSkip" not in source for source in swift_release_test_sources)
-        and "unzip-based bridge materialization is unavailable outside macOS"
-        in swift_release_test_sources[0]
-        and "throw ParityHarnessError.unzipFailed("
-        in swift_release_test_sources[0],
-        "release-filtered Swift tests must fail instead of skipping native validation",
-        errors,
-    )
-    require(
-        all(
-            marker in swift_sdk_guard_source
-            for marker in (
-                '"$(uname -s)" != "Darwin"',
-                '"${MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT:-}" != "1"',
-                "MOBILE_SDK_APPLE_ARTIFACT_DIR",
-                "MOBILE_SDK_SWIFT_SCRATCH_DIR",
-                "MOBILE_SDK_PYTHON_BINARY",
-                "scripts/check_mobile_sdk_artifacts.sh",
-                "--apple-only",
-                "SorafsOrchestratorParityTests.swift",
-                "--disable-automatic-resolution",
-                '--scratch-path "${SWIFT_SCRATCH_DIRECTORY}"',
-            )
-        ),
-        "privacy Swift SDK gate must reauthenticate one external Apple artifact before testing",
-        errors,
-    )
-    require(
-        all(
-            marker in workflow_source
-            for marker in (
-                "scripts/tests/check_privacy_swift_native_contract_test.py",
-                "runs-on: macos-14",
-                "Install exact Apple Rust toolchain and targets",
-                "Prime privacy Apple Cargo dependencies",
-                "MOBILE_SDK_APPLE_ARTIFACT_DIR=",
-                "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1",
-                "NORITO_BRIDGE_OUT_DIR=",
-                "NORITO_BRIDGE_BUILD_DIR=",
-                "Build exact ABI-21 NoritoBridge XCFramework",
-                "scripts/build_norito_xcframework.sh",
-                "Authenticate Apple native artifact",
-                "scripts/check_mobile_sdk_artifacts.sh --apple-only",
-                "Swift privacy native fail-closed contract",
-                "Privacy Swift SDK tests",
-            )
-        ),
-        "privacy workflow must build, authenticate, and test the exact Apple ABI-21 bridge",
-        errors,
-    )
-    require(
-        all(
-            method in kotlin_privacy_test_source
-            for method in (
-                "compiledProfileCatalogRoundTripsAndRejectsAdversarialBytes()",
-                "exact12FixtureBundleRoundTripsAndRejectsAdversarialBytes()",
-            )
-        )
-        and kotlin_privacy_test_source.count(
-            "assertTrue(\n            PrivacyNativeBridge.isNativeAvailable(),"
-        )
-        >= 2
-        and "WhenAvailable" not in kotlin_privacy_test_source
-        and "IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE"
-        not in kotlin_privacy_test_source
-        and "if (!available) return" not in kotlin_privacy_test_source,
-        "Kotlin privacy native tests must require the ABI-21 bridge unconditionally",
-        errors,
-    )
-    require(
-        all(
-            method in java_privacy_test_source
-            for method in (
-                "compiledProfileCatalogRoundTripsAndRejectsAdversarialBytes()",
-                "exact12FixtureBundleRoundTripsAndRejectsAdversarialBytes()",
-            )
-        )
-        and java_privacy_test_source.count(
-            "if (!PrivacyNativeBridge.isNativeAvailable()) {"
-        )
-        >= 2
-        and java_privacy_test_source.count("throw new AssertionError(") >= 2
-        and "WhenAvailable" not in java_privacy_test_source
-        and "IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE" not in java_privacy_test_source
-        and "if (!available)" not in java_privacy_test_source,
-        "Java privacy native tests must require the ABI-21 bridge unconditionally",
-        errors,
-    )
-    require(
-        all(
-            marker in jvm_sdk_guard_source
-            for marker in (
-                "PRIVACY_JVM_NATIVE_ARTIFACT",
-                "PRIVACY_JVM_NATIVE_MANIFEST",
-                "scripts/check_native_sdk_abi21_artifact.py",
-                '"${PYTHON_BIN}" -I -B "${ABI21_ARTIFACT_CHECKER}" verify',
-                '"${IROHA_NATIVE_LIBRARY_PATH:-}" != "${NATIVE_DIRECTORY}"',
-                '"${LD_LIBRARY_PATH:-}" != "${NATIVE_DIRECTORY}"',
-                '-Djava.library.path="${NATIVE_DIRECTORY}"',
-            )
-        ),
-        "privacy JVM SDK gate must authenticate and exclusively load its required native bridge",
-        errors,
-    )
-    require(
-        all(
-            marker in workflow_source
-            for marker in (
-                "scripts/tests/check_privacy_jvm_native_contract_test.py",
-                "needs: privacy_native_bridge_tests",
-                "Download authenticated Linux ABI-21 privacy bridge",
-                "JVM privacy native fail-closed contract",
-                "PRIVACY_JVM_NATIVE_ARTIFACT:",
-                "PRIVACY_JVM_NATIVE_MANIFEST:",
-                "IROHA_NATIVE_LIBRARY_PATH:",
-                "LD_LIBRARY_PATH:",
-            )
-        ),
-        "privacy workflow must transfer, authenticate, and require the JVM ABI-21 bridge",
-        errors,
-    )
-    require(
-        "Exact12FixtureBundleRoundTripsAndRejectsAdversarialBytes()"
-        in csharp_privacy_test_source
-        and "Assert.True(\n            PrivacyNative.IsAvailable(),"
-        in csharp_privacy_test_source
-        and "WhenAvailable" not in csharp_privacy_test_source
-        and "if (!PrivacyNative.IsAvailable())" not in csharp_privacy_test_source
-        and "IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE"
-        not in csharp_privacy_test_source,
-        "C# exact-12 privacy tests must require the ABI-21 native bridge unconditionally",
-        errors,
-    )
-    require(
-        all(
-            marker in csharp_sdk_guard_source
-            for marker in (
-                '"${IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE:-}" != "1"',
-                "PRIVACY_CSHARP_NATIVE_ARTIFACT",
-                "PRIVACY_CSHARP_NATIVE_MANIFEST",
-                "scripts/check_native_sdk_abi21_artifact.py",
-                '"${PYTHON_BIN}" -I -B "${ABI21_ARTIFACT_CHECKER}" verify',
-                '"${LD_LIBRARY_PATH:-}" != "${NATIVE_DIRECTORY}"',
-            )
-        ),
-        "privacy C# SDK gate must authenticate and exclusively load its required native bridge",
-        errors,
-    )
-    require(
-        all(
-            symbol in native_artifact_checker_source
-            for symbol in (
-                '"iroha_privacy_compiled_profile_catalog_v1"',
-                '"iroha_privacy_validate_compiled_profile_catalog_v1"',
-                '"iroha_privacy_exact12_fixture_bundle_v1"',
-                '"iroha_privacy_validate_exact12_fixture_bundle_v1"',
-                '"iroha_privacy_free_buffer"',
-            )
-        ),
-        "ABI-21 C# artifact evidence must bind every privacy fixture symbol",
-        errors,
-    )
-    require(
-        all(
-            marker in workflow_source
-            for marker in (
-                "cargo build --locked --release -p connect_norito_bridge",
-                "scripts/check_native_sdk_abi21_artifact.py record",
-                "--sdk csharp",
-                "Upload authenticated C# privacy bridge",
-                "needs: privacy_native_bridge_tests",
-                "Download authenticated C# privacy bridge",
-                "python3 -I -B scripts/tests/check_privacy_csharp_native_contract_test.py",
-                'IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE: "1"',
-                "PRIVACY_CSHARP_NATIVE_ARTIFACT:",
-                "PRIVACY_CSHARP_NATIVE_MANIFEST:",
-            )
-        ),
-        "privacy workflow must build, authenticate, transfer, and require the C# ABI-21 bridge",
-        errors,
-    )
     lock_helper_executable_source = "\n".join(
         line
         for line in lock_helper_source.splitlines()
@@ -2257,6 +2193,16 @@ def check(overrides: dict[str, str] | None = None) -> None:
         and "'pytest>=8.0'" not in python_sdk_guard_source
         and "'requests>=2.31'" not in python_sdk_guard_source,
         "privacy Python SDK gate must use authenticated Python 3.12 and freshly reinstall the hash-pinned dependency lock",
+        errors,
+    )
+    require(
+        "scripts/check_privacy_python_witness_boundary.py"
+        in python_sdk_guard_source
+        and "tests/privacy_wallet_worker_controller_test.py"
+        in python_sdk_guard_source
+        and "scripts/tests/check_privacy_python_witness_boundary_test.py"
+        in python_sdk_guard_source,
+        "privacy Python SDK gate must enforce and test the Rust-worker witness boundary",
         errors,
     )
     require(
@@ -2571,18 +2517,72 @@ if mode:
             "          SETUP_PYTHON_PATH: python3\n",
             1,
         )
+    elif mode in {
+        "--negative-control-jvm-sdk-distribution-workflow",
+        "--negative-control-jvm-sdk-java-version-workflow",
+        "--negative-control-jvm-sdk-job-workflow",
+        "--negative-control-jvm-sdk-needs-workflow",
+        "--negative-control-jvm-sdk-setup-order-workflow",
+        "--negative-control-jvm-sdk-setup-workflow",
+        "--negative-control-jvm-sdk-test-workflow",
+        "--negative-control-csharp-sdk-dotnet-version-workflow",
+        "--negative-control-csharp-sdk-job-workflow",
+        "--negative-control-csharp-sdk-needs-workflow",
+        "--negative-control-csharp-sdk-setup-order-workflow",
+        "--negative-control-csharp-sdk-setup-workflow",
+        "--negative-control-csharp-sdk-test-workflow",
+        "--negative-control-js-sdk-install-order-workflow",
+        "--negative-control-js-sdk-install-workflow",
+        "--negative-control-js-sdk-job-workflow",
+        "--negative-control-js-sdk-needs-workflow",
+        "--negative-control-js-sdk-node-cache-workflow",
+        "--negative-control-js-sdk-node-setup-order-workflow",
+        "--negative-control-js-sdk-node-setup-workflow",
+        "--negative-control-js-sdk-node-version-workflow",
+        "--negative-control-js-sdk-runner-workflow",
+        "--negative-control-js-sdk-test-order-workflow",
+        "--negative-control-js-sdk-test-workflow",
+        "--negative-control-swift-sdk-job-workflow",
+        "--negative-control-swift-sdk-needs-workflow",
+        "--negative-control-swift-sdk-parse-workflow",
+        "--negative-control-swift-sdk-runner-workflow",
+    }:
+        lane = (
+            "privacy_jvm_sdk_tests"
+            if "jvm-sdk" in mode
+            else "privacy_csharp_sdk_tests"
+            if "csharp-sdk" in mode
+            else "privacy_javascript_sdk_tests"
+            if "js-sdk" in mode
+            else "privacy_swift_sdk_parse"
+        )
+        path = ".github/workflows/pr_privacy_sdk_guard.yml"
+        source = read(path, {})
+        match = re.search(
+            rf"(?ms)^  {re.escape(lane)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+            source,
+        )
+        if match is None:
+            raise SystemExit(f"negative control cannot find workflow job: {lane}")
+        block = match.group(0)
+        mutated_block = block.replace(
+            f"  {lane}:\n",
+            f"  {lane}:\n    # sealed lane mutation: {mode}\n",
+            1,
+        )
+        overrides[path] = source[: match.start()] + mutated_block + source[match.end() :]
     elif mode == "--negative-control-js-privacy-abi-drift":
         path = "javascript/iroha_js/src/crypto.js"
         overrides[path] = read(path, {}).replace(
+            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 22",
             "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 21",
-            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 20",
             1,
         )
     elif mode == "--negative-control-python-privacy-abi-drift":
         path = "python/iroha_python/src/iroha_python/crypto.py"
         overrides[path] = read(path, {}).replace(
-            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 21",
             "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 22",
+            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 21",
             1,
         )
     elif mode == "--negative-control-canonical-backend-alias-rejection-coverage":
@@ -2650,7 +2650,13 @@ except (GuardFailure, SyntaxError, ValueError) as error:
 print("privacy SDK canonical cutover guard passed")
 PY
 
-if [[ -n "${MODE}" ]]; then
+if [[ -z "${MODE}" ]]; then
+  "${PYTHON_BIN}" -I -S \
+    "${ROOT_DIR}/scripts/check_privacy_exact12_sdk_manifest_parity.py" \
+    --require-ready
+fi
+
+if [[ -n "${MODE}" || "${PRIVACY_SDK_GUARD_SKIP_RUNTIME:-0}" == "1" ]]; then
   exit 0
 fi
 

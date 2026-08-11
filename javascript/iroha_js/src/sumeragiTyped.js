@@ -113,7 +113,7 @@ function parseSumeragiNativeAmxBody(value, context) {
     [
       "round",
       "epoch",
-      "chain_id_hash",
+      "network_id",
       "source_id",
       "tx_entrypoint_hash",
       "plan_digest",
@@ -210,7 +210,7 @@ function parseSumeragiNativeAmxBody(value, context) {
   return Object.freeze({
     round,
     epoch: parseSumeragiUnsigned(record.epoch, `${context}.epoch`),
-    chain_id_hash: parseSumeragiHash(record.chain_id_hash, `${context}.chain_id_hash`),
+    network_id: parseSumeragiHash(record.network_id, `${context}.network_id`),
     source_id: sourceId,
     tx_entrypoint_hash: entrypointHash,
     plan_digest: parseSumeragiHash(record.plan_digest, `${context}.plan_digest`),
@@ -272,7 +272,7 @@ function parseSumeragiNativeAmxBody(value, context) {
 function sumeragiNativeAmxBodyIdentityEqual(left, right) {
   const fields = [
     "epoch",
-    "chain_id_hash",
+    "network_id",
     "source_id",
     "tx_entrypoint_hash",
     "plan_digest",
@@ -1105,7 +1105,7 @@ function parseSumeragiNativeAmxReceipt(value, context) {
     [
       "version",
       "source_id",
-      "chain_id_hash",
+      "network_id",
       "plan_digest",
       "lane_id",
       "dataspace_id",
@@ -1123,7 +1123,7 @@ function parseSumeragiNativeAmxReceipt(value, context) {
     throw new RangeError(`${context}.version must equal 2`);
   }
   const sourceId = parseSumeragiByte32(record.source_id, `${context}.source_id`);
-  const chainIdHash = parseSumeragiHash(record.chain_id_hash, `${context}.chain_id_hash`);
+  const networkId = parseSumeragiHash(record.network_id, `${context}.network_id`);
   const planDigest = parseSumeragiHash(record.plan_digest, `${context}.plan_digest`);
   const laneId = parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
     max: 0xffffffff,
@@ -1167,7 +1167,7 @@ function parseSumeragiNativeAmxReceipt(value, context) {
       !sumeragiRoundsEqual(body.round, firstBody.round) ||
       body.epoch !== firstBody.epoch ||
       body.round.height !== authorityHeight ||
-      body.chain_id_hash !== chainIdHash ||
+      body.network_id !== networkId ||
       body.source_id !== sourceId ||
       body.tx_entrypoint_hash !== firstBody.tx_entrypoint_hash ||
       body.plan_digest !== planDigest ||
@@ -1194,7 +1194,7 @@ function parseSumeragiNativeAmxReceipt(value, context) {
   return Object.freeze({
     version,
     source_id: sourceId,
-    chain_id_hash: chainIdHash,
+    network_id: networkId,
     plan_digest: planDigest,
     lane_id: laneId,
     dataspace_id: dataspaceId,

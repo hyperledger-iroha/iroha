@@ -52,11 +52,12 @@ use iroha_data_model::{
     permission::Permission,
     prelude::{AccountId, QueryBuilderExt},
     privacy::{
-        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyActiveLifecycleV1, PrivacyCapabilityRowV1,
-        PrivacyCapabilitySnapshotV1, PrivacyChallengeV1, PrivacyCompiledProfileResultV1,
-        PrivacyCompiledProfileSnapshotV1, PrivacyCredentialDocumentTypeV1, PrivacyIssuerIdV1,
-        PrivacyP256PointV1, PrivacyParameterDigestV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
-        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
+        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyActiveLifecycleV1, PrivacyChallengeV1,
+        PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
+        PrivacyCredentialDocumentTypeV1, PrivacyExact12CapabilityManifestV1,
+        PrivacyExact12CapabilityRowV1, PrivacyIssuerIdV1, PrivacyP256PointV1,
+        PrivacyParameterDigestV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1,
+        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
         PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
         PrivacyRootV1, PrivacySessionTranscriptDigestV1, PrivacyStatementDigestV1,
         PrivacyStatementV1, PrivacyTransactionIntentDigestV1, PrivacyVegaIssuerRecordDigestV1,
@@ -250,9 +251,9 @@ fn is_exact_replay_error(error: &eyre::Report) -> bool {
 }
 
 fn protocol_row(
-    snapshot: &PrivacyCapabilitySnapshotV1,
+    snapshot: &PrivacyExact12CapabilityManifestV1,
     protocol: PrivacyProtocolIdV1,
-) -> Result<PrivacyCapabilityRowV1> {
+) -> Result<PrivacyExact12CapabilityRowV1> {
     snapshot
         .protocols
         .iter()
@@ -262,7 +263,7 @@ fn protocol_row(
 }
 
 fn assert_exact_protocol_row(
-    snapshot: &PrivacyCapabilitySnapshotV1,
+    snapshot: &PrivacyExact12CapabilityManifestV1,
     protocol: PrivacyProtocolIdV1,
     compiled: PrivacyCompiledProfileSnapshotV1,
     activation: Option<PrivacyProtocolActivationRecordV1>,
@@ -369,7 +370,7 @@ async fn wait_for_all_peer_activations(
         Option<PrivacyProtocolActivationRecordV1>,
     )],
     context: &str,
-) -> Result<Vec<PrivacyCapabilitySnapshotV1>> {
+) -> Result<Vec<PrivacyExact12CapabilityManifestV1>> {
     let deadline = Instant::now() + PEER_CONVERGENCE_TIMEOUT;
     let mut last_observed = Vec::new();
     loop {
@@ -716,7 +717,7 @@ fn zk_ams_transaction_context(
     nonce: u32,
 ) -> ZkAmsPrivacyActionTransactionContextV1 {
     ZkAmsPrivacyActionTransactionContextV1 {
-        chain_id: client.chain.clone(),
+        network_id: client.network_id,
         authority: client.account.clone(),
         creation_time,
         time_to_live: Some(ACTION_TTL),
@@ -732,7 +733,7 @@ fn build_transaction_from_envelope(
     client: &Client,
 ) -> Result<SignedTransaction> {
     let mut builder = TransactionBuilder::new(
-        context.chain_id.clone(),
+        context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
@@ -769,7 +770,7 @@ fn zk_ams_binding_v1<'a>(
         .digest()
         .wrap_err("derive canonical ZK-AMS statement digest")?;
     Ok(TranscriptBindingV1 {
-        chain_id: statement.context.chain_id.as_str().as_bytes(),
+        network_id: statement.context.network_id.as_bytes(),
         genesis_hash: canonical_genesis_hash,
         action_index: statement.context.action_index,
         statement_digest: *statement_digest.as_bytes(),
@@ -1291,7 +1292,7 @@ fn build_vega_action(
         .map_err(|_| eyre!("Vega trusted timestamp exceeded u64"))?;
     let fixture = vega_fixture(trusted_timestamp_ms, challenge_byte)?;
     let context = VegaPrivacyActionTransactionContextV1 {
-        chain_id: client.chain.clone(),
+        network_id: client.network_id,
         authority: client.account.clone(),
         creation_time,
         time_to_live: Some(ACTION_TTL),
@@ -2107,6 +2108,273 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
         ensure!(
             canonical_genesis_hash(&restarted_client)? == genesis_hash,
             "restarted validator derived a different canonical genesis hash"
+        );
+        Ok(())
+    }
+    .await;
+
+    network.shutdown().await;
+    result
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn canonical_vega_action_survives_four_validator_activation_replay_and_restart() -> Result<()>
+{
+    init_instruction_registry();
+    let context =
+        stringify!(canonical_vega_action_survives_four_validator_activation_replay_and_restart);
+    let builder = NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_block_cadence(TEST_BLOCK_CADENCE)
+        .with_permissioned_consensus();
+    let Some(network) = sandbox::start_network_async_or_skip(builder, context).await? else {
+        return Ok(());
+    };
+
+    let result: Result<()> = async {
+        ensure!(
+            network.peers().len() == 4,
+            "Vega lifecycle test requires exactly four trusted validators"
+        );
+        let client = bounded_client(network.client());
+        let genesis_hash = canonical_genesis_hash(&client)?;
+        let compiled = compiled_privacy_profile_v1(VEGA_PROTOCOL)
+            .wrap_err("load canonical compiled Vega profile")?;
+        let snapshot: PrivacyCompiledProfileSnapshotV1 = compiled.into();
+
+        submit_instruction(
+            &client,
+            Grant::account_permission(
+                Permission::from(CanEnactGovernance),
+                client.account.clone(),
+            ),
+            "grant CanEnactGovernance for Vega",
+        )
+        .await?;
+
+        let mismatch_height = next_incoming_height(&client)?;
+        let mut mismatched = proposed_activation(
+            compiled,
+            mismatch_height,
+            mismatch_height
+                .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
+                .ok_or_else(|| eyre!("Vega mismatch activation height overflowed"))?,
+        );
+        mismatched.parameter_digest = PrivacyParameterDigestV1::new([0xA5; 32]);
+        ensure!(
+            mismatched.parameter_digest != compiled.parameter_digest,
+            "Vega mismatched digest fixture accidentally equals compiled state"
+        );
+        let mismatch_error = submit_instruction(
+            &client,
+            RegisterPrivacyProtocolActivationV1::new(mismatched),
+            "mismatched compiled Vega activation must reject",
+        )
+        .await
+        .expect_err("mismatched compiled Vega activation was accepted");
+        ensure!(
+            error_chain_contains(&mismatch_error, "does not match compiled native profile"),
+            "Vega compiled-digest rejection had wrong reason: {mismatch_error:?}"
+        );
+
+        let registration_height = next_incoming_height(&client)?;
+        let activation_height = registration_height
+            .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
+            .ok_or_else(|| eyre!("Vega activation height overflowed"))?;
+        let proposed = proposed_activation(compiled, registration_height, activation_height);
+        submit_instruction(
+            &client,
+            RegisterPrivacyProtocolActivationV1::new(proposed),
+            "register exact compiled Vega activation",
+        )
+        .await?;
+        wait_for_all_peer_activations(
+            &network,
+            registration_height,
+            &[(VEGA_PROTOCOL, snapshot, Some(proposed))],
+            "exact proposed Vega activation",
+        )
+        .await?;
+
+        let (issuer_record, preactivation) =
+            build_vega_action(&client, genesis_hash, 21, 0x31, [0x21; 32])?;
+        submit_instruction(
+            &client,
+            RegisterPrivacyVegaIssuerV1::new(issuer_record),
+            "register canonical Vega issuer while protocol is Proposed",
+        )
+        .await?;
+        let last_pre_activation_height = activation_height
+            .checked_sub(1)
+            .ok_or_else(|| eyre!("Vega activation height has no predecessor"))?;
+        timeout(
+            ACTIVATION_ADVANCE_TIMEOUT,
+            advance_to_exact_height(&client, last_pre_activation_height, "Vega"),
+        )
+        .await
+        .map_err(|_| {
+            eyre!(
+                "advancing the Vega activation exceeded {ACTIVATION_ADVANCE_TIMEOUT:?}"
+            )
+        })??;
+        wait_for_all_peer_activations(
+            &network,
+            last_pre_activation_height,
+            &[(VEGA_PROTOCOL, snapshot, Some(proposed))],
+            "Vega remains Proposed through activation height minus one",
+        )
+        .await?;
+        assert_rejected_with(
+            &client,
+            &preactivation,
+            "canonical Vega action before activation",
+            &["activation is not active"],
+        )
+        .await?;
+
+        submit_instruction(
+            &client,
+            Log::new(
+                Level::INFO,
+                format!("Vega exact activation block {activation_height}"),
+            ),
+            "commit exact Vega activation block",
+        )
+        .await?;
+        let active = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
+            PrivacyActiveLifecycleV1 {
+                proposed_at_height: registration_height,
+                activated_at_height: activation_height,
+                state_since_height: activation_height,
+            },
+        ));
+        wait_for_all_peer_activations(
+            &network,
+            activation_height,
+            &[(VEGA_PROTOCOL, snapshot, Some(active))],
+            "exact Active Vega state on all validators",
+        )
+        .await?;
+
+        let (final_issuer_record, final_action) =
+            build_vega_action(&client, genesis_hash, 22, 0x33, [0x22; 32])?;
+        ensure!(
+            final_issuer_record == issuer_record,
+            "Vega action fixture drifted from registered issuer state"
+        );
+        let stale = independently_resigned_stale_intent(&final_action, 122, &client)?;
+        let governance_tamper = independently_resigned_governance_tamper(
+            &final_action,
+            GovernanceTamper::VegaIssuerRecord,
+            &client,
+        )?;
+        let proof_corruption =
+            independently_resigned_vega_proof_corruption(&final_action, &client)?;
+        assert_rejected_with(
+            &client,
+            &stale,
+            "independently signed stale Vega intent",
+            &[
+                "privacy statement transaction-intent digest differs",
+                "transaction intent",
+                "intent binding",
+            ],
+        )
+        .await?;
+        assert_rejected_with(
+            &client,
+            &governance_tamper,
+            "self-consistent Vega issuer-record substitution",
+            &[
+                "IssuerRecordDigestMismatch",
+                "issuer record digest",
+                "trusted Vega issuer state",
+            ],
+        )
+        .await?;
+        assert_rejected_with(
+            &client,
+            &proof_corruption,
+            "independently signed Vega proof corruption",
+            &["native Vega verification failed", "Vega proof verification failed"],
+        )
+        .await?;
+
+        let restart_index = network.peers().len() - 1;
+        let restart_peer = network.peers()[restart_index].clone();
+        let config_layers = network.config_layers().collect::<Vec<_>>();
+        ensure!(
+            restart_peer.shutdown_if_started().await,
+            "selected Active Vega validator was not running before restart"
+        );
+        let submitted = submit_signed_transaction(
+            &client,
+            &final_action,
+            "submit canonical active Vega action",
+        )
+        .await?;
+        ensure!(
+            *submitted.as_ref() == *final_action.hash().as_ref(),
+            "submitted Vega transaction hash differs from signed bytes"
+        );
+        let finalized_height = client
+            .get_privacy_capabilities()
+            .wrap_err("query height after Vega finality")?
+            .committed_height;
+        let healthy_clients = network
+            .peers()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != restart_index)
+            .map(|(_, peer)| bounded_client(peer.client()))
+            .collect::<Vec<_>>();
+        wait_for_transactions_on_peers(
+            &healthy_clients,
+            &[("Vega", &final_action)],
+            "healthy-validator Vega finality",
+        )
+        .await?;
+        let replay_error = client
+            .submit_transaction(&final_action)
+            .expect_err("exact finalized Vega transaction replay was accepted");
+        ensure!(
+            is_exact_replay_error(&replay_error),
+            "exact Vega replay rejected for wrong reason: {replay_error:?}"
+        );
+
+        timeout(
+            RESTART_TIMEOUT,
+            restart_peer.start_checked(config_layers.iter(), None),
+        )
+        .await
+        .map_err(|_| eyre!("Vega validator restart exceeded {RESTART_TIMEOUT:?}"))?
+        .wrap_err("restart Vega validator")?;
+        wait_for_all_peer_activations(
+            &network,
+            finalized_height,
+            &[(VEGA_PROTOCOL, snapshot, Some(active))],
+            "post-restart Active Vega binding and catch-up height",
+        )
+        .await?;
+        let all_clients = network
+            .peers()
+            .iter()
+            .map(|peer| bounded_client(peer.client()))
+            .collect::<Vec<_>>();
+        wait_for_transactions_on_peers(
+            &all_clients,
+            &[("Vega", &final_action)],
+            "post-restart exact Vega transaction visibility",
+        )
+        .await?;
+        let restarted_client = bounded_client(restart_peer.client());
+        ensure!(
+            canonical_genesis_hash(&restarted_client)? == genesis_hash,
+            "restarted Vega validator derived a different canonical genesis hash"
+        );
+        println!(
+            "TAIRA_PRIVACY_PROTOCOL_FOUR_PEER_CASE_V1:privacy_exact12_zk_ams_vega_network::canonical_vega_action_survives_four_validator_activation_replay_and_restart:passed"
         );
         Ok(())
     }

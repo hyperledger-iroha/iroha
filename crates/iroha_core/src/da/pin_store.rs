@@ -193,6 +193,14 @@ mod tests {
     fn sample_intent(lane: u32, seq: u64, alias: Option<&str>) -> DaPinIntent {
         let lane_byte = u8::try_from(lane).expect("lane id fits in byte for test intent");
         let seq_byte = u8::try_from(seq).expect("sequence fits in byte for test intent");
+        let key_pair =
+            iroha_crypto::KeyPair::try_from_seed(vec![0xD3; 32], iroha_crypto::Algorithm::Ed25519)
+                .expect("valid deterministic DA pin store key");
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0xD4; 32]),
+        ));
         DaPinIntent {
             lane_id: LaneId::new(lane),
             epoch: 1,
@@ -200,7 +208,14 @@ mod tests {
             storage_ticket: StorageTicketId::new([lane_byte; 32]),
             manifest_hash: ManifestDigest::new([seq_byte; 32]),
             alias: alias.map(ToOwned::to_owned),
-            owner: None,
+            authorization: crate::da::signed_test_ingest_authorization(
+                network_id,
+                &key_pair,
+                LaneId::new(lane),
+                1,
+                seq,
+                1,
+            ),
         }
     }
 

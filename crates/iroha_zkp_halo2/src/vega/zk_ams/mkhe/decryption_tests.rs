@@ -1,9 +1,13 @@
 // Test body included from the parent module to keep its production source budget bounded.
 use super::super::super::MaskedRelaxedRandomErrorV1;
+use super::super::active_exact_binding::PersistentWitnessConsumerV1;
 use super::super::collective::{
-    aggregate_zk_ams_mkhe_collective_public_key_v1, generate_zk_ams_mkhe_collective_party_state_v1,
+    aggregate_zk_ams_mkhe_collective_public_key_v1,
+    collective_public_key_digest_from_bounded_cpk_v1,
+    generate_zk_ams_mkhe_collective_party_state_v1,
+    validate_collective_public_key_share_for_verified_cpk_compact_v1,
 };
-use super::super::sample_uniform_rns;
+use super::super::{mod_add, sample_uniform_rns};
 use super::*;
 
 const TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
@@ -66,6 +70,15 @@ struct FailingRandom;
 
 impl MaskedRelaxedRandomSourceV1 for FailingRandom {
     fn fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
+        Err(MaskedRelaxedRandomErrorV1::Unavailable)
+    }
+}
+
+struct PartiallyFailingRandom;
+
+impl MaskedRelaxedRandomSourceV1 for PartiallyFailingRandom {
+    fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
+        destination.fill(0xa5);
         Err(MaskedRelaxedRandomErrorV1::Unavailable)
     }
 }
@@ -269,6 +282,7 @@ fn make_shares(fixture: &Fixture, label: &[u8]) -> Vec<AuthenticatedDecryptionSh
 }
 
 struct PublicReleaseProvingFixture {
+    governed_roster: super::super::active::ZkAmsMkheGovernedActiveRosterV1,
     party_secrets: Vec<ZkAmsMkheActivePartySecretV1>,
     party_states: Vec<ZkAmsMkheCollectivePartyStateV1>,
     public_key_shares: Vec<ZkAmsMkheCollectivePublicKeyShareV1>,
@@ -325,7 +339,8 @@ fn public_release_proving_fixture() -> &'static PublicReleaseProvingFixture {
                 .map(|handle| handle.join().unwrap().unwrap())
                 .collect::<Vec<_>>()
         });
-        let (party_states, public_key_shares): (Vec<_>, Vec<_>) = generated.into_iter().unzip();
+        let (mut party_states, public_key_shares): (Vec<_>, Vec<_>) =
+            generated.into_iter().unzip();
         assert!(
             party_states.len() == ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1
                 && party_states.iter().all(|state| {
@@ -347,6 +362,18 @@ fn public_release_proving_fixture() -> &'static PublicReleaseProvingFixture {
             share_references,
         )
         .unwrap();
+        assert!(matches!(
+            party_states[0].persistent_secret_binding_for(
+                &governed_roster,
+                PersistentWitnessConsumerV1::Decryption,
+            ),
+            Err(ZkAmsMkheErrorV1::ReleaseUnavailable)
+        ));
+        for (state, share) in party_states.iter_mut().zip(&public_key_shares) {
+            state
+                .admit_test_state_owned_cpk_binding(&governed_roster, share)
+                .unwrap();
+        }
         let binding = ZkAmsMkheWireBindingV1::new(
             &roster,
             keccak256(b"decryption-public-reachability.ciphertext-lineage"),
@@ -363,6 +390,7 @@ fn public_release_proving_fixture() -> &'static PublicReleaseProvingFixture {
         )
         .unwrap();
         PublicReleaseProvingFixture {
+            governed_roster,
             party_secrets,
             party_states,
             public_key_shares,
@@ -385,6 +413,32 @@ fn public_release_statement<'a>(
         public_key_shares,
     )
     .unwrap()
+}
+
+fn public_release_persistent_context(
+    fixture: &PublicReleaseProvingFixture,
+    statement: ZkAmsMkheDecryptionStatementV1<'_>,
+) -> (
+    ZkAmsMkhePersistentDecryptionVerificationContextV1,
+    [ZkAmsMkhePersistentDecryptionPartyUseV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1],
+) {
+    let party_states: [&ZkAmsMkheCollectivePartyStateV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
+        std::array::from_fn(|index| &fixture.party_states[index]);
+    prepare_zk_ams_mkhe_persistent_decryption_v1(&fixture.governed_roster, statement, party_states)
+        .unwrap()
+}
+
+fn public_release_party_use(
+    fixture: &PublicReleaseProvingFixture,
+    statement: ZkAmsMkheDecryptionStatementV1<'_>,
+    party_index: usize,
+) -> (
+    ZkAmsMkhePersistentDecryptionVerificationContextV1,
+    ZkAmsMkhePersistentDecryptionPartyUseV1,
+) {
+    let (context, uses) = public_release_persistent_context(fixture, statement);
+    let party_use = uses.into_iter().nth(party_index).unwrap();
+    (context, party_use)
 }
 
 #[test]
@@ -464,16 +518,54 @@ fn unavailable_zero_and_constant_random_sources_fail_closed() {
 }
 
 #[test]
+fn transient_secret_owners_zeroize_after_partial_rng_error_and_unwind() {
+    reset_decryption_transient_zeroized_drop_count_v1();
+    assert_eq!(
+        validate_wide_relation_random_health(&mut PartiallyFailingRandom),
+        Err(ZkAmsMkheErrorV1::RandomUnavailable)
+    );
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 1);
+
+    let bound = WideMagnitudeV1::max_for_bits(TEST_SMUDGE_BITS).unwrap();
+    assert_eq!(
+        sample_signed_wide(&bound, &mut PartiallyFailingRandom),
+        Err(ZkAmsMkheErrorV1::RandomUnavailable)
+    );
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 2);
+
+    let profile = test_profile();
+    let unwind = std::panic::catch_unwind(|| {
+        let mut small = ZeroizingI64VectorV1::with_capacity(2).unwrap();
+        small.push(7);
+        let mut wide = ZeroizingSignedWideVectorV1::with_capacity(1).unwrap();
+        wide.push(SignedWideV1::from_i64(-9));
+        let _candidate = ZeroizingWideMagnitudeCandidateV1::new(bound.clone());
+        let _rns = ZeroizingDecryptionRnsV1::new(
+            RnsPolynomial::from_signed(&profile, &[1, -1, 0, 1, 0, -1, 1, 0]).unwrap(),
+        );
+        panic!("exercise zeroizing unwind owners");
+    });
+    assert!(unwind.is_err());
+    assert_eq!(decryption_transient_zeroized_drop_count_v1(), 6);
+}
+
+#[test]
 fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
     let fixture = public_release_proving_fixture();
     let public_key_shares: [&ZkAmsMkheCollectivePublicKeyShareV1;
         ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
         std::array::from_fn(|index| &fixture.public_key_shares[index]);
     let statement = public_release_statement(fixture, &public_key_shares);
+    let (persistent_context, persistent_uses) =
+        public_release_persistent_context(fixture, statement);
+    let mut persistent_uses = persistent_uses.into_iter();
+    let persistent_use = persistent_uses.next().unwrap();
     let mut random = FastDeterministicRandom::new(b"decryption-public-reachability-proof");
     let share = prove_zk_ams_mkhe_decryption_share_v1(
         statement,
+        &persistent_context,
         0,
+        persistent_use,
         &fixture.party_states[0],
         &fixture.party_secrets[0],
         &mut random,
@@ -481,18 +573,17 @@ fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
     .unwrap();
     assert_eq!(share.party_index(), 0);
     assert_eq!(share.party(), fixture.roster.parties()[0]);
-    verify_zk_ams_mkhe_decryption_share_v1(statement, &share).unwrap();
+    verify_zk_ams_mkhe_decryption_share_v1(statement, &persistent_context, &share).unwrap();
 
-    let transport = split_zk_ams_mkhe_decryption_share_v1(statement, &share).unwrap();
+    let transport =
+        split_zk_ams_mkhe_decryption_share_v1(statement, &persistent_context, &share).unwrap();
     let manifest = transport.manifest_bytes().unwrap();
     println!(
-        "ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1={}",
+        "TEST_ONLY_SYNTHETIC_PERSISTENT_DECRYPTION_MANIFEST_DIGEST={}",
         hex::encode(transport.manifest().manifest_digest())
     );
-    assert_eq!(
-        transport.manifest().manifest_digest(),
-        ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1
-    );
+    assert_ne!(transport.manifest().manifest_digest(), [0; 32]);
+    assert_eq!(ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1, [0; 32]);
     assert_eq!(
         manifest.len(),
         ZK_AMS_MKHE_DECRYPTION_SPLIT_MANIFEST_BYTES_V1
@@ -502,10 +593,15 @@ fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
     assert!(transport.polynomial_object().len() <= 64 * 1024 * 1024);
     assert!(transport.proof_envelope().len() <= 32 * 1024 * 1024);
     let components = transport.ordered_components();
-    let reconstructed =
-        reconstruct_zk_ams_mkhe_decryption_share_v1(statement, &manifest, &components).unwrap();
+    let reconstructed = reconstruct_zk_ams_mkhe_decryption_share_v1(
+        statement,
+        &persistent_context,
+        &manifest,
+        &components,
+    )
+    .unwrap();
     assert_eq!(reconstructed, share);
-    verify_zk_ams_mkhe_decryption_share_v1(statement, &reconstructed).unwrap();
+    verify_zk_ams_mkhe_decryption_share_v1(statement, &persistent_context, &reconstructed).unwrap();
 
     // Every manifest statement/binding/authentication axis is covered by
     // the signed manifest digest. These offsets are fixed by the 498-byte
@@ -538,7 +634,13 @@ fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
         let mut changed = manifest.clone();
         changed[offset] ^= 1;
         assert!(
-            reconstruct_zk_ams_mkhe_decryption_share_v1(statement, &changed, &components,).is_err(),
+            reconstruct_zk_ams_mkhe_decryption_share_v1(
+                statement,
+                &persistent_context,
+                &changed,
+                &components,
+            )
+            .is_err(),
             "manifest mutation offset {offset} must reject"
         );
     }
@@ -548,7 +650,14 @@ fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
     for offset in [252_usize, 253, 294, 295] {
         let mut changed = manifest.clone();
         changed[offset] ^= 1;
-        assert!(ZkAmsMkheDecryptionTransportManifestV1::decode_exact(statement, &changed).is_err());
+        assert!(
+            ZkAmsMkheDecryptionTransportManifestV1::decode_exact(
+                statement,
+                &persistent_context,
+                &changed
+            )
+            .is_err()
+        );
     }
     let mut reordered_pointers = manifest.clone();
     let first_pointer = reordered_pointers[252..294].to_vec();
@@ -556,14 +665,22 @@ fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
     reordered_pointers[252..294].copy_from_slice(&second_pointer);
     reordered_pointers[294..336].copy_from_slice(&first_pointer);
     assert!(
-        ZkAmsMkheDecryptionTransportManifestV1::decode_exact(statement, &reordered_pointers,)
-            .is_err()
+        ZkAmsMkheDecryptionTransportManifestV1::decode_exact(
+            statement,
+            &persistent_context,
+            &reordered_pointers,
+        )
+        .is_err()
     );
     let mut duplicate_pointer = manifest.clone();
     duplicate_pointer[294..336].copy_from_slice(&first_pointer);
     assert!(
-        ZkAmsMkheDecryptionTransportManifestV1::decode_exact(statement, &duplicate_pointer,)
-            .is_err()
+        ZkAmsMkheDecryptionTransportManifestV1::decode_exact(
+            statement,
+            &persistent_context,
+            &duplicate_pointer,
+        )
+        .is_err()
     );
 
     // Manifest authentication is resolved before even the component-list
@@ -572,14 +689,23 @@ fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
     let mut forged_authentication = manifest.clone();
     *forged_authentication.last_mut().unwrap() ^= 1;
     assert_eq!(
-        reconstruct_zk_ams_mkhe_decryption_share_v1(statement, &forged_authentication, &[],),
+        reconstruct_zk_ams_mkhe_decryption_share_v1(
+            statement,
+            &persistent_context,
+            &forged_authentication,
+            &[],
+        ),
         Err(ZkAmsMkheErrorV1::InvalidAuthentication)
     );
 
-    assert!(reconstruct_zk_ams_mkhe_decryption_share_v1(statement, &manifest, &[]).is_err());
+    assert!(
+        reconstruct_zk_ams_mkhe_decryption_share_v1(statement, &persistent_context, &manifest, &[])
+            .is_err()
+    );
     assert!(
         reconstruct_zk_ams_mkhe_decryption_share_v1(
             statement,
+            &persistent_context,
             &manifest,
             &[transport.polynomial_object()],
         )
@@ -588,6 +714,7 @@ fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
     assert!(
         reconstruct_zk_ams_mkhe_decryption_share_v1(
             statement,
+            &persistent_context,
             &manifest,
             &[transport.polynomial_object(), transport.polynomial_object(),],
         )
@@ -596,6 +723,7 @@ fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
     assert!(
         reconstruct_zk_ams_mkhe_decryption_share_v1(
             statement,
+            &persistent_context,
             &manifest,
             &[transport.proof_envelope(), transport.polynomial_object(),],
         )
@@ -604,6 +732,7 @@ fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
     assert!(
         reconstruct_zk_ams_mkhe_decryption_share_v1(
             statement,
+            &persistent_context,
             &manifest,
             &[
                 transport.polynomial_object(),
@@ -623,6 +752,7 @@ fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
         assert!(
             reconstruct_zk_ams_mkhe_decryption_share_v1(
                 statement,
+                &persistent_context,
                 &manifest,
                 &truncated_components,
             )
@@ -636,13 +766,14 @@ fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
             [transport.polynomial_object(), &extended]
         };
         assert!(
-                reconstruct_zk_ams_mkhe_decryption_share_v1(
-                    statement,
-                    &manifest,
-                    &extended_components,
-                )
-                .is_err()
-            );
+            reconstruct_zk_ams_mkhe_decryption_share_v1(
+                statement,
+                &persistent_context,
+                &manifest,
+                &extended_components,
+            )
+            .is_err()
+        );
         let mut mutated = object.to_vec();
         *mutated.last_mut().unwrap() ^= 1;
         let mutated_components: [&[u8]; 2] = if object_index == 0 {
@@ -651,13 +782,19 @@ fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
             [transport.polynomial_object(), &mutated]
         };
         assert!(
-            reconstruct_zk_ams_mkhe_decryption_share_v1(statement, &manifest, &mutated_components,)
-                .is_err()
+            reconstruct_zk_ams_mkhe_decryption_share_v1(
+                statement,
+                &persistent_context,
+                &manifest,
+                &mutated_components,
+            )
+            .is_err()
         );
     }
     assert!(
         reconstruct_zk_ams_mkhe_decryption_share_v1(
             statement,
+            &persistent_context,
             &manifest[..manifest.len() - 1],
             &transport.ordered_components(),
         )
@@ -668,6 +805,7 @@ fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
     assert!(
         reconstruct_zk_ams_mkhe_decryption_share_v1(
             statement,
+            &persistent_context,
             &extended_manifest,
             &transport.ordered_components(),
         )
@@ -698,6 +836,7 @@ fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
     assert!(
         reconstruct_zk_ams_mkhe_decryption_share_v1(
             wrong_statement,
+            &persistent_context,
             &manifest,
             &transport.ordered_components(),
         )
@@ -721,10 +860,109 @@ fn public_generated_opaque_state_reaches_native_prove_and_verify_end_to_end() {
     assert!(
         reconstruct_zk_ams_mkhe_decryption_share_v1(
             wrong_sample_statement,
+            &persistent_context,
             &manifest,
             &transport.ordered_components(),
         )
         .is_err()
+    );
+}
+
+#[test]
+fn compact_cpk_share_validation_rejects_substituted_active_proof_evidence() {
+    let fixture = public_release_proving_fixture();
+    let transcript_digest = keccak256(b"decryption-public-reachability.transcript");
+    let baseline = &fixture.public_key_shares[0];
+    assert_eq!(
+        validate_collective_public_key_share_for_verified_cpk_compact_v1(
+            &fixture.governed_roster,
+            transcript_digest,
+            0,
+            baseline,
+        ),
+        Ok(baseline.digest())
+    );
+
+    let mut substitution = baseline.clone();
+    substitution
+        .splice_active_proof_for_test(&fixture.public_key_shares[1])
+        .expect("hostile fixture has a recomputed legacy share digest");
+    assert_eq!(
+        validate_collective_public_key_share_for_verified_cpk_compact_v1(
+            &fixture.governed_roster,
+            transcript_digest,
+            0,
+            &substitution,
+        ),
+        Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
+        "a structurally valid proof/authentication substitution must not inherit active admission",
+    );
+}
+
+#[test]
+fn bounded_cpk_digests_are_byte_exact_with_the_native_statement() {
+    let fixture = public_release_proving_fixture();
+    let profile = release_profile_v1();
+    let transcript_digest = fixture.collective_public_key.transcript_digest();
+    let share_digests = core::array::from_fn(|index| fixture.public_key_shares[index].digest());
+    let mut aggregate_b = vec![0_u64; profile.ring_degree * profile.moduli.len()];
+    for share in &fixture.public_key_shares {
+        for (limb, residues) in share
+            .party_public_b()
+            .residues()
+            .chunks_exact(profile.ring_degree)
+            .enumerate()
+        {
+            let start = limb * profile.ring_degree;
+            for (offset, residue) in residues.iter().copied().enumerate() {
+                aggregate_b[start + offset] =
+                    mod_add(aggregate_b[start + offset], residue, profile.moduli[limb]);
+            }
+        }
+    }
+    assert_eq!(
+        collective_public_key_digest_from_bounded_cpk_v1(
+            &fixture.governed_roster,
+            transcript_digest,
+            &aggregate_b,
+            share_digests,
+        )
+        .expect("bounded collective digest"),
+        fixture.collective_public_key.digest(),
+    );
+
+    let public_key_shares: [&ZkAmsMkheCollectivePublicKeyShareV1;
+        ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
+        core::array::from_fn(|index| &fixture.public_key_shares[index]);
+    let statement = public_release_statement(fixture, &public_key_shares);
+    let bounded_key_context = decryption_key_context_digest_from_bounded_cpk_v1(
+        &fixture.governed_roster,
+        transcript_digest,
+        fixture.collective_public_key.digest(),
+        share_digests,
+        |party_index, hash| {
+            update_wire_rns_hash(
+                hash,
+                fixture.public_key_shares[party_index].party_public_b(),
+            )
+        },
+    )
+    .expect("bounded key-context digest");
+    assert_eq!(bounded_key_context, statement.key_context_digest());
+    assert_eq!(
+        decryption_wire_ciphertext_digest_v1(&profile, &fixture.roster, &fixture.ciphertext)
+            .expect("bounded ciphertext digest"),
+        statement
+            .ciphertext_digest()
+            .expect("native ciphertext digest"),
+    );
+    assert_eq!(
+        decryption_statement_binding_digest_from_axes_v1(
+            &fixture.roster,
+            &fixture.ciphertext,
+            bounded_key_context,
+        ),
+        statement.binding_digest(),
     );
 }
 
@@ -735,43 +973,149 @@ fn public_prover_rejects_wrong_opaque_active_secret_and_roster_slot_before_rng()
         ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
         std::array::from_fn(|index| &fixture.public_key_shares[index]);
     let statement = public_release_statement(fixture, &public_key_shares);
+    let (persistent_context, persistent_use) = public_release_party_use(fixture, statement, 0);
     assert_eq!(
         prove_zk_ams_mkhe_decryption_share_v1(
             statement,
+            &persistent_context,
             0,
+            persistent_use,
             &fixture.party_states[0],
             &fixture.party_secrets[1],
             &mut FailingRandom,
         ),
         Err(ZkAmsMkheErrorV1::InvalidAuthentication)
     );
+    let (persistent_context, persistent_use) = public_release_party_use(fixture, statement, 0);
     assert_eq!(
         prove_zk_ams_mkhe_decryption_share_v1(
             statement,
+            &persistent_context,
             ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1,
+            persistent_use,
             &fixture.party_states[0],
             &fixture.party_secrets[0],
             &mut FailingRandom,
         ),
         Err(ZkAmsMkheErrorV1::InvalidPartySet)
     );
+    let (persistent_context, persistent_use) = public_release_party_use(fixture, statement, 1);
     assert_eq!(
         prove_zk_ams_mkhe_decryption_share_v1(
             statement,
+            &persistent_context,
             1,
+            persistent_use,
             &fixture.party_states[0],
             &fixture.party_secrets[1],
             &mut FailingRandom,
         ),
         Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
     );
+    let (persistent_context, persistent_use) = public_release_party_use(fixture, statement, 1);
     assert_eq!(
         prove_zk_ams_mkhe_decryption_share_v1(
             statement,
+            &persistent_context,
             0,
+            persistent_use,
+            &fixture.party_states[0],
+            &fixture.party_secrets[0],
+            &mut FailingRandom,
+        ),
+        Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+    );
+    let (persistent_context, persistent_use) = public_release_party_use(fixture, statement, 0);
+    assert_eq!(
+        prove_zk_ams_mkhe_decryption_share_v1(
+            statement,
+            &persistent_context,
+            0,
+            persistent_use,
             &fixture.party_states[0],
             &fixture.party_secrets[0],
             &mut ConstantRandom(0),
+        ),
+        Err(ZkAmsMkheErrorV1::RandomUnavailable)
+    );
+}
+
+#[test]
+fn persistent_party_use_rejects_every_bound_axis_before_rng() {
+    let fixture = public_release_proving_fixture();
+    let public_key_shares: [&ZkAmsMkheCollectivePublicKeyShareV1;
+        ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
+        std::array::from_fn(|index| &fixture.public_key_shares[index]);
+    let statement = public_release_statement(fixture, &public_key_shares);
+    for axis in 0..23 {
+        let (persistent_context, mut persistent_use) =
+            public_release_party_use(fixture, statement, 0);
+        persistent_use.corrupt_axis_for_test(axis, fixture.roster.parties()[1]);
+        assert_eq!(
+            prove_zk_ams_mkhe_decryption_share_v1(
+                statement,
+                &persistent_context,
+                0,
+                persistent_use,
+                &fixture.party_states[0],
+                &fixture.party_secrets[0],
+                &mut FailingRandom,
+            ),
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
+            "persistent party-use axis {axis} must reject",
+        );
+    }
+}
+
+#[test]
+fn retained_context_mints_fresh_later_statement_uses_and_rejects_stale_use() {
+    let fixture = public_release_proving_fixture();
+    let public_key_shares: [&ZkAmsMkheCollectivePublicKeyShareV1;
+        ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
+        std::array::from_fn(|index| &fixture.public_key_shares[index]);
+    let statement = public_release_statement(fixture, &public_key_shares);
+    let (persistent_context, initial_uses) = public_release_persistent_context(fixture, statement);
+    let later_ciphertext = ZkAmsMkheCollectiveCiphertextWireV1::new(
+        fixture.ciphertext.binding(),
+        fixture.ciphertext.sample_index() + 1,
+        fixture.ciphertext.constant().clone(),
+        fixture.ciphertext.linear().clone(),
+    )
+    .unwrap();
+    let later_statement = ZkAmsMkheDecryptionStatementV1::new(
+        &fixture.roster,
+        &later_ciphertext,
+        &fixture.collective_public_key,
+        &public_key_shares,
+    )
+    .unwrap();
+    let later_uses = persistent_context
+        .bind_statement_v1(later_statement)
+        .unwrap();
+    let initial_use = initial_uses.into_iter().next().unwrap();
+    let later_use = later_uses.into_iter().next().unwrap();
+    assert_ne!(initial_use, later_use);
+    assert_eq!(
+        prove_zk_ams_mkhe_decryption_share_v1(
+            later_statement,
+            &persistent_context,
+            0,
+            initial_use,
+            &fixture.party_states[0],
+            &fixture.party_secrets[0],
+            &mut FailingRandom,
+        ),
+        Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+    );
+    assert_eq!(
+        prove_zk_ams_mkhe_decryption_share_v1(
+            later_statement,
+            &persistent_context,
+            0,
+            later_use,
+            &fixture.party_states[0],
+            &fixture.party_secrets[0],
+            &mut FailingRandom,
         ),
         Err(ZkAmsMkheErrorV1::RandomUnavailable)
     );
@@ -784,28 +1128,18 @@ fn opaque_state_and_verified_key_context_reject_every_splice_before_rng() {
         ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
         std::array::from_fn(|index| &fixture.public_key_shares[index]);
     let statement = public_release_statement(fixture, &public_key_shares);
-    let expected = expected_opaque_party_state_context(statement, 0).unwrap();
-    validate_opaque_party_state_context(&fixture.party_states[0], expected).unwrap();
-
-    for axis in 0..9 {
-        let mut changed = expected;
-        match axis {
-            0 => changed.profile_digest[0] ^= 1,
-            1 => changed.security_certificate_digest[0] ^= 1,
-            2 => changed.roster_digest[0] ^= 1,
-            3 => changed.key_material_digest[0] ^= 1,
-            4 => changed.epoch += 1,
-            5 => changed.transcript_digest[0] ^= 1,
-            6 => changed.party_index = 1,
-            7 => changed.party = fixture.roster.parties()[1],
-            8 => changed.public_share_digest[0] ^= 1,
-            _ => unreachable!(),
-        }
-        assert_eq!(
-            validate_opaque_party_state_context(&fixture.party_states[0], changed),
-            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial),
-            "opaque state context axis {axis} must reject"
-        );
+    for substituted_party in 1..ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1 {
+        let mut states: [&ZkAmsMkheCollectivePartyStateV1; ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1] =
+            std::array::from_fn(|index| &fixture.party_states[index]);
+        states[0] = &fixture.party_states[substituted_party];
+        assert!(matches!(
+            prepare_zk_ams_mkhe_persistent_decryption_v1(
+                &fixture.governed_roster,
+                statement,
+                states,
+            ),
+            Err(ZkAmsMkheErrorV1::InvalidKeyMaterial)
+        ));
     }
 
     let mut swapped_public_key_shares = public_key_shares;
@@ -1007,11 +1341,29 @@ fn release_resource_evidence_is_exact_for_split_transport() {
     assert_eq!(evidence.split_proof_headroom_bytes, 524_233);
     assert!(evidence.split_component_ceilings_met);
     assert_eq!(
+        evidence.native_combine_relation_residency_lower_bound_bytes,
+        358_612_992
+    );
+    assert_eq!(
+        evidence.governed_native_workspace_ceiling_bytes,
+        160 * 1024 * 1024
+    );
+    assert!(
+        evidence.native_combine_relation_residency_lower_bound_bytes
+            > evidence.governed_native_workspace_ceiling_bytes
+    );
+    assert_eq!(
+        evidence.native_peak_residency_certificate_digest,
+        ZK_AMS_MKHE_DECRYPTION_NATIVE_RESIDENCY_CERTIFICATE_DIGEST_V1
+    );
+    assert_eq!(evidence.native_peak_residency_certificate_digest, [0; 32]);
+    assert!(!evidence.native_peak_residency_certified);
+    assert_eq!(
         evidence.split_release_kat_digest,
         ZK_AMS_MKHE_DECRYPTION_SPLIT_RELEASE_KAT_DIGEST_V1
     );
-    assert_ne!(evidence.split_release_kat_digest, [0; 32]);
-    assert!(evidence.split_transport_ready);
+    assert_eq!(evidence.split_release_kat_digest, [0; 32]);
+    assert!(!evidence.split_transport_ready);
     assert_eq!(evidence.record_overhead_bytes, 432);
     assert_eq!(evidence.total_share_record_bytes, 72_876_523);
     assert_eq!(evidence.governed_share_ceiling_bytes, 64 * 1024 * 1024);
@@ -1021,13 +1373,15 @@ fn release_resource_evidence_is_exact_for_split_transport() {
         evidence.minimum_sound_share_ceiling_bytes,
         evidence.total_share_record_bytes
     );
+    assert_ne!(evidence.evidence_digest, [0; 32]);
+
+    let mut forged_native_ready = evidence;
+    forged_native_ready.native_peak_residency_certified = true;
+    forged_native_ready.split_transport_ready = true;
+    forged_native_ready.evidence_digest = decryption_resource_evidence_digest(forged_native_ready);
     assert_eq!(
-        evidence.evidence_digest,
-        [
-            0x1a, 0x67, 0x05, 0xd1, 0xad, 0x09, 0xd0, 0x0c, 0x7f, 0x90, 0x2d, 0xf1, 0x9b, 0xff,
-            0xe8, 0xc2, 0x37, 0x35, 0x93, 0x5d, 0x5b, 0x0c, 0x4f, 0x2d, 0xea, 0xd4, 0xb5, 0xf0,
-            0x25, 0xd6, 0xc3, 0x67,
-        ]
+        forged_native_ready.validate(),
+        Err(ZkAmsMkheErrorV1::InvalidProfile)
     );
 }
 

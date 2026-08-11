@@ -138,5 +138,5 @@ retries, and the final adversarial underfunded rollback. A sandbox bind skip or
 a partial 3-of-10 run is not a pass.
 
 For a multi-seed run, use `scripts/nexus/run_cross_runtime_matrix.sh` after prebuilding a compatible
-`irohad`; do not rely on `IROHA_TEST_SKIP_BUILD=1` unless that binary is present and matches the
+`iroha3d`; do not rely on `IROHA_TEST_SKIP_BUILD=1` unless that binary is present and matches the
 workspace.

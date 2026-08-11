@@ -106,6 +106,7 @@ struct KuraPruneSidecarRewriteProjectionV2 {
 }
 
 impl KuraPruneSidecarRewriteProjectionV2 {
+    #[cfg(test)]
     const fn none() -> Self {
         Self {
             pipeline: KuraPruneSidecarPairProjectionV2 {
@@ -134,11 +135,9 @@ impl KuraPruneSidecarRewriteProjectionV2 {
             return false;
         };
         (self.pipeline.required
-            || (self.pipeline.retained_data_bytes == 0
-                && self.pipeline.retained_index_bytes == 0))
+            || (self.pipeline.retained_data_bytes == 0 && self.pipeline.retained_index_bytes == 0))
             && (self.roster.required
-                || (self.roster.retained_data_bytes == 0
-                    && self.roster.retained_index_bytes == 0))
+                || (self.roster.retained_data_bytes == 0 && self.roster.retained_index_bytes == 0))
             && self.sequential_peak_bytes == pipeline.max(roster)
     }
 
@@ -189,20 +188,14 @@ impl KuraPruneCapacityAdmissionV2 {
             .and_then(|bytes| bytes.checked_add(self.autonomous_terminal_reserved_bytes))
     }
 
-    fn transaction_peak_bytes(
-        self,
-        sidecar: KuraPruneSidecarRewriteProjectionV2,
-    ) -> Option<u64> {
+    fn transaction_peak_bytes(self, sidecar: KuraPruneSidecarRewriteProjectionV2) -> Option<u64> {
         self.roster
             .allocation_peak_with_sidecar(sidecar.sequential_peak_bytes)
             .and_then(|bytes| self.marker_stable_growth_bytes.checked_add(bytes))
             .map(|post_marker| self.marker_temporary_bytes.max(post_marker))
     }
 
-    fn required_peak_bytes(
-        self,
-        sidecar: KuraPruneSidecarRewriteProjectionV2,
-    ) -> Option<u64> {
+    fn required_peak_bytes(self, sidecar: KuraPruneSidecarRewriteProjectionV2) -> Option<u64> {
         self.source_physical_bytes
             .checked_add(self.reserved_bytes()?)
             .and_then(|bytes| bytes.checked_add(self.intent_bytes))
@@ -715,14 +708,14 @@ struct BlockReplicaAdvert {
 #[derive(Clone, Debug)]
 struct VerifiedKuraReplicaAuthority {
     key: BlockReplicaKey,
-    chain_id: ChainId,
+    network_id: NetworkId,
     selected_keepers: Vec<(u32, PeerId)>,
 }
 
 #[derive(Encode)]
 struct KuraReplicaKeeperScoreV1 {
     domain: Vec<u8>,
-    chain_id: ChainId,
+    network_id: NetworkId,
     context_id: HeightContextId,
     height: u64,
     block_hash: HashOf<BlockHeader>,

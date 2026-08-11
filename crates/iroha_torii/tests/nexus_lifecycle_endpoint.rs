@@ -85,6 +85,7 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
         );
         Torii::new(
             iroha_data_model::ChainId::from("test-chain"),
+            iroha_torii::test_utils::signed_query_network_id(),
             kiso,
             cfg.torii.clone(),
             Arc::clone(&queue),
@@ -101,6 +102,7 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
     #[cfg(not(feature = "telemetry"))]
     let torii = Torii::new(
         iroha_data_model::ChainId::from("test-chain"),
+        iroha_torii::test_utils::signed_query_network_id(),
         kiso,
         cfg.torii.clone(),
         Arc::clone(&queue),

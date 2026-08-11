@@ -2056,7 +2056,7 @@ pub fn configure(
     };
 }
 
-fn max_bytes_cfg() -> usize {
+pub(super) fn max_bytes_cfg() -> usize {
     let max_bytes = attach_cfg().read().max_bytes;
     usize::try_from(max_bytes).unwrap_or(usize::MAX)
 }

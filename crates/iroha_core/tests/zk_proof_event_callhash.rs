@@ -29,6 +29,7 @@ fn proof_event_includes_call_hash() {
     let chain_id = ChainId::from("chain");
     let state =
         iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
@@ -43,7 +44,7 @@ fn proof_event_includes_call_hash() {
     );
     let verify = iroha_data_model::isi::zk::VerifyProof::new(attach);
     let tx = TransactionBuilder::new(
-        chain_id,
+        network_id,
         authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

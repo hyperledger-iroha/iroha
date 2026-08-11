@@ -8,6 +8,8 @@ import {
   ToriiClient,
   ToriiHttpError,
   IsoMessageTimeoutError,
+  LocalSigningContext,
+  NetworkId,
   bootstrapConnectPreviewSession,
   extractToriiFeatureConfig,
   buildRegisterDomainTransaction,
@@ -29,6 +31,8 @@ import {
   isNonEmptyString,
   isPlainObject,
 } from "./integrationToriiProverReportAssertions.js";
+import { normalizeIntegrationString, parseBooleanEnv } from "./integrationToriiEnv.js";
+import { buildIntegrationGovernancePlainBallotPayload } from "./toriiClientGovernanceTests.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BASE_URL = process.env.IROHA_TORII_INTEGRATION_URL ?? "";
@@ -130,8 +134,10 @@ const CONTRACT_CALL_OPTIONS = parseJsonEnv(
 const GOVERNANCE_BALLOT_OPTIONS = parseJsonEnv(
   process.env.IROHA_TORII_INTEGRATION_GOV_BALLOT ?? null,
 );
-const CHAIN_ID =
-  process.env.IROHA_TORII_INTEGRATION_CHAIN_ID ?? "00000000-0000-0000-0000-000000000000";
+const NETWORK_ID = NetworkId.parse(
+  process.env.IROHA_TORII_INTEGRATION_NETWORK_ID ??
+    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
 const AUTHORITY_ACCOUNT_ID =
   process.env.IROHA_TORII_INTEGRATION_ACCOUNT_ID ??
   "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
@@ -148,14 +154,6 @@ if (!BASE_URL) {
   throw new Error(
     "IROHA_TORII_INTEGRATION_URL is required when the live Torii integration suite is selected",
   );
-}
-
-function parseBooleanEnv(value) {
-  if (!value) {
-    return false;
-  }
-  const normalized = value.trim().toLowerCase();
-  return normalized !== "0" && normalized !== "false";
 }
 
 const SUCCESS_STATUSES = new Set(["applied"]);
@@ -272,9 +270,17 @@ test(
     }
 
     if (CONNECT_SESSION) {
-      const sessionOptions = JSON.parse(CONNECT_SESSION);
-      assert.ok(sessionOptions.sid, "connect session payload must provide sid");
-      const session = await client.createConnectSession(sessionOptions);
+      const rawSessionOptions = JSON.parse(CONNECT_SESSION);
+      for (const field of ["sid", "network_id", "app_pk", "nonce"]) {
+        assert.ok(rawSessionOptions[field], `connect session payload must provide ${field}`);
+      }
+      const session = await client.createConnectSession({
+        sid: rawSessionOptions.sid,
+        networkId: NetworkId.parse(rawSessionOptions.network_id),
+        appPublicKey: Buffer.from(rawSessionOptions.app_pk, "base64url"),
+        nonce: Buffer.from(rawSessionOptions.nonce, "base64url"),
+        node: rawSessionOptions.node ?? null,
+      });
       assert.ok(session?.wallet_uri ?? session?.walletUri, "connect session should return a wallet URI");
     }
   },
@@ -885,7 +891,7 @@ test(
     const privateKey = decodePrivateKeyHex(PRIVATE_KEY_HEX);
     const domainId = randomDomainId();
     const { signedTransaction, hash } = buildRegisterDomainTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       domainId,
       metadata: {
@@ -937,7 +943,7 @@ test(
     const privateKey = decodePrivateKeyHex(PRIVATE_KEY_HEX);
     const domainId = randomDomainId();
     const { signedTransaction, hash } = buildRegisterDomainTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       domainId,
       metadata: {
@@ -1005,7 +1011,7 @@ test(
     const privateKey = decodePrivateKeyHex(PRIVATE_KEY_HEX);
     const domainId = randomDomainId();
     const { signedTransaction: domainTx, hash: domainHash } = buildRegisterDomainTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       domainId,
       metadata: {
@@ -1025,7 +1031,7 @@ test(
     const accountId = randomAccountId(domainId);
     const { signedTransaction: accountTx, hash: accountHash } =
       buildRegisterAccountAndTransferTransaction({
-        chainId: CHAIN_ID,
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ACCOUNT_ID,
         account: {
           accountId,
@@ -1048,7 +1054,7 @@ test(
     const assetId = composeAssetId(assetDefinitionId, AUTHORITY_ACCOUNT_ID);
     const { signedTransaction: assetTx, hash: assetHash } =
       buildRegisterAssetDefinitionAndMintTransaction({
-        chainId: CHAIN_ID,
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ACCOUNT_ID,
         assetDefinition: {
           assetDefinitionId,
@@ -1094,7 +1100,7 @@ test(
 
     const { signedTransaction: extraMintTx, hash: extraMintHash } =
       buildMintAssetTransaction({
-        chainId: CHAIN_ID,
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ACCOUNT_ID,
         assetId,
         quantity: "3",
@@ -1202,7 +1208,7 @@ test(
     const remainingQuantity = (BigInt(mintedQuantity) - BigInt(transferQuantity)).toString();
 
     const { signedTransaction: domainTx, hash: domainHash } = buildRegisterDomainTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       domainId,
       metadata: {
@@ -1220,7 +1226,7 @@ test(
 
     const { signedTransaction: senderTx, hash: senderHash } =
       buildRegisterAccountAndTransferTransaction({
-        chainId: CHAIN_ID,
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ACCOUNT_ID,
         account: {
           accountId: senderAccountId,
@@ -1242,7 +1248,7 @@ test(
 
     const { signedTransaction: receiverTx, hash: receiverHash } =
       buildRegisterAccountAndTransferTransaction({
-        chainId: CHAIN_ID,
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ACCOUNT_ID,
         account: {
           accountId: receiverAccountId,
@@ -1264,7 +1270,7 @@ test(
 
     const { signedTransaction: assetTx, hash: assetHash } =
       buildRegisterAssetDefinitionAndMintTransaction({
-        chainId: CHAIN_ID,
+        networkId: NETWORK_ID,
         authority: AUTHORITY_ACCOUNT_ID,
         assetDefinition: {
           assetDefinitionId,
@@ -1291,7 +1297,7 @@ test(
     assert.equal(mintedAsset.quantity, mintedQuantity);
 
     const { signedTransaction: transferTx, hash: transferHash } = buildTransferAssetTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       sourceAssetId: senderAssetId,
       destinationAccountId: receiverAccountId,
@@ -1606,8 +1612,9 @@ test(
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
+      localSigningContext: new LocalSigningContext(NETWORK_ID),
     });
-
+    const canonicalAuth = { accountId: AUTHORITY_ACCOUNT_ID, privateKey: Buffer.from(PRIVATE_KEY_HEX, "hex") };
     const attachmentPayload = Buffer.from(
       `iroha-js-attachment-${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`,
       "utf8",
@@ -1617,6 +1624,7 @@ test(
     try {
       uploaded = await client.uploadAttachment(attachmentPayload, {
         contentType: "text/plain",
+        canonicalAuth,
       });
     } catch (error) {
       if (isAttachmentEndpointUnavailable(error)) {
@@ -1630,10 +1638,9 @@ test(
       throw error;
     }
     assertAttachmentMetadata(uploaded, "attachment upload metadata");
-
     let attachmentList;
     try {
-      attachmentList = await client.listAttachments();
+      attachmentList = await client.listAttachments({ canonicalAuth });
     } catch (error) {
       if (isAttachmentEndpointUnavailable(error)) {
         t.diagnostic(
@@ -1656,7 +1663,7 @@ test(
 
     let fetched;
     try {
-      fetched = await client.getAttachment(uploaded.id);
+      fetched = await client.getAttachment(uploaded.id, { canonicalAuth });
     } catch (error) {
       if (isAttachmentEndpointUnavailable(error)) {
         t.diagnostic(
@@ -1679,9 +1686,8 @@ test(
       attachmentPayload.toString("utf8"),
       "attachment payload should round-trip exactly",
     );
-
     try {
-      await client.deleteAttachment(uploaded.id);
+      await client.deleteAttachment(uploaded.id, { canonicalAuth });
     } catch (error) {
       if (isAttachmentEndpointUnavailable(error)) {
         t.diagnostic(
@@ -1694,7 +1700,7 @@ test(
       throw error;
     }
 
-    const deleted = await waitForAttachmentDeletion(client, uploaded.id);
+    const deleted = await waitForAttachmentDeletion(client, uploaded.id, canonicalAuth);
     if (!deleted) {
       t.diagnostic(
         `attachment ${uploaded.id} still retrievable after delete; retention policy may delay cleanup`,
@@ -1926,7 +1932,7 @@ test(
 
     const blockEventPromise = waitForPipelineBlockEvent(client, controller.signal);
     const { signedTransaction, hash } = buildRegisterDomainTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       domainId,
       metadata: {
@@ -1988,7 +1994,7 @@ test(
     const domainId = randomDomainId();
     const streamPromise = waitForSumeragiStatusEvent(client, controller.signal);
     const { signedTransaction, hash } = buildRegisterDomainTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       domainId,
       metadata: {
@@ -2042,7 +2048,7 @@ test(
     const privateKey = decodePrivateKeyHex(PRIVATE_KEY_HEX);
     const domainId = randomDomainId();
     const { signedTransaction, hash } = buildRegisterDomainTransaction({
-      chainId: CHAIN_ID,
+      networkId: NETWORK_ID,
       authority: AUTHORITY_ACCOUNT_ID,
       domainId,
       metadata: {
@@ -2436,27 +2442,23 @@ test(
     const pinList = await client.listSorafsPinManifests({ limit: 5 });
     assert.ok(Array.isArray(pinList.manifests), "pin manifest list must include manifests array");
     assert.ok(
-      Number.isInteger(pinList.limit) && pinList.limit > 0,
-      "pin manifest list must include a positive limit",
+      Number.isInteger(pinList.finalized_cursor.height) && pinList.finalized_cursor.height > 0,
+      "pin manifest list must include a positive finalized height",
     );
+    assert.equal(pinList.finalized_cursor.block_hash.length, 32);
+    assert.ok(Number.isInteger(pinList.charged_usage.manifest_count));
+    assert.ok(Number.isInteger(pinList.charged_usage.content_bytes));
 
     if (pinList.manifests.length > 0) {
       const [manifest] = pinList.manifests;
-      assertHexString(manifest.digest_hex, "SoraFS manifest digest");
-      const resolved = await client.getSorafsPinManifestTyped(manifest.digest_hex);
-      assert.equal(
-        resolved.manifest.digest_hex,
-        manifest.digest_hex,
-        "resolved manifest digest must match list entry",
-      );
-      assert.ok(Array.isArray(resolved.aliases), "manifest response must include aliases array");
-      assert.ok(
-        Array.isArray(resolved.replication_orders),
-        "manifest response must include replication orders",
-      );
+      const manifestDigestHex = Buffer.from(manifest.digest).toString("hex");
+      assertHexString(manifestDigestHex, "SoraFS manifest digest");
+      assert.equal("alias" in manifest, false, "list summaries must omit alias proofs");
+      assert.equal("metadata" in manifest, false, "list summaries must omit metadata");
+      assert.equal("lineage" in manifest, false, "list summaries must omit lineage expansion");
       const iteratorHit = await iteratorIncludes(
         client.iterateSorafsPinManifests({ pageSize: 1, maxItems: 10 }),
-        (entry) => entry?.digest_hex === manifest.digest_hex,
+        (entry) => Buffer.from(entry.digest).toString("hex") === manifestDigestHex,
       );
       assert.ok(iteratorHit, "pin manifest iterator should surface the sampled manifest");
     } else {
@@ -3009,6 +3011,8 @@ test(
       timestamp: new Date().toISOString(),
     };
     const submission = await client.submitDaBlob({
+      networkId: NETWORK_ID,
+      owner: AUTHORITY_ACCOUNT_ID,
       payload: payloadBuffer,
       codec: "application/octet-stream",
       metadata,
@@ -3251,7 +3255,7 @@ test(
     }
     if (!isPlainObject(CONNECT_PREVIEW_CONFIG)) {
       t.diagnostic(
-        "set IROHA_TORII_INTEGRATION_CONNECT_PREVIEW to a JSON object (e.g. {\"node\":\"connect.devnet.example\"}) to exercise the preview bootstrapper",
+        "set IROHA_TORII_INTEGRATION_CONNECT_PREVIEW to a JSON object (e.g. {\"network_id\":\"hash:<genesis>#<checksum>\",\"node\":\"connect.devnet.example\"}) to exercise the preview bootstrapper",
       );
       return;
     }
@@ -3265,7 +3269,15 @@ test(
       apiToken: API_TOKEN,
     });
     const previewEnv = CONNECT_PREVIEW_CONFIG ?? {};
-    const chainId = normalizeIntegrationString(previewEnv.chainId) ?? CHAIN_ID;
+    assert.equal(
+      Object.hasOwn(previewEnv, "chainId") || Object.hasOwn(previewEnv, "chain_id"),
+      false,
+      "Connect preview config must use exact network_id, not a human-readable chain label",
+    );
+    const previewNetworkIdLiteral = normalizeIntegrationString(previewEnv.network_id);
+    const previewNetworkId = previewNetworkIdLiteral
+      ? NetworkId.parse(previewNetworkIdLiteral)
+      : NETWORK_ID;
     const previewNode = normalizeIntegrationString(previewEnv.node);
     const sessionOptionsRaw = isPlainObject(previewEnv.sessionOptions)
       ? previewEnv.sessionOptions
@@ -3282,7 +3294,7 @@ test(
     let createdManagementToken = null;
     try {
       const result = await bootstrapConnectPreviewSession(client, {
-        chainId,
+        networkId: previewNetworkId,
         node: previewNode ?? null,
         nonce: previewEnv.nonce ?? null,
         sessionOptions,
@@ -3827,7 +3839,7 @@ test(
 );
 
 test(
-  "governance plain ballot submission (optional)",
+  "governance plain ballot draft (optional)",
   {
     timeout: 120_000,
   },
@@ -3846,7 +3858,10 @@ test(
     }
     let ballotPayload;
     try {
-      ballotPayload = buildGovernancePlainBallotPayload(GOVERNANCE_BALLOT_OPTIONS);
+      ballotPayload = buildIntegrationGovernancePlainBallotPayload(
+        GOVERNANCE_BALLOT_OPTIONS,
+        { defaultAuthority: AUTHORITY_ACCOUNT_ID, networkId: NETWORK_ID },
+      );
     } catch (error) {
       t.diagnostic(
         `invalid governance ballot payload from IROHA_TORII_INTEGRATION_GOV_BALLOT: ${
@@ -3865,11 +3880,17 @@ test(
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
+      localSigningContext: new LocalSigningContext(NETWORK_ID),
     });
 
     let response;
     try {
-      response = await client.governanceSubmitPlainBallot(ballotPayload);
+      response = await client.governanceSubmitPlainBallot(ballotPayload, {
+        canonicalAuth: {
+          accountId: ballotPayload.authority,
+          privateKey: decodePrivateKeyHex(PRIVATE_KEY_HEX),
+        },
+      });
     } catch (error) {
       if (shouldSkipGovernanceBallotEndpoints(error)) {
         t.diagnostic(
@@ -4908,10 +4929,10 @@ function shouldRetryDaManifestFetch(error) {
   return /404/.test(message) || /not\s+found/i.test(message);
 }
 
-async function waitForAttachmentDeletion(client, attachmentId, attempts = 3, delayMs = 500) {
+async function waitForAttachmentDeletion(client, attachmentId, canonicalAuth, attempts = 3, delayMs = 500) {
   for (let index = 0; index < attempts; index += 1) {
     try {
-      await client.getAttachment(attachmentId);
+      await client.getAttachment(attachmentId, { canonicalAuth });
     } catch (error) {
       if (isAttachmentNotFoundError(error) || isAttachmentEndpointUnavailable(error)) {
         return true;
@@ -4971,14 +4992,6 @@ function delay(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
-}
-
-function normalizeIntegrationString(value) {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length === 0 ? null : trimmed;
 }
 
 function resolveProjectPath(rawPath) {
@@ -5041,47 +5054,6 @@ function coerceNonNegativeInteger(value) {
     }
   }
   return null;
-}
-
-function buildGovernancePlainBallotPayload(overrides) {
-  if (!isPlainObject(overrides)) {
-    return null;
-  }
-  const referendumId = normalizeIntegrationString(overrides.referendumId);
-  if (!referendumId) {
-    return null;
-  }
-  const authority =
-    normalizeIntegrationString(overrides.authority) ?? AUTHORITY_ACCOUNT_ID;
-  const owner = normalizeIntegrationString(overrides.owner) ?? AUTHORITY_ACCOUNT_ID;
-  const chainId = normalizeIntegrationString(overrides.chainId) ?? CHAIN_ID;
-  const durationBlocksRaw = overrides.durationBlocks ?? 10;
-  const durationBlocks =
-    typeof durationBlocksRaw === "number"
-      ? durationBlocksRaw
-      : Number.parseInt(String(durationBlocksRaw), 10);
-  if (!Number.isFinite(durationBlocks) || durationBlocks <= 0) {
-    throw new Error("governance ballot durationBlocks must be a positive integer");
-  }
-  const amountRaw = overrides.amount ?? "1";
-  const amountText =
-    typeof amountRaw === "number" && Number.isFinite(amountRaw)
-      ? amountRaw.toString()
-      : normalizeIntegrationString(String(amountRaw));
-  if (!amountText) {
-    throw new Error("governance ballot amount must be a non-empty string or number");
-  }
-  const direction =
-    normalizeIntegrationString(overrides.direction ?? "Aye") ?? "Aye";
-  return {
-    authority,
-    chainId,
-    referendumId,
-    owner,
-    amount: amountText,
-    durationBlocks,
-    direction,
-  };
 }
 
 function buildIsoPacs008Fields(overrides) {

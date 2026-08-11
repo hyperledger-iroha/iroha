@@ -1,0 +1,844 @@
+# Sumeragi lifecycle simplification
+
+This source-coupled record freezes the baseline for replacing the accumulated
+Serve, witness, latch, and producer-episode scheduling paths with one
+deterministic lifecycle coordinator. It is not proof-ledger promotion evidence
+and must not be refreshed merely because the replacement changes a sealed
+source.
+
+## Frozen starting tree
+
+The baseline was captured at `2026-08-09T23:10:45+09:00`, before the new
+coordinator source and module declaration were added.
+
+- Branch: `optimizations`, two commits ahead of and four commits behind
+  `origin/optimizations`.
+- `HEAD`: `01dd293010e94f39055eda190d38396e6d561a3e`.
+- Active merge `MERGE_HEAD`:
+  `a1da64c76e8ce460bd3ea277814c2ee7fcd9940c`.
+- Index: 288 changed paths, 77,257 added lines, and 78,752 deleted lines. The
+  binary cached diff SHA-256 is
+  `0a3a233e9c267242349089807077de294a24d10f1da225d7d0833b054b20561a`.
+- Unstaged pre-refactor worktree: 16 changed paths, 1,189 added lines, and 394
+  deleted lines. Its binary diff SHA-256 is
+  `6ed97133261113eb4b7a6e446adadf4ba0375b0caccac6bc32b401015b3e7c53`.
+  This digest is reproducible from the current tree only by excluding the new
+  `v2_lifecycle_coordinator.rs`, its `mod.rs` declaration, and this baseline
+  record.
+- Untracked paths before the refactor: zero.
+- `Cargo.lock` SHA-256:
+  `e6da0ca17c73b77367806a208fefe8fc1301342a3245e29a2de4586a5dd86bf3`.
+  The file must remain byte-identical.
+- `formal/sumeragi_v2/proof_coverage.json` SHA-256:
+  `b82d79ae26d17f4fda865d2492526543833c67ecc35eba8544501748c448f161`.
+  Its frozen status is 35 `tlaps_proved`, 12 `specified_unproved`, 6
+  `trusted_contract`, 1 `out_of_scope`, no promoted cross-tool rows, and
+  `machine_checked_completion: false`.
+
+The active merge, complete index, unstaged late-passive-Fetch repair, and every
+other concurrent change are retained in place. No reset, checkout, stash, or
+bulk replacement is authorized.
+
+At capture time no Cargo or rustc process was active. An existing
+TLAPS/Isabelle history-extension proof and a SANY process were active against
+the sibling `iroha-sumeragi-v2-production-ready-20260801` checkout. Coordinator
+work must not overlap those jobs with Cargo, rustc, TLC, TLAPS, Verus, or an
+aggregate checker, and those processes must not be interrupted.
+
+## Replacement-corridor baseline
+
+The production line count ends immediately before each file's top-level test
+module. The token count uses the proof ledger checker's `rust_code_tokens`
+lexer over the same prefix. This deliberately broad corridor covers the state
+and scheduling owners that the coordinator is intended to replace.
+
+| Source | Production lines | Rust tokens | SHA-256 |
+|---|---:|---:|---|
+| `crates/iroha_core/src/sumeragi/v2.rs` | 12,130 | 64,851 | `54637183d82dcce98fa4e6831ab1d7b68bba7ca5e479a27098bec045ec927e76` |
+| `crates/iroha_core/src/sumeragi/v2_effects.rs` | 11,901 | 62,675 | `04014f40e4278b54ba49ea98dbed74471b9f933fc36c58849c8879edf5f8464a` |
+| `crates/iroha_core/src/sumeragi/v2_runtime.rs` | 17,726 | 87,393 | `69e83bac3128a68a95226586a9abaddf2e004f2469036e479fadd4068ce7f342` |
+| `crates/iroha_core/src/sumeragi/v2_worker.rs` | 18,537 | 94,468 | `85077659c0b2ed52852b41dece874d7e448c11d7044aad75e4ba6903d5ad8422` |
+| `crates/iroha_core/src/sumeragi/v2_runner.rs` | 5,580 | 26,951 | `89a8edfa92d879c5bdf3dd3a11a66e0dd621afb15abaf9d9dfd1267fc21b4022` |
+| `crates/iroha_core/src/sumeragi/v2_lifecycle_recovery.rs` | 1,716 | 8,170 | `686437e9a28e62e055044c7e8068f672dace83cd7686792626aa5b099b04afc2` |
+| **Total** | **67,590** | **344,508** | — |
+
+The final reviewed replacement corridor may contain at most 206,704 tokens,
+which is the integral 60% ceiling of this baseline. Production additions and
+deletions must also be classified from this same frozen corridor so the final
+ratio demonstrates at least two deleted production lines for every production
+line added. Test lines do not enter either ratio.
+
+## Provisional source seals
+
+The exact-Serve checker already expects the worker's actual test context:
+`#[cfg(test)] pub(super) mod tests`. A focused authenticated include-closure
+probe found no mismatch, so no speculative checker change was made.
+
+Three same-round closure digests are frozen individually. They currently match
+their authenticated recursive source closures but become provisional as soon
+as the coordinator changes the corresponding sources:
+
+- `v2_effects.rs`:
+  `65209ef560de0410ef8ac009bfbfb3e549afacba1809469e96c53926d1535c07`.
+- `v2_runner.rs`:
+  `74da559229ff1ffb382a5ac0f36362aa1bc2d37606ec888ac917450338786a48`.
+- `v2_worker.rs`:
+  `d91a31969aa397dd1840e635a29f2579e0d9d9e3297c3f1ce07256bc33acb6b9`.
+
+Their protected properties are Decision-over-Prepare and terminal rebind in
+the effect path, reconciliation after the serialized runner transition, and
+the worker's non-consuming held-offset projection. Their existing negative
+mutations remain regression oracles. Each property and mutation must move into
+one of the four final authoritative contracts—state schema, transition table,
+selector/rank, or persistence/recovery—before its old seal is removed. These
+digests must not be refreshed in place.
+
+## Frozen replacement decisions
+
+The pure reducer keeps one sole-writer authority module below the 1,500-line
+production ceiling. Immutable schema/value types live in the sibling
+`v2_lifecycle_schema.rs`; this split does not create a second transition
+authority. Capacity-denied work is a frozen pre-admission fence and therefore
+does not allocate an ordinal. Its complete semantic request is retained, the
+named capacity generation is the only unlock, and an unlocked fence is either
+admitted, replaced by a new fence, or retired on conclusive rejection.
+
+`LifecycleKey` remains the specified six-field key. Its phase is a closed
+statement-kind discriminator: Broadcast Proposal, Prepare/Commit Vote,
+Prepare/Commit QC, TimeoutVote, and TC are distinct phases, as are Proposal,
+Vote, and Timeout equivocation and invalid-body diagnostics. A diagnostic
+subject is a domain-separated digest over its kind, offender, and canonical
+authenticated conflicting pair. Routes, signatures, aggregate carriers, and
+full envelopes remain physical-only evidence.
+
+The adapter carriers themselves retain every fact needed to derive those
+keys. `EnterView` carries the complete authenticated protected PrepareQC, not
+only its round and subject: proposal round, phase, and execution commitment
+remain available after a timeout-certificate transition. Its logical identity
+normalizes interchangeable signer/aggregate carriers, while its exact physical
+identity retains the full TC and QC bytes. Equivocation reports likewise carry
+one closed Proposal, Vote, or TimeoutVote pair. Offender, round, and diagnostic
+kind are derived from that pair; the logical diagnostic digest canonicalizes
+the two unsigned statements, and physical identity retains both complete
+signed artifacts in observation order. Only the cryptographically authenticated
+adapter boundary can mint the sealed pair; the executor independently rechecks
+its structural conflict against the frozen height authority before reporting
+it, and no sibling module can manufacture a replacement pair from raw wire
+values.
+
+Every scheduler episode must carry the coordinator's exact frozen capacity
+geometry, and every physical slot belongs to the admitted work class's typed
+capacity lane. Duplicate physical digests retain the lowest canonical slot,
+while every supplied slot is consumed once independent of input order.
+Admission constructors are sealed inside the coordinator module. The exhaustive
+production adapter classifier is the only authority allowed to mint the logical
+phase, stage, and immutable scheduling topology. The logical target is not a
+seventh caller-supplied identity field: it is the key's authenticated subject,
+or the verified height-context digest for subjectless work, so ledger recovery
+reconstructs it without trusting an extra value. Admission and recovery
+inputs never carry an episode universe: the coordinator derives context, leader,
+roster slots, view, subject, phase, and capacity from a separately sealed,
+verified-height authority, and rollover replaces that authority atomically. A
+separate authenticated planner snapshot supplies live rank debts.
+
+The capacity geometry is likewise sealed. Sign, Fetch, Store, Validate, and
+Apply all charge the existing `effect_work_capacity` pool; splitting Sign into
+a second coordinator pool would overbook the executor. Broadcast, EnterView,
+and both diagnostic classes charge the two retained reducer-effect batches,
+bounded by `2 * MAX_EFFECTS_PER_STEP`. Certified Serve uses the existing checked
+roster-plus-reply-source family bound, and ProducerTurn has the same one-to-one
+capacity. Production factories derive these limits from the verified context,
+shared `SumeragiV2Config`, and network reply-source bound; callers cannot supply
+raw geometry. Certified Fetch retains its existing secondary request gate.
+
+Capacity waits belong only to bounded pre-admission fences. A claimed record
+may block only on an explicit external or recovery generation; letting it wait
+on its own reserved capacity would form a local lasso. Advancing an external
+or recovery generation atomically wakes every stale record sharing that
+source. The closed work-shape table binds each work class and specialized phase
+to its exact permitted execution-stage kind and is shared by admission and
+persistence. The rank's `source` component is the numeric ingress-source
+service position, not reducer provenance. Causal authority remains
+authenticated by the sealed owner/effect binding across persistence, signing,
+and retransmission continuations. The eight natural-number rank components are
+named in their mandated lexicographic order so they cannot be permuted or
+truncated by an adapter. For every `plan_turn`, the authenticated runtime
+snapshot supplies only identity-bound mode/capacity/selector/lane/source/runner
+debts. The coordinator derives the remaining-stage topology and exact live
+members of the target's frozen predecessor cut, rejects missing or extra ready
+rows, and binds the resulting rank to the returned lease. No rank snapshot is
+an immutable record or ledger field; external generation advancement may
+legitimately change a later snapshot.
+
+The raw planner input has no production constructor, `Default`, or `Clone`.
+Its test-only mint rejects duplicate ready ordinals, duplicate generation
+sources, and local Capacity/ProducerTurn generation claims instead of silently
+coalescing them in a map. Planning computes prospective external/recovery
+wakeups first, validates the complete identity-bound ready census, and only
+then publishes those generations. A malformed or stale census therefore
+cannot make waiting work ready before the coordinator fails closed. Production
+selection remains intentionally unreachable until fair ingress can attest
+lane/source positions under its lock and the reified move-only
+Completion/Runtime/Ingress cursor is bound into the same composite snapshot.
+That cursor now preserves the old iteration sequence while exposing its exact
+reach debt, but it is not independently a planner mint. Post-selection legacy
+evidence and absent-source zero defaults are not accepted substitutes.
+
+The executor separately mints a move-only, context-bound mode observation:
+its debt is one until the typed Kura application completion is retained and
+zero afterwards. It is derived from `finality_completion`, not from a looser
+`ready_to_finish` or queue-empty predicate. The runner likewise mints only a
+context-bound observation of its live Completion/Runtime/Ingress cursor for a
+closed target turn. Both observations remain inert until the composite factory
+joins every rank component and validates the complete ready census atomically.
+
+The first fair-ingress tranche is an inert, move-only pre-dequeue queue cut,
+not a planner or a second scheduler. Its sole mint takes `service_lock` before
+the queue-state lock, freezes the physical admission cutoff and ready-source
+prefix, and releases the state guard while retaining exclusive dequeue service
+for later composite validation. Every pre-cut row binds its authenticated wire
+key, complete process-local ownership projection, physical queue/source class,
+exact stored canonical bytes and length, the production dequeue helper's exact
+`Blocked | Strict | Dependency` verdict,
+and its monotone obsolete-owner status. An opaque immutable carrier census is
+retained beside that comparable geometry for executor-only classification. The
+selected pending identity additionally binds carrier-derived height context,
+exact source owner, wire identity, ownership projection, and unique physical
+admission ordinal.
+Lane and source positions are exact one-based non-zero values. Release-mode
+capture/revalidation proves the complete ready/lane/pending-wire indexes,
+counter and byte-accounting cut before comparing it. Producer appends at or
+after the cutoff—including a newly ready source or newly admitted barrier
+carrier—are excluded from the cut-aware projections without changing frozen
+authority; malformed post-cut state still fails structural validation. Any
+pre-cut reorder, removal, encoded-carrier or index mutation, identity mutation,
+or same-wire ownership-history coalescence fails its comparison. The service
+guard may span coordinator snapshot validation; the queue-state guard may not
+span network, cryptographic, effect, or coordinator work.
+
+The cut also retains typed snapshots of both legacy physical barriers during
+the one-cut migration. The Certified-Serve projection binds the exact gate
+actor, selected request/carrier, request cutoff, and predecessor-cleared
+predicate. The leader-wire projection binds its gate actor, durable Ingress
+ordinal set, complete active token/carrier/predecessor map, earliest selected
+barrier, body/control dependency, and monotone obsolete-token verdicts. The
+existing dequeue and lifecycle cut derive these values through the same pure
+helpers. Rebinding either gate or advancing any pre-cut authority therefore
+fails the queue CAS; these projections disappear with the old barriers rather
+than becoming new scheduler state.
+
+The queue-local cut alone deliberately does not mint selector debt: transport
+queue state cannot decide the per-occurrence fatal/restart, retained-dispatch,
+timeout-recovery, capacity/owner, terminal-subject, malformed-carrier, and
+Certified-Serve preparation/backpressure predicates. A separate inert executor
+join now classifies the complete opaque pre-cut census under the same service
+turn, validates the tracker/work/pending-fetch/retained-response request cut,
+and confirms that any acquired family claim equals the retained response. It
+maps every certified response to the formal aggregate untrusted resource source
+even though its production hop is authenticated, and counts each drainable
+request-fenced physical occurrence independently of claimed-family authority.
+Every response which passes exact read-only authentication first remains in the
+physical-ordinal census; candidates are grouped by exact signed-request hash,
+and only the unique lowest physical ordinal in each family receives the
+claimed-family verdict. Non-winning retransmissions remain census members and
+may still own request-fence priority. An occurrence holding both authorities is
+counted once because selector debt is the checked cardinality of their concrete
+ordinal set union; an empty complete set is exactly zero. Remote-invalid
+response carriers may retain request-fenced physical priority; inconsistent
+local indexes fail closed.
+
+The returned `PreparedLifecycleIngressSelector` is opaque, move-only, and
+borrow-free. It retains the complete queue-minted occurrence-identity map,
+verdict map, selected lane/source position and identity, plus each winning
+family's immutable carrier and equality-reprobed executor candidate. Its
+embedded opaque queue witness also preserves the physical cut, complete
+ready/lane geometry, occurrence identities, and Serve/leader barrier
+projections, so the future final CAS can reject a reorder of an unrelated
+pre-cut row rather than checking only the selected target. Releasing the queue
+guard and executor borrow makes this a preparation rather than live authority:
+it may be stale immediately after return and exposes no general clone,
+constructor, mutation, claim, reservation, or dequeue API. The only
+crate-visible mint takes the ingress queue and target physical ordinal together;
+raw cut rows and candidates remain sealed. There is no optional selector, zero
+placeholder, caller-supplied row, or legacy lifecycle/scheduler ordinal in this
+tranche, and the result still cannot mint `SchedulerInputs`.
+
+The queue-only final CAS now exists behind that sealed boundary, but it is not
+exposed from `PreparedLifecycleIngressSelector` and has no production caller.
+The cut binds an unforgeable process-local queue identity and its move-only
+witness must agree with the enclosing expected lifecycle context and selected
+physical ordinal. Commit reacquires `service_lock`, snapshots the exact
+cut-aware geometry and both barrier projections, releases the state lock for
+carrier re-encoding and ownership-hash validation, then reacquires state for
+the final cached geometry/barrier/context comparison immediately before
+mutation. The Certified-Serve reservation lifecycle id already binds its exact
+request hash, so this final lock compares the reservation, carrier ordinal,
+payload shape, and any dependency round/subject without hashing the request.
+That final cached comparison performs no body encoding or ownership hashing;
+after it succeeds, the shared production tail still performs its existing
+durable ownership validation while holding the state lock.
+Post-cut appends remain outside the comparison and survive source
+rotation; any pre-cut reorder, removal, coalescence, ownership change, barrier
+change, or queue substitution rejects without dequeuing. Exact success uses a
+single factored production tail for durable leader-wire binding, Certified-Serve
+physical drain, lane/global counters and indexes, source rotation, and the
+runtime physical cut. Consuming the witness makes this queue transition
+one-shot. It still cannot claim a response family, reserve runtime/service
+capacity, or act without the future output-permitted `v2_effects` transaction.
+That future wrapper must consume the complete prepared selector, finish the
+last candidate equality probe while its immutable family carriers are retained,
+then release every retained inbound `Arc` before invoking the queue commit; the
+shared production dequeue tail rejects a selected envelope with another strong
+owner rather than cloning physical ownership.
+
+An inert late-response readiness join is now sealed and module-private beside
+that queue witness; no sibling production module can invoke it before the
+consuming transaction exists.
+It borrows, rather than consumes, the complete
+`PreparedLifecycleIngressSelector`, and only the queue-selected occurrence may
+enter it. A request-fenced response which is not the lowest authenticated
+physical winner of its exact signed-request family is rejected; it cannot
+borrow the winner's candidate. The borrowed preparation retains the complete
+selected queue-minted context, digest, and physical ordinal for the future
+queue CAS; the readiness join first proves that exact identity is the family
+winner, then binds the exact request hash, executor-authenticated response
+candidate, its sealed
+`PendingRuntimeEffectBinding`, and the active context. Certified-Fetch
+admission and response wake share one fail-closed key helper for the existing
+six-field Fetch projection, including the same domain-separated block subject
+and execution commitment; an ordinary Fetch without explicit certificate
+commitment authority cannot use this path. The binding's authenticated causal
+lifecycle hash supplies the only causal root.
+
+The exact signed-request hash also feeds one shared
+`iroha:sumeragi:v2:lifecycle:certified-fetch-wait-source:v1` derivation. A
+response authenticates that external source, not a caller-selected generation:
+the coordinator locates exactly one existing Fetch row by semantic key and
+causal owner, reads that row's current `Waiting` token, requires its source and
+coordinator-observed generation to agree exactly, and passes that unchanged
+token through the existing readiness reducer. The staged transition changes
+the original `Waiting` row to `Ready`, advances its source generation, and
+replaces its one existing physical slot at the same address with the complete
+queue-minted ingress-identity digest. It never allocates an owner, ordinal,
+record, slot, or capacity charge. A missing/non-unique slot, a slot outside the
+frozen authenticated capacity geometry, a slot not already consumed by the
+incumbent carrier, an invalid consumed-set subset, or a no-op digest is rejected
+before mutation. The prepared logical mutation retains an exclusive borrow of
+the exact coordinator snapshot until its infallible assignment, so it cannot be
+applied to a different or meanwhile-mutated authority. The future
+consuming transaction must pair this logical `PhysicalReplacement` with the
+same-address concrete-work registry swap; neither half is exposed alone in
+production. An exact duplicate against `Ready`, or a late response against the
+exact terminal tombstone, stutters without advancing the generation or
+replacing the installed response. Missing/foreign identities, claimed rows,
+wrong sources or generations, ambiguous shared-source waits, and damaged
+indexes return typed failures without latching a new coordinator fault.
+Response claim, runtime and service reservation, output-permit validation, and
+the consuming queue CAS remain intentionally unavailable and must be joined in
+the future all-or-nothing transaction before production cutover.
+
+The concrete half now has a bounded body-first pre-CAS conversion as well.
+Blocking body-store persistence happens before any selector authority is
+retained for conversion: the exact `AuthenticatedCertifiedBodyResponse`
+crosses the canonical file-and-directory sync boundary and returns a sealed
+`DurableCertifiedFetchBodyReceipt` binding its request hash, full response hash,
+context, round, subject, manifest hash, and durable body frame. Because that I/O
+may invalidate every earlier queue observation, the future composite caller
+must then recapture a fresh selector/queue cut before continuing; a pre-storage
+selector is never reused.
+
+The logical mutation seals one same-address
+`(OwnerId, ordinal, PhysicalSlotId)` location with distinct incumbent and
+replacement digests; it cannot describe a slot move. The registry preflight
+accepts that location plus one opaque selector-minted capability, never
+decomposed caller-supplied response, responder, hash, queue-identity, or
+pending-binding inputs. That capability's fields and production mint are
+private to the selector; it exists only after the freshly prepared selector has
+bound the unique winning queue occurrence, signed authenticated response family
+and responder, and executor's sealed pending candidate. A borrow-bound registry
+preflight checks the location, incumbent digest and causal owner, exact pending
+`FetchBody` shape, selected queue identity and wire context, authenticated
+response family, and exact equality between the executor candidate's pending
+binding and the incumbent binding without mutating the map. The candidate
+binding is borrowed and is never retained as a second causal proof. This first
+token owns no dequeue commit. Consuming it together with the sealed durable
+receipt mints a second move-only token only after rechecking request and full
+response hashes, context, round, subject, manifest hash, and the still-installed
+incumbent Fetch family. Drop or error at either preparation stage leaves the
+registry byte-for-byte unchanged.
+
+The production-shaped selector test still starts with real signed competing
+responses and the fair-ingress queue-minted winning identity, installs an exact
+incumbent from the real Fetch task's ownership only in a sealed test helper, and
+proves the first bridge prepares and drops without dequeueing, renumbering, raw
+receipt minting, or otherwise changing the queue. Static source coverage pins
+that the first token has no post-dequeue method and only the durable second token
+owns the exact-dequeue commit. That private method validates its owned checked-
+dequeue carrier, queue identity, durable receipt, and retained Fetch before its
+first mutation, then moves the incumbent `AdapterEffect::FetchBody`, original
+`PendingRuntimeEffectBinding`, durable receipt, and exact dequeued response into
+a closed completion at the same address. Registry cardinality is preserved and
+only the installed digest changes to the logical `PhysicalReplacement` digest.
+There is no path to install an executable closed completion without the durable
+receipt; generic registry replacement rejects completion values and is not a
+second construction path. Scheduled execution rechecks the receipt against the
+exact retained Fetch and dequeued response, and its sealed `StoreBody` successor
+retains the same nested `DurableBodyReceipt` for future canonical reload instead
+of relying on legacy ready-body persistence. The required order is therefore:
+authenticate the response and persist its body to obtain the sealed receipt,
+freshly recapture selector/queue state, prepare the registry preflight, bind the
+receipt, exact-dequeue, then install the closed completion. `Ready` and terminal
+stutters remain separate non-mutation branches. The queue commit, response claim,
+runtime/service reservations, and production caller remain unavailable.
+Although a diagnostic post-dequeue mismatch leaves the volatile registry
+unchanged, the external dequeue cannot be undone: the future composite caller
+must convert that result directly to fail-stop and must never retry or continue.
+
+Those rechecks are diagnostics for the inert tranche, not a mutation
+capability. A returned boolean cannot close the interval after the shared
+output guard is sampled or after queue state is unlocked: restart activation
+or same-wire coalescence may still occur before a later caller acts. The only
+production consumer must therefore be one synchronous executor transaction
+which retains a `ConsensusOutputPermit`, consumes the preparation, re-probes
+its exact candidate and executor cut, and commits or removes the exact queue
+identity under the queue-state lock. A failed final comparison aborts every
+staged planner, response-claim, runtime, and service reservation change.
+
+The claimed-response priority relation also has an explicit migration gate.
+The existing formal model claims a certified response when transport admits
+it, while production Rust currently authenticates and claims that response
+only after fair-ingress dequeue. Outstanding request-hash membership is not a
+claim and cannot grant priority: several distinct response carriers may be
+queued for one request. Until the executor can transactionally authenticate
+the exact response, bind its pending fetch and canonical body plus queue-minted
+pending identity, preserve the already prepared lowest physical family winner,
+acquire or coalesce its exact claim, and reserve the matching runtime/service
+completion owner with rollback on planner or queue-CAS failure, the composite
+factory returns an unavailable-selector error and production planning remains
+unreachable. Selector debt zero is valid only after a complete typed verdict
+set proves that no pre-cut occurrence is a priority owner; it is never the
+fallback for an unavailable preflight.
+
+The production cutover has an explicit ordinal-free seam. A move-only
+`PendingRuntimeEffectBinding` retains only the authenticated causal lifecycle
+key, exact concrete-effect identity, and inherited semantic statement under a
+separate integrity projection; the legacy runtime ordinal is absent. The
+logical coordinator still stores only the resulting physical slot and digest.
+Complete process-local `AdapterEffect` values live in a sibling deterministic
+registry keyed by `(OwnerId, record ordinal, PhysicalSlotId)`, never by digest
+alone, because two inherited body authorities may share one concrete carrier.
+Registry installation consumes both the effect and pending binding, rejects
+overwrite, digest drift, or disagreement between the pending causal lifecycle
+key and the admitted `OwnerId`, resolves only an exact lease-advertised slot,
+and is one-shot on execution. Lease removal returns the complete move-only
+effect-plus-pending token rather than a bare effect, so a `Blocked` or
+`Replenished` settlement can restore the incumbent without reminting causal
+authority. It owns no admission, readiness, rank, retry,
+wait, generation, capacity, lease, or ordinal state. The registry remains inert
+until the same atomic production switch removes the old runtime allocator and
+scheduler; it is not a dual-mode execution path.
+
+The concrete admission seam consumes the complete effect and its move-only
+pending binding. It first projects and stages the digest-only coordinator
+transition. A first `Admitted` result may derive the staged record's sole
+`(OwnerId, ordinal, PhysicalSlotId, digest)` address. An exact retry of a
+`Waiting(Recovery)` record may derive the same immutable address only after the
+staged reducer has rebound its authenticated geometry and made it `Ready`;
+this is reported separately from an ordinary retry. In both cases that exact
+work is installed without overwrite before lifecycle-ledger publication. A
+registry failure discards the staged logical transition and returns the input
+pair. A ledger publication failure synchronously removes the just-installed
+entry, keeps the old active logical state (including the unrebound recovery
+wait), returns the pair, and latches the existing durability fault. The staged
+coordinator becomes active only after registry installation and ledger
+publication both succeed. Capacity waits, ordinary retries, terminal
+replay/stutter, and rejections return the exact pair without touching an
+incumbent registry entry. The externally nameable holder exposes only empty
+construction; every registry mutation stays inside the coordinator module.
+
+Certified Fetch completion has a separate direct reducer seam and must not
+re-enter the retired producer machinery. Production must not expose its
+execution token from a raw response or a pre-persistence selector snapshot.
+The exact response is first authenticated against its outstanding certified
+request, then its canonical body is written through `V2BodyStore`; only after
+the body file and directory entry are synchronised does storage return the
+sealed `DurableCertifiedFetchBodyReceipt`. While that bounded I/O is
+outstanding, the original Fetch row remains the sole executable authority and
+no closed completion or Store row exists. A crash before the receipt therefore
+recovers or retransmits the Fetch, while a crash after it can reconstruct the
+exact body before replaying `BodyAvailable`. Body-first orphan files are safe
+and idempotent; ledger-first Store publication is forbidden.
+
+After obtaining that receipt, the transaction freshly recaptures the complete
+selector/queue cut, prepares the drop-inert registry preflight, consumes it with
+the receipt, performs the exact checked dequeue, and only then installs the
+closed same-address completion carrier. No selector or queue witness retained
+across the blocking persistence call is admissible. The resulting borrow-bound
+registry execution token checks the claimed Fetch lease, owner, ordinal,
+consumed slot, installed response digest, retained Fetch effect, retained
+pending causal binding, and nested durable body receipt. While that token keeps
+the concrete row exclusively borrowed, the adapter previews `BodyAvailable`
+against cloned reducer and wire-registry state. Preview never calls the
+serviced-candidate store, producer-continuation reservation, deferred FIFO, or
+legacy lifecycle ordinal allocator.
+
+A `Busy` preview leaves the completion installed and settles the unchanged
+Fetch lease on one context-scoped external reducer-fence source. The adapter
+owns that source's monotone generation and advances it whenever pending
+persistence, awaiting-signature, or replay-fence authority changes. Generation
+`u64::MAX` is permanently reserved as invalid; exhaustion fails closed before
+either a wait token or a reducer mutation is exposed. Idempotent, superseded,
+and transitional legacy-conflict results retain the same exclusive adapter
+borrow until the future transaction gives them their typed settlement, so they
+cannot become check-then-use classifications.
+
+An applied preview is valid only when the cloned reducer emits exactly one
+`StoreBody` whose tag, round, and subject all equal the input `BodyAvailable`.
+The retained Fetch pending binding then projects the Store binding without a
+legacy ordinal: the immutable causal key and inherited semantic statement stay
+exact while only the concrete effect kind, physical identity, and integrity
+projection change. This projection is deterministic data, not separately
+executable authority; it remains sealed inside the parent-to-successor
+transaction and cannot coexist as a usable duplicate of the Fetch binding.
+
+The production transition must stage Fetch `Advanced` and Store admission on
+one coordinator copy, release the parent's Effect charge before admitting the
+successor, require the same `OwnerId` with a newly allocated record ordinal,
+install the Store concrete work, and publish one lifecycle-ledger replacement.
+Only after every coordinator, registry, body, service, request, response-claim,
+and queue preflight is exact may the already-previewed adapter state be moved
+into place. A post-dequeue mismatch is process fail-stop, never retry. This
+direct path remains unreachable until restart can reconstruct the exact ready
+body and replay or inject the matching `BodyAvailable` before exposing a live
+Store row; process fail-stop cannot substitute for that power-loss contract.
+
+The next direct seam advances that durable Store row to `ValidateBody` without
+reviving legacy completion machinery. Its sealed pending binding projects only
+an exact `StoreBody -> ValidateBody` pair with identical tag, round, subject,
+causal lifecycle key, and inherited candidate statement; only the concrete
+effect identity and integrity projection change. The adapter rechecks the
+nested `DurableBodyReceipt` against the frozen context and registered manifest,
+then previews `BodyStored` on cloned reducer and wire-registry state. Applied is
+valid only for one exact `ValidateBody`; Busy and every inactive result retain
+the adapter borrow, and commit remains an infallible state installation inside
+the future Store registry transaction.
+
+The concrete registry mirrors that boundary with two closed, move-only body
+carriers. `DurableStoreBody` and `DurableValidateBody` each retain their exact
+coordinator-minted address, owned adapter effect, ordinal-free pending binding,
+and durable body receipt. They also retain an independently transferred hash of
+the authenticated response manifest; execution requires that hash to equal the
+receipt's catalog hash instead of treating the receipt as both sides of the
+comparison. Typed borrow-bound preflights re-project each carrier under the
+verified height context and require the claimed lifecycle key, causal owner,
+stage, reconstruction source, and complete consumed one-slot Effect geometry.
+Generic registry borrow/take operations reject both closed forms, and the
+current tokens expose no constructor, installation, removal, commit, or parts
+extraction. The sealed Store-to-Validate successor already owns every field
+needed for the later child carrier, but remains drop-inert until the adapter,
+coordinator, registry, ledger, and recovery cuts can publish together.
+
+Because the Store input already names a synchronised body-store frame, restart
+must reload those exact bytes from the durable catalog rather than depend on
+legacy `ready_bodies`. Publishing the Store-to-Validate ledger replacement is
+safe only when recovery can replay `BodyAvailable` and then `BodyStored` for
+that exact manifest before exposing the reconstructed Validate row. Durable
+bytes alone do not prove that either reducer transition was replayed, and
+process fail-stop does not replace this power-loss ordering contract.
+
+Successful deterministic validation has a wider closed reducer result than the
+earlier body stages. Its private, borrow-bound preview registers the
+independently durable execution commitment on a cloned wire registry and then
+classifies exactly five outcomes: reducer-fence `Busy`, ignored/inactive,
+applied with no effect, one exact `Apply`, or one exact safety-WAL `Persist`.
+Every outcome retains the staged registry. Non-Busy ignored outcomes also
+retain the staged reducer because `ValidationCompleted` may advance
+`Durable -> Validated` before determining that the current role, view, or
+decision owns no child effect. The `Persist` carrier keeps the complete core
+effect sealed and exposes neither encoded WAL bytes nor an append capability;
+the `Apply` carrier requires the exact event tag, subject, proposal round,
+execution commitment, and durable Decision. Preparation mutates no live
+adapter, WAL, lifecycle record, or legacy completion queue.
+
+Deterministic validation failure uses a separate private preview because it
+must never mint a success commitment or enter the safety-WAL continuation.
+After rebinding the exact `DurableBodyReceipt` to the frozen context and the
+independently registered manifest, it admits only four outcomes: reducer-fence
+`Busy`, ignored/inactive, applied with no effect, or one exact
+`ReportInvalidCertifiedBody` carrying the registered Prepare QC for the same
+round and subject. Every outcome retains the staged registry, and every
+non-Busy outcome retains the staged reducer. The report path round-trips its
+core certificate through the wire registry and rejects any phase, proposal
+round, subject, or carrier mismatch. These move-only tokens expose no commit,
+WAL append, deferred-completion, serviced-candidate, producer-continuation, or
+lifecycle mutation surface; the future composite transaction must consume the
+selected rejected-validation carrier and publish its diagnostic effect through
+the same coordinator-owned execution cut.
+
+The body-store side of that seam is scheduler-free. It accepts an exact
+`DurableBodyReceipt`, a separately carried expected manifest hash, and the
+deterministic validator; before invoking the validator it rechecks the frozen
+context, round, subject, checksummed frame, stored manifest, and both manifest
+hash authorities. Its closed non-clone result is either a post-fsync
+`ValidatedBodyReceipt`, a deterministic rejection bound to the same durable
+receipt, or an exact certified-merge-sidecar deferral bound to that receipt.
+No work id, runtime owner, lifecycle ordinal, or scheduler decision appears in
+this surface. The legacy task wrapper delegates to the same storage core for
+behavioral compatibility, but only the new registry path supplies the
+independent manifest authority needed by the direct lifecycle transaction.
+The scheduler-free result has a consuming success-only extraction which
+returns every rejection or sidecar deferral intact. The closed Validate
+registry preflight can bind that exact `ValidatedBodyReceipt` without changing
+its row: it rechecks the durable receipt, any inherited Prepare/Commit
+commitment, and derives a domain-separated replacement digest from the
+incumbent physical identity, independent manifest hash, durable frame, and
+canonical execution commitment. The resulting borrow-bound token exposes only
+preview inputs, the validation receipt, and old/new digests; it has no install,
+remove, or commit operation until the coordinator Ready replacement and
+registry conversion can publish atomically.
+
+The inert asynchronous handoff now makes that storage interval explicit. The
+borrow-bound Validate preflight can be consumed into a sealed, non-clone owned
+request which snapshots the exact registry address and incumbent digest,
+adapter coordinates, durable receipt, independent manifest hash, causal key,
+inherited candidate-authority statement, and immutable lifecycle key and stage.
+Consuming that request is the only new execution operation: it calls the
+scheduler-free body-store core and retains the complete request beside the
+closed result. The mutable registry is not borrowed while body I/O or
+validation runs. Reattachment reacquires the registry and rechecks the
+unchanged address, digest, closed carrier, pending effect binding, causal key,
+authority statement, durable receipt, lifecycle identity, and outcome; failure
+returns the owned executed token intact, while success remains drop-inert under
+a new exclusive borrow. No service queue, work identifier, caller-supplied
+ordinal, ordinal allocator, or second scheduler participates in the handoff.
+
+The claimed-side dispatch cut is now explicit and remains inert. Its sole
+coordinator-plus-registry entry point consumes the exact claimed Validate lease
+only after rechecking the active record, reverse identity indexes, closed
+carrier, verified projection, and one-slot geometry. A domain-separated
+external wait source binds the coordinator-minted address, incumbent digest,
+causal key, inherited authority statement, durable frame hash, and independently
+transferred manifest hash. The entry point samples that source's current
+observed generation, rejects the reserved maximum and any waiting-row alias,
+then settles `Claimed -> Waiting` on a coordinator copy and proves that no
+unrelated record, index, capacity, generation, or ordinal state changed. Only
+after those checks does it detach the registry request, publish the staged
+coordinator, and return one non-clone dispatch. Every precommit failure returns
+the caller's exact lease; a body-store error returns the complete dispatch and
+wake authority intact. Dropping a successful dispatch leaves the row explicitly
+Waiting and the closed registry carrier unchanged. This tranche creates no
+legacy body task or work identifier, enqueues no service work, publishes no
+Ready event while dispatching, rewrites no lifecycle ledger, and has no
+production caller. Merge-sidecar registration and wake remain prerequisites
+for wiring it.
+
+Executable validation completion is one volatile two-sided transaction.
+Successful validation and deterministic rejection each install a closed
+same-address carrier which owns the moved `DurableValidateBody`, its original
+incumbent digest as a separate authority coordinate, and the exact body-store
+outcome. The replacement digest is domain-separated by outcome and binds the
+old digest, independently transferred manifest, durable frame, and either the
+canonical execution commitment or the one closed reducer-level rejection
+identity. Human-readable rejection text remains diagnostic-only. The
+preflight rechecks the exact Waiting token, immutable lifecycle key and stage,
+one authenticated independent Effect-slot episode, reverse indexes, durable
+metadata, unchanged registry address and digest, pending binding, receipt, and
+outcome. It then publishes `Waiting -> Ready` with an equal-slot physical
+replacement on a coordinator copy, proves the wait generation advanced by
+exactly one and every unrelated record, index, capacity, high-water, debt,
+durable, universe, and consumed coordinate remained unchanged, and only then
+stages the registry carrier under an unwind-safe guard. The live coordinator
+is replaced with `mem::swap`, immediately followed by an infallible guard
+disarm which returns only precomputed typed location metadata; no fallible or
+panicking work follows either volatile commit. Any precommit error returns the
+exact executed dispatch, and unwind before the swap restores the original
+registry row byte-for-byte.
+
+Missing certified-merge sidecar is not executable completion. It installs no
+carrier, publishes no Ready event, and returns a sealed move-only deferral token
+which retains the exact executed dispatch, wake authority, and missing
+reference while both live sides remain byte-for-byte Waiting/original. A
+future sealed sidecar registration and same-row wake transaction must consume
+that token. Waiting, Ready, wait generations, and physical carriers are absent
+from `LifecycleLedgerV1`, so neither executable publication nor deferral writes
+the lifecycle ledger. A crash before the volatile cut retains only the durable
+Validate row; a crash after it likewise reconstructs that durable row and
+semantically revalidates the body-store success marker before any replacement
+is re-exposed. There is no production caller yet.
+
+Ready Validate execution now has an inert, sealed preflight. One exact
+coordinator-minted lease must retain the independent Validate key and stage,
+owner, ordinal, single Effect slot, and the outcome-bound replacement digest.
+The registry replays the retained incumbent through the verified height
+projection and rechecks its causal key, candidate statement, durable receipt,
+independently transferred expected manifest hash, and closed outcome authority.
+Only a durable validated receipt or the one canonical reducer rejection
+identity can cross the boundary; merge-sidecar deferral never publishes Ready,
+and rejection diagnostics remain inaccessible. The resulting non-clone token
+holds the exclusive registry borrow. Its sole fixed-output join consumes the
+token, constructs one private-field authority for the already-proved outcome,
+and passes that value directly into the matching sealed adapter entry point.
+There is no generic callback, replayable `&self` projection, or raw receipt and
+coordinate return path. The adapter preview is immediately consumed into one
+opaque, non-clone publication preflight while the registry token remains
+borrowed beside it. Validated Busy, inactive, no-effect, and Apply plus every
+rejected branch retain their exact staged authority unchanged. Validated
+Persist accepts only validation-origin `PrepareIntent` or `LockAndCommit`,
+encodes the exact next WAL payload, checks its expected sequence, and simulates
+the matching `Persisted` acknowledgement on cloned reducer/registry state. That
+simulation must close to exactly one matching vote-signing continuation and no
+nested Persist. The encoded payload, post-acknowledgement state, and Sign effect
+remain private. Adapter or publication-preflight errors retain the complete
+opaque registry token. The bridge exposes only the nine-way Copy discriminator:
+no commit, install, extraction, WAL bytes, raw event or receipt constructor,
+legacy task identifier, scheduler authority, or production caller. It never
+appends the WAL, and dropping any result mutates neither subsystem.
+
+TODO: Add the sole atomic consuming transaction which settles the Validate
+parent, authenticates and admits any exact successor, transitions or retires
+the Ready completion carrier, and installs the staged adapter state with the
+required WAL and restart ordering. No subset of coordinator settlement,
+successor admission, registry transition, or adapter commit may publish alone.
+Before that transaction can exist, authenticated restart must replay a
+terminalized Validate transition and reconstruct its exact successor, and the
+rejected-report branch must reserve or prove Consensus capacity before the
+Validate record is claimed; a claimed record cannot use record-level Capacity
+as a settlement wait. A durable Validate row is live, terminal `Advanced`, or
+typed `Cancelled` by explicit old-height retirement; generic Completed,
+Rejected, and Failed tombstones are rejected by the shared payload/terminal
+validator. Only `Advanced` requires semantic replay coverage. Validation
+success versus deterministic rejection is reauthenticated from the exact
+body-store outcome, not encoded as an unauthenticated tombstone discriminator.
+
+The corresponding ordinal-free successor projection accepts only
+`ValidateBody -> Apply` under the same tag, subject, causal lifecycle key, and
+inherited candidate statement. It applies the existing commitment-refinement
+lattice rather than requiring all non-phase key coordinates to be identical:
+an ordinary Validate may acquire the Decision commitment, a Prepare-authorized
+Validate may advance only to the matching Commit commitment, and a
+Commit-authorized Validate may retain only that exact commitment. The result
+is deterministic sealed data, not executable or installable authority. A
+shared inert coordinator reducer already checks the matching third pipeline
+edge: it terminalizes the claimed Validate parent before admitting the exact
+one-slot Apply child, requires the store-minted validation receipt to bind the
+certificate's proposal round, subject, context, and exact execution
+commitment, preserves the causal owner, permits only the refinement above,
+advances the Effect generation once, and keeps net Effect usage constant. Its
+borrow-bound token exposes no persistence, registry mutation, or commit
+method. A future atomic transition must still join the selected
+Validate lease, durable validation receipt, exact reducer preview, coordinator
+cut, registry carrier conversion, WAL ordering when required, and restart
+reconstruction before either staged state is published.
+
+An ordinary frozen-prefix target is blocked only by a member of its own frozen
+predecessor universe that is currently `Ready`; a `Waiting` member blocks
+nothing. The dormant producer uses a distinct handoff-barrier policy: once
+Serve makes that adjacent record ready, later ordinals cannot overtake it.
+Thus the producer debt has strict precedence without turning every earlier
+Serve or unrelated prefix target into a global scheduler barrier.
+
+`LifecycleLedgerV1` uses a new framed Norito file with explicit stable numeric
+codes for phase, work class, stage, predecessor scope, and terminal outcome.
+It persists context/height, the ordinal high-water mark, nonterminal records,
+terminal tombstones, reconstruction sources, small Certified-Serve payload
+references, and adjacent producer debt. It excludes readiness, leases, wait
+generations, rank snapshots, physical carriers, and scheduler episodes.
+Discovery of the
+retired `certified-serve-state.norito` v5 file fails startup with an explicit
+authorized-fresh-reset error; there is no migration or runtime bypass.
+Certified-Serve references are canonical Norito encodings of a typed small
+envelope (request-bound lifecycle subject, exact signed-request hash,
+authorizing-certificate hash, and typed terminal receipt), not unchecked opaque
+bytes. The request
+hash—not the certificate hash—is the content-addressed resolver key because a
+certificate does not recover the requester, request signature, or the exact
+request hash authenticated by a response.
+
+The six-field Serve key keeps that exact signed-request identity without a
+seventh field: its subject is a domain-separated digest of the certified block
+subject and signed-request hash. This prevents two requesters for the same body
+from aliasing one terminal tombstone or cached response while preserving the
+common lifecycle-key schema.
+
+Exact Certified-Serve payloads live in a scheduler-free, context-bound payload
+store. It retains the full signed request and, after completion, only the
+manifest, responder, signature, and exact response hash; canonical body bytes
+remain in `V2BodyStore`. Admission fsyncs a Pending payload before persisting
+the atomic Serve/Producer ledger pair. That operation is one sealed boundary:
+each bounded capacity fence owns one exact pending frame, while conclusive
+rejections synchronously delete and directory-sync theirs. An ambiguous ledger
+durability failure keeps the authenticated file for restart reconciliation.
+The sealed post-fsync receipt stays inside that coordinator-owned fence; no
+runtime-side cache can forge or lose the receipt needed for rollover cleanup.
+Repeated backpressure therefore cannot grow beyond the bounded admission-wait
+table or consume the payload-store lifetime bound. Completion fsyncs its terminal
+payload before settling the ledger. The arbitrary-verifier request mint exists
+only in tests: production authentication is fixed to the live adapter or an
+immutable verified-height roster and proof-of-possession set. Pending
+persistence independently reauthenticates that exact request, derives the
+retaining validator from the node's actual consensus key, and proves its QC
+signer membership before minting a post-fsync receipt. The completion write
+also accepts the exact durable-body receipt, rechecks request/manifest/body
+binding, certified local retention authority, and the frozen-roster responder
+signature, then mints its receipt only after file and directory
+synchronization. Newly created store and ledger directories are installed one
+component at a time and each owning parent is fsynced before success can be
+observed. A payload-only crash tail is an orphan;
+any ledger reference without an exact authenticated payload is a startup-fatal
+recovery error. Opening the payload files yields only a structural recovery
+cut. Before the lifecycle ledger can join it, startup re-verifies every exact
+request signature and QC against the verified height roster and proofs of
+possession, proves that the local validator still owns certified retention
+authority, and reconstructs any completed response from `V2BodyStore` for an
+independent manifest, responder-signature, and full-response-hash check.
+Only after the reconciled ledger has been republished does startup delete and
+directory-sync every fully authenticated payload with no ledger owner. A stale
+or incomplete authenticated cut cannot authorize that pruning step. Only
+Pending payload-first crash tails are prunable: a Completed or typed-negative
+payload without a ledger admission is impossible under the write ordering and
+therefore fails startup without deleting the evidence.
+
+Durable metadata is bijective with coordinator records rather than a parallel
+ownership table. Serve and its adjacent ProducerTurn share one reconstruction
+source and all five non-phase key coordinates; only `Serve` becomes
+`ProducerTurn`. Successful Serve retirement requires
+`Completed(Some(response))` so
+the cached response digest is persisted before the producer is exposed. The
+store uses fixed internal record/frame bounds; caller-provided bounds and
+`usize::MAX` validation are forbidden. A sealed 65,536-record per-height ceiling
+counts terminal tombstones as well as live work, and admission fails closed
+before allocating when the ceiling would be exceeded. Durable admission and
+terminal settlement reduce on a private staged transaction, atomically replace
+the ledger, and only then publish the new in-memory state. Generic settlement
+cannot terminalize Certified Serve: only the exact completed or typed-negative
+post-fsync payload receipt can authorize that ledger transition. The production
+coordinator is not clonable, so the height-local ledger retains a single public
+writer. A persistence failure leaves the prior owner/ordinal or active lease
+visible and latches a durability fault.
+
+Durable open never accepts a caller-provided ordinal seed. It opens and
+validates the height-local ledger first, derives the coordinator high-water
+from that frame, and joins every live row to exactly one sealed,
+storage-authenticated recovery candidate. ProducerTurn rows join only through
+their adjacent Serve. Physical geometry is rebound before the coordinator is
+returned, and any remaining `Waiting(Recovery)` row rejects startup. Every
+Serve tombstone or live row must also resolve through the exact request-keyed
+payload store. A terminal payload written before its ledger update is treated
+as the expected crash cut: startup rebinds the atomic Serve/producer pair,
+settles the authenticated terminal result, persists the reconciled ledger, and
+only then exposes the coordinator.
+
+Rollover is a two-context durable protocol, not an in-memory map clear. The
+verified successor snapshot carries its own ledger root and post-fsync
+Cancelled payload receipts for every live Serve. The coordinator first removes
+the validated batch of unadmitted pending Serve payloads, writes the fully
+retired predecessor ledger, then creates or verifies the successor's empty
+ledger with the unchanged ordinal high-water, and finally switches the sole
+writer. A crash after either write is idempotent: the predecessor can be
+reopened as a terminal height and retry the same immediate successor, while an
+already-created successor must be empty and carry either zero (an untouched
+file) or the exact retained high-water. Pending admission fences are retired by
+their exact semantic keys and never allocate rollover ordinals. Every pending
+Serve fence contributes its internally retained receipt to that validated batch
+rollback; partial filesystem failure latches restart-required durability
+failure.

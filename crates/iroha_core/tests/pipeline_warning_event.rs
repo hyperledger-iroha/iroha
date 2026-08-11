@@ -63,6 +63,7 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     let chain_id = ChainId::from("chain");
     let state = State::new_with_chain_for_testing(world, kura.clone(), query, chain_id.clone());
+    let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
@@ -76,14 +77,14 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
         );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let tx1 = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
     .sign(alice_keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         bob_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -195,6 +196,7 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     let chain_id = ChainId::from("chain");
     let state = State::new_with_chain_for_testing(world, kura.clone(), query, chain_id.clone());
+    let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
@@ -208,14 +210,14 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
         );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let tx1 = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
     .sign(alice_keypair.private_key());
     let tx2 = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         bob_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

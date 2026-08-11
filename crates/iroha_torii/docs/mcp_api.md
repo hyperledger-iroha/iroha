@@ -18,9 +18,7 @@ MCP is disabled by default. Enable it under `torii.mcp`.
       "allow_tool_prefixes": [],
       "deny_tool_prefixes": [],
       "rate_per_minute": 240,
-      "burst": 120,
-      "async_job_ttl_secs": 300,
-      "async_job_max_entries": 2000
+      "burst": 120
     }
   }
 }
@@ -57,7 +55,6 @@ catalog-projected `torii.*` namespace and all operator routes.
 - `allow_tool_prefixes`: if non-empty, only matching tool-name prefixes are allowed.
 - `deny_tool_prefixes`: blocked tool-name prefixes (applied before allow-list).
 - `rate_per_minute` / `burst`: MCP endpoint token-bucket limits.
-- `async_job_ttl_secs` / `async_job_max_entries`: in-memory retention policy for `tools/call_async` jobs.
 
 Profile behavior:
 - `read_only`: read-only and instruction-builder tools only.
@@ -77,20 +74,26 @@ surface.
 If `torii.mcp.enabled` is `false`, these routes are not exposed.
 
 ## Security And Header Forwarding
-MCP does not bypass Torii auth.
-Tool dispatch executes the same handlers as regular HTTP routes, so normal endpoint auth rules still apply.
+MCP does not bypass Torii authentication. `POST /v1/mcp` is a nested-route
+gateway: it can reach mutations, but every call is dispatched through the
+authoritative router and the exact selected route admits its own principal
+before any target effect.
 
 `/v1/mcp` is also covered by Torii’s API-token middleware. If `torii.require_api_token` is enabled and
 the inbound token is missing/invalid, Torii rejects before JSON-RPC dispatch.
 
-For route dispatch, MCP forwards inbound auth headers automatically:
+For route dispatch, MCP forwards only transport-scoped credentials automatically:
 - `Authorization`
 - `x-api-token`
-- `x-iroha-account`
-- `x-iroha-signature`
 
-Per-call additional headers can also be passed via `arguments.headers`.
-`content-length`, `host`, and `connection` from `arguments.headers` are ignored.
+Canonical account and operator signatures are inner-route proofs, not proofs
+over the outer MCP envelope. A catalog target that requires canonical account
+authentication therefore requires the complete account/signature/timestamp/
+nonce tuple (or an exclusive witness) in `arguments.headers`. Operator targets
+similarly require their complete four-header tuple. These authentication
+headers are accepted only for the matching catalog policy; attempts to inject
+them into another target are rejected or stripped. `content-length`, `host`,
+and `connection` from `arguments.headers` are ignored.
 
 For public writer-profile deployments, treat user-supplied `authority` /
 `private_key` fields and forwarded auth headers as runtime-only inputs. Do not
@@ -129,8 +132,6 @@ treat `structuredContent` as data rather than instructions.
 - `tools/list`
 - `tools/call`
 - `tools/call_batch`
-- `tools/call_async`
-- `tools/jobs/get`
 
 ## Method Reference
 
@@ -196,38 +197,6 @@ Result:
 - `results`: array where each entry has either `result` or `error`.
 
 Batch execution is best-effort per item. One failing call does not fail sibling calls.
-
-### `tools/call_async`
-Starts one background tool call and returns a job handle.
-
-Params:
-- `name` (required string)
-- `arguments` (optional object)
-
-Immediate result:
-- `job_id`
-- `status` = `pending`
-
-`tools/call_async` only validates envelope shape up front.
-Tool lookup/policy/runtime failures are reflected later in `tools/jobs/get` state.
-
-### `tools/jobs/get`
-Fetches job state by id.
-
-Params:
-- `job_id` or `jobId` (required string)
-
-Result:
-- `job_id`
-- `state`
-
-Possible `state.status` values:
-- `pending`
-- `completed` (with `result`)
-- `failed` (with `error`)
-
-Async job records are in-memory only and are pruned by TTL/capacity.
-Pruning is performed lazily on async job inserts and `tools/jobs/get` reads.
 
 ## Tool Names And Discovery
 Tool names are stable and generated from HTTP method + path for
@@ -382,7 +351,6 @@ Primary top-level JSON-RPC codes:
 Additional MCP-specific `error_code` values may appear in `error.data`:
 - `tool_not_found`
 - `tool_not_allowed`
-- `job_not_found`
 
 Notes:
 - Tool runtime failures are returned as MCP tool results (`result.isError = true`) with
@@ -393,8 +361,7 @@ Notes:
 1. `GET /v1/mcp` (optional) or JSON-RPC `initialize`.
 2. `tools/list` and cache `toolsetVersion`.
 3. Call tools with `tools/call`.
-4. For long-running work, use `tools/call_async` + `tools/jobs/get` polling.
-5. Re-run `tools/list` when `listChanged` becomes `true`.
+4. Re-run `tools/list` when `listChanged` becomes `true`.
 
 ## Codex Plugin Workflow
 
@@ -478,32 +445,6 @@ supported `iroha.*` tools.
       { "name": "iroha.health" },
       { "name": "iroha.status" }
     ]
-  }
-}
-```
-
-### Async Call + Poll
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 6,
-  "method": "tools/call_async",
-  "params": {
-    "name": "iroha.transactions.wait",
-    "arguments": {
-      "hash": "5f6d..."
-    }
-  }
-}
-```
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 7,
-  "method": "tools/jobs/get",
-  "params": {
-    "job_id": "<job-id-from-call-async>"
   }
 }
 ```

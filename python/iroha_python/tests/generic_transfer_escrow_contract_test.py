@@ -8,15 +8,15 @@ import types
 from pathlib import Path
 from typing import Any
 
-import requests
 import pytest
+import requests
 from blake3 import blake3
-
 
 # These tests exercise the pure Python SDK layer independently of a previously
 # built local extension. CI still builds and tests the Rust extension itself.
 PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "src" / "iroha_python"
 PURE_PACKAGE = "_iroha_python_source_test"
+TX_PURE_PACKAGE = "_iroha_python_tx_network_id_test"
 if PURE_PACKAGE not in sys.modules:
     package = types.ModuleType(PURE_PACKAGE)
     package.__path__ = [str(PACKAGE_ROOT)]
@@ -48,6 +48,68 @@ Payment = settlement_module.Payment
 ContractCallIntent = client_module.ContractCallIntent
 ToriiClient = client_module.ToriiClient
 VerifiedCommittedTransaction = client_module.VerifiedCommittedTransaction
+
+
+class FakeNetworkId:
+    def __init__(self, value: bytes) -> None:
+        self._value = value
+
+    def to_bytes(self) -> bytes:
+        return self._value
+
+
+NETWORK_ID = FakeNetworkId(b"\x77" * 32)
+RETIRED_NETWORK_KEYWORDS = (
+    "chain",
+    "chainId",
+    "chain_id",
+    "canonicalGenesisHash",
+    "canonical_genesis_hash",
+    "genesisHash",
+    "genesis_hash",
+)
+
+
+def _install_network_id_contract(module: types.ModuleType) -> None:
+    module.NetworkId = FakeNetworkId
+
+    def require(value: object, context: str = "network_id") -> FakeNetworkId:
+        if not isinstance(value, FakeNetworkId):
+            raise TypeError(f"{context} must be a NetworkId")
+        return value
+
+    module._require_network_id = require
+
+
+def _load_native_free_tx_module() -> types.ModuleType:
+    if TX_PURE_PACKAGE not in sys.modules:
+        package = types.ModuleType(TX_PURE_PACKAGE)
+        package.__path__ = [str(PACKAGE_ROOT)]
+        package.__package__ = TX_PURE_PACKAGE
+        sys.modules[TX_PURE_PACKAGE] = package
+
+        crypto = types.ModuleType(f"{TX_PURE_PACKAGE}.crypto")
+        _install_network_id_contract(crypto)
+
+        class NativePlaceholder:
+            pass
+
+        crypto._LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 = 255
+        for name in (
+            "ContractCall",
+            "Ed25519KeyPair",
+            "Instruction",
+            "PrivacyExact12CapabilityManifestV1",
+            "PrivacyNativeActionBuildResultV1",
+            "SignedTransactionEnvelope",
+            "TransactionBuilder",
+            "TransactionExecutableEntry",
+        ):
+            setattr(crypto, name, NativePlaceholder)
+        crypto._normalize_lane_privacy_attachment = lambda value: value
+        crypto.build_signed_transaction = lambda *_args, **_kwargs: None
+        sys.modules[f"{TX_PURE_PACKAGE}.crypto"] = crypto
+    return importlib.import_module(f"{TX_PURE_PACKAGE}.tx")
 
 
 def _response(payload: Any, status: int = 200) -> requests.Response:
@@ -122,9 +184,47 @@ def test_typed_batch_and_conditional_escrow_payloads_are_canonical() -> None:
         )
 
 
-def test_native_independent_batch_outcomes_project_to_ordered_receipt() -> None:
+@pytest.mark.parametrize(
+    "raw_network_id",
+    [b"\x77" * 32, bytearray(b"\x77" * 32), memoryview(b"\x77" * 32)],
+)
+def test_transaction_config_rejects_raw_network_bytes_at_construction(
+    raw_network_id: bytes | bytearray | memoryview,
+) -> None:
+    tx = _load_native_free_tx_module()
+    with pytest.raises(
+        TypeError,
+        match="TransactionConfig.network_id must be a NetworkId",
+    ):
+        tx.TransactionConfig(
+            network_id=raw_network_id,
+            authority="authority@payments",
+            fee_payment={},
+        )
+
+
+@pytest.mark.parametrize("retired_key", RETIRED_NETWORK_KEYWORDS)
+def test_transaction_draft_sign_rejects_legacy_network_keyword_aliases(
+    retired_key: str,
+) -> None:
+    tx = _load_native_free_tx_module()
+    draft = tx.TransactionDraft(
+        tx.TransactionConfig(
+            network_id=NETWORK_ID,
+            authority="authority@payments",
+            fee_payment={},
+        )
+    )
+    with pytest.raises(TypeError, match=f"unexpected keyword argument '{retired_key}'"):
+        draft.sign(b"private-key", **{retired_key: "retired"})
+
+
+def test_public_status_rejects_native_batch_outcomes() -> None:
     payload = {
         "hash": "ab" * 32,
+        "status": {"kind": "Rejected"},
+        "scope": "global",
+        "resolved_from": "state",
         "batch_transfer_outcomes": [
             {
                 "leg_index": 0,
@@ -152,31 +252,37 @@ def test_native_independent_batch_outcomes_project_to_ordered_receipt() -> None:
         ],
     }
 
-    projected = client_module._with_batch_transfer_receipt(payload)
-
-    assert projected["batch_receipt"]["mode"] == "Independent"
-    assert [leg["id"] for leg in projected["batch_receipt"]["legs"]] == [
-        "first",
-        "second",
-    ]
-    assert projected["batch_receipt"]["legs"][0]["status"] == "Applied"
-    assert projected["batch_receipt"]["legs"][1]["status"] == "Rejected"
-    assert (
-        projected["batch_receipt"]["legs"][1]["code"]
-        == "HoldingLimitExceeded"
-    )
+    with pytest.raises(ValueError, match="retired or unsupported fields"):
+        client_module._normalize_public_pipeline_status(payload, "ab" * 32)
 
 
 def test_signed_role_scoped_escrow_queries_use_native_query_payloads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     crypto = types.ModuleType(f"{PURE_PACKAGE}.crypto")
-    crypto.build_find_asset_escrows_by_seller_query = (
-        lambda authority, private_key, seller: b"seller-query"
-    )
-    crypto.build_find_asset_escrows_by_buyer_query = (
-        lambda authority, private_key, buyer: b"buyer-query"
-    )
+    _install_network_id_contract(crypto)
+    query_network_ids: list[FakeNetworkId] = []
+
+    def seller_query(
+        authority: str,
+        private_key: bytes,
+        network_id: FakeNetworkId,
+        seller: str,
+    ) -> bytes:
+        query_network_ids.append(network_id)
+        return b"seller-query"
+
+    def buyer_query(
+        authority: str,
+        private_key: bytes,
+        network_id: FakeNetworkId,
+        buyer: str,
+    ) -> bytes:
+        query_network_ids.append(network_id)
+        return b"buyer-query"
+
+    crypto.build_find_asset_escrows_by_seller_query = seller_query
+    crypto.build_find_asset_escrows_by_buyer_query = buyer_query
     monkeypatch.setitem(sys.modules, f"{PURE_PACKAGE}.crypto", crypto)
     records = [
         {
@@ -205,12 +311,14 @@ def test_signed_role_scoped_escrow_queries_use_native_query_payloads(
     seller_records = client.list_asset_escrows_by_seller(
         seller="seller@payments",
         authority="authority@payments",
+        network_id=NETWORK_ID,
         private_key_hex="11" * 32,
         status="Locked",
     )
     buyer_records = client.list_asset_escrows_by_buyer(
         buyer="buyer@payments",
         authority="authority@payments",
+        network_id=NETWORK_ID,
         private_key=b"\x11" * 32,
         escrow_id="escrow-released",
     )
@@ -221,7 +329,110 @@ def test_signed_role_scoped_escrow_queries_use_native_query_payloads(
         b"seller-query",
         b"buyer-query",
     ]
+    assert query_network_ids == [NETWORK_ID, NETWORK_ID]
     assert all(call["url"].endswith("/query") for call in session.calls)
+
+
+@pytest.mark.parametrize(
+    "raw_network_id",
+    [b"\x77" * 32, bytearray(b"\x77" * 32), memoryview(b"\x77" * 32)],
+)
+def test_public_query_helpers_reject_raw_network_bytes_before_native_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+    raw_network_id: bytes | bytearray | memoryview,
+) -> None:
+    crypto = types.ModuleType(f"{PURE_PACKAGE}.crypto")
+    _install_network_id_contract(crypto)
+
+    def unexpected_native_dispatch(*_args: object, **_kwargs: object) -> bytes:
+        raise AssertionError("raw NetworkId reached the native query boundary")
+
+    for name in (
+        "build_find_asset_escrow_query",
+        "build_find_asset_escrows_by_seller_query",
+        "build_find_asset_escrows_by_buyer_query",
+        "build_find_committed_transaction_query",
+        "build_find_block_by_hash_query",
+        "committed_transaction_carrier_block_hash",
+        "verify_committed_transaction_inclusion",
+    ):
+        setattr(crypto, name, unexpected_native_dispatch)
+    monkeypatch.setitem(sys.modules, f"{PURE_PACKAGE}.crypto", crypto)
+
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    calls = (
+        lambda: client.get_asset_escrow(
+            escrow_id="escrow",
+            authority="authority@payments",
+            network_id=raw_network_id,
+            private_key=b"\x11" * 32,
+        ),
+        lambda: client.list_asset_escrows_by_seller(
+            seller="seller@payments",
+            authority="authority@payments",
+            network_id=raw_network_id,
+            private_key=b"\x11" * 32,
+        ),
+        lambda: client.list_asset_escrows_by_buyer(
+            buyer="buyer@payments",
+            authority="authority@payments",
+            network_id=raw_network_id,
+            private_key=b"\x11" * 32,
+        ),
+        lambda: client.get_verified_committed_transaction(
+            transaction_hash="11" * 32,
+            authority="authority@payments",
+            network_id=raw_network_id,
+            private_key=b"\x11" * 32,
+        ),
+    )
+    for call in calls:
+        with pytest.raises(TypeError, match="network_id must be a NetworkId"):
+            call()
+    assert session.calls == []
+
+
+@pytest.mark.parametrize("retired_key", RETIRED_NETWORK_KEYWORDS)
+def test_public_query_helpers_reject_legacy_network_keyword_aliases(
+    retired_key: str,
+) -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    calls = (
+        lambda: client.get_asset_escrow(
+            escrow_id="escrow",
+            authority="authority@payments",
+            network_id=NETWORK_ID,
+            private_key=b"\x11" * 32,
+            **{retired_key: "retired"},
+        ),
+        lambda: client.list_asset_escrows_by_seller(
+            seller="seller@payments",
+            authority="authority@payments",
+            network_id=NETWORK_ID,
+            private_key=b"\x11" * 32,
+            **{retired_key: "retired"},
+        ),
+        lambda: client.list_asset_escrows_by_buyer(
+            buyer="buyer@payments",
+            authority="authority@payments",
+            network_id=NETWORK_ID,
+            private_key=b"\x11" * 32,
+            **{retired_key: "retired"},
+        ),
+        lambda: client.get_verified_committed_transaction(
+            transaction_hash="11" * 32,
+            authority="authority@payments",
+            network_id=NETWORK_ID,
+            private_key=b"\x11" * 32,
+            **{retired_key: "retired"},
+        ),
+    )
+    for call in calls:
+        with pytest.raises(TypeError, match=f"unexpected keyword argument '{retired_key}'"):
+            call()
+    assert session.calls == []
 
 
 def test_verified_committed_transaction_uses_two_signed_native_queries(
@@ -231,15 +442,32 @@ def test_verified_committed_transaction_uses_two_signed_native_queries(
     block_hash = "22" * 32
     result_hash = "33" * 32
     crypto = types.ModuleType(f"{PURE_PACKAGE}.crypto")
-    crypto.build_find_committed_transaction_query = (
-        lambda authority, private_key, requested_hash: b"transaction-query"
-    )
+    _install_network_id_contract(crypto)
+    query_network_ids: list[FakeNetworkId] = []
+
+    def transaction_query(
+        authority: str,
+        private_key: bytes,
+        network_id: FakeNetworkId,
+        requested_hash: str,
+    ) -> bytes:
+        query_network_ids.append(network_id)
+        return b"transaction-query"
+
+    def block_query(
+        authority: str,
+        private_key: bytes,
+        network_id: FakeNetworkId,
+        requested_hash: str,
+    ) -> bytes:
+        query_network_ids.append(network_id)
+        return b"block-query"
+
+    crypto.build_find_committed_transaction_query = transaction_query
     crypto.committed_transaction_carrier_block_hash = (
         lambda requested_hash, response: block_hash
     )
-    crypto.build_find_block_by_hash_query = (
-        lambda authority, private_key, requested_hash: b"block-query"
-    )
+    crypto.build_find_block_by_hash_query = block_query
     crypto.verify_committed_transaction_inclusion = (
         lambda requested_hash, transaction_response, block_response: {
             "transaction_hash": transaction_hash,
@@ -275,6 +503,7 @@ def test_verified_committed_transaction_uses_two_signed_native_queries(
     verified = client.get_verified_committed_transaction(
         transaction_hash=transaction_hash,
         authority="authority@payments",
+        network_id=NETWORK_ID,
         private_key_hex="44" * 32,
     )
 
@@ -295,6 +524,7 @@ def test_verified_committed_transaction_uses_two_signed_native_queries(
         b"transaction-query",
         b"block-query",
     ]
+    assert query_network_ids == [NETWORK_ID, NETWORK_ID]
     assert all(
         call["headers"]["Accept"] == "application/x-norito"
         for call in session.calls
@@ -508,7 +738,6 @@ def test_contract_intents_prepare_ordered_batch_and_keep_signing_local(
     client._submit_transaction_draft_result = submit
 
     result = client.call_contract_batch_and_wait(
-        chain_id="test-chain",
         authority="authority@payments",
         private_key_hex="11" * 32,
         entries=[first, second, instruction],
@@ -545,7 +774,6 @@ def test_single_contract_call_is_the_local_batch_convenience_form() -> None:
 
     client.call_contract_batch_and_wait = call_batch
     result = client.call_contract_and_wait(
-        chain_id="test-chain",
         authority="authority@payments",
         private_key=b"\x22" * 32,
         contract_alias="wallet::payments",
@@ -559,4 +787,5 @@ def test_single_contract_call_is_the_local_batch_convenience_form() -> None:
     assert isinstance(captured["entries"][0], ContractCallIntent)
     assert captured["private_key"] == b"\x22" * 32
     assert captured["private_key_hex"] is None
+    assert "chain_id" not in captured
     assert result["tx_hashes"] == ["ab" * 32]

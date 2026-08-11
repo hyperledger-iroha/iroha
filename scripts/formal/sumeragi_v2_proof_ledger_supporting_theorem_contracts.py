@@ -164,6 +164,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ AsyncRetransmitLifecycleOwned(node) "
         "/\\ ~AsyncRetransmitLifecycleResetThisStep(node) "
         "/\\ ~AsyncRetransmitLifecycleEpisodeCompletesThisStep(node) "
+        "/\\ ~AsyncTimeoutLifecycleTransfersThisStep(node) "
         "=> /\\ AsyncRetransmitLifecycleOrdinal(node)' "
         "= AsyncRetransmitLifecycleOrdinal(node) "
         "/\\ AsyncRetransmitLifecyclePhysicalCut(node)' "
@@ -178,13 +179,14 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ AsyncRetransmitLifecycleOrdinal(node)' = 0 "
         "=> /\\ AsyncRetransmitLifecyclePhysicalCut(node)' = 0 "
         "/\\ \\/ AsyncRetransmitLifecycleResetThisStep(node) "
-        "\\/ AsyncRetransmitLifecycleEpisodeCompletesThisStep(node)"
+        "\\/ AsyncRetransmitLifecycleEpisodeCompletesThisStep(node) "
+        "\\/ AsyncTimeoutLifecycleTransfersThisStep(node)"
     ),
     (
         "SumeragiV2AsyncNetwork",
         "AsyncCandidateProducerContinuationPostRetransmitCutCannotOwnRunnerTurn",
     ): (
-        "\\A node \\in ValidatorIds, record \\in "
+        "\\A node \\in ValidatorIds: \\A record \\in "
         "AsyncCandidateProducerContinuationResolutionRecordsForNode(node): "
         "/\\ AsyncRetransmitLifecycleOwned(node) "
         "/\\ AsyncRetransmitLifecyclePhysicalCut(node) "
@@ -277,9 +279,9 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     ): (
         "\\A initialContext, owner: "
         "owner \\in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext) "
-        "=> AsyncSpecAt(initialContext) "
+        "=> (AsyncSpecAt(initialContext) "
         "=> WF_AsyncAllVars( "
-        "AdequateLeaderFixedSelectedServiceOwnerAction(owner))"
+        "AdequateLeaderFixedSelectedServiceOwnerAction(owner)))"
     ),
     (
         "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs",
@@ -565,8 +567,8 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "\\A initialContext \\in AdmissibleContextRecords: "
         "/\\ IndexedCompositionInvariant "
         "/\\ IndexedChainNext "
-        "/\\ ~IndexedAsync(initialContext)!gst "
-        "/\\ (IndexedAsync(initialContext)!gst)' "
+        "/\\ ~IndexedCore(initialContext, 7) "
+        "/\\ (IndexedCore(initialContext, 7))' "
         "=> /\\ Responsive \\subseteq "
         "IndexedAsync(initialContext)!AsyncActiveServiceNodes "
         "/\\ Responsive \\subseteq "
@@ -579,7 +581,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "\\A initialContext \\in AdmissibleContextRecords: "
         "/\\ IndexedCompositionInvariant "
         "/\\ IndexedChainNext "
-        "/\\ IndexedAsync(initialContext)!gst "
+        "/\\ IndexedCore(initialContext, 7) "
         "/\\ Responsive \\subseteq "
         "IndexedAsync(initialContext)!AsyncActiveServiceNodes "
         "=> Responsive \\subseteq "
@@ -621,7 +623,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     ): (
         "\\A initialContext \\in AdmissibleContextRecords: "
         "IndexedChainSpec "
-        "=> [](IndexedAsync(initialContext)!gst "
+        "=> [](IndexedCore(initialContext, 7) "
         "=> Responsive \\subseteq "
         "IndexedAsync(initialContext)!AsyncActiveServiceNodes)"
     ),
@@ -644,7 +646,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "SumeragiV2TimeoutViewProgressProofs",
         "TimeoutPhysicalControlRetransmissionCreatesExactPacket",
     ): (
-        "\\A node \\in ValidatorIds, item: "
+        "\\A node \\in ValidatorIds, item \\in AsyncNetworkItems: "
         "/\\ TimeoutPhysicalControlRetainedDueOwner(item) "
         "/\\ item.source = node /\\ UNCHANGED vars "
         "/\\ SendNodeRetransmissions(node) "
@@ -791,7 +793,8 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
         "IndexedHistoricalCertificateScheduledImportOwnersHaveExactProvenance",
     ): (
-        "\\A initialContext \\in AdmissibleContextRecords, candidate: "
+        "\\A candidate: "
+        "\\A initialContext \\in AdmissibleContextRecords: "
         "/\\ IndexedHistoricalCertificateLocalLineageInvariantAt(initialContext) "
         "/\\ candidate \\in "
         "IndexedDecisionWitness(initialContext)!AsyncCandidateSet "
@@ -1473,9 +1476,10 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "SumeragiV2AsyncNetwork",
         "AsyncCandidateLifecycleReviewedTokenOwnsOneOrigin",
     ): (
-        "\\A state, node, token \\in "
-        "AsyncCandidateLifecycleReviewedSemanticOwnerTokensIn(state, node), "
-        "left, right: /\\ token.origin = left /\\ token.origin = right "
+        "\\A state, left, right: \\A node \\in ValidatorIds: "
+        "\\A token \\in "
+        "AsyncCandidateLifecycleReviewedSemanticOwnerTokensIn(state, node): "
+        "/\\ token.origin = left /\\ token.origin = right "
         "=> left = right"
     ),
     (
@@ -2502,14 +2506,14 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "ExactDecisionRequestLifecycleConcreteOwnerUsesAsyncFairness",
     ): (
         "\\A initialContext, archive, ownerKind: "
-        "/\\ archive \\in AsyncVotersAt(initialContext) "
+        "(/\\ archive \\in AsyncVotersAt(initialContext) "
         "/\\ archive \\in Responsive "
         "/\\ ownerKind "
-        "\\in ExactDecisionRequestLifecycleConcreteFairOwnerKinds "
-        "=> AsyncSpecAt(initialContext) "
+        "\\in ExactDecisionRequestLifecycleConcreteFairOwnerKinds) "
+        "=> (AsyncSpecAt(initialContext) "
         "=> WF_AsyncAllVars( "
         "ExactDecisionRequestLifecycleConcreteFairAction( "
-        "archive, ownerKind))"
+        "archive, ownerKind)))"
     ),
     (
         "SumeragiV2ExactDecisionStageServiceClosureProofs",
@@ -4176,8 +4180,9 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedChainSpecProvidesHistoricalDueIoModeFairness",
     ): (
-        "\\A initialContext \\in AdmissibleContextRecords, owner \\in "
-        "Responsive, mode \\in IndexedHistoricalTransport(initialContext)! "
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "\\A owner \\in Responsive, mode \\in "
+        "IndexedHistoricalTransport(initialContext)! "
         "HistoricalDiscoveryTimedOwnerModeCarrier: IndexedChainSpec => "
         "WF_(IndexedHistoricalTransport(initialContext)!AsyncAllVars)( "
         "IndexedHistoricalDueIoModeFairAction( initialContext, owner, mode))"
@@ -4216,10 +4221,12 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedChainSpecHistoricalDueNodeOwnerReachesRankGoal",
     ): (
-        "\\A initialContext \\in AdmissibleContextRecords, node \\in "
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "\\A node \\in "
         "Responsive, clockValue \\in Nat, sourceRank \\in "
         "IndexedHistoricalTransport(initialContext)! "
-        "HistoricalDiscoveryFixedClockBlockerCarrier, owner: IndexedChainSpec "
+        "HistoricalDiscoveryFixedClockBlockerCarrier: "
+        "\\A owner: IndexedChainSpec "
         "=> ((/\\ IndexedHistoricalTransport(initialContext)! "
         "HistoricalDiscoveryFixedClockBlockedAtRank( node, clockValue, "
         "sourceRank) /\\ IndexedHistoricalTransport(initialContext)! "
@@ -4234,10 +4241,12 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedChainSpecHistoricalDueIoOwnerReachesRankGoal",
     ): (
-        "\\A initialContext \\in AdmissibleContextRecords, node \\in "
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "\\A node \\in "
         "Responsive, clockValue \\in Nat, sourceRank \\in "
         "IndexedHistoricalTransport(initialContext)! "
-        "HistoricalDiscoveryFixedClockBlockerCarrier, owner: IndexedChainSpec "
+        "HistoricalDiscoveryFixedClockBlockerCarrier: "
+        "\\A owner: IndexedChainSpec "
         "=> ((/\\ IndexedHistoricalTransport(initialContext)! "
         "HistoricalDiscoveryFixedClockBlockedAtRank( node, clockValue, "
         "sourceRank) /\\ IndexedHistoricalTransport(initialContext)! "
@@ -4254,7 +4263,8 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedHistoricalTickBlockedHasEnabledPostGstTick",
     ): (
-        "\\A initialContext \\in AdmissibleContextRecords, node \\in "
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "\\A node \\in "
         "Responsive, clockValue \\in Nat, sourceRank \\in "
         "IndexedHistoricalTransport(initialContext)! "
         "HistoricalDiscoveryFixedClockBlockerCarrier: "
@@ -4267,7 +4277,8 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedChainSpecHistoricalTickReachesRankGoal",
     ): (
-        "\\A initialContext \\in AdmissibleContextRecords, node \\in "
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "\\A node \\in "
         "Responsive, clockValue \\in Nat, sourceRank \\in "
         "IndexedHistoricalTransport(initialContext)! "
         "HistoricalDiscoveryFixedClockBlockerCarrier: IndexedChainSpec => "
@@ -4282,6 +4293,39 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     ): (
         "IndexedChainSpec => "
         "IndexedHistoricalFixedClockNonPacketServiceProperty"
+    ),
+    (
+        "SumeragiV2AsyncHistoricalRecoveryClockTemporalProofs",
+        "HistoricalDiscoveryPacketCorridorResidualClosesPacketLeaves",
+    ): (
+        "\\A specification: "
+        "/\\ (specification => "
+        "[]AsyncCandidateProducerContinuationExternalCoverageInvariant) "
+        "/\\ (specification => "
+        "[]AsyncCandidateProducerContinuationLocalReplayCapacityInvariant) "
+        "/\\ HistoricalDiscoveryFixedClockPacketCorridorTemporalResidual( "
+        "specification) => "
+        "/\\ HistoricalDiscoveryFixedClockPacketServiceProperty( "
+        "specification) "
+        "/\\ HistoricalDiscoveryCandidateServeIdentityBudgetProperty( "
+        "specification)"
+    ),
+    (
+        "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+        "IndexedChainSpecProvidesHistoricalPacketConcreteActionSelection",
+    ): (
+        "IndexedChainSpec => "
+        "IndexedHistoricalFixedClockPacketActionSelectionProperties"
+    ),
+    (
+        "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
+        "IndexedPacketServiceResidualProvidesPhysicalKernels",
+    ): (
+        "IndexedHistoricalFixedClockPacketCorridorTemporalResidual => "
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "IndexedHistoricalTransport(initialContext)! "
+        "HistoricalDiscoveryCandidateServeLifecyclePhysicalKernelProperties( "
+        "IndexedChainSpec)"
     ),
     (
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
@@ -4518,7 +4562,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ IndexedHistoricalDiscoveryClockProgressProperty => "
         "\\A initialContext \\in AdmissibleContextRecords, "
         "node \\in Responsive: "
-        "(/\\ IndexedHistoricalTransport(initialContext)!gst "
+        "(/\\ IndexedCore(initialContext, 7) "
         "/\\ IndexedHistoricalTransport(initialContext)!"
         "HistoricalRecoveryTarget(node)) ~> "
         "IndexedHistoricalDiscoveryOutcome(initialContext, node)"
@@ -4531,7 +4575,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ IndexedHistoricalDiscoveryClockProgressProperty => "
         "\\A initialContext \\in AdmissibleContextRecords, "
         "node \\in Responsive: "
-        "(/\\ IndexedHistoricalTransport(initialContext)!gst "
+        "(/\\ IndexedCore(initialContext, 7) "
         "/\\ IndexedHistoricalTransport(initialContext)!"
         "HistoricalRecoveryTarget(node)) ~> "
         "IndexedHistoricalDiscoveryOwnedOutcome( initialContext, node)"

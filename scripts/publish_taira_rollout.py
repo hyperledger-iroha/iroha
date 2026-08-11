@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 try:
+    from . import taira_privacy_rollout_contract as rollout_observation
     from . import taira_rollout_admission as admission
     from .release_artifact_contract import (
         ReleaseArtifactError,
@@ -48,6 +49,7 @@ try:
         verify_release_manifest,
     )
 except ImportError:
+    import taira_privacy_rollout_contract as rollout_observation
     import taira_rollout_admission as admission
     from release_artifact_contract import (
         ReleaseArtifactError,
@@ -155,6 +157,15 @@ FORBIDDEN_ORAS_FLAGS = frozenset(
 
 class TairaPublicationError(RuntimeError):
     """The candidate publication violated the installed authority contract."""
+
+
+def _require_authenticated_rollout_observation_authority() -> None:
+    """Translate the independent observation provisioning barrier."""
+
+    try:
+        rollout_observation.require_authenticated_rollout_observation_authority_provisioned()
+    except rollout_observation.RolloutContractError as exc:
+        raise TairaPublicationError(str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -1406,8 +1417,10 @@ def _validate_request(request: PublishRequest) -> PublishRequest:
     )
 
 
-def publish(request: PublishRequest, *, now_unix: int | None = None) -> dict[str, object]:
-    """Execute one complete authority-bound publication transaction."""
+def _publish_after_authenticated_rollout_observation(
+    request: PublishRequest, *, now_unix: int | None = None
+) -> dict[str, object]:
+    """Execute publication after an independently authenticated observation."""
 
     request = _validate_request(request)
     current_time = int(time.time()) if now_unix is None else now_unix
@@ -1843,6 +1856,15 @@ def publish(request: PublishRequest, *, now_unix: int | None = None) -> dict[str
             }
         )
         return terminal
+
+
+def publish(request: PublishRequest, *, now_unix: int | None = None) -> dict[str, object]:
+    """Production entry point, closed before request, path, signer, or registry I/O."""
+
+    _require_authenticated_rollout_observation_authority()
+    return _publish_after_authenticated_rollout_observation(
+        request, now_unix=now_unix
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:

@@ -1,6 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
-
 namespace Hyperledger.Iroha.Http;
 
 public static partial class CanonicalRequest
@@ -14,6 +11,7 @@ public static partial class CanonicalRequest
     /// <see cref="BuildHeaders"/>.
     /// </remarks>
     internal static CanonicalRequestHeaders BuildHeadersForExactPath(
+        NetworkId networkId,
         string accountId,
         ReadOnlySpan<byte> privateKeySeed,
         string method,
@@ -23,6 +21,7 @@ public static partial class CanonicalRequest
         long? timestampMs = null,
         string? nonce = null)
     {
+        ArgumentNullException.ThrowIfNull(networkId);
         var exactAccountId = RequireExactNonBlank(accountId, nameof(accountId));
         var canonicalAccountId = RequireCanonicalAccountId(exactAccountId, nameof(accountId));
         var exactMethod = RequireHttpMethodToken(method, nameof(method));
@@ -35,10 +34,14 @@ public static partial class CanonicalRequest
             : RequireCanonicalNonce(nonce, nameof(nonce));
 
         EnsureAccountMatchesPrivateKey(canonicalAccountId, privateKeySeed, nameof(accountId));
-        var canonicalQuery = BuildCanonicalQueryString(query);
-        var bodyHash = Convert.ToHexString(SHA256.HashData(body)).ToLowerInvariant();
-        var signatureMessage = Encoding.UTF8.GetBytes(
-            $"{exactMethod.ToUpperInvariant()}\n{exactPath}\n{canonicalQuery}\n{bodyHash}\n{effectiveTimestamp}\n{effectiveNonce}");
+        var signatureMessage = BuildSignatureMessageForExactPath(
+            networkId,
+            exactMethod,
+            exactPath,
+            query,
+            body,
+            effectiveTimestamp,
+            effectiveNonce);
         var signature = Hyperledger.Iroha.Crypto.Ed25519Signer.Sign(
             signatureMessage,
             privateKeySeed);

@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
@@ -29,6 +28,15 @@ public sealed partial class ToriiClient : IDisposable
     private readonly bool ownsHttpClient;
     private readonly JsonSerializerOptions serializerOptions;
 
+    /// <summary>Creates a client for one Torii endpoint.</summary>
+    /// <param name="baseUri">The exact Torii base URI.</param>
+    /// <param name="httpClient">
+    /// An optional caller-owned HTTP client. Its complete handler chain must disable
+    /// automatic redirects and automatic retries for signed, nonce-bearing, or
+    /// credential-bearing requests. <see cref="ToriiClient"/> cannot inspect or
+    /// reconfigure an injected handler chain after construction.
+    /// </param>
+    /// <param name="options">Optional client behavior and validation settings.</param>
     public ToriiClient(Uri baseUri, HttpClient? httpClient = null, ToriiClientOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(baseUri);
@@ -726,7 +734,7 @@ public sealed partial class ToriiClient : IDisposable
         ToriiAccountOnboardingPlanRequest request,
         string onboardingToken,
         string expectedAuthority,
-        string expectedChainId,
+        NetworkId expectedNetworkId,
         ToriiAccountOnboardingPlanBodyEncoder canonicalBodyEncoder,
         CancellationToken cancellationToken = default)
     {
@@ -743,7 +751,7 @@ public sealed partial class ToriiClient : IDisposable
         ToriiAccountOnboardingReceiptVerifier.RequirePinned(
             receipt,
             expectedAuthority,
-            expectedChainId,
+            expectedNetworkId,
             canonicalBodyEncoder);
         RequireMatchingAccountOnboardingRequest(
             normalizedRequest,
@@ -756,14 +764,14 @@ public sealed partial class ToriiClient : IDisposable
         ToriiAccountOnboardingPlanReceipt receipt,
         string onboardingToken,
         string expectedAuthority,
-        string expectedChainId,
+        NetworkId expectedNetworkId,
         ToriiAccountOnboardingPlanBodyEncoder canonicalBodyEncoder,
         CancellationToken cancellationToken = default)
     {
         ToriiAccountOnboardingReceiptVerifier.RequirePinned(
             receipt,
             expectedAuthority,
-            expectedChainId,
+            expectedNetworkId,
             canonicalBodyEncoder);
         var exactOnboardingToken = RequireAccountOnboardingToken(onboardingToken);
         var response = await PostAccountOnboardingAsync<ToriiAccountOnboardingApplyRequest, ToriiAccountOnboardingResponse>(
@@ -1144,6 +1152,16 @@ public sealed partial class ToriiClient : IDisposable
         {
             throw new JsonException("Fee sponsor program lookup returned a different program id.");
         }
+        try
+        {
+            _ = AccountAddress.Parse(response.PayoutAccount);
+        }
+        catch (FormatException error)
+        {
+            throw new JsonException(
+                "Fee sponsor program lookup returned a non-canonical payout account.",
+                error);
+        }
         return response;
     }
 
@@ -1314,13 +1332,6 @@ public sealed partial class ToriiClient : IDisposable
         return await ReadStrictUtf8TextContentAsync(response.Content, "Torii metrics response body", cancellationToken);
     }
 
-    public async Task<ToriiRuntimeAbiActive> GetRuntimeAbiActiveAsync(CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiRuntimeAbiActive>("/v1/runtime/abi/active", cancellationToken: cancellationToken);
-        ValidateRuntimeAbiActive(response, "runtime ABI active response");
-        return response;
-    }
-
     public async Task<ToriiRuntimeAbiHash> GetRuntimeAbiHashAsync(CancellationToken cancellationToken = default)
     {
         var response = await GetAsync<ToriiRuntimeAbiHash>(
@@ -1329,14 +1340,6 @@ public sealed partial class ToriiClient : IDisposable
         ValidateRuntimeAbiHash(response, "runtime ABI hash response");
         return response;
     }
-
-    public async Task<ToriiRuntimeMetrics> GetRuntimeMetricsAsync(CancellationToken cancellationToken = default)
-    {
-        var response = await GetAsync<ToriiRuntimeMetrics>("/v1/runtime/metrics", cancellationToken: cancellationToken);
-        ValidateRuntimeMetrics(response, "runtime metrics response");
-        return response;
-    }
-
 
     public async Task<ToriiSoraFsCidLookupResponse> GetSoraFsCidLookupAsync(
         string cid,
@@ -1445,6 +1448,12 @@ public sealed partial class ToriiClient : IDisposable
         };
     }
 
+    /// <summary>Submits one canonical, versioned signed-query envelope.</summary>
+    /// <remarks>
+    /// The signed body is dispatched once. Redirect responses, non-success responses,
+    /// and transport failures are surfaced to the caller without replaying the body.
+    /// An injected <see cref="HttpClient"/> must provide the same one-shot behavior.
+    /// </remarks>
     public async Task<JsonDocument> SubmitSignedQueryAsync(
         ReadOnlyMemory<byte> noritoVersionedBytes,
         string? query = null,
@@ -1452,7 +1461,7 @@ public sealed partial class ToriiClient : IDisposable
     {
         var normalizedBytes = NormalizeNonEmptyBinaryPayload(noritoVersionedBytes, nameof(noritoVersionedBytes));
         using var content = CreateBinaryContent(normalizedBytes, "application/x-norito");
-        using var response = await SendAsync(HttpMethod.Post, "/query", query, content, cancellationToken: cancellationToken);
+        using var response = await SendAsync(HttpMethod.Post, "/v1/query", query, content, cancellationToken: cancellationToken);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         return await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
             stream,
@@ -1460,6 +1469,11 @@ public sealed partial class ToriiClient : IDisposable
             cancellationToken);
     }
 
+    /// <summary>Submits one managed canonical signed-query envelope.</summary>
+    /// <remarks>
+    /// The envelope is dispatched once. An injected <see cref="HttpClient"/> must
+    /// disable automatic redirects and retries for this nonce-bearing request.
+    /// </remarks>
     public Task<JsonDocument> SubmitSignedQueryAsync(
         SignedQueryEnvelope signedQuery,
         string? query = null,
@@ -1467,6 +1481,46 @@ public sealed partial class ToriiClient : IDisposable
     {
         ArgumentNullException.ThrowIfNull(signedQuery);
         return SubmitSignedQueryAsync(signedQuery.VersionedNoritoBytes, query, cancellationToken);
+    }
+
+    /// <summary>Fetches one authorized committed transaction through the canonical signed
+    /// <c>FindTransactions</c> details route.</summary>
+    /// <remarks>
+    /// Build <paramref name="signedQuery"/> with
+    /// <see cref="SignedIterableQueryBuilder.FindTransactionDetails(string)"/> and the exact
+    /// genesis-derived <c>NetworkId</c>. Torii verifies the network, signature, freshness, and
+    /// one-shot nonce before ledger access, then authorizes only an involved account or an
+    /// operator. The nonce-bearing request is dispatched once; redirects, retries, and replay
+    /// are forbidden for both this SDK and injected transports.
+    /// </remarks>
+    public async Task<JsonDocument> GetPipelineTransactionDetailsAsync(
+        SignedQueryEnvelope signedQuery,
+        string transactionHashHex,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(signedQuery);
+        var normalizedHash = NormalizeTransactionHashHex(transactionHashHex);
+        using var content = CreateBinaryContent(signedQuery.VersionedNoritoBytes, "application/x-norito");
+        using var response = await SendAsync(
+            HttpMethod.Post,
+            "/v1/pipeline/transactions/details",
+            content: content,
+            cancellationToken: cancellationToken);
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        var document = await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
+            stream,
+            $"pipeline transaction details response for `{response.RequestMessage?.RequestUri}`",
+            cancellationToken);
+        try
+        {
+            ValidatePipelineTransactionDetailsResponse(document.RootElement, normalizedHash);
+            return document;
+        }
+        catch
+        {
+            document.Dispose();
+            throw;
+        }
     }
 
     public Task<HttpResponseMessage> OpenEventSseAsync(
@@ -1647,6 +1701,12 @@ public sealed partial class ToriiClient : IDisposable
             cancellationToken: cancellationToken);
     }
 
+    /// <summary>Submits one managed canonical signed transaction.</summary>
+    /// <remarks>
+    /// After the compatibility preflight, the signed body is dispatched once. An
+    /// injected <see cref="HttpClient"/> must disable automatic redirects and retries.
+    /// Reconcile an ambiguous outcome by transaction hash instead of replaying it.
+    /// </remarks>
     public async Task SubmitTransactionAsync(
         SignedTransactionEnvelope transaction,
         CancellationToken cancellationToken = default)
@@ -1655,6 +1715,12 @@ public sealed partial class ToriiClient : IDisposable
         await SubmitTransactionAsync(transaction.NoritoBytes, cancellationToken);
     }
 
+    /// <summary>Submits one canonical signed-transaction body.</summary>
+    /// <remarks>
+    /// After the compatibility preflight, the signed body is dispatched once. Redirect
+    /// responses, non-success responses, and transport failures are surfaced without
+    /// replay. An injected <see cref="HttpClient"/> must preserve that behavior.
+    /// </remarks>
     public async Task SubmitTransactionAsync(
         ReadOnlyMemory<byte> noritoBytes,
         CancellationToken cancellationToken = default)
@@ -1876,13 +1942,11 @@ public sealed partial class ToriiClient : IDisposable
         var exactPath = RequireExactRequestPath(path, nameof(path));
         var exactQuery = NormalizeOptionalExactQuery(query, nameof(query));
         var exactAccept = NormalizeOptionalAcceptHeaderValue(accept, nameof(accept));
-
         var requestUri = BuildRequestUri(exactPath, exactQuery);
         var request = new HttpRequestMessage(method, requestUri)
         {
             Content = content,
         };
-
         var bearerToken = NormalizeOptionalBearerToken(Options.BearerToken, nameof(ToriiClientOptions.BearerToken));
         if (bearerToken is not null)
         {
@@ -1900,6 +1964,8 @@ public sealed partial class ToriiClient : IDisposable
         {
             var bodyBytes = content is null ? Array.Empty<byte>() : await content.ReadAsByteArrayAsync(cancellationToken);
             var headers = CanonicalRequest.BuildHeaders(
+                Options.LocalSigningContext?.NetworkId
+                    ?? throw new InvalidOperationException("Canonical request authentication requires ToriiClientOptions.LocalSigningContext."),
                 Options.CanonicalRequestCredentials.AccountId,
                 Options.CanonicalRequestCredentials.PrivateKeySeed,
                 exactMethod,
@@ -4726,15 +4792,9 @@ public sealed partial class ToriiClient : IDisposable
             }
 
             var backend = RequireJsonString(backendNode, $"{context}.{eventKind}.id_matcher.backend");
-            var normalizedBackend = VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(
+            _ = VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(
                 backend,
                 $"{context}.{eventKind}.id_matcher.backend");
-            if (!string.Equals(normalizedBackend, backend, StringComparison.Ordinal))
-            {
-                throw new ArgumentException(
-                    $"{context}.{eventKind}.id_matcher.backend must use exact production verifier backend text.",
-                    $"{context}.{eventKind}.id_matcher.backend");
-            }
 
             if (string.Equals(eventKind, "Proof", StringComparison.Ordinal))
             {
@@ -6517,64 +6577,80 @@ public sealed partial class ToriiClient : IDisposable
     private static PipelineTransactionStatus ParsePipelineTransactionStatus(JsonElement root, string transactionHashHex)
     {
         const string context = "pipeline transaction status response";
-        var rootObject = RequireJsonObject(root, context);
-        JsonElement content;
-        if (rootObject.TryGetProperty("content", out var contentElement))
-        {
-            if (contentElement.ValueKind == JsonValueKind.Null)
-            {
-                throw new JsonException($"{context}.content must not be null.");
-            }
-
-            content = RequireJsonObject(contentElement, $"{context}.content");
-        }
-        else
-        {
-            content = rootObject;
-        }
-
-        var statusElement = content.TryGetProperty("status", out var explicitStatus)
-            ? explicitStatus
-            : rootObject.TryGetProperty("status", out var rootStatus)
-                ? rootStatus
-                : throw new JsonException($"{context}.status must not be null.");
-
+        var content = RequireJsonObject(root, context);
+        RequireExactJsonFields(content, context, "hash", "status", "scope", "resolved_from");
+        var statusElement = RequireJsonObjectProperty(content, "status", $"{context}.status");
+        var statusFields = statusElement.TryGetProperty("block_height", out _)
+            ? new[] { "kind", "block_height" }
+            : new[] { "kind" };
+        RequireExactJsonFields(statusElement, $"{context}.status", statusFields);
         var rawKind = ReadPipelineStatusKind(statusElement, $"{context}.status");
-
-        var rejectionContentBase64 = ReadPipelineRejectionContent(statusElement, $"{context}.status.content");
-        ValidateOptionalBase64(
-            rejectionContentBase64,
-            $"{context}.status.content");
-
-        var hashHex = ReadOptionalJsonStringProperty(content, "hash", $"{context}.content.hash") is { } responseHash
-            ? NormalizePipelineResponseTransactionHashHex(responseHash, $"{context}.content.hash")
-            : transactionHashHex;
-        var blockHeight = statusElement.ValueKind == JsonValueKind.Object
-            ? ReadOptionalJsonUInt64Property(statusElement, "block_height", $"{context}.status.block_height")
-            : null;
-        blockHeight ??= ReadOptionalJsonUInt64Property(content, "block_height", $"{context}.content.block_height");
-        var scope = ReadOptionalJsonStringProperty(content, "scope", $"{context}.content.scope");
-        if (scope is not null)
+        var state = ParsePipelineTransactionState(rawKind);
+        var hashHex = NormalizePipelineResponseTransactionHashHex(
+            RequireJsonStringProperty(content, "hash", $"{context}.hash"),
+            $"{context}.hash");
+        if (!string.Equals(hashHex, transactionHashHex, StringComparison.Ordinal))
         {
-            ValidateExactTokenText(scope, $"{context}.content.scope");
+            throw new JsonException($"{context}.hash does not match the requested transaction hash.");
         }
-
-        var resolvedFrom = ReadOptionalJsonStringProperty(content, "resolved_from", $"{context}.content.resolved_from");
-        if (resolvedFrom is not null)
+        var blockHeight = statusElement.TryGetProperty("block_height", out _)
+            ? ValidatePositiveJsonUInt64Property(
+                statusElement,
+                "block_height",
+                $"{context}.status.block_height")
+            : (ulong?)null;
+        var scope = RequireJsonStringProperty(content, "scope", $"{context}.scope");
+        if (scope is not ("local" or "auto" or "global"))
         {
-            ValidateExactTokenText(resolvedFrom, $"{context}.content.resolved_from");
+            throw new JsonException($"{context}.scope must be local, auto, or global.");
+        }
+        var resolvedFrom = RequireJsonStringProperty(content, "resolved_from", $"{context}.resolved_from");
+        if (resolvedFrom is not ("cache" or "queue" or "state"))
+        {
+            throw new JsonException($"{context}.resolved_from must be cache, queue, or state.");
         }
 
         return new PipelineTransactionStatus
         {
             HashHex = hashHex,
             RawKind = rawKind,
-            State = ParsePipelineTransactionState(rawKind),
+            State = state,
             BlockHeight = blockHeight,
-            Scope = scope is null ? string.Empty : scope,
-            ResolvedFrom = resolvedFrom is null ? string.Empty : resolvedFrom,
-            RejectionContentBase64 = rejectionContentBase64,
+            Scope = scope,
+            ResolvedFrom = resolvedFrom,
         };
+    }
+
+    private static void ValidatePipelineTransactionDetailsResponse(JsonElement root, string transactionHashHex)
+    {
+        const string context = "pipeline transaction details response";
+        var record = RequireJsonObject(root, context);
+        RequireExactJsonFields(record, context, "hash", "transaction", "trigger_completions");
+        var hash = NormalizePipelineResponseTransactionHashHex(
+            RequireJsonStringProperty(record, "hash", $"{context}.hash"),
+            $"{context}.hash");
+        if (!string.Equals(hash, transactionHashHex, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{context}.hash does not match the signed query target.");
+        }
+        _ = RequireJsonObjectProperty(record, "transaction", $"{context}.transaction");
+        if (!record.TryGetProperty("trigger_completions", out var completions)
+            || completions.ValueKind != JsonValueKind.Array)
+        {
+            throw new JsonException($"{context}.trigger_completions must be an array.");
+        }
+    }
+
+    private static void RequireExactJsonFields(JsonElement element, string context, params string[] expected)
+    {
+        var expectedFields = expected.ToHashSet(StringComparer.Ordinal);
+        var actualFields = element.EnumerateObject()
+            .Select(static property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        if (!actualFields.SetEquals(expectedFields))
+        {
+            throw new JsonException($"{context} contains missing or unsupported fields.");
+        }
     }
 
     private static string ReadPipelineStatusKind(JsonElement statusElement, string context)
@@ -6584,39 +6660,14 @@ public sealed partial class ToriiClient : IDisposable
             throw new JsonException($"{context} must not be null.");
         }
 
-        string rawKind;
-        if (statusElement.ValueKind == JsonValueKind.String)
+        if (statusElement.ValueKind != JsonValueKind.Object)
         {
-            rawKind = statusElement.GetString() ?? throw new JsonException($"{context} must not be null.");
-        }
-        else if (statusElement.ValueKind == JsonValueKind.Object)
-        {
-            rawKind = RequireJsonStringProperty(statusElement, "kind", $"{context}.kind");
-        }
-        else
-        {
-            throw new JsonException($"{context} must be a string or object.");
+            throw new JsonException($"{context} must be an object.");
         }
 
+        var rawKind = RequireJsonStringProperty(statusElement, "kind", $"{context}.kind");
         ValidateExactTokenText(rawKind, $"{context}.kind");
         return rawKind;
-    }
-
-    private static string? ReadPipelineRejectionContent(JsonElement statusElement, string context)
-    {
-        if (statusElement.ValueKind != JsonValueKind.Object
-            || !statusElement.TryGetProperty("content", out var rejectionElement)
-            || rejectionElement.ValueKind == JsonValueKind.Null)
-        {
-            return null;
-        }
-
-        if (rejectionElement.ValueKind != JsonValueKind.String)
-        {
-            throw new JsonException($"{context} must be a string.");
-        }
-
-        return rejectionElement.GetString();
     }
 
     private static string NormalizePipelineResponseTransactionHashHex(string value, string context)
@@ -6641,7 +6692,8 @@ public sealed partial class ToriiClient : IDisposable
             "Applied" => PipelineTransactionState.Applied,
             "Rejected" => PipelineTransactionState.Rejected,
             "Expired" => PipelineTransactionState.Expired,
-            _ => PipelineTransactionState.Unknown,
+            _ => throw new JsonException(
+                "pipeline transaction status response.status.kind is not a supported pipeline status kind."),
         };
     }
 

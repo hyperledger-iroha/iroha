@@ -7,6 +7,7 @@
  * path and Fetch-backed Torii client instead.
  */
 import { NexusAppClient } from "@iroha/iroha-js/nexus-app";
+import { NetworkId } from "@iroha/iroha-js";
 import {
   browserSignedTransactionHashHex,
   browserTransactionCodec,
@@ -15,6 +16,9 @@ import {
 const accountId = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
 const destinationAccountId = "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L";
 const sourceAssetId = `7EAD8EFYUx1aVKZPUU1fyKvr8dF1#${accountId}`;
+const networkId = NetworkId.parse(
+  "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+);
 const signingPublicKey = Buffer.from(
   "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
   "hex",
@@ -65,7 +69,7 @@ const toriiClient = {
 };
 
 const client = new NexusAppClient({
-  chainId: "test-chain",
+  networkId,
   connectTransport,
   transactionCodec: browserTransactionCodec,
   toriiClient,

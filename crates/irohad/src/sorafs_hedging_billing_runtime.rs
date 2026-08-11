@@ -19,7 +19,7 @@ use std::{
 
 use eyre::{Result, WrapErr, bail};
 use iroha_config::parameters::{actual::SorafsHedgingBillingRuntime, is_production_runtime_handle};
-use iroha_data_model::ChainId;
+use iroha_data_model::NetworkId;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use sorafs_manifest::hedging::signed::HedgingFeedTrustPolicyV1;
 use sorafs_node::hedging_billing_service::{
@@ -124,7 +124,7 @@ impl fmt::Debug for HedgingBillingRuntimeInnerV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("HedgingBillingRuntimeInnerV1")
-            .field("chain_id", &self.policy.chain_id)
+            .field("network_id", &self.policy.network_id)
             .field("policy_revision", &self.policy.revision)
             .field("runtime_only_adapters", &"[REDACTED]")
             .finish_non_exhaustive()
@@ -557,14 +557,14 @@ impl HedgingBillingRuntimeApiV1 for HedgingBillingRuntimeHandleV1 {
 /// incapable adapters fail startup before the private checkpoint is opened.
 pub(crate) fn start(
     config: SorafsHedgingBillingRuntime,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     policy: HedgingBillingServicePolicyV1,
     feed_policy: &Arc<HedgingFeedTrustPolicyV1>,
     dependencies: HedgingBillingRuntimeDependenciesV1,
     shutdown_signal: ShutdownSignal,
 ) -> Result<(HedgingBillingRuntimeHandleV1, Child)> {
     let poll_interval = config.poll_interval;
-    let handle = assemble(config, chain_id, policy, feed_policy, dependencies)?;
+    let handle = assemble(config, network_id, policy, feed_policy, dependencies)?;
     record_status_metrics(&handle);
 
     let worker = handle.clone();
@@ -620,7 +620,7 @@ pub(crate) fn start(
 
 fn assemble(
     config: SorafsHedgingBillingRuntime,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     policy: HedgingBillingServicePolicyV1,
     feed_policy: &Arc<HedgingFeedTrustPolicyV1>,
     dependencies: HedgingBillingRuntimeDependenciesV1,
@@ -629,8 +629,8 @@ fn assemble(
     policy
         .validate()
         .wrap_err("validate configured hedging/billing service policy")?;
-    if &policy.chain_id != chain_id {
-        bail!("hedging/billing service policy chain identity does not match iroha_config");
+    if &policy.network_id != network_id {
+        bail!("hedging/billing service policy network identity does not match iroha_config");
     }
     if policy
         .canonical_digest()
@@ -1202,8 +1202,8 @@ mod tests {
         },
     };
 
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::account::AccountId;
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{account::AccountId, block::BlockHeader};
     use sorafs_manifest::{
         deal::XorQuantity,
         hedging::signed::{
@@ -1230,7 +1230,8 @@ mod tests {
 
     use super::*;
 
-    const CHAIN_ID: &str = "sorafs-reference-production";
+    const DISPLAY_CHAIN_NAME: &str = "sorafs-reference-production";
+    const GENESIS_SEED: &[u8] = b"sorafs-reference-production-genesis";
     const QUERY_HANDLE: &str = "ledger.billing.finalized.primary";
     const VERIFIER_HANDLE: &str = "consensus.billing.verifier.primary";
     const SIGNER_HANDLE: &str = "hsm.billing.statement.primary";
@@ -1249,6 +1250,16 @@ mod tests {
         HedgingBillingRuntimeProviderQualificationV1::new(1, [0xA5; 32]);
     const WITNESS_QUALIFICATION: HedgingBillingRuntimeProviderQualificationV1 =
         HedgingBillingRuntimeProviderQualificationV1::new(1, [0xA6; 32]);
+
+    fn network_id(genesis: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            genesis,
+        )))
+    }
+
+    fn configured_network_id() -> NetworkId {
+        network_id(GENESIS_SEED)
+    }
 
     #[derive(Debug)]
     struct EmptyFinalizedQuery {
@@ -1357,7 +1368,7 @@ mod tests {
 
         fn verify_page(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             _previous: Option<HedgingBillingJournalCommitmentV1>,
             _page: &HedgingBillingFinalizedEventPageV1,
         ) -> Result<(), HedgingBillingExternalError> {
@@ -1366,7 +1377,7 @@ mod tests {
 
         fn verify_period_close(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             _close: &HedgingBillingFinalizedPeriodCloseV1,
         ) -> Result<(), HedgingBillingExternalError> {
             Ok(())
@@ -1374,7 +1385,7 @@ mod tests {
 
         fn verify_epoch_transition(
             &self,
-            _chain_id: &ChainId,
+            _network_id: &NetworkId,
             _transition: &HedgingBillingEpochTransitionV1,
         ) -> Result<(), HedgingBillingExternalError> {
             Ok(())
@@ -1609,11 +1620,12 @@ mod tests {
     ) -> HedgingBillingFinalizedEventPageV1 {
         HedgingBillingFinalizedEventPageV1 {
             version: HEDGING_BILLING_FINALIZED_PAGE_VERSION_V1,
-            chain_id: ChainId::from(CHAIN_ID),
+            network_id: configured_network_id(),
             start_sequence: 1,
             next_sequence: 1,
             journal_commitment: HedgingBillingJournalCommitmentV1 {
                 version: HEDGING_BILLING_JOURNAL_COMMITMENT_VERSION_V1,
+                network_id: configured_network_id(),
                 finalized_cursor: cursor,
                 journal_next_sequence: 1,
                 journal_root: [0xB1; 32],
@@ -1725,7 +1737,7 @@ mod tests {
             version: HEDGING_BILLING_POLICY_VERSION_V1,
             revision: 1,
             predecessor_policy_digest: None,
-            chain_id: ChainId::from(CHAIN_ID),
+            network_id: configured_network_id(),
             billing_policy_digest: [0x61; 32],
             feed_trust_policy_digest: feed_policy.canonical_digest().expect("feed policy digest"),
             billing_epoch_unix: 1_800_000_000,
@@ -1894,7 +1906,7 @@ mod tests {
         let initial_head = *head.lock().expect("finalized head state");
         let handle = assemble(
             config(state_dir, &policy),
-            &ChainId::from(CHAIN_ID),
+            &configured_network_id(),
             policy.clone(),
             &Arc::new(feed_policy),
             dependencies_with_head(&policy, QUERY_HANDLE, true, query_ready, Arc::clone(&head)),
@@ -1986,7 +1998,7 @@ mod tests {
         let policy = service_policy(&feed_policy);
         let error = assemble(
             config(state_dir.clone(), &policy),
-            &ChainId::from(CHAIN_ID),
+            &configured_network_id(),
             policy.clone(),
             &Arc::new(feed_policy),
             dependencies(
@@ -2002,6 +2014,34 @@ mod tests {
         assert!(
             !state_dir.exists(),
             "provider qualification must run before private state is opened"
+        );
+    }
+
+    #[test]
+    fn assembly_rejects_same_label_with_different_genesis() {
+        let temp = TempDir::new().expect("tempdir");
+        let state_dir = temp.path().join("must-not-exist");
+        let feed_policy = feed_policy();
+        let policy = service_policy(&feed_policy);
+        let deployment_a_label = DISPLAY_CHAIN_NAME;
+        let deployment_b_label = DISPLAY_CHAIN_NAME;
+        let foreign_network = network_id(b"sorafs-reference-foreign-genesis");
+        assert_eq!(deployment_a_label, deployment_b_label);
+        assert_ne!(policy.network_id, foreign_network);
+
+        let error = assemble(
+            config(state_dir.clone(), &policy),
+            &foreign_network,
+            policy.clone(),
+            &Arc::new(feed_policy),
+            dependencies(&policy, QUERY_HANDLE, true, Arc::new(AtomicBool::new(true))),
+        )
+        .expect_err("a matching display label cannot authorize another genesis");
+
+        assert!(error.to_string().contains("network identity"));
+        assert!(
+            !state_dir.exists(),
+            "network mismatch must fail before state opens"
         );
     }
 
@@ -2053,7 +2093,7 @@ mod tests {
 
             let error = assemble(
                 config,
-                &ChainId::from(CHAIN_ID),
+                &configured_network_id(),
                 policy.clone(),
                 &Arc::new(feed_policy.clone()),
                 dependencies(&policy, QUERY_HANDLE, true, Arc::new(AtomicBool::new(true))),
@@ -2079,7 +2119,7 @@ mod tests {
         let policy = service_policy(&feed_policy);
         let error = assemble(
             config(state_dir.clone(), &policy),
-            &ChainId::from(CHAIN_ID),
+            &configured_network_id(),
             policy.clone(),
             &Arc::new(feed_policy),
             dependencies(
@@ -2106,7 +2146,7 @@ mod tests {
         let policy = service_policy(&feed_policy);
         let error = assemble(
             config(state_dir.clone(), &policy),
-            &ChainId::from(CHAIN_ID),
+            &configured_network_id(),
             policy.clone(),
             &Arc::new(feed_policy),
             dependencies(
@@ -2135,7 +2175,7 @@ mod tests {
         let query_ready = Arc::new(AtomicBool::new(true));
         let handle = assemble(
             config.clone(),
-            &ChainId::from(CHAIN_ID),
+            &configured_network_id(),
             policy.clone(),
             &Arc::new(feed_policy.clone()),
             dependencies(&policy, QUERY_HANDLE, true, Arc::clone(&query_ready)),
@@ -2201,7 +2241,7 @@ mod tests {
 
         let restarted = assemble(
             config,
-            &ChainId::from(CHAIN_ID),
+            &configured_network_id(),
             policy.clone(),
             &Arc::new(feed_policy),
             dependencies(&policy, QUERY_HANDLE, true, Arc::new(AtomicBool::new(true))),
@@ -2326,7 +2366,7 @@ mod tests {
         }));
         let handle = assemble(
             config(temp.path().join("billing-state"), &policy),
-            &ChainId::from(CHAIN_ID),
+            &configured_network_id(),
             policy.clone(),
             &Arc::new(feed_policy),
             dependencies_with_head(

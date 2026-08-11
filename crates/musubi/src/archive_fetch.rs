@@ -16,7 +16,7 @@ use std::{
 };
 
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     musubi::{
         ArchiveId, MUSUBI_MAX_ARCHIVE_LOCATIONS_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1,
         MusubiArchiveCommitmentV1, MusubiArchiveLocationIdV1, MusubiArchiveLocationQueryV1,
@@ -416,8 +416,7 @@ pub struct MusubiArchiveFetchAdapterV1<'client> {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ArchiveFetchDeploymentBindingV1 {
-    chain_id: ChainId,
-    genesis_hash: [u8; 32],
+    network_id: NetworkId,
     minimum_snapshot: MusubiRegistrySnapshotV1,
 }
 
@@ -450,13 +449,11 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
     #[must_use]
     pub fn with_expected_deployment(
         mut self,
-        chain_id: &ChainId,
-        genesis_hash: [u8; 32],
+        network_id: NetworkId,
         minimum_snapshot: MusubiRegistrySnapshotV1,
     ) -> Self {
         self.expected_deployment = Some(ArchiveFetchDeploymentBindingV1 {
-            chain_id: chain_id.clone(),
-            genesis_hash,
+            network_id,
             minimum_snapshot,
         });
         self
@@ -730,12 +727,7 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
             .map_err(registry_error)?
             .ok_or_else(archive_unavailable)?;
         if let Some(expected) = &self.expected_deployment {
-            validate_deployment_binding(
-                expected,
-                &page.chain_id,
-                page.genesis_hash,
-                page.snapshot,
-            )?;
+            validate_deployment_binding(expected, page.network_id, page.snapshot)?;
         }
         // The V1 directory contains at most four locations and this first-page request asks for
         // all four. A cursor or a shorter/different identity list is therefore incomplete rather
@@ -792,16 +784,14 @@ impl<'client> MusubiArchiveFetchAdapterV1<'client> {
 
 fn validate_deployment_binding(
     expected: &ArchiveFetchDeploymentBindingV1,
-    observed_chain_id: &ChainId,
-    observed_genesis_hash: [u8; 32],
+    observed_network_id: NetworkId,
     observed_snapshot: MusubiRegistrySnapshotV1,
 ) -> Result<(), ArchiveFetchErrorV1> {
     let minimum = expected.minimum_snapshot;
-    if expected.genesis_hash.iter().all(|byte| *byte == 0)
+    if expected.network_id.as_bytes()[31] & 1 != 1
         || minimum.validate().is_err()
         || observed_snapshot.validate().is_err()
-        || observed_chain_id != &expected.chain_id
-        || observed_genesis_hash != expected.genesis_hash
+        || observed_network_id != expected.network_id
         || observed_snapshot.finalized_height < minimum.finalized_height
         || observed_snapshot.index_revision < minimum.index_revision
         || (observed_snapshot.finalized_height == minimum.finalized_height
@@ -1020,6 +1010,18 @@ mod tests {
     use sorafs_car::FileEntry;
 
     use super::*;
+
+    fn network_id() -> NetworkId {
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            .parse()
+            .expect("network id")
+    }
+
+    fn other_network_id() -> NetworkId {
+        "hash:214A4C8F95074B216BE2F72EB93166506DAE0B1026ED01EF5A760632CD93ABAB#50FA"
+            .parse()
+            .expect("other network id")
+    }
 
     #[derive(Default)]
     struct CountingIntegrityObserver {
@@ -1271,8 +1273,7 @@ mod tests {
 
     fn deployment_binding() -> ArchiveFetchDeploymentBindingV1 {
         ArchiveFetchDeploymentBindingV1 {
-            chain_id: ChainId::from("musubi-fetch-binding-test"),
-            genesis_hash: [0x51; 32],
+            network_id: network_id(),
             minimum_snapshot: MusubiRegistrySnapshotV1 {
                 finalized_height: 10,
                 finalized_block_hash: [0x52; 32],
@@ -1282,22 +1283,13 @@ mod tests {
     }
 
     #[test]
-    fn locked_fetch_binding_rejects_another_chain_or_genesis() {
+    fn locked_fetch_binding_rejects_another_network() {
         let expected = deployment_binding();
-        for (chain_id, genesis_hash) in [
-            (ChainId::from("another-musubi-chain"), expected.genesis_hash),
-            (expected.chain_id.clone(), [0x53; 32]),
-        ] {
-            let error = validate_deployment_binding(
-                &expected,
-                &chain_id,
-                genesis_hash,
-                expected.minimum_snapshot,
-            )
-            .expect_err("another deployment must not authorize a locked fetch");
-            assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
-            assert_eq!(error.class(), ArchiveFetchFailureClassV1::Permanent);
-        }
+        let error =
+            validate_deployment_binding(&expected, other_network_id(), expected.minimum_snapshot)
+                .expect_err("another deployment must not authorize a locked fetch");
+        assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
+        assert_eq!(error.class(), ArchiveFetchFailureClassV1::Permanent);
     }
 
     #[test]
@@ -1315,13 +1307,8 @@ mod tests {
                 index_revision: expected.minimum_snapshot.index_revision - 1,
             },
         ] {
-            let error = validate_deployment_binding(
-                &expected,
-                &expected.chain_id,
-                expected.genesis_hash,
-                snapshot,
-            )
-            .expect_err("a finalized view older than the lock anchor must fail");
+            let error = validate_deployment_binding(&expected, expected.network_id, snapshot)
+                .expect_err("a finalized view older than the lock anchor must fail");
             assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
         }
     }
@@ -1333,13 +1320,8 @@ mod tests {
             finalized_block_hash: [0x56; 32],
             ..expected.minimum_snapshot
         };
-        let error = validate_deployment_binding(
-            &expected,
-            &expected.chain_id,
-            expected.genesis_hash,
-            conflicting,
-        )
-        .expect_err("a conflicting finalized block at the anchor height must fail");
+        let error = validate_deployment_binding(&expected, expected.network_id, conflicting)
+            .expect_err("a conflicting finalized block at the anchor height must fail");
         assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
     }
 
@@ -1351,30 +1333,21 @@ mod tests {
             finalized_block_hash: [0; 32],
             index_revision: expected.minimum_snapshot.index_revision,
         };
-        let error = validate_deployment_binding(
-            &expected,
-            &expected.chain_id,
-            expected.genesis_hash,
-            invalid,
-        )
-        .expect_err("an invalid observed snapshot must fail even when its counters do not regress");
+        let error = validate_deployment_binding(&expected, expected.network_id, invalid)
+            .expect_err(
+                "an invalid observed snapshot must fail even when its counters do not regress",
+            );
         assert_eq!(error.code(), "MUSUBI_ARCHIVE_LOCATION_EVIDENCE_INVALID");
     }
 
     #[test]
     fn locked_fetch_binding_accepts_the_anchor_and_a_later_snapshot() {
         let expected = deployment_binding();
+        validate_deployment_binding(&expected, expected.network_id, expected.minimum_snapshot)
+            .expect("the exact lock anchor is valid");
         validate_deployment_binding(
             &expected,
-            &expected.chain_id,
-            expected.genesis_hash,
-            expected.minimum_snapshot,
-        )
-        .expect("the exact lock anchor is valid");
-        validate_deployment_binding(
-            &expected,
-            &expected.chain_id,
-            expected.genesis_hash,
+            expected.network_id,
             MusubiRegistrySnapshotV1 {
                 finalized_height: expected.minimum_snapshot.finalized_height + 1,
                 finalized_block_hash: [0x57; 32],
@@ -1384,7 +1357,7 @@ mod tests {
         .expect("a non-regressing later finalized snapshot is valid");
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(unix)]
     #[test]
     fn fetch_adapter_records_the_expected_locked_deployment() {
         let temporary = tempfile::tempdir().expect("temporary cache root");
@@ -1398,11 +1371,8 @@ mod tests {
         )
         .expect("signer-free registry client");
         let expected = deployment_binding();
-        let adapter = MusubiArchiveFetchAdapterV1::new(&registry, &cache).with_expected_deployment(
-            &expected.chain_id,
-            expected.genesis_hash,
-            expected.minimum_snapshot,
-        );
+        let adapter = MusubiArchiveFetchAdapterV1::new(&registry, &cache)
+            .with_expected_deployment(expected.network_id, expected.minimum_snapshot);
 
         assert_eq!(adapter.expected_deployment.as_ref(), Some(&expected));
     }

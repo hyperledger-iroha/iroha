@@ -2139,7 +2139,7 @@ public sealed partial class SccpExactTests
             ["settlement"] = new Dictionary<string, object?>
             {
                 ["asset_definition_id"] = "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                ["custody_account_id"] = custody,
+                ["custody_owner"] = custody,
                 ["payload_amount_scale"] = 9,
             },
         };

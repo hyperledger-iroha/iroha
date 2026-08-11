@@ -24,7 +24,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId, Registrable,
+    ChainId, NetworkId, Registrable,
     account::AccountId,
     block::{
         BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext,
@@ -46,12 +46,21 @@ use iroha_data_model::{
     smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress},
     sorafs::pricing::PricingScheduleRecord,
 };
+
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias},
     governance::CanEnactGovernance,
     smart_contract::{CanInvokeContractEntrypoint, CanRegisterSmartContractCode},
 };
 use nonzero_ext::nonzero;
+
+/// Exact genesis-lineage identity used by [`mk_minimal_root_cfg`].
+#[must_use]
+pub fn signed_query_network_id() -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"Torii test genesis trust anchor",
+    )))
+}
 
 fn checked_random_keypair(context: &str) -> iroha_crypto::KeyPair {
     iroha_crypto::KeyPair::try_random()
@@ -104,7 +113,7 @@ pub fn apply_queued_in_one_block(
         return 0;
     }
 
-    let mut accepted: Vec<_> = guards
+    let accepted: Vec<_> = guards
         .iter()
         .map(|guard| {
             (
@@ -127,11 +136,9 @@ pub fn apply_queued_in_one_block(
         state.install_lane_manifests(&manifests);
     }
 
-    // `BlockBuilder::new` canonicalizes transactions by entrypoint hash. Mirror that order before
-    // constructing the explicit fixture context so every context remains aligned with its block
-    // entrypoint. Supplying a non-empty context also bypasses Core's automatic single-height lane
-    // ownership fixture, which is unsuitable for this helper's multi-block synthetic chains.
-    accepted.sort_unstable_by_key(|(tx, _, _)| tx.hash_as_entrypoint());
+    // Supplying a non-empty context bypasses Core's automatic single-height lane ownership
+    // fixture, which is unsuitable for this helper's multi-block synthetic chains. Preserve the
+    // queue order so every context remains aligned with the corresponding block entrypoint.
     let execution_context = BlockExecutionContextBundle::new(
         accepted
             .iter()
@@ -473,7 +480,7 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
                 .expect("canonical contract deployment nonce")
         })
         .unwrap_or(0);
-    let chain_id = state_view.chain_id().clone();
+    let network_id = *state_view.network_id();
     drop(state_view);
 
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
@@ -483,7 +490,7 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
     )
     .expect("construct contract alias");
     let contract_address =
-        ContractAddress::derive(&chain_id, authority, deploy_nonce, DataSpaceId::UNIVERSAL)
+        ContractAddress::derive(&network_id, authority, deploy_nonce, DataSpaceId::UNIVERSAL)
             .expect("derive contract address");
     let total_size = u64::try_from(artifact.len()).expect("artifact size fits u64");
     let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))
@@ -541,7 +548,7 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
     }
 
     let transaction = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -969,6 +976,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             zk_ivm_prove_job_max_entries: defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
             zk_ivm_prove_job_max_retained_bytes:
                 defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
+            zk_ivm_prove_job_max_entries_per_owner:
+                defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES_PER_OWNER,
+            zk_ivm_prove_job_max_retained_bytes_per_owner:
+                defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES_PER_OWNER,
             transaction_ingress: A::TransactionIngress::default(),
             da_ingest: A::DaIngest::default(),
             connect: A::Connect {
@@ -1066,6 +1077,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             store_dir: WithOrigin::inline(std::env::temp_dir()),
             merkle_chunk_size_bytes: defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES,
             max_payload_bytes: defaults::snapshot::MAX_PAYLOAD_BYTES,
+            resources: Default::default(),
             verification_public_key: None,
             signing_private_key: None,
             bootstrap: Default::default(),
@@ -1311,6 +1323,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             policy_transition_delay_blocks: defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            policy_transition_max_per_height:
+                defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
             tree_roots_history_len: defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             tree_frontier_checkpoint_interval:
                 defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,
@@ -1466,6 +1480,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             policy_transition_delay_blocks: defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS,
             policy_transition_window_blocks:
                 defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS,
+            policy_transition_max_per_height:
+                defaults::confidential::POLICY_TRANSITION_MAX_PER_HEIGHT,
             tree_roots_history_len: defaults::confidential::TREE_ROOTS_HISTORY_LEN,
             tree_frontier_checkpoint_interval:
                 defaults::confidential::TREE_FRONTIER_CHECKPOINT_INTERVAL,
@@ -1605,6 +1621,7 @@ mod tests {
             query,
             chain_id.clone(),
         ));
+        let network_id = *state.network_id_ref();
 
         assert_eq!(&state.chain_id, &chain_id);
 
@@ -1615,7 +1632,7 @@ mod tests {
         ));
 
         let tx = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -1652,7 +1669,7 @@ mod tests {
         drop(view);
 
         let second_tx = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

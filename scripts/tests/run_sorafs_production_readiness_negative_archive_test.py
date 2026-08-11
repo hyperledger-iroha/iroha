@@ -74,16 +74,26 @@ def write_promotion_args(root: Path) -> Path:
     FIXTURES.write_all_gates(root)
     foundation = FIXTURES.write_foundational_summary(root)
     qualification_args = FIXTURES.topology_cli_args(root)
-    topology = Path(
-        qualification_args[
-            qualification_args.index("--topology-qualification-summary") + 1
-        ]
-    )
-    resilience = Path(
-        qualification_args[
-            qualification_args.index("--resilience-qualification-summary") + 1
-        ]
-    )
+    assert len(qualification_args) % 2 == 0
+    qualification_lines = [
+        shlex.join(
+            [
+                flag,
+                (
+                    str(
+                        2
+                        * MODULE.promotion_runner.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS
+                    )
+                    if flag == "--max-topology-qualification-review-age-secs"
+                    else value
+                ),
+            ]
+        )
+        for flag, value in zip(
+            qualification_args[::2], qualification_args[1::2]
+        )
+        if flag != "--l1-lane-summary"
+    ]
     lines = [
         shlex.join(["--out-dir", str(root / "unused-positive-output")]),
         shlex.join(
@@ -92,14 +102,7 @@ def write_promotion_args(root: Path) -> Path:
                 str(root / "unused-positive-output" / "aggregate.json"),
             ]
         ),
-        shlex.join(["--topology-qualification-summary", str(topology)]),
-        shlex.join(["--resilience-qualification-summary", str(resilience)]),
-        shlex.join(
-            [
-                "--resilience-qualification-signer-public-key-hex",
-                FIXTURES.RESILIENCE_SIGNER_PUBLIC_KEY.hex(),
-            ]
-        ),
+        *qualification_lines,
         shlex.join(["--foundational-prerequisite-summary", str(foundation)]),
         shlex.join(
             [
@@ -154,7 +157,9 @@ def baseline_input_digests(root: Path) -> dict[str, str]:
 
     paths = [
         root / "l1-topology-qualification.summary",
+        root / "l1-topology-qualification.summary.ed25519",
         root / "l1-resilience-qualification.summary",
+        root / "l1-lane-evidence.inventory",
         root / "foundational_prerequisites.json",
         *(root / f"{gate}.json" for gate in MODULE.DEFAULT_REQUIRED_GATES),
     ]

@@ -14,6 +14,14 @@ NODE_LIB = REPO_ROOT / "crates" / "sorafs_node" / "src" / "lib.rs"
 DAEMON_RUNTIME = (
     REPO_ROOT / "crates" / "irohad" / "src" / "sorafs_provider_ingest_runtime.rs"
 )
+DAEMON_RUNTIME_TESTS = (
+    REPO_ROOT
+    / "crates"
+    / "irohad"
+    / "src"
+    / "sorafs_provider_ingest_runtime"
+    / "tests.rs"
+)
 CONFIG_USER = (
     REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "user.rs"
 )
@@ -93,6 +101,7 @@ def test_standard_daemon_pins_multi_provider_inventory_across_startup_and_ticks(
 def test_completion_signer_binding_is_public_exact_and_rechecked() -> None:
     node = _read(NODE_RUNTIME)
     daemon = _read(DAEMON_RUNTIME)
+    daemon_tests = _read(DAEMON_RUNTIME_TESTS)
     config = f"{_read(CONFIG_USER)}\n{_read(CONFIG_ACTUAL)}"
 
     for contract in (
@@ -118,7 +127,7 @@ def test_completion_signer_binding_is_public_exact_and_rechecked() -> None:
         "let transaction = self.signer.sign(payload).await?;",
     ):
         assert contract in daemon
-    assert daemon.count("validate_resolver_signer_binding(") >= 7
+    assert f"{daemon}\n{daemon_tests}".count("validate_resolver_signer_binding(") >= 7
     assert daemon.count("self.current_eligibility()?;") >= 2
 
     for field in (
@@ -194,7 +203,7 @@ def test_provider_ingest_docs_separate_pool_closure_from_external_blockers() -> 
         "governance-advert/stream-grant/pinned-HTTPS child transports",
         "own configured production",
         "completion-signer",
-        "governance-aware HSM/KMS signer backend",
+        "governance-aware external software signer backend",
         "provider-indexed immutable archive",
         "deployment-owned sealed-CAS backend",
         "retention-authority protocol",

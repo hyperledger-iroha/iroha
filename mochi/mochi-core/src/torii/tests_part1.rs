@@ -20,7 +20,6 @@ use httpmock::{
 };
 use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
-    ChainId,
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     block::consensus::{ExecWitness, ExecWitnessMsg},
@@ -871,6 +870,37 @@ async fn submit_query_returns_bytes_on_success() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn submit_query_does_not_follow_redirects() {
+    let Some(server) = try_start_mock_server() else {
+        return;
+    };
+    let target = server.mock(|when, then| {
+        when.method(POST).path("/redirect-target");
+        then.status(200).body(vec![0xAA]);
+    });
+    let target_url = server.url("/redirect-target");
+    let original = server.mock(|when, then| {
+        when.method(POST).path("/v1/query");
+        then.status(307).header("Location", target_url.clone());
+    });
+
+    let client = ToriiClient::new(server.url("/")).expect("client");
+    let error = client
+        .submit_query(&[0x10, 0x11, 0x12])
+        .await
+        .expect_err("redirect must be returned instead of followed");
+
+    original.assert();
+    target.assert_hits(0);
+    match error {
+        ToriiError::UnexpectedStatus { status, .. } => {
+            assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
+        }
+        other => panic!("expected UnexpectedStatus, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn builder_applies_api_token_to_http_requests() {
     let Some(server) = try_start_mock_server() else {
         return;
@@ -1047,13 +1077,15 @@ fn readiness_smoke_plan_uses_checked_transaction_signing() {
         .iter()
         .next()
         .expect("development signer available");
-    let plan = ReadinessSmokePlan::for_signer_with_attempts("mochi-smoke", signer, 2)
+    let network_id = test_network_id();
+    let plan = ReadinessSmokePlan::for_signer_with_attempts(network_id, signer, 2)
         .expect("build readiness smoke plan");
 
     assert_eq!(plan.transactions.len(), 2);
     for tx in &plan.transactions {
         tx.verify_signature()
             .expect("checked smoke transaction signature verifies");
+        assert_eq!(tx.network_id(), Some(&network_id));
     }
     assert_ne!(
         plan.transactions[0].hash(),
@@ -1067,8 +1099,8 @@ fn readiness_smoke_mutates_only_its_signing_account_metadata() {
     let signer = crate::compose::development_signing_authorities()
         .first()
         .expect("development signer available");
-    let plan =
-        ReadinessSmokePlan::for_signer("mochi-smoke", signer).expect("build readiness smoke plan");
+    let plan = ReadinessSmokePlan::for_signer(test_network_id(), signer)
+        .expect("build readiness smoke plan");
     let iroha_data_model::transaction::Executable::Instructions(instructions) =
         plan.transactions[0].instructions()
     else {
@@ -1092,7 +1124,7 @@ fn generated_readiness_transactions_renew_for_the_full_retry_budget() {
     let signer = crate::compose::development_signing_authorities()
         .first()
         .expect("development signer available");
-    let mut plan = ReadinessSmokePlan::for_signer_with_attempts("mochi-smoke", signer, 3)
+    let mut plan = ReadinessSmokePlan::for_signer_with_attempts(test_network_id(), signer, 3)
         .expect("build readiness smoke plan");
     let old_hashes = plan.tx_hashes().collect::<Vec<_>>();
     let creation_time = plan.transactions[0].creation_time();
@@ -1124,8 +1156,8 @@ fn caller_supplied_readiness_transactions_keep_the_exact_signed_envelope() {
     let signer = crate::compose::development_signing_authorities()
         .first()
         .expect("development signer available");
-    let generated =
-        ReadinessSmokePlan::for_signer("mochi-smoke", signer).expect("build readiness smoke plan");
+    let generated = ReadinessSmokePlan::for_signer(test_network_id(), signer)
+        .expect("build readiness smoke plan");
     let transaction = generated.transactions[0].clone();
     let hash = transaction.hash();
     let mut exact = ReadinessSmokePlan::new(vec![transaction]);
@@ -1154,9 +1186,7 @@ fn block_stream_frame(block: &SignedBlock) -> Vec<u8> {
 }
 
 fn sample_block() -> SignedBlock {
-    let chain: ChainId = "mochi-block-stream".parse().expect("chain id");
-    let mut builder = TransactionBuilder::new(
-        chain.clone(),
+    let mut builder = TransactionBuilder::new_genesis(
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     );

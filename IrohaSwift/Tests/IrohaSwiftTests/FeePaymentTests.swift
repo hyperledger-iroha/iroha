@@ -187,6 +187,19 @@ final class FeePaymentTests: XCTestCase {
         }
     }
 
+    func testFeeSponsorProgramRequiresCanonicalPayoutAccount() throws {
+        let canonical = Data(
+            #"{"id":{"sponsor":"\#(authority)","name":"wallet_fx"},"payout_account":"\#(authority)","lifecycle":{"state":"paused","value":null}}"#.utf8
+        )
+        let program = try JSONDecoder().decode(FeeSponsorProgram.self, from: canonical)
+        XCTAssertEqual(program.payoutAccount, authority)
+
+        let missing = Data(
+            #"{"id":{"sponsor":"\#(authority)","name":"wallet_fx"},"lifecycle":{"state":"paused","value":null}}"#.utf8
+        )
+        XCTAssertThrowsError(try JSONDecoder().decode(FeeSponsorProgram.self, from: missing))
+    }
+
     func testIntentRejectsUnknownFieldsAndNonCanonicalLimits() throws {
         let unknown = Data(
             #"{"payer":"authority","value":{"charge_limits":[]},"fee_sponsor":"legacy"}"#.utf8

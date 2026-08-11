@@ -1929,17 +1929,20 @@ fn prune_intent_tampering_and_roster_recovery_fail_closed() {
         kura.reconcile_and_project_prune_sidecar_rewrites_locked(2)
             .expect("project tampering fixture retained sidecars")
     };
-    let valid_intent = admit_prune_intent_fixture(&kura, KuraPruneIntentV2 {
-        version: 2,
-        source_height: 4,
-        source_tip_hash: Some(blocks[3].hash()),
-        target_height: 2,
-        target_tip_hash: Some(blocks[1].hash()),
-        retained_merge_entries: 1,
-        retained_merge_tip_hash: Some(merge_entries[0].canonical_hash()),
-        sidecar_rewrite,
-        capacity: unsealed_prune_capacity_fixture(),
-    });
+    let valid_intent = admit_prune_intent_fixture(
+        &kura,
+        KuraPruneIntentV2 {
+            version: 2,
+            source_height: 4,
+            source_tip_hash: Some(blocks[3].hash()),
+            target_height: 2,
+            target_tip_hash: Some(blocks[1].hash()),
+            retained_merge_entries: 1,
+            retained_merge_tip_hash: Some(merge_entries[0].canonical_hash()),
+            sidecar_rewrite,
+            capacity: unsealed_prune_capacity_fixture(),
+        },
+    );
     drop(kura);
     let mut tampered = valid_intent.clone();
     tampered.target_tip_hash = Some(HashOf::from_untyped_unchecked(Hash::new(

@@ -943,7 +943,7 @@ mod tests {
         let specs = gather_instruction_specs(&registry, None);
         assert_eq!(
             specs.len(),
-            103,
+            110,
             "first-release generated instruction count"
         );
 

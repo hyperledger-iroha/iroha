@@ -1863,7 +1863,8 @@ def _run_candidate_session_wrapper(argv: Sequence[str]) -> int:
             resource_guard._terminate_owned_group(child, process_group_id)
         resource_guard._write_wrapper_control(
             args.control_fd,
-            f"EXIT {returncode} {1 if lingering else 0} {kernel_peak_rss_bytes}",
+            "EXIT "
+            f"{returncode} 0 {1 if lingering else 0} 0 {kernel_peak_rss_bytes}",
         )
         if capture_control_outcome:
             if control_stdout is None or control_stderr is None:
@@ -2149,10 +2150,12 @@ def _run_pinned_bundle_command(
         )
         fields = wrapper_exit.split()
         if (
-            len(fields) != 4
+            len(fields) != 6
             or fields[0] != "EXIT"
             or fields[2] not in {"0", "1"}
-            or not fields[3].isdigit()
+            or fields[3] not in {"0", "1"}
+            or fields[4] not in {"0", "1"}
+            or not fields[5].isdigit()
         ):
             raise resource_guard.GuardError(
                 f"Kagemusha {operation_description} wrapper emitted invalid exit status"
@@ -2165,7 +2168,15 @@ def _run_pinned_bundle_command(
             ) from error
         if fields[2] == "1":
             raise resource_guard.GuardError(
+                f"Kagemusha {operation_description} lost its supervisor lifeline"
+            )
+        if fields[3] == "1":
+            raise resource_guard.GuardError(
                 f"Kagemusha {operation_description} left a lingering process group"
+            )
+        if fields[4] == "1":
+            raise resource_guard.GuardError(
+                f"Kagemusha {operation_description} was cancelled"
             )
         if operation == MEMORY_CAPACITY_OPERATION:
             if returncode != 0:

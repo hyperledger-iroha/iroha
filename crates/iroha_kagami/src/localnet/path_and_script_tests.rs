@@ -196,11 +196,11 @@
         );
         assert!(
             start_contents.contains("if [ -x \"$DEFAULT_IROHAD_BIN_DEBUG\" ]; then"),
-            "start script should prefer the debug irohad for local contract development"
+            "start script should prefer the debug iroha3d for local contract development"
         );
         assert!(
             start_contents.contains("elif [ -x \"$DEFAULT_IROHAD_BIN_RELEASE\" ]; then"),
-            "start script should fall back to the release irohad when no debug binary exists"
+            "start script should fall back to the release iroha3d when no debug binary exists"
         );
         assert!(
             start_contents.contains("DEFAULT_IROHA_CLI_RELEASE="),

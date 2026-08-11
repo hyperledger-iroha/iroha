@@ -243,6 +243,22 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
     }
 
     func testOperationClassifierDoesNotBleedKindOrTransactionOnlyCodes() {
+        for target in [
+            KagemushaSubmissionTarget.offlineTopUp,
+            .offlineRedeem,
+        ] {
+            guard case .definitivePreAdmission =
+                KagemushaSubmissionFailureClassifier.classify(
+                    ToriiClientError.httpStatus(
+                        code: 400,
+                        message: nil,
+                        rejectCode: "offline_wrong_network"
+                    ),
+                    target: target
+                ) else {
+                return XCTFail("exact-network rejection must be definitive for \(target)")
+            }
+        }
         let redeemOnly = ToriiClientError.httpStatus(
             code: 400,
             message: nil,

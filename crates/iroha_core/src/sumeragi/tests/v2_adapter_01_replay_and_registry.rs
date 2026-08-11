@@ -1152,7 +1152,7 @@ fn unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics() {
     assert!(first.effects().is_empty());
 
     let retransmit = adapter
-        .receive_verified(unsafe_proposal)
+        .receive_verified(unsafe_proposal.clone())
         .expect("coalesce the exact unsafe proposal retransmission");
     assert_eq!(
         retransmit.disposition(),
@@ -1161,18 +1161,20 @@ fn unsafe_proposal_admission_preserves_duplicate_and_equivocation_semantics() {
     assert!(retransmit.effects().is_empty());
 
     let conflict = adapter
-        .receive_verified(conflicting_proposal)
+        .receive_verified(conflicting_proposal.clone())
         .expect("report the conflicting proposal fingerprint");
     assert_eq!(conflict.disposition(), reducer::StepDisposition::Applied);
+    let wire::ConsensusMessageV2Payload::Proposal(first_proposal) = unsafe_proposal.payload else {
+        unreachable!("proposal fixture contains a proposal")
+    };
+    let wire::ConsensusMessageV2Payload::Proposal(second_proposal) = conflicting_proposal.payload
+    else {
+        unreachable!("proposal fixture contains a proposal")
+    };
     assert_eq!(
         conflict.effects(),
         &[AdapterEffect::ReportEquivocation {
-            offender: adapter.wire_context.roster
-                [usize::try_from(proposer).expect("small proposer index")]
-            .validator
-            .clone(),
-            round: wire_round,
-            kind: reducer::EquivocationKind::Proposal,
+            evidence: AdapterEquivocationEvidence::proposal(first_proposal, second_proposal),
         }]
     );
 

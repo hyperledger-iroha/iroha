@@ -6,9 +6,8 @@ suites. Its proof generation, finality verification, native recursion, split,
 and acknowledgement execution are genuine. The release authorities and review
 artifacts in this deterministic test bundle are self-issued test fixtures,
 however; the bundle is not shipping-release provenance, a physical-device
-benchmark, or KeyMint/Secure Enclave qualification evidence. The bundle uses
-the current Taira chain
-`fc56984b-2be7-431d-840e-21514d1883f0` and the exact runtime asset alias
+benchmark, or KeyMint/Secure Enclave qualification evidence. The bundle binds
+the exact genesis-derived Taira `NetworkId` and the exact runtime asset alias
 `sbd#cbsi`, whose typed asset definition ID is
 `7ZepsJTHCVLKsrFFNZGSRGZgvBhv`. Neither identity may be substituted.
 
@@ -47,9 +46,10 @@ directory already contains a file, preventing partial or mixed releases.
 `iroha.kagemusha-sbd-mobile-acceptance-bundle` and
 `bundle_version: 1`. It records:
 
-- `bridge_abi_version: u32`, `wire_version: 4`, `chain_id` equal to the
-  current Taira UUID, `canonical_sbd_asset_definition_id` equal to the typed
-  `sbd#cbsi` ID, and `asset_scale: 2`;
+- `bridge_abi_version: u32`, `wire_version: 4`, `network_id` equal to the
+  canonical checksummed hash literal of the exact Taira genesis header,
+  `canonical_sbd_asset_definition_id` equal to the typed `sbd#cbsi` ID, and
+  `asset_scale: 2`;
 - `evaluated_block_height`, `evaluated_block_hash_hex`,
   `acceptance_time_ms`, `sender_account_id`, `recipient_account_id`, and
   `receiver_device_id`;

@@ -5382,7 +5382,7 @@ mod tests {
         let first = records.first().expect("release fixture is non-empty");
         LaneQueueReservationReleaseBarrierV3 {
             version: LaneQueueReservationReleaseBarrierV3::VERSION,
-            chain_id_hash: Hash::new([release_seed, 7]),
+            network_id: super::super::queue_test_network_id(),
             epoch: 3,
             lane_id: first.key.lane_id,
             dataspace_id: first.key.dataspace_id,

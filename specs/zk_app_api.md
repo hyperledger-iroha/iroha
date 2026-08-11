@@ -5,7 +5,9 @@ This document describes the app‑facing ZK endpoints exposed by Torii for handl
 Key properties:
 - Deterministic, non‑forking behavior. Disabling the worker does not change consensus results.
 - Feature‑gated under `app_api` (enabled by default for Torii).
-- Rate‑limited and optionally protected by API tokens.
+- Rate‑limited; attachment storage is partitioned by an exact-network,
+  canonically authenticated account. API tokens are only an optional
+  additional gate.
 - On‑disk storage under `./storage/torii` by default.
 
 For a repo-wide view of which surfaces perform real proof verification versus
@@ -34,7 +36,10 @@ ledger paths:
   Norito batch length before allocating the outer vector, and rejects JSON
   base64 strings that cannot fit `max_envelope_bytes` before allocating their
   decoded buffers. It then applies finite batch, per-envelope, curve-`k`, and
-  transcript-label ceilings. The embedding API requires those limits
+  transcript-label ceilings. Before content-type inspection or decode, Torii
+  requires canonical account authentication over the exact runtime
+  `NetworkId`, method, URI, nonce, expiry, and bounded raw body. The embedding
+  API requires those limits
   explicitly; the no-limit Torii handler has been removed.
 
 The pre-release decode-only `/v1/zk/verify` and `/v1/zk/submit-proof` routes
@@ -68,6 +73,12 @@ committed block height and hash evaluated by the retained immutable state view.
 
 Attachments store sanitized artifacts such as proof envelopes or JSON DTOs. Each attachment is addressed by a deterministic id derived from the sanitized bytes.
 
+All attachment list/count/read/create/delete requests carry canonical account
+authentication bound to the exact runtime `NetworkId`, HTTP method, URI, nonce,
+expiry, and bounded raw body. Torii verifies it before any query/path/body
+extractor runs and derives the tenant exclusively from the verified `AccountId`.
+API-token possession alone never selects or authorizes a tenant.
+
 Endpoints:
 - `POST /v1/zk/attachments` — store attachment, returns metadata `{ id, size, content_type, created_ms, provenance? }`.
 - `GET  /v1/zk/attachments` — list metadata for stored attachments (JSON array).
@@ -94,7 +105,7 @@ Details:
 - Provenance: responses include `provenance` with `{ declared_type, sniffed_type, hashes { blake2b_256, sha256 }, sanitizer { verdict, expanded_bytes, archive_depth, sandboxed } }`.
 - Rejections: unsupported types return `415 Unsupported Media Type`; expansion/sandbox failures return `413`/`400` with the rejection reason in the body.
 - Size cap: enforced per item via `torii.attachments_max_bytes` (default 4 MiB). Requests exceeding the cap receive `413 Payload Too Large`.
-- Per-tenant quota: Torii enforces per-tenant attachment limits using `torii.attachments_per_tenant_max_count` (count) and `torii.attachments_per_tenant_max_bytes` (aggregate bytes). Tenants are derived from `X-API-Token` (hashed as `token:<blake2b-32 hex>`); requests without a token fall back to tenant `anon`. If an upload would exceed either limit, Torii deterministically evicts the oldest attachments for that tenant before persisting the new body. When the incoming body alone exceeds `torii.attachments_per_tenant_max_bytes`, Torii returns `413 Payload Too Large`.
+- Per-tenant quota: Torii enforces per-tenant attachment limits using `torii.attachments_per_tenant_max_count` (count) and `torii.attachments_per_tenant_max_bytes` (aggregate bytes). The tenant is the canonically authenticated `AccountId`; there is no anonymous or token-derived fallback. If an upload would exceed either limit, Torii deterministically evicts the oldest attachments for that account before persisting the new body. When the incoming body alone exceeds `torii.attachments_per_tenant_max_bytes`, Torii returns `413 Payload Too Large`.
 - Retention (TTL): attachments older than `torii.attachments_ttl_secs` (default 7 days) are removed by a background GC that runs approximately every 60 seconds.
 - Storage layout:
   - Data: `storage/torii/zk_attachments/<id>.bin`
@@ -107,7 +118,9 @@ Torii also exposes an app-facing helper endpoint to *generate* a proof attachmen
 or validation, and it can be disabled/unused without changing ledger results.
 
 Endpoints:
-- `POST /v1/zk/ivm/derive` — execute IVM bytecode and derive an `IvmProved` payload (commitments only).
+- `POST /v1/zk/ivm/derive` — authenticate the exact-network account, require it
+  to equal the body authority, then execute IVM bytecode and derive an
+  `IvmProved` payload (commitments only).
 - `POST /v1/zk/ivm/prove` — submit a prove job (returns `{ job_id }`).
 - `GET  /v1/zk/ivm/prove/{job_id}` — poll job status; returns `{ status, proved?, attachment?, error? }`.
 - `DELETE /v1/zk/ivm/prove/{job_id}` — remove a job from the in-memory job cache.
@@ -122,6 +135,13 @@ Job status values:
 - `running` — actively proving.
 - `done` — proof attachment is available.
 - `error` — proving failed (see `error`).
+
+Ownership and authentication:
+- IVM derive and `POST`, `GET`, and `DELETE` for IVM prove jobs require canonical account-signature headers (or
+  the canonical multisig witness). The signed POST account must exactly match the request
+  `authority`.
+- Torii stores that account as the immutable job owner. Foreign and absent job identifiers share
+  the same `404` response, and a foreign caller cannot refresh or delete the owner's entry.
 
 Cancellation:
 - `DELETE` is best-effort cancellation. It cancels queued jobs immediately and frees capacity.
@@ -151,6 +171,9 @@ Resource controls:
 - Job cache retention is controlled by `torii.zk_ivm_prove_job_ttl_secs` (TTL),
   `torii.zk_ivm_prove_job_max_entries` (count cap), and
   `torii.zk_ivm_prove_job_max_retained_bytes` (aggregate byte cap; default 128 MiB).
+  Per-owner caps are `torii.zk_ivm_prove_job_max_entries_per_owner` (default 32) and
+  `torii.zk_ivm_prove_job_max_retained_bytes_per_owner` (default 32 MiB). Capacity pressure may
+  evict only that same owner's terminal entries; it never evicts another tenant's result.
   Terminal JSON is compact, serialized once, and retained as immutable bytes; proof bytes use
   canonical `proof.bytes_b64` and are limited to 8 MiB decoded.
   - TTL eviction cancels pending/running jobs best-effort to free capacity.
@@ -277,6 +300,8 @@ zk_ivm_tooling_timeout_ms = 60000     # derive/simulation/view deadline
 zk_ivm_prove_job_ttl_secs = 1800      # 30 minutes
 zk_ivm_prove_job_max_entries = 1024   # cap in-memory job entries (0 disables the cap)
 zk_ivm_prove_job_max_retained_bytes = 134_217_728 # aggregate job memory cap (128 MiB)
+zk_ivm_prove_job_max_entries_per_owner = 32 # per-account retained job cap
+zk_ivm_prove_job_max_retained_bytes_per_owner = 33_554_432 # per-account cap (32 MiB)
 
 # (optional) app API tokens and rate limits
 require_api_token = false
@@ -495,5 +520,10 @@ all private-key aliases before dispatch; Torii returns a skeleton for clients
 to sign locally and submit:
 - POST `/v1/gov/ballots/zk-v1` — v1-style DTO with explicit envelope fields.
 - POST `/v1/gov/ballots/zk-v1/ballot-proof` — accepts canonical V1 `BallotProof` JSON directly.
+
+Both routes require one typed genesis-derived `network_id` and canonical
+exact-network account authentication over the bounded raw request before DTO
+decoding. The authenticated account must equal the body `authority`; retired
+`chain_id`/`genesis_hash` keys, redirects, and transparent retries are rejected.
 
 See specs/governance_api.md for details and examples.

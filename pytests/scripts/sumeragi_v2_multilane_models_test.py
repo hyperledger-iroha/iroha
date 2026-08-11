@@ -492,10 +492,7 @@ def copy_layout_fixture(tmp_path: Path, module, contract: dict) -> None:
         Path(check["path"]) for check in contract["forbidden_source_checks"]
     )
     relatives.update(Path(check["path"]) for check in contract["source_checks"])
-    for relative in relatives:
-        destination = tmp_path / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(ROOT_DIR / relative, destination)
+    copy_reviewed_source_fixture_with_includes(tmp_path, module, relatives)
 
 
 def validate_fixture(tmp_path: Path, module, contract: dict) -> tuple[str, ...]:
@@ -1457,7 +1454,7 @@ def test_native_prepublication_contract_rejects_prewsv_retention_cleanup(
     models = copy_native_prepublication_fixture(tmp_path, module)
     path = (
         tmp_path
-        / "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"
+        / "crates/iroha_core/src/kura/native_amx_participant_application_artifacts.rs"
     )
     replace_once(
         path,

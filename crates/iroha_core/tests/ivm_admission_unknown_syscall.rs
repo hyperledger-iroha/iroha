@@ -63,6 +63,7 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     let chain: ChainId = "chain".parse().unwrap();
     let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
+    let network_id = *state.network_id_ref();
 
     // Build a tiny program with an unknown syscall followed by HALT.
     let unknown_syscall = unlisted_syscall_number();
@@ -87,7 +88,7 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let tx = TransactionBuilder::new(
-        chain.clone(),
+        network_id,
         account_id.clone(),
         fee_payment_with_gas_limit(TEST_GAS_LIMIT),
     )

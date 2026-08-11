@@ -9,7 +9,7 @@
 data_root = "./data"
 
 # When enabled, MOCHI will try to run `cargo build` for missing binaries
-# (`irohad`, `iroha_cli`, and `kagami`) before launching peers.
+# (`iroha3d`, `iroha`, and `kagami`) before launching peers.
 build_binaries = false
 
 # Choose a topology profile. Use a preset string or a custom table:
@@ -48,7 +48,7 @@ torii_start = 11300
 p2p_start = 1337
 
 [binaries]
-# Set these paths if `irohad`, `iroha_cli`, or `kagami` are not discoverable in
+# Set these paths if `iroha3d`, `iroha`, or `kagami` are not discoverable in
 # your PATH. Leave empty to inherit the PATH lookup. You can also set the
 # `MOCHI_IROHAD` or `MOCHI_KAGAMI` environment variables—or pass CLI flags like
 # `./bin/mochi --kagami /path/to/kagami`—to override these values without editing

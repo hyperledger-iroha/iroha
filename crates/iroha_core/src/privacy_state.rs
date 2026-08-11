@@ -5282,16 +5282,19 @@ pub struct PrivacyOrchardPoolStateV1 {
 impl PrivacyOrchardPoolStateV1 {
     /// Construct the sole empty-frontier origin for a governed Orchard pool.
     pub(crate) fn bootstrap(
-        bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
-        asset_definition_id: AssetDefinitionId,
-        public_balance_scope: AssetBalanceScope,
-        reserve_account: AccountId,
+        bootstrap: PrivacyOrchardPoolBootstrapV1,
     ) -> Result<Self, &'static str> {
+        bootstrap
+            .validate()
+            .map_err(|_| "Orchard pool bootstrap is invalid")?;
+        let bootstrap_digest = bootstrap
+            .digest()
+            .map_err(|_| "Orchard pool bootstrap canonical encoding failed")?;
         Self::new(
             bootstrap_digest,
-            asset_definition_id,
-            public_balance_scope,
-            reserve_account,
+            bootstrap.asset_definition_id,
+            bootstrap.public_balance_scope,
+            bootstrap.reserve_account,
             PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
             PrivacyRootV1::new(crate::privacy_engines::orchard::orchard_empty_root_v1()),
             0,
@@ -5639,19 +5642,24 @@ impl PrivacyOrchardPoolSnapshotV1 {
     #[cfg(test)]
     pub(crate) fn canonical_bootstrap_for_test(
         namespace: PrivacyNamespaceV1,
-        bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
         asset_definition_id: AssetDefinitionId,
         public_balance_scope: AssetBalanceScope,
         reserve_account: AccountId,
     ) -> Self {
         validate_orchard_namespace(namespace).expect("test Orchard namespace is canonical");
-        let state = PrivacyOrchardPoolStateV1::bootstrap(
-            bootstrap_digest,
+        let PrivacyNamespaceScopeV1::Pool(pool) = namespace.scope() else {
+            unreachable!("validated Orchard namespace has pool scope")
+        };
+        let bootstrap = PrivacyOrchardPoolBootstrapV1::new(
+            pool.pool_id,
             asset_definition_id,
             public_balance_scope,
             reserve_account,
         )
-        .expect("test Orchard state is canonical");
+        .expect("test Orchard bootstrap is canonical");
+        let bootstrap_digest = bootstrap.digest().expect("test Orchard bootstrap digest");
+        let state = PrivacyOrchardPoolStateV1::bootstrap(bootstrap)
+            .expect("test Orchard state is canonical");
         let provenance = PrivacyRootProvenanceV1::orchard_pool_bootstrap(bootstrap_digest, 1)
             .expect("test Orchard provenance is canonical");
         let root_key = PrivacyRootKeyV1::new(
@@ -9618,7 +9626,7 @@ impl_validated_json_key!(PrivacyPgcPoolInvariantKeyV1);
 mod tests {
     use std::str::FromStr as _;
 
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::privacy::{
         BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_RING_DEGREE_V1,
         BootleLanternAllowedAttributeValuesV1, BootleLanternIssuerPolicyLifecycleV1,
@@ -9643,7 +9651,8 @@ mod tests {
         PrivacyZkX509DisclosedAttributeV1, PrivacyZkX509TrustAnchorRecordDigestV1,
     };
     use iroha_data_model::{
-        ChainId, account::AccountId, asset::AssetDefinitionId, domain::DomainId, name::Name,
+        NetworkId, account::AccountId, asset::AssetDefinitionId, block::BlockHeader,
+        domain::DomainId, name::Name,
     };
     use mv::{json::JsonKeyCodec, storage::Storage};
     use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
@@ -9652,6 +9661,12 @@ mod tests {
 
     fn nonzero(byte: u8) -> [u8; 32] {
         [byte; 32]
+    }
+
+    fn network_id(byte: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(nonzero(byte)),
+        ))
     }
 
     fn p256_point(multiple: u64) -> PrivacyP256PointV1 {
@@ -10591,18 +10606,24 @@ mod tests {
 
     fn orchard_persisted_fixture() -> OrchardPersistedFixture {
         let namespace = orchard_namespace(0xA7);
-        let bootstrap_digest = PrivacyOrchardPoolBootstrapDigestV1::new(nonzero(0xA8));
         let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("privacy", "universal").expect("domain"),
             Name::from_str("orchard_asset").expect("asset name"),
         );
-        let state = PrivacyOrchardPoolStateV1::bootstrap(
-            bootstrap_digest,
+        let reserve_account = account(0xA9);
+        let PrivacyNamespaceScopeV1::Pool(pool) = namespace.scope() else {
+            unreachable!("Orchard fixture uses a pool namespace")
+        };
+        let bootstrap = PrivacyOrchardPoolBootstrapV1::new(
+            pool.pool_id,
             asset_definition_id,
             AssetBalanceScope::Global,
-            account(0xA9),
+            reserve_account,
         )
-        .expect("canonical Orchard empty state");
+        .expect("canonical Orchard bootstrap");
+        let bootstrap_digest = bootstrap.digest().expect("Orchard bootstrap digest");
+        let state =
+            PrivacyOrchardPoolStateV1::bootstrap(bootstrap).expect("canonical Orchard empty state");
         let root = state.root();
         let provenance = PrivacyRootProvenanceV1::orchard_pool_bootstrap(bootstrap_digest, 9)
             .expect("Orchard bootstrap provenance");
@@ -15862,7 +15883,7 @@ mod tests {
 
         let statement = IrohaZkX509StarkP256StatementV1 {
             context: PrivacyStatementContextV1 {
-                chain_id: ChainId::from("x509-authoritative-state-test"),
+                network_id: network_id(0x91),
                 action_index: 0,
                 transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(nonzero(91)),
                 parameter_id: PrivacyParameterIdV1::new(nonzero(92)),

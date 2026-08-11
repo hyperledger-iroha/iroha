@@ -6,7 +6,7 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake,
 };
 use iroha_config_base::WithOrigin;
-use iroha_data_model::{ChainId, prelude::Peer};
+use iroha_data_model::prelude::Peer;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::NetworkHandle;
 use iroha_primitives::addr::{SocketAddr as IrohaSocketAddr, SocketAddrHost, socket_addr};
@@ -23,7 +23,7 @@ impl iroha_p2p::network::message::ClassifyTopic for TestMsg {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn interval_dns_refresh_increments_counter() {
-    let chain = ChainId::from("test_chain");
+    let chain = super::test_network_id("test_chain");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
 

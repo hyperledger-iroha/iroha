@@ -136,19 +136,29 @@ public final class UrlConnectionTransportExecutor
         connection.addRequestProperty(header.getKey(), value);
       }
     }
-    final boolean hasBody = request.body().length > 0 && !request.method().equalsIgnoreCase("GET");
+    final byte[] body = request.body();
+    final boolean hasBody = body.length > 0 && !request.method().equalsIgnoreCase("GET");
+    if (request.replayPolicy() == RequestReplayPolicy.ONE_SHOT) {
+      // Avoid stale pooled connections, the main source of transparent URLConnection replays, and
+      // use fixed-length streaming to disable URLConnection's internal body retry path.
+      connection.setUseCaches(false);
+      connection.setRequestProperty("Connection", "close");
+      if (hasBody) {
+        connection.setFixedLengthStreamingMode(body.length);
+      }
+    }
     connection.setDoOutput(hasBody);
     return connection;
   }
 
   private static void writeRequestBody(
       final TransportRequest request, final HttpURLConnection connection) throws IOException {
-    final boolean hasBody =
-        request.body().length > 0 && !request.method().equalsIgnoreCase("GET");
+    final byte[] body = request.body();
+    final boolean hasBody = body.length > 0 && !request.method().equalsIgnoreCase("GET");
     if (!hasBody) {
       return;
     }
-    connection.getOutputStream().write(request.body());
+    connection.getOutputStream().write(body);
   }
 
   private static byte[] readBody(

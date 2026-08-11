@@ -13,30 +13,59 @@ class ConfidentialAssetToriiClient private constructor(builder: Builder) {
 
     private val executor: HttpTransportExecutor = builder.executor
     private val baseUri: URI = builder.baseUri
+    private val localSigningContext: LocalSigningContext = checkNotNull(builder.localSigningContext) {
+        "localSigningContext must be configured before building a confidential asset client"
+    }
     private val timeout: Duration? = builder.timeout
     private val defaultHeaders: Map<String, String> = Collections.unmodifiableMap(LinkedHashMap(builder.defaultHeaders))
     private val observers: List<ClientObserver> = builder.observers.toList()
 
-    fun getZkAssetRoots(request: ZkRootsRequest): CompletableFuture<ZkRootsResponse> =
-        executePost(ZK_ROOTS_PATH, request.toJsonBytes(), ZkRootsResponse::parse)
+    fun getZkAssetRoots(
+        request: ZkRootsRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ZkRootsResponse> =
+        executePost(ZK_ROOTS_PATH, request.toJsonBytes(), canonicalAuth, ZkRootsResponse::parse)
 
-    fun getZkAssetMerklePaths(request: ZkMerklePathRequest): CompletableFuture<ZkMerklePathResponse> =
-        executePost(ZK_MERKLE_PATH_PATH, request.toJsonBytes(), ZkMerklePathResponse::parse)
+    fun getZkAssetMerklePaths(
+        request: ZkMerklePathRequest,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ZkMerklePathResponse> =
+        executePost(
+            ZK_MERKLE_PATH_PATH,
+            request.toJsonBytes(),
+            canonicalAuth,
+            ZkMerklePathResponse::parse,
+        )
 
-    fun getLatestZkAssetRoot(assetId: String): CompletableFuture<ByteArray?> =
-        getZkAssetRoots(ZkRootsRequest(assetId, 1)).thenApply { it.getLatestRootBytes() }
+    fun getLatestZkAssetRoot(
+        assetId: String,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): CompletableFuture<ByteArray?> =
+        getZkAssetRoots(ZkRootsRequest(assetId, 1), canonicalAuth)
+            .thenApply { it.getLatestRootBytes() }
 
     fun executor(): HttpTransportExecutor = executor
 
-    private fun <T> executePost(path: String, body: ByteArray, parser: (ByteArray) -> T): CompletableFuture<T> {
-        val request = buildPostRequest(path, body)
+    private fun <T> executePost(
+        path: String,
+        body: ByteArray,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+        parser: (ByteArray) -> T,
+    ): CompletableFuture<T> {
+        val request = buildPostRequest(path, body, canonicalAuth)
         notifyRequest(request)
         return executeHttpRequest(request, parser)
     }
 
-    private fun buildPostRequest(path: String, body: ByteArray): TransportRequest {
+    private fun buildPostRequest(
+        path: String,
+        body: ByteArray,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): TransportRequest {
         val target = resolvePath(path)
-        val headers = mergeHeaders()
+        val headers = LinkedHashMap(mergeHeaders())
+        requireCanonicalHeadersUnset(headers)
+        headers.putAll(buildCanonicalHeaders(target, body, canonicalAuth))
         TransportSecurity.requireHttpRequestAllowed(
             "ConfidentialAssetToriiClient",
             baseUri,
@@ -58,6 +87,45 @@ class ConfidentialAssetToriiClient private constructor(builder: Builder) {
         ensureHeader(headers, "Accept", "application/json")
         ensureHeader(headers, "Content-Type", "application/json")
         return headers
+    }
+
+    private fun buildCanonicalHeaders(
+        target: URI,
+        body: ByteArray,
+        canonicalAuth: ToriiCanonicalRequestAuth,
+    ): Map<String, String> {
+        val timestampMs = canonicalAuth.timestampMs
+        val nonce = canonicalAuth.nonce
+        require((timestampMs == null) == (nonce == null)) {
+            "timestampMs and nonce must be provided together"
+        }
+        return if (timestampMs == null) {
+            CanonicalRequestSigner.buildHeaders(
+                localSigningContext.networkId(),
+                "POST",
+                target,
+                body,
+                canonicalAuth.accountId,
+                canonicalAuth.privateKey,
+            )
+        } else {
+            CanonicalRequestSigner.buildHeaders(
+                localSigningContext.networkId(),
+                "POST",
+                target,
+                body,
+                canonicalAuth.accountId,
+                canonicalAuth.privateKey,
+                timestampMs,
+                nonce!!,
+            )
+        }
+    }
+
+    private fun requireCanonicalHeadersUnset(headers: Map<String, String>) {
+        require(headers.keys.none { candidate ->
+            CANONICAL_AUTH_HEADERS.any { it.equals(candidate, ignoreCase = true) }
+        }) { "canonical request headers must be supplied only through canonicalAuth" }
     }
 
     private fun resolvePath(path: String?): URI {
@@ -107,11 +175,16 @@ class ConfidentialAssetToriiClient private constructor(builder: Builder) {
     class Builder internal constructor() {
         internal var executor: HttpTransportExecutor = PlatformHttpTransportExecutor.createDefault()
         internal var baseUri: URI = URI.create("http://localhost:8080")
+        internal var localSigningContext: LocalSigningContext? = null
         internal var timeout: Duration? = Duration.ofSeconds(15)
         internal val defaultHeaders = LinkedHashMap<String, String>()
         internal val observers = ArrayList<ClientObserver>()
         fun executor(executor: HttpTransportExecutor): Builder { this.executor = executor; return this }
         fun baseUri(baseUri: URI): Builder { this.baseUri = baseUri; return this }
+        fun localSigningContext(localSigningContext: LocalSigningContext): Builder {
+            this.localSigningContext = localSigningContext
+            return this
+        }
         fun timeout(timeout: Duration?): Builder { this.timeout = timeout; return this }
         fun addHeader(name: String, value: String): Builder { defaultHeaders[name] = value; return this }
         fun defaultHeaders(headers: Map<String, String>?): Builder { defaultHeaders.clear(); headers?.forEach { (k, v) -> defaultHeaders[k] = v }; return this }
@@ -123,6 +196,12 @@ class ConfidentialAssetToriiClient private constructor(builder: Builder) {
     companion object {
         private const val ZK_ROOTS_PATH = "/v1/zk/roots"
         private const val ZK_MERKLE_PATH_PATH = "/v1/zk/merkle-path"
+        private val CANONICAL_AUTH_HEADERS = setOf(
+            CanonicalRequestSigner.HEADER_ACCOUNT,
+            CanonicalRequestSigner.HEADER_SIGNATURE,
+            CanonicalRequestSigner.HEADER_TIMESTAMP_MS,
+            CanonicalRequestSigner.HEADER_NONCE,
+        )
 
         @JvmStatic fun builder(): Builder = Builder()
         private fun ensureHeader(headers: MutableMap<String, String>, name: String, value: String) {

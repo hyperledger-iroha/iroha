@@ -1073,11 +1073,86 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
     """Shared vote/Commit kernels cannot be bypassed in production or Verus."""
 
     module = load_checker()
-    assert module._same_round_semantic_kernel_source_fidelity_errors(ROOT_DIR) == []
+    provider_name = "_SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256"
+
+    def provider_assignments(
+        sources: tuple[tuple[Path, str], ...],
+    ) -> list[tuple[str, int]]:
+        return [
+            (path.name, node.lineno)
+            for path, source in sources
+            for node in ast.parse(source, filename=str(path)).body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == provider_name
+                for target in node.targets
+            )
+        ]
+
+    checker_sources = tuple(
+        (path, path.read_text(encoding="utf-8")) for path in checker_source_paths()
+    )
+    expected_provider = [
+        ("sumeragi_v2_proof_ledger_terminal_discharge_contracts.py", 962)
+    ]
+    assert provider_assignments(checker_sources) == expected_provider
+    synthetic_shadow = f"\n{provider_name} = {{}}\n"
+    shadowed_sources = tuple(
+        (
+            path,
+            source + synthetic_shadow
+            if path.name == "sumeragi_v2_proof_ledger_source_seal_contracts.py"
+            else source,
+        )
+        for path, source in checker_sources
+    )
+    assert provider_assignments(shadowed_sources) == [
+        (
+            "sumeragi_v2_proof_ledger_source_seal_contracts.py",
+            len(
+                next(
+                    source
+                    for path, source in checker_sources
+                    if path.name
+                    == "sumeragi_v2_proof_ledger_source_seal_contracts.py"
+                ).splitlines()
+            )
+            + 2,
+        ),
+        *expected_provider,
+    ]
+    source_seals = dict(module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256)
+    pending_relatives = tuple(
+        relative
+        for relative, expected_sha256 in source_seals.items()
+        if expected_sha256.startswith("PENDING")
+    )
+    assert pending_relatives == ()
+    baseline_errors = module._same_round_semantic_kernel_source_fidelity_errors(
+        ROOT_DIR
+    )
+    assert not any(
+        "same-round semantic kernel source must match exact reviewed SHA-256"
+        in error
+        for error in baseline_errors
+    ), baseline_errors
     source_paths = tuple(
         Path(relative)
         for relative in module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256
     )
+    canonical_expanded_sha256: dict[str, str] = {}
+    for relative in module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256:
+        expansion_errors: list[str] = []
+        _path, source = module._read_reviewed_rust_source(
+            ROOT_DIR,
+            relative,
+            expansion_errors,
+            "same-round semantic kernel mutation fixture",
+        )
+        assert not expansion_errors, expansion_errors
+        canonical_expanded_sha256[relative] = hashlib.sha256(
+            source.encode("utf-8")
+        ).hexdigest()
     mutations = (
         (
             "vote_signer_reintroduced",
@@ -1146,8 +1221,39 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             "effect reconciliation must let the first durable Decision supersede any protected Prepare lock",
         ),
         (
+            "effect_terminal_rebind_removed",
+            Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
+            "reconcile_decision_work",
+            """self.protected_decision = Some(durable_decision);
+        self.protected_lock = Some(decision_body);
+        self.decision_body_drained |= drain_decision_body;""",
+            """let _ = durable_decision;
+        self.protected_lock = Some(decision_body);
+        self.decision_body_drained |= drain_decision_body;""",
+            "effect reconciliation must rebind terminal protection to the exact durable Decision",
+        ),
+        (
+            "runner_reconciliation_disconnected",
+            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+            "advance_executor",
+            "let _ = reconcile_executor_locked_body(executor, services)?;",
+            "let _ = (executor, services);",
+            "the production runner must reconcile the exact durable lock or Decision after every serialized transition",
+        ),
+        (
+            "worker_completion_projection_consumes_or_skips_held_offset",
+            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+            "certified_serve_predecessor_completion_evidence",
+            ".and_then(|io| io.completion_ownership_at(ownership_position))",
+            ".and_then(|io| io.completion_ownership_at(0))",
+            "selected-Serve completion evidence must project the exact held offset without consuming a completion",
+        ),
+        (
             "production_gate_disconnected",
-            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/v2_core/"
+                "refinement/transition_gate_tail.rs"
+            ),
             "check",
             "accepts_facts(transition_facts(projection))",
             "true",
@@ -1270,7 +1376,10 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         ),
         (
             "timeout_generation_overflow_regression_deleted",
-            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/v2_core/"
+                "tests/reducer_timeout_and_projection.rs"
+            ),
             "same_round_timeout_generation_overflow_preserves_the_complete_state",
             "fn same_round_timeout_generation_overflow_preserves_the_complete_state() {",
             "fn removed_same_round_timeout_generation_overflow_preserves_the_complete_state() {",
@@ -1278,7 +1387,10 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         ),
         (
             "timeout_generation_overflow_public_state_weakened",
-            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/v2_core/"
+                "tests/reducer_timeout_and_projection.rs"
+            ),
             "same_round_timeout_generation_overflow_preserves_the_complete_state",
             "assert_eq!(pending, before);",
             "assert_eq!(pending.generation, before.generation);",
@@ -1286,7 +1398,10 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         ),
         (
             "timeout_generation_overflow_in_place_state_weakened",
-            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/v2_core/"
+                "tests/reducer_timeout_and_projection.rs"
+            ),
             "same_round_timeout_generation_overflow_preserves_the_complete_state",
             "assert_eq!(in_place, before);",
             "assert_eq!(in_place.generation, before.generation);",
@@ -1378,7 +1493,10 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         ),
         (
             "verus_timeout_round_bound_narrowed",
-            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            Path(
+                "crates/iroha_sumeragi_core/src/verus_proofs/"
+                "production_transition_contracts.rs"
+            ),
             "production_action_preserves_volatile_bounds",
             "facts.volatile_after.timeout_vote_pools <= 2,",
             "facts.volatile_after.timeout_vote_pools <= 1,",
@@ -1386,7 +1504,10 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         ),
         (
             "verus_same_round_timeout_pool_forced_empty",
-            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            Path(
+                "crates/iroha_sumeragi_core/src/verus_proofs/"
+                "production_transition_contracts.rs"
+            ),
             "production_action_preserves_volatile_bounds",
             """&& (if facts.install_view_unchanged {
                     facts.timeout_vote_pool_unchanged
@@ -1407,7 +1528,10 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         ),
         (
             "verus_advancing_formed_timeout_invention_accepted",
-            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            Path(
+                "crates/iroha_sumeragi_core/src/verus_proofs/"
+                "production_transition_contracts.rs"
+            ),
             "production_action_preserves_volatile_bounds",
             """} else {
                     facts.volatile_after.formed_timeouts
@@ -1420,7 +1544,10 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         ),
         (
             "verus_advancing_timeout_control_retention_accepted",
-            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            Path(
+                "crates/iroha_sumeragi_core/src/verus_proofs/"
+                "production_transition_contracts.rs"
+            ),
             "production_action_preserves_volatile_bounds",
             """&& (if facts.install_view_unchanged {
                     facts.timeout_control_unchanged
@@ -1439,9 +1566,19 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             "Verus vote identity must invoke the shared production macro",
         ),
     )
+    fixture_paths = set(source_paths)
+    for source_path in source_paths:
+        fixture_paths.update(
+            source_path.parent / component
+            for component in module._REVIEWED_RUST_INCLUDE_MANIFESTS.get(
+                source_path.as_posix(), ()
+            )
+        )
     for case, relative, item, old, new, error_fragment in mutations:
+        module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256.clear()
+        module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256.update(source_seals)
         repo_root = tmp_path / case
-        for source_path in source_paths:
+        for source_path in fixture_paths:
             destination = repo_root / source_path
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT_DIR / source_path, destination)
@@ -1459,9 +1596,33 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             )
         else:
             mutate_rust_item_source(module, path, item, old, new)
+        changed_relatives: list[str] = []
+        for reviewed_relative in source_seals:
+            expansion_errors: list[str] = []
+            _reviewed_path, reviewed_source = module._read_reviewed_rust_source(
+                repo_root,
+                reviewed_relative,
+                expansion_errors,
+                "same-round semantic kernel mutation fixture",
+            )
+            assert not expansion_errors, expansion_errors
+            reviewed_sha256 = hashlib.sha256(
+                reviewed_source.encode("utf-8")
+            ).hexdigest()
+            if reviewed_sha256 != canonical_expanded_sha256[reviewed_relative]:
+                module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256[
+                    reviewed_relative
+                ] = reviewed_sha256
+                changed_relatives.append(reviewed_relative)
+        assert len(changed_relatives) == 1, (case, changed_relatives)
         errors = module._same_round_semantic_kernel_source_fidelity_errors(
             repo_root
         )
+        assert not any(
+            "same-round semantic kernel source must match exact reviewed SHA-256"
+            in error
+            for error in errors
+        ), errors
         assert any(error_fragment in error for error in errors), errors
 
 

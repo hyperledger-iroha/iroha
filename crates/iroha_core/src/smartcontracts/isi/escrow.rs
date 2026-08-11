@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use eyre::Result;
 use iroha_crypto::derive_non_signing_ed25519_public_key;
 #[cfg(test)]
-use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 #[cfg(test)]
 use iroha_data_model::fastpq::TransferDeltaTranscript;
 use iroha_data_model::{
@@ -384,7 +384,7 @@ fn reject_native_orderbook_lock(
 
 /// Derive the deterministic protocol custody account for an escrow.
 pub fn escrow_custody_account_id(
-    chain_id: &iroha_data_model::ChainId,
+    network_id: &iroha_data_model::NetworkId,
     escrow_id: &EscrowId,
     asset_definition: &AssetDefinitionId,
 ) -> Result<AccountId, Error> {
@@ -392,7 +392,7 @@ pub fn escrow_custody_account_id(
     let public_key = derive_non_signing_ed25519_public_key(
         ESCROW_CUSTODY_ACCOUNT_DOMAIN.as_bytes(),
         &[
-            chain_id.as_str().as_bytes(),
+            network_id.as_bytes(),
             escrow_id.as_hash().as_ref(),
             asset_definition.as_bytes(),
         ],
@@ -556,7 +556,7 @@ fn validate_native_orderbook_lock_record(
         .ok_or_else(|| validation_err("native orderbook asset lock not found"))?;
     ensure_asset_lock(&record)?;
     let expected_custody = escrow_custody_account_id(
-        state_transaction.chain_id(),
+        state_transaction.network_id(),
         escrow_id,
         &record.asset_definition,
     )?;
@@ -883,7 +883,7 @@ pub(crate) fn partition_orderbook_asset_lock(
         ));
     }
     let expected_parent_custody = escrow_custody_account_id(
-        state_transaction.chain_id(),
+        state_transaction.network_id(),
         parent_id,
         &parent.asset_definition,
     )?;
@@ -930,7 +930,7 @@ pub(crate) fn partition_orderbook_asset_lock(
     assert_numeric_spec_with(amount.as_numeric(), spec)?;
 
     let child_custody = escrow_custody_account_id(
-        state_transaction.chain_id(),
+        state_transaction.network_id(),
         &child_id,
         &parent.asset_definition,
     )?;
@@ -1066,7 +1066,7 @@ pub(crate) fn settle_orderbook_asset_lock(
         ));
     }
     let expected_custody = escrow_custody_account_id(
-        state_transaction.chain_id(),
+        state_transaction.network_id(),
         escrow_id,
         &record.asset_definition,
     )?;
@@ -1286,7 +1286,7 @@ impl Execute for OpenAssetEscrow {
             .asset_definition(&self.asset_definition)?;
 
         let custody = escrow_custody_account_id(
-            state_transaction.chain_id(),
+            state_transaction.network_id(),
             &self.escrow_id,
             &self.asset_definition,
         )?;
@@ -1660,7 +1660,7 @@ fn execute_open_asset_lock(
         .asset_definition(&instruction.asset_definition)?;
 
     let custody = escrow_custody_account_id(
-        state_transaction.chain_id(),
+        state_transaction.network_id(),
         &instruction.escrow_id,
         &instruction.asset_definition,
     )?;
@@ -2036,7 +2036,7 @@ impl Execute for OpenConditionalEscrow {
             .asset_definition(&self.asset_definition)?;
 
         let custody = escrow_custody_account_id(
-            state_transaction.chain_id(),
+            state_transaction.network_id(),
             &self.escrow_id,
             &self.asset_definition,
         )?;
@@ -2579,6 +2579,14 @@ mod tests {
         EscrowId::new(Hash::new(format!("native-escrow-test:{label}")))
     }
 
+    fn escrow_test_network_id(seed: u8) -> iroha_data_model::NetworkId {
+        iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([seed; Hash::LENGTH]),
+            ),
+        )
+    }
+
     fn block_header(timestamp_ms: u64) -> iroha_data_model::block::BlockHeader {
         iroha_data_model::block::BlockHeader::new(
             nonzero_ext::nonzero!(1_u64),
@@ -2830,31 +2838,35 @@ mod tests {
 
     #[test]
     fn custody_account_derivation_is_stable() {
-        let chain_id: iroha_data_model::ChainId = "00000000-0000-0000-0000-000000000001"
-            .parse()
-            .expect("chain id");
+        let network_id = escrow_test_network_id(1);
         let asset_definition: AssetDefinitionId =
             "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().expect("asset");
         let escrow_id = EscrowId::new(Hash::new("escrow"));
-        let custody = escrow_custody_account_id(&chain_id, &escrow_id, &asset_definition)
+        let custody = escrow_custody_account_id(&network_id, &escrow_id, &asset_definition)
             .expect("custody account derivation succeeds");
         assert_eq!(
             custody,
-            escrow_custody_account_id(&chain_id, &escrow_id, &asset_definition)
+            escrow_custody_account_id(&network_id, &escrow_id, &asset_definition)
                 .expect("custody account derivation is repeatable")
         );
-
-        let legacy_seed_material = format!(
-            "{ESCROW_CUSTODY_ACCOUNT_DOMAIN}|{}|{}|{asset_definition}",
-            chain_id.as_str(),
-            hex::encode(escrow_id.as_hash().as_ref()),
-        );
-        let legacy_seed: [u8; Hash::LENGTH] = Hash::new(legacy_seed_material).into();
-        let legacy_keypair = KeyPair::try_from_seed(legacy_seed.to_vec(), Algorithm::Ed25519)
-            .expect("legacy public seed derives");
         assert_ne!(
             custody,
-            AccountId::new(legacy_keypair.public_key().clone()),
+            escrow_custody_account_id(&escrow_test_network_id(2), &escrow_id, &asset_definition,)
+                .expect("different exact network custody derivation succeeds"),
+            "same-label deployments with different genesis hashes need disjoint custody",
+        );
+
+        let mut public_seed_material = Vec::new();
+        public_seed_material.extend_from_slice(ESCROW_CUSTODY_ACCOUNT_DOMAIN.as_bytes());
+        public_seed_material.extend_from_slice(network_id.as_bytes());
+        public_seed_material.extend_from_slice(escrow_id.as_hash().as_ref());
+        public_seed_material.extend_from_slice(asset_definition.to_string().as_bytes());
+        let public_seed: [u8; Hash::LENGTH] = Hash::new(public_seed_material).into();
+        let public_seed_keypair = KeyPair::try_from_seed(public_seed.to_vec(), Algorithm::Ed25519)
+            .expect("public seed derives");
+        assert_ne!(
+            custody,
+            AccountId::new(public_seed_keypair.public_key().clone()),
             "protocol custody must not expose a signing key through public seed derivation"
         );
     }
@@ -2902,14 +2914,14 @@ mod tests {
         let court = fixture_account("court");
         let asset_definition = fixture_asset_definition_id();
         let escrow_id = fixture_escrow_id("shielded-open");
-        let asset_definition_entry = AssetDefinition::numeric(
+        let mut asset_definition_entry = AssetDefinition::numeric(
             asset_definition.clone(),
             "XOR".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
-        .confidential_policy(AssetConfidentialPolicy::shielded_only())
         .build(&seller);
+        asset_definition_entry.set_confidential_policy(AssetConfidentialPolicy::shielded_only());
         let state = state_with_parties_and_definition(
             &seller,
             &buyer,
@@ -2940,7 +2952,7 @@ mod tests {
             balance(&tx, &seller, &asset_definition),
             Quantity::from(100_u32)
         );
-        let custody = escrow_custody_account_id(tx.chain_id(), &escrow_id, &asset_definition)
+        let custody = escrow_custody_account_id(tx.network_id(), &escrow_id, &asset_definition)
             .expect("custody account derivation succeeds");
         assert_eq!(balance(&tx, &custody, &asset_definition), Quantity::zero());
     }
@@ -3600,8 +3612,9 @@ mod tests {
             .is_err(),
             "insufficient source balance must be rejected"
         );
-        let custody = escrow_custody_account_id(tx.chain_id(), &over_balance_id, &asset_definition)
-            .expect("custody account derivation succeeds");
+        let custody =
+            escrow_custody_account_id(tx.network_id(), &over_balance_id, &asset_definition)
+                .expect("custody account derivation succeeds");
         assert!(tx.world.asset_escrows.get(&over_balance_id).is_none());
         assert!(tx.world.account(&custody).is_err());
 

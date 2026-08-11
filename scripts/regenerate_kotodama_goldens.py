@@ -536,6 +536,7 @@ def atomic_publish(source: Path, destination: Path) -> bool:
             return False
     except FileNotFoundError:
         pass
+    destination.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.", dir=destination.parent
     )

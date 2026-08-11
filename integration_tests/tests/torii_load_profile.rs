@@ -17,7 +17,7 @@ use iroha::{
     },
 };
 use iroha_data_model::{
-    ChainId, Level,
+    Level, NetworkId,
     isi::Log,
     query::executor::prelude::FindParameters,
     transaction::{SignedTransaction, TransactionBuilder},
@@ -44,9 +44,9 @@ fn bounded_concurrency(sample_count: usize, requested: usize) -> usize {
     requested.max(1).min(sample_count.max(1))
 }
 
-fn build_log_transaction(chain_id: ChainId, prefix: &str, index: usize) -> SignedTransaction {
+fn build_log_transaction(network_id: NetworkId, prefix: &str, index: usize) -> SignedTransaction {
     TransactionBuilder::new(
-        chain_id,
+        network_id,
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -102,12 +102,12 @@ async fn run_query_profile(
 
 async fn warmup_transactions(
     clients: &[Client],
-    chain_id: ChainId,
+    network_id: NetworkId,
     warmup_samples: usize,
 ) -> eyre::Result<()> {
     for index in 0..warmup_samples {
         let client = clients[index % clients.len()].clone();
-        let tx = build_log_transaction(chain_id.clone(), "torii-http-load-profile-warmup", index);
+        let tx = build_log_transaction(network_id, "torii-http-load-profile-warmup", index);
         let hash = tokio::task::spawn_blocking(move || client.submit_transaction(&tx))
             .await
             .wrap_err("transaction warmup worker panicked")?
@@ -119,7 +119,7 @@ async fn warmup_transactions(
 
 async fn run_transaction_submit_profile(
     clients: &[Client],
-    chain_id: ChainId,
+    network_id: NetworkId,
     samples: usize,
     concurrency: usize,
 ) -> eyre::Result<(Vec<Duration>, Duration)> {
@@ -132,11 +132,8 @@ async fn run_transaction_submit_profile(
         let mut handles = Vec::with_capacity(batch);
         for offset in 0..batch {
             let client = clients[(next + offset) % clients.len()].clone();
-            let tx = build_log_transaction(
-                chain_id.clone(),
-                "torii-http-load-profile-submit",
-                next + offset,
-            );
+            let tx =
+                build_log_transaction(network_id, "torii-http-load-profile-submit", next + offset);
             handles.push(tokio::task::spawn_blocking(move || {
                 let start = Instant::now();
                 let hash = client.submit_transaction(&tx)?;
@@ -159,11 +156,11 @@ async fn run_transaction_submit_profile(
 
 async fn measure_submit_to_commit(
     client: Client,
-    chain_id: ChainId,
+    network_id: NetworkId,
     index: usize,
     event_timeout: Duration,
 ) -> eyre::Result<Duration> {
-    let transaction = build_log_transaction(chain_id, "torii-http-load-profile-commit", index);
+    let transaction = build_log_transaction(network_id, "torii-http-load-profile-commit", index);
     let hash = transaction.hash();
     let mut events = tokio::time::timeout(
         event_timeout,
@@ -211,7 +208,7 @@ async fn measure_submit_to_commit(
 
 async fn run_transaction_commit_profile(
     clients: &[Client],
-    chain_id: ChainId,
+    network_id: NetworkId,
     samples: usize,
     concurrency: usize,
     event_timeout: Duration,
@@ -225,10 +222,9 @@ async fn run_transaction_commit_profile(
         let mut handles = Vec::with_capacity(batch);
         for offset in 0..batch {
             let client = clients[(next + offset) % clients.len()].clone();
-            let chain_id = chain_id.clone();
             handles.push(tokio::spawn(measure_submit_to_commit(
                 client,
-                chain_id,
+                network_id,
                 next + offset,
                 event_timeout,
             )));
@@ -315,11 +311,11 @@ async fn torii_http_hot_path_load_profile() -> eyre::Result<()> {
         query_wall_time,
     );
 
-    let chain_id = network.chain_id();
+    let network_id = network.network_id();
     let tx_warmup = HTTP_WARMUP_SAMPLES.min(tx_samples);
-    warmup_transactions(&clients, chain_id.clone(), tx_warmup).await?;
+    warmup_transactions(&clients, network_id, tx_warmup).await?;
     let (tx_durations, tx_wall_time) =
-        run_transaction_submit_profile(&clients, chain_id.clone(), tx_samples, concurrency).await?;
+        run_transaction_submit_profile(&clients, network_id, tx_samples, concurrency).await?;
     iroha_torii::profile_stats::print_profile(
         "http",
         "transaction_submit",
@@ -332,7 +328,7 @@ async fn torii_http_hot_path_load_profile() -> eyre::Result<()> {
     let event_timeout = network.sync_timeout().max(Duration::from_secs(60));
     let (commit_durations, commit_wall_time) = run_transaction_commit_profile(
         &clients,
-        chain_id,
+        network_id,
         commit_samples,
         concurrency.min(DEFAULT_HTTP_COMMIT_SAMPLES),
         event_timeout,

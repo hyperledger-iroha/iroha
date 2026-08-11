@@ -13,7 +13,7 @@ use halo2_proofs::{
 use iroha_crypto::Hash as CryptoHash;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     confidential::ConfidentialStatus,
     proof::{ProofBox, VerifyingKeyRecord},
     zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
@@ -184,7 +184,7 @@ macro_rules! define_confidential_public_input_spec {
     };
 }
 /// Canonical public-input schema for confidential transfer V2.
-pub const CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_transfer_v3","hash":"axiom_poseidon_t3_r2_rf8_rp57_mds0","merkle_leaf_domain":"cfleaf03","merkle_node_domain":"cfnode03","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","asset_tag","chain_tag"]}"#;
+pub const CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_transfer_v3","hash":"axiom_poseidon_t3_r2_rf8_rp57_mds0","merkle_leaf_domain":"cfleaf03","merkle_node_domain":"cfnode03","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","asset_tag","network_tag"]}"#;
 define_confidential_public_input_spec! {
     /// Parsed public inputs for one Kagemusha top-up shield proof.
     pub struct KagemushaTopUpShieldPublicInputsV2;
@@ -212,8 +212,8 @@ define_confidential_public_input_spec! {
             "leaf_index", "Canonically encoded leaf index.", Some(ConfidentialUnsignedRangeV1::LeafIndex);
         AssetTag => asset_tag,
             "asset_tag", "Asset-domain tag.", None;
-        ChainTag => chain_tag,
-            "chain_tag", "Chain-domain tag.", None;
+        NetworkTag => network_tag,
+            "network_tag", "Exact-network domain tag.", None;
         PayerTag => payer_tag,
             "payer_tag", "Payer identity tag.", None;
         OperationTag => operation_tag,
@@ -245,8 +245,8 @@ define_confidential_public_input_spec! {
             "public_amount", "Exact public redemption amount.", Some(ConfidentialUnsignedRangeV1::Amount);
         AssetTag => asset_tag,
             "asset_tag", "Asset-domain tag.", None;
-        ChainTag => chain_tag,
-            "chain_tag", "Chain-domain tag.", None;
+        NetworkTag => network_tag,
+            "network_tag", "Exact-network domain tag.", None;
 }
 
 define_confidential_public_input_spec! {
@@ -276,8 +276,8 @@ define_confidential_public_input_spec! {
             "public_amount", "Exact public redemption amount.", Some(ConfidentialUnsignedRangeV1::Amount);
         AssetTag => asset_tag,
             "asset_tag", "Asset-domain tag.", None;
-        ChainTag => chain_tag,
-            "chain_tag", "Chain-domain tag.", None;
+        NetworkTag => network_tag,
+            "network_tag", "Exact-network domain tag.", None;
 }
 /// Compatibility name for the second Kagemusha top-up schema contract.
 ///
@@ -311,8 +311,8 @@ pub const CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3: u64 = u64::from_le_bytes(
 pub const CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3: u64 = u64::from_le_bytes(*b"cfnode03");
 /// Domain word for asset tags.
 pub const CONFIDENTIAL_POSEIDON_ASSET_DOMAIN_V3: u64 = u64::from_le_bytes(*b"cfasst03");
-/// Domain word for chain tags.
-pub const CONFIDENTIAL_POSEIDON_CHAIN_DOMAIN_V3: u64 = u64::from_le_bytes(*b"cfchn_03");
+/// Domain word for network tags.
+pub const CONFIDENTIAL_POSEIDON_NETWORK_DOMAIN_V3: u64 = u64::from_le_bytes(*b"cfnet_03");
 /// Domain word for Kagemusha payer tags.
 pub const CONFIDENTIAL_POSEIDON_PAYER_DOMAIN_V3: u64 = u64::from_le_bytes(*b"cfpayr03");
 /// Domain word for Kagemusha operation tags.
@@ -1023,7 +1023,7 @@ pub fn parse_unshield_public_inputs(
         public.root,
         public.public_amount,
         public.asset_tag,
-        public.chain_tag,
+        public.network_tag,
     ))
 }
 
@@ -1056,7 +1056,7 @@ pub fn parse_unshield_public_inputs_v3(
         public.root,
         public.public_amount,
         public.asset_tag,
-        public.chain_tag,
+        public.network_tag,
     ))
 }
 
@@ -1399,7 +1399,7 @@ pub(in crate::zk) mod secure_relation_v3 {
         canonical_nonzero_scalar(witness.input_0_diversifier, "transfer input 0 diversifier")?;
         canonical_nonzero_scalar(witness.output_0_owner_tag, "transfer output 0 owner tag")?;
         canonical_nonzero_scalar(witness.asset_tag, "transfer asset tag")?;
-        canonical_nonzero_scalar(witness.chain_tag, "transfer chain tag")?;
+        canonical_nonzero_scalar(witness.network_tag, "transfer network tag")?;
         validate_path::<DEPTH>(&witness.input_0_path, "transfer input 0 path")?;
         validate_path::<DEPTH>(&witness.input_1_path, "transfer input 1 path")?;
 
@@ -1453,7 +1453,7 @@ pub(in crate::zk) mod secure_relation_v3 {
             (witness.spend_scalar, "Kagemusha top-up spend scalar"),
             (witness.diversifier, "Kagemusha top-up diversifier"),
             (witness.asset_tag, "Kagemusha top-up asset tag"),
-            (witness.chain_tag, "Kagemusha top-up chain tag"),
+            (witness.network_tag, "Kagemusha top-up network tag"),
             (witness.payer_tag, "Kagemusha top-up payer tag"),
             (witness.operation_tag, "Kagemusha top-up operation tag"),
         ] {
@@ -1478,7 +1478,7 @@ pub(in crate::zk) mod secure_relation_v3 {
         spend_scalar: [u8; 32],
         diversifiers: [[u8; 32]; 2],
         asset_tag: [u8; 32],
-        chain_tag: [u8; 32],
+        network_tag: [u8; 32],
         paths: [&ConfidentialMerklePathV2; 2],
     ) -> Result<(), String> {
         if input_amounts[0] == 0 || input_rhos[0] == [0; 32] {
@@ -1487,7 +1487,7 @@ pub(in crate::zk) mod secure_relation_v3 {
         canonical_nonzero_scalar(spend_scalar, "unshield spend scalar")?;
         canonical_nonzero_scalar(diversifiers[0], "unshield input 0 diversifier")?;
         canonical_nonzero_scalar(asset_tag, "unshield asset tag")?;
-        canonical_nonzero_scalar(chain_tag, "unshield chain tag")?;
+        canonical_nonzero_scalar(network_tag, "unshield network tag")?;
         validate_path::<DEPTH>(paths[0], "unshield input 0 path")?;
         validate_path::<DEPTH>(paths[1], "unshield input 1 path")?;
         if include_input_1 {
@@ -1513,7 +1513,7 @@ pub(in crate::zk) mod secure_relation_v3 {
             witness.spend_scalar,
             [witness.input_0_diversifier, witness.input_1_diversifier],
             witness.asset_tag,
-            witness.chain_tag,
+            witness.network_tag,
             [&witness.input_0_path, &witness.input_1_path],
         )
     }
@@ -1528,7 +1528,7 @@ pub(in crate::zk) mod secure_relation_v3 {
             witness.spend_scalar,
             [witness.input_0_diversifier, witness.input_1_diversifier],
             witness.asset_tag,
-            witness.chain_tag,
+            witness.network_tag,
             [&witness.input_0_path, &witness.input_1_path],
         )?;
         if witness.include_output_0 {
@@ -1599,13 +1599,13 @@ pub(in crate::zk) mod secure_relation_v3 {
         spend: AssignedValue<Scalar>,
         rho: AssignedValue<Scalar>,
         asset: AssignedValue<Scalar>,
-        chain: AssignedValue<Scalar>,
+        network: AssignedValue<Scalar>,
     ) -> AssignedValue<Scalar> {
         poseidon.hash(
             ctx,
             range,
             CONFIDENTIAL_POSEIDON_NULLIFIER_DOMAIN_V3,
-            &[spend, rho, asset, chain],
+            &[spend, rho, asset, network],
         )
     }
 
@@ -1797,12 +1797,12 @@ pub(in crate::zk) mod secure_relation_v3 {
                 .expect("validated transfer asset tag"),
             None => Scalar::ZERO,
         });
-        let chain = ctx.load_witness(match witness {
-            Some(value) => canonical_nonzero_scalar(value.chain_tag, "transfer chain tag")
-                .expect("validated transfer chain tag"),
+        let network = ctx.load_witness(match witness {
+            Some(value) => canonical_nonzero_scalar(value.network_tag, "transfer network tag")
+                .expect("validated transfer network tag"),
             None => Scalar::ZERO,
         });
-        for value in [spend, diversifiers[0], output_owners[0], asset, chain] {
+        for value in [spend, diversifiers[0], output_owners[0], asset, network] {
             assert_nonzero(ctx, &range, value);
         }
         constrain_optional_nonzero(ctx, &range, diversifiers[1], present_input_1);
@@ -1856,8 +1856,8 @@ pub(in crate::zk) mod secure_relation_v3 {
             ),
         ];
         let nullifiers = [
-            nullifier_hash(ctx, &range, &poseidon, spend, rho[0], asset, chain),
-            nullifier_hash(ctx, &range, &poseidon, spend, rho[1], asset, chain),
+            nullifier_hash(ctx, &range, &poseidon, spend, rho[0], asset, network),
+            nullifier_hash(ctx, &range, &poseidon, spend, rho[1], asset, network),
         ];
         for value in [commitments[0], commitments[2], nullifiers[0]] {
             assert_nonzero(ctx, &range, value);
@@ -1899,7 +1899,7 @@ pub(in crate::zk) mod secure_relation_v3 {
                 public_output_1,
                 root_0,
                 asset,
-                chain,
+                network,
             ],
             input_amount: input_sum,
             recipient_amount: amounts[2],
@@ -2002,9 +2002,9 @@ pub(in crate::zk) mod secure_relation_v3 {
             witness.map_or([0; 32], |value| value.asset_tag),
             "Kagemusha top-up asset tag",
         ));
-        let chain = ctx.load_witness(decode(
-            witness.map_or([0; 32], |value| value.chain_tag),
-            "Kagemusha top-up chain tag",
+        let network = ctx.load_witness(decode(
+            witness.map_or([0; 32], |value| value.network_tag),
+            "Kagemusha top-up network tag",
         ));
         let payer = ctx.load_witness(decode(
             witness.map_or([0; 32], |value| value.payer_tag),
@@ -2014,7 +2014,7 @@ pub(in crate::zk) mod secure_relation_v3 {
             witness.map_or([0; 32], |value| value.operation_tag),
             "Kagemusha top-up operation tag",
         ));
-        for value in [rho, spend, diversifier, asset, chain, payer, operation] {
+        for value in [rho, spend, diversifier, asset, network, payer, operation] {
             assert_nonzero(ctx, &range, value);
         }
 
@@ -2026,7 +2026,7 @@ pub(in crate::zk) mod secure_relation_v3 {
             &[spend, diversifier],
         );
         let output_commitment = note_hash(ctx, &range, &poseidon, amount, rho, owner, asset);
-        let spend_nullifier = nullifier_hash(ctx, &range, &poseidon, spend, rho, asset, chain);
+        let spend_nullifier = nullifier_hash(ctx, &range, &poseidon, spend, rho, asset, network);
         for value in [output_commitment, spend_nullifier] {
             assert_nonzero(ctx, &range, value);
         }
@@ -2122,7 +2122,7 @@ pub(in crate::zk) mod secure_relation_v3 {
             asset_scale: scale,
             leaf_index,
             asset_tag: asset,
-            chain_tag: chain,
+            network_tag: network,
             payer_tag: payer,
             operation_tag: operation,
         })
@@ -2172,7 +2172,7 @@ pub(in crate::zk) mod secure_relation_v3 {
         root: AssignedValue<Scalar>,
         public_amount: AssignedValue<Scalar>,
         asset_tag: AssignedValue<Scalar>,
-        chain_tag: AssignedValue<Scalar>,
+        network_tag: AssignedValue<Scalar>,
         input_amount: AssignedValue<Scalar>,
         change_amount: Option<AssignedValue<Scalar>>,
         has_second_input: AssignedValue<Scalar>,
@@ -2195,7 +2195,7 @@ pub(in crate::zk) mod secure_relation_v3 {
                 root: self.root,
                 public_amount: self.public_amount,
                 asset_tag: self.asset_tag,
-                chain_tag: self.chain_tag,
+                network_tag: self.network_tag,
             })
         }
 
@@ -2215,7 +2215,7 @@ pub(in crate::zk) mod secure_relation_v3 {
                 root: self.root,
                 public_amount: self.public_amount,
                 asset_tag: self.asset_tag,
-                chain_tag: self.chain_tag,
+                network_tag: self.network_tag,
             })
         }
     }
@@ -2278,18 +2278,18 @@ pub(in crate::zk) mod secure_relation_v3 {
         assert_nonzero(ctx, &range, input_rho[0]);
         constrain_optional_nonzero(ctx, &range, input_rho[1], present_input_1);
 
-        let (spend_bytes, diversifier_bytes, asset_bytes, chain_bytes) = match witness {
+        let (spend_bytes, diversifier_bytes, asset_bytes, network_bytes) = match witness {
             UnshieldWitnessRef::Full(Some(value)) => (
                 value.spend_scalar,
                 [value.input_0_diversifier, value.input_1_diversifier],
                 value.asset_tag,
-                value.chain_tag,
+                value.network_tag,
             ),
             UnshieldWitnessRef::Change(Some(value)) => (
                 value.spend_scalar,
                 [value.input_0_diversifier, value.input_1_diversifier],
                 value.asset_tag,
-                value.chain_tag,
+                value.network_tag,
             ),
             UnshieldWitnessRef::Full(None) | UnshieldWitnessRef::Change(None) => {
                 ([0; 32], [[0; 32]; 2], [0; 32], [0; 32])
@@ -2309,8 +2309,8 @@ pub(in crate::zk) mod secure_relation_v3 {
         let diversifiers = diversifier_bytes
             .map(|bytes| ctx.load_witness(decode(bytes, "validated unshield diversifier")));
         let asset = ctx.load_witness(decode(asset_bytes, "validated unshield asset tag"));
-        let chain = ctx.load_witness(decode(chain_bytes, "validated unshield chain tag"));
-        for value in [spend, diversifiers[0], asset, chain] {
+        let network = ctx.load_witness(decode(network_bytes, "validated unshield network tag"));
+        for value in [spend, diversifiers[0], asset, network] {
             assert_nonzero(ctx, &range, value);
         }
         constrain_optional_nonzero(ctx, &range, diversifiers[1], present_input_1);
@@ -2345,8 +2345,8 @@ pub(in crate::zk) mod secure_relation_v3 {
             ),
         ];
         let nullifiers = [
-            nullifier_hash(ctx, &range, &poseidon, spend, input_rho[0], asset, chain),
-            nullifier_hash(ctx, &range, &poseidon, spend, input_rho[1], asset, chain),
+            nullifier_hash(ctx, &range, &poseidon, spend, input_rho[0], asset, network),
+            nullifier_hash(ctx, &range, &poseidon, spend, input_rho[1], asset, network),
         ];
         for value in [input_commitments[0], nullifiers[0]] {
             assert_nonzero(ctx, &range, value);
@@ -2456,7 +2456,7 @@ pub(in crate::zk) mod secure_relation_v3 {
             root: root_0,
             public_amount,
             asset_tag: asset,
-            chain_tag: chain,
+            network_tag: network,
             input_amount: input_sum,
             change_amount,
             has_second_input: present_input_1,
@@ -2888,7 +2888,7 @@ pub(in crate::zk) mod secure_relation_v3 {
                     Scalar::ZERO
                 }),
                 asset_tag: scalar_to_repr_bytes(asset),
-                chain_tag: scalar_to_repr_bytes(Scalar::from(61)),
+                network_tag: scalar_to_repr_bytes(Scalar::from(61)),
                 input_0_path: path_0,
                 input_1_path: path_1,
             }
@@ -2909,7 +2909,7 @@ pub(in crate::zk) mod secure_relation_v3 {
         fn expected_instances(witness: &ConfidentialTransferWitnessV2) -> Vec<Vec<Scalar>> {
             let spend = scalar_from_repr(witness.spend_scalar).expect("canonical spend scalar");
             let asset = scalar_from_repr(witness.asset_tag).expect("canonical asset tag");
-            let chain = scalar_from_repr(witness.chain_tag).expect("canonical chain tag");
+            let network = scalar_from_repr(witness.network_tag).expect("canonical network tag");
             let amounts = [
                 witness.input_0_amount,
                 witness.input_1_amount,
@@ -2961,7 +2961,7 @@ pub(in crate::zk) mod secure_relation_v3 {
             let nullifiers = [rho[0], rho[1]].map(|rho| {
                 native_hash(
                     CONFIDENTIAL_POSEIDON_NULLIFIER_DOMAIN_V3,
-                    &[spend, rho, asset, chain],
+                    &[spend, rho, asset, network],
                 )
             });
             vec![
@@ -2985,7 +2985,7 @@ pub(in crate::zk) mod secure_relation_v3 {
                 }],
                 vec![scalar_from_repr(witness.input_0_path.root).expect("canonical root")],
                 vec![asset],
-                vec![chain],
+                vec![network],
             ]
         }
 
@@ -3136,7 +3136,7 @@ pub(in crate::zk) mod secure_relation_v3 {
                 ("output_0_owner", 3),
                 ("output_1_owner", 4),
                 ("asset_tag", 5),
-                ("chain_tag", 6),
+                ("network_tag", 6),
             ] {
                 let mut witness = original.clone();
                 match mutate {
@@ -3150,7 +3150,7 @@ pub(in crate::zk) mod secure_relation_v3 {
                     3 => witness.output_0_owner_tag = bump(witness.output_0_owner_tag),
                     4 => witness.output_1_owner_tag = bump(witness.output_1_owner_tag),
                     5 => witness.asset_tag = bump(witness.asset_tag),
-                    6 => witness.chain_tag = bump(witness.chain_tag),
+                    6 => witness.network_tag = bump(witness.network_tag),
                     _ => unreachable!(),
                 }
                 rejects(label, witness);
@@ -3210,7 +3210,7 @@ pub(in crate::zk) mod secure_relation_v3 {
             let spend = Scalar::from(73);
             let diversifier = Scalar::from(79);
             let asset = Scalar::from(83);
-            let chain = Scalar::from(89);
+            let network = Scalar::from(89);
             let owner = native_hash(CONFIDENTIAL_POSEIDON_OWNER_DOMAIN_V3, &[spend, diversifier]);
             let commitment = native_hash(
                 CONFIDENTIAL_POSEIDON_NOTE_DOMAIN_V3,
@@ -3244,7 +3244,7 @@ pub(in crate::zk) mod secure_relation_v3 {
                 spend_scalar: scalar_to_repr_bytes(spend),
                 diversifier: scalar_to_repr_bytes(diversifier),
                 asset_tag: scalar_to_repr_bytes(asset),
-                chain_tag: scalar_to_repr_bytes(chain),
+                network_tag: scalar_to_repr_bytes(network),
                 payer_tag: scalar_to_repr_bytes(Scalar::from(97)),
                 operation_tag: scalar_to_repr_bytes(Scalar::from(101)),
                 zero_path: ConfidentialMerklePathV2 {
@@ -3266,7 +3266,7 @@ pub(in crate::zk) mod secure_relation_v3 {
             let spend = scalar_from_repr(witness.spend_scalar).expect("canonical spend");
             let diversifier = scalar_from_repr(witness.diversifier).expect("canonical diversifier");
             let asset = scalar_from_repr(witness.asset_tag).expect("canonical asset");
-            let chain = scalar_from_repr(witness.chain_tag).expect("canonical chain");
+            let network = scalar_from_repr(witness.network_tag).expect("canonical network");
             let owner = native_hash(CONFIDENTIAL_POSEIDON_OWNER_DOMAIN_V3, &[spend, diversifier]);
             let commitment = native_hash(
                 CONFIDENTIAL_POSEIDON_NOTE_DOMAIN_V3,
@@ -3274,7 +3274,7 @@ pub(in crate::zk) mod secure_relation_v3 {
             );
             let nullifier = native_hash(
                 CONFIDENTIAL_POSEIDON_NULLIFIER_DOMAIN_V3,
-                &[spend, rho, asset, chain],
+                &[spend, rho, asset, network],
             );
             vec![
                 vec![commitment],
@@ -3288,7 +3288,7 @@ pub(in crate::zk) mod secure_relation_v3 {
                 vec![Scalar::from(u64::from(witness.asset_scale))],
                 vec![Scalar::from(u64::from(witness.leaf_index))],
                 vec![asset],
-                vec![chain],
+                vec![network],
                 vec![scalar_from_repr(witness.payer_tag).expect("canonical payer")],
                 vec![scalar_from_repr(witness.operation_tag).expect("canonical operation")],
             ]
@@ -3422,7 +3422,7 @@ pub(in crate::zk) mod secure_relation_v3 {
                 ("spend", 0usize),
                 ("diversifier", 1),
                 ("asset", 2),
-                ("chain", 3),
+                ("network", 3),
                 ("payer", 4),
                 ("operation", 5),
             ] {
@@ -3431,7 +3431,7 @@ pub(in crate::zk) mod secure_relation_v3 {
                     0 => witness.spend_scalar = bump(witness.spend_scalar),
                     1 => witness.diversifier = bump(witness.diversifier),
                     2 => witness.asset_tag = bump(witness.asset_tag),
-                    3 => witness.chain_tag = bump(witness.chain_tag),
+                    3 => witness.network_tag = bump(witness.network_tag),
                     4 => witness.payer_tag = bump(witness.payer_tag),
                     5 => witness.operation_tag = bump(witness.operation_tag),
                     _ => unreachable!(),
@@ -3470,7 +3470,7 @@ pub(in crate::zk) mod secure_relation_v3 {
                 input_0_diversifier: transfer.input_0_diversifier,
                 input_1_diversifier: transfer.input_1_diversifier,
                 asset_tag: transfer.asset_tag,
-                chain_tag: transfer.chain_tag,
+                network_tag: transfer.network_tag,
                 input_0_path: transfer.input_0_path.clone(),
                 input_1_path: transfer.input_1_path.clone(),
             }
@@ -3491,7 +3491,7 @@ pub(in crate::zk) mod secure_relation_v3 {
                 input_0_diversifier: full.input_0_diversifier,
                 input_1_diversifier: full.input_1_diversifier,
                 asset_tag: full.asset_tag,
-                chain_tag: full.chain_tag,
+                network_tag: full.network_tag,
                 input_0_path: full.input_0_path.clone(),
                 input_1_path: full.input_1_path.clone(),
             }
@@ -3517,7 +3517,7 @@ pub(in crate::zk) mod secure_relation_v3 {
                 output_0_owner_tag: scalar_to_repr_bytes(Scalar::ONE),
                 output_1_owner_tag: [0; 32],
                 asset_tag: witness.asset_tag,
-                chain_tag: witness.chain_tag,
+                network_tag: witness.network_tag,
                 input_0_path: witness.input_0_path.clone(),
                 input_1_path: witness.input_1_path.clone(),
             };
@@ -3549,7 +3549,7 @@ pub(in crate::zk) mod secure_relation_v3 {
                 input_0_diversifier: witness.input_0_diversifier,
                 input_1_diversifier: witness.input_1_diversifier,
                 asset_tag: witness.asset_tag,
-                chain_tag: witness.chain_tag,
+                network_tag: witness.network_tag,
                 input_0_path: witness.input_0_path.clone(),
                 input_1_path: witness.input_1_path.clone(),
             };
@@ -3847,10 +3847,10 @@ pub fn derive_confidential_asset_tag_v2(asset_definition_id: &str) -> [u8; 32] {
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-/// Derive the field tag for a chain identifier.
-pub fn derive_confidential_chain_tag_v2(chain_id: &str) -> [u8; 32] {
-    derive_confidential_chain_tag_v3(chain_id)
-        .expect("validated chain identifiers derive non-zero V3 tags")
+/// Derive the field tag for an exact genesis-derived network identity.
+pub fn derive_confidential_network_tag_v2(network_id: &NetworkId) -> [u8; 32] {
+    derive_confidential_network_tag_v3(network_id)
+        .expect("exact network identities derive non-zero V3 tags")
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -3892,7 +3892,7 @@ pub fn derive_confidential_note_v2(
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive a confidential spend nullifier from its opening and context.
 pub fn derive_confidential_nullifier_v2(
-    chain_id: &str,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
     rho: [u8; 32],
@@ -3901,7 +3901,7 @@ pub fn derive_confidential_nullifier_v2(
         spend_key,
         rho,
         derive_confidential_asset_tag_v3(asset_definition_id).expect("validated asset identifier"),
-        derive_confidential_chain_tag_v3(chain_id).expect("validated chain identifier"),
+        derive_confidential_network_tag_v3(network_id).expect("exact network identity"),
     )
     .expect("validated confidential nullifier inputs")
 }
@@ -4005,13 +4005,12 @@ pub fn derive_confidential_asset_tag_v3(asset_definition_id: &str) -> Result<[u8
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-/// Derive the domain-separated V3 chain tag.
-pub fn derive_confidential_chain_tag_v3(chain_id: &str) -> Result<[u8; 32], String> {
-    let canonical = strict_v3_identifier(chain_id, "chain identifier")?;
+/// Derive the domain-separated V3 tag for an exact genesis-derived network.
+pub fn derive_confidential_network_tag_v3(network_id: &NetworkId) -> Result<[u8; 32], String> {
     Ok(scalar_to_repr_bytes(poseidon_tag_v3(
-        CONFIDENTIAL_POSEIDON_CHAIN_DOMAIN_V3,
-        b"iroha.confidential.v3.chain_preimage",
-        canonical.as_bytes(),
+        CONFIDENTIAL_POSEIDON_NETWORK_DOMAIN_V3,
+        b"iroha.confidential.v3.network_id_preimage",
+        network_id.as_bytes(),
     )?))
 }
 
@@ -4075,7 +4074,7 @@ pub fn derive_confidential_nullifier_v3(
     spend_key: &[u8],
     rho: [u8; 32],
     asset_tag: [u8; 32],
-    chain_tag: [u8; 32],
+    network_tag: [u8; 32],
 ) -> Result<[u8; 32], String> {
     if spend_key.len() != 32 || spend_key.iter().all(|byte| *byte == 0) || rho == [0; 32] {
         return Err("V3 nullifier spend key and rho must be non-zero".to_owned());
@@ -4085,12 +4084,12 @@ pub fn derive_confidential_nullifier_v3(
     let asset = scalar_from_repr(asset_tag)
         .filter(|value| *value != Scalar::ZERO)
         .ok_or_else(|| "V3 asset tag must be a non-zero canonical Pasta scalar".to_owned())?;
-    let chain = scalar_from_repr(chain_tag)
+    let network = scalar_from_repr(network_tag)
         .filter(|value| *value != Scalar::ZERO)
-        .ok_or_else(|| "V3 chain tag must be a non-zero canonical Pasta scalar".to_owned())?;
+        .ok_or_else(|| "V3 network tag must be a non-zero canonical Pasta scalar".to_owned())?;
     let nullifier = confidential_poseidon_hash_v3(
         CONFIDENTIAL_POSEIDON_NULLIFIER_DOMAIN_V3,
-        &[spend, rho, asset, chain],
+        &[spend, rho, asset, network],
     );
     if nullifier == Scalar::ZERO {
         return Err("V3 nullifier must not be zero".to_owned());
@@ -5029,7 +5028,7 @@ pub(crate) struct ConfidentialTransferWitnessV2 {
     output_0_owner_tag: [u8; 32],
     output_1_owner_tag: [u8; 32],
     asset_tag: [u8; 32],
-    chain_tag: [u8; 32],
+    network_tag: [u8; 32],
     input_0_path: ConfidentialMerklePathV2,
     input_1_path: ConfidentialMerklePathV2,
 }
@@ -5053,7 +5052,7 @@ impl Zeroize for ConfidentialTransferWitnessV2 {
         self.output_0_owner_tag.zeroize();
         self.output_1_owner_tag.zeroize();
         self.asset_tag.zeroize();
-        self.chain_tag.zeroize();
+        self.network_tag.zeroize();
         self.input_0_path.zeroize();
         self.input_1_path.zeroize();
     }
@@ -5078,7 +5077,7 @@ pub(crate) struct KagemushaTopUpShieldWitnessV2 {
     spend_scalar: [u8; 32],
     diversifier: [u8; 32],
     asset_tag: [u8; 32],
-    chain_tag: [u8; 32],
+    network_tag: [u8; 32],
     payer_tag: [u8; 32],
     operation_tag: [u8; 32],
     zero_path: ConfidentialMerklePathV2,
@@ -5095,7 +5094,7 @@ impl Zeroize for KagemushaTopUpShieldWitnessV2 {
         self.spend_scalar.zeroize();
         self.diversifier.zeroize();
         self.asset_tag.zeroize();
-        self.chain_tag.zeroize();
+        self.network_tag.zeroize();
         self.payer_tag.zeroize();
         self.operation_tag.zeroize();
         self.zero_path.zeroize();
@@ -5122,7 +5121,7 @@ struct ConfidentialUnshieldWitnessV2 {
     input_0_diversifier: [u8; 32],
     input_1_diversifier: [u8; 32],
     asset_tag: [u8; 32],
-    chain_tag: [u8; 32],
+    network_tag: [u8; 32],
     input_0_path: ConfidentialMerklePathV2,
     input_1_path: ConfidentialMerklePathV2,
 }
@@ -5139,7 +5138,7 @@ impl Zeroize for ConfidentialUnshieldWitnessV2 {
         self.input_0_diversifier.zeroize();
         self.input_1_diversifier.zeroize();
         self.asset_tag.zeroize();
-        self.chain_tag.zeroize();
+        self.network_tag.zeroize();
         self.input_0_path.zeroize();
         self.input_1_path.zeroize();
     }
@@ -5169,7 +5168,7 @@ pub(crate) struct ConfidentialUnshieldWitnessV3 {
     input_0_diversifier: [u8; 32],
     input_1_diversifier: [u8; 32],
     asset_tag: [u8; 32],
-    chain_tag: [u8; 32],
+    network_tag: [u8; 32],
     input_0_path: ConfidentialMerklePathV2,
     input_1_path: ConfidentialMerklePathV2,
 }
@@ -5189,7 +5188,7 @@ impl Zeroize for ConfidentialUnshieldWitnessV3 {
         self.input_0_diversifier.zeroize();
         self.input_1_diversifier.zeroize();
         self.asset_tag.zeroize();
-        self.chain_tag.zeroize();
+        self.network_tag.zeroize();
         self.input_0_path.zeroize();
         self.input_1_path.zeroize();
     }
@@ -5340,9 +5339,13 @@ impl KagemushaStepSecureWitnessV3 {
     /// never accepted as a substitute for an active confidential opening.
     pub(crate) fn deterministic_padding() -> Result<Self, String> {
         let asset_definition_id = "kagemusha-fixed-padding#internal";
-        let chain_id = "kagemusha-fixed-padding-chain";
+        let network_id = NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            CryptoHash::new(b"kagemusha-fixed-padding-network"),
+        ));
         let asset_tag = derive_confidential_asset_tag_v3(asset_definition_id)?;
-        let chain_tag = derive_confidential_chain_tag_v3(chain_id)?;
+        let network_tag = derive_confidential_network_tag_v3(&network_id)?;
 
         let spend_key = [0x41_u8; 32];
         let spend_scalar = scalar_to_repr_bytes(hash_to_scalar(
@@ -5379,7 +5382,7 @@ impl KagemushaStepSecureWitnessV3 {
             output_0_owner_tag: recipient_owner,
             output_1_owner_tag: [0; 32],
             asset_tag,
-            chain_tag,
+            network_tag,
             input_0_path: input_path.clone(),
             input_1_path: empty_input_path.clone(),
         };
@@ -5397,7 +5400,7 @@ impl KagemushaStepSecureWitnessV3 {
             input_0_diversifier: input_diversifier,
             input_1_diversifier: [0; 32],
             asset_tag,
-            chain_tag,
+            network_tag,
             input_0_path: input_path,
             input_1_path: empty_input_path,
         };
@@ -5420,7 +5423,7 @@ impl KagemushaStepSecureWitnessV3 {
             spend_scalar: scalar_to_repr_bytes(topup_spend),
             diversifier: topup_diversifier,
             asset_tag,
-            chain_tag,
+            network_tag,
             payer_tag: derive_kagemusha_topup_payer_tag_v3("kagemusha-fixed-padding-payer")?,
             operation_tag: derive_kagemusha_topup_operation_tag_v3(&[0x48; 32])?,
             zero_path,
@@ -5790,7 +5793,7 @@ impl PreparedKagemushaTopUpShieldV3 {
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
 fn prepare_kagemusha_topup_shield_v3(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     payer: &str,
     operation_id: [u8; 32],
@@ -5848,10 +5851,10 @@ fn prepare_kagemusha_topup_shield_v3(
         &[spend_scalar, diversifier_scalar],
     );
     let asset_tag = derive_confidential_asset_tag_v3(asset_definition_id)?;
-    let chain_tag = derive_confidential_chain_tag_v3(chain_id.as_str())?;
+    let network_tag = derive_confidential_network_tag_v3(network_id)?;
     let rho_scalar = hash_to_scalar(b"iroha.confidential.v3.note_rho", &[&rho]);
     let asset_scalar = scalar_from_repr(asset_tag).expect("derived asset tag is canonical");
-    let chain_scalar = scalar_from_repr(chain_tag).expect("derived chain tag is canonical");
+    let network_scalar = scalar_from_repr(network_tag).expect("derived network tag is canonical");
     let output_commitment = scalar_to_repr_bytes(confidential_poseidon_hash_v3(
         CONFIDENTIAL_POSEIDON_NOTE_DOMAIN_V3,
         &[
@@ -5863,7 +5866,7 @@ fn prepare_kagemusha_topup_shield_v3(
     ));
     let spend_nullifier = scalar_to_repr_bytes(confidential_poseidon_hash_v3(
         CONFIDENTIAL_POSEIDON_NULLIFIER_DOMAIN_V3,
-        &[spend_scalar, rho_scalar, asset_scalar, chain_scalar],
+        &[spend_scalar, rho_scalar, asset_scalar, network_scalar],
     ));
     let output_nodes =
         kagemusha_topup_output_path_nodes_v2(output_commitment, &normalized_zero_path)?;
@@ -5887,7 +5890,7 @@ fn prepare_kagemusha_topup_shield_v3(
         spend_scalar: scalar_to_repr_bytes(spend_scalar),
         diversifier,
         asset_tag,
-        chain_tag,
+        network_tag,
         payer_tag,
         operation_tag,
         zero_path: normalized_zero_path,
@@ -5905,7 +5908,7 @@ fn prepare_kagemusha_topup_shield_v3(
             asset_scale: scalar_to_repr_bytes(Scalar::from(u64::from(asset_scale))),
             leaf_index: scalar_to_repr_bytes(Scalar::from(u64::from(leaf_index))),
             asset_tag,
-            chain_tag,
+            network_tag,
             payer_tag,
             operation_tag,
         },
@@ -5916,7 +5919,7 @@ fn prepare_kagemusha_topup_shield_v3(
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_kagemusha_step_topup_witness_v3(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     payer: &str,
     operation_id: [u8; 32],
@@ -5929,7 +5932,7 @@ pub(crate) fn prepare_kagemusha_step_topup_witness_v3(
     zero_path: &ConfidentialMerklePathV2,
 ) -> Result<KagemushaStepSecureWitnessV3, String> {
     let prepared = prepare_kagemusha_topup_shield_v3(
-        chain_id,
+        network_id,
         asset_definition_id,
         payer,
         operation_id,
@@ -5948,7 +5951,7 @@ pub(crate) fn prepare_kagemusha_step_topup_witness_v3(
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
 pub fn build_kagemusha_topup_shield_proof_v2(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     payer: &str,
     operation_id: [u8; 32],
@@ -5965,7 +5968,7 @@ pub fn build_kagemusha_topup_shield_proof_v2(
     ensure_kagemusha_topup_shield_v2_canonical_vk_box(vk_box)?;
     let (params, parsed_vk) = parse_vk_for_kagemusha_topup_shield_v2(circuit_id, vk_box)?;
     let prepared = prepare_kagemusha_topup_shield_v3(
-        chain_id,
+        network_id,
         asset_definition_id,
         payer,
         operation_id,
@@ -6033,7 +6036,7 @@ struct PreparedConfidentialTransferV3 {
     output_commitments: [[u8; 32]; 2],
     root: [u8; 32],
     asset_tag: [u8; 32],
-    chain_tag: [u8; 32],
+    network_tag: [u8; 32],
     input_count: usize,
     output_count: usize,
 }
@@ -6050,7 +6053,7 @@ impl PreparedConfidentialTransferV3 {
             self.output_commitments[1],
             self.root,
             self.asset_tag,
-            self.chain_tag,
+            self.network_tag,
         ];
         values
             .into_iter()
@@ -6072,7 +6075,7 @@ impl PreparedConfidentialTransferV3 {
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
 fn prepare_confidential_transfer_v3_resolved_paths(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
     inputs: &[ConfidentialTransferInputV2],
@@ -6108,7 +6111,7 @@ fn prepare_confidential_transfer_v3_resolved_paths(
     let spend_scalar = hash_to_scalar(b"iroha.confidential.v3.spend_scalar", &[spend_key]);
     let spend_scalar_bytes = Zeroizing::new(scalar_to_repr_bytes(spend_scalar));
     let asset_tag = derive_confidential_asset_tag_v3(asset_definition_id)?;
-    let chain_tag = derive_confidential_chain_tag_v3(chain_id.as_str())?;
+    let network_tag = derive_confidential_network_tag_v3(network_id)?;
     let input_0 = inputs
         .first()
         .cloned()
@@ -6152,9 +6155,9 @@ fn prepare_confidential_transfer_v3_resolved_paths(
         [0u8; 32]
     };
     let nullifier_0 =
-        derive_confidential_nullifier_v3(spend_key, input_0.rho, asset_tag, chain_tag)?;
+        derive_confidential_nullifier_v3(spend_key, input_0.rho, asset_tag, network_tag)?;
     let nullifier_1 = if let Some(note) = input_1.as_ref() {
-        derive_confidential_nullifier_v3(spend_key, note.rho, asset_tag, chain_tag)?
+        derive_confidential_nullifier_v3(spend_key, note.rho, asset_tag, network_tag)?
     } else {
         [0u8; 32]
     };
@@ -6175,7 +6178,7 @@ fn prepare_confidential_transfer_v3_resolved_paths(
         output_0_owner_tag: output_0.owner_tag,
         output_1_owner_tag: output_1.as_ref().map_or([0u8; 32], |note| note.owner_tag),
         asset_tag,
-        chain_tag,
+        network_tag,
         input_0_path,
         input_1_path,
     };
@@ -6187,7 +6190,7 @@ fn prepare_confidential_transfer_v3_resolved_paths(
         output_commitments: [output_0_commitment, output_1_commitment],
         root: root_hint,
         asset_tag,
-        chain_tag,
+        network_tag,
         input_count: inputs.len(),
         output_count: outputs.len(),
     })
@@ -6196,7 +6199,7 @@ fn prepare_confidential_transfer_v3_resolved_paths(
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
 fn build_confidential_transfer_proof_v2_resolved_paths(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
     inputs: &[ConfidentialTransferInputV2],
@@ -6217,7 +6220,7 @@ fn build_confidential_transfer_proof_v2_resolved_paths(
     ensure_confidential_transfer_v2_canonical_vk_box(vk_box)?;
     let (params, parsed_vk) = parse_vk_for_transfer(circuit_id, vk_box)?;
     let prepared = prepare_confidential_transfer_v3_resolved_paths(
-        chain_id,
+        network_id,
         asset_definition_id,
         spend_key,
         inputs,
@@ -6277,7 +6280,7 @@ fn build_confidential_transfer_proof_v2_resolved_paths(
 /// Build a confidential transfer proof, deriving input paths from the tree.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn build_confidential_transfer_proof_v2(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
     tree_commitments: &[[u8; 32]],
@@ -6292,7 +6295,7 @@ pub fn build_confidential_transfer_proof_v2(
         return Err("tree commitments do not match the supplied root_hint".to_owned());
     }
     build_confidential_transfer_proof_v2_resolved_paths(
-        chain_id,
+        network_id,
         asset_definition_id,
         spend_key,
         inputs,
@@ -6387,7 +6390,7 @@ fn normalize_confidential_transfer_paths_v3(
 /// proof receipt or reconstruct a second confidential relation.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(crate) fn prepare_kagemusha_step_transfer_witness_v3_with_paths(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
     input_paths: &[ConfidentialMerklePathV2],
@@ -6396,7 +6399,7 @@ pub(crate) fn prepare_kagemusha_step_transfer_witness_v3_with_paths(
     root_hint: [u8; 32],
 ) -> Result<KagemushaStepSecureWitnessV3, String> {
     let prepared = prepare_confidential_transfer_v3_resolved_paths(
-        chain_id,
+        network_id,
         asset_definition_id,
         spend_key,
         inputs,
@@ -6419,7 +6422,7 @@ pub(crate) fn prepare_kagemusha_step_transfer_witness_v3_with_paths(
 /// Build a confidential transfer proof using explicitly supplied input paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn build_confidential_transfer_proof_v2_with_paths(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
     input_paths: &[ConfidentialMerklePathV2],
@@ -6430,7 +6433,7 @@ pub fn build_confidential_transfer_proof_v2_with_paths(
     vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialTransferProofV2, String> {
     build_confidential_transfer_proof_v2_resolved_paths(
-        chain_id,
+        network_id,
         asset_definition_id,
         spend_key,
         inputs,
@@ -6454,7 +6457,7 @@ pub fn build_confidential_transfer_proof_v2_with_paths(
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
 fn build_confidential_unshield_proof_v2_resolved_paths(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
     inputs: &[ConfidentialUnshieldInputV2],
@@ -6489,7 +6492,7 @@ fn build_confidential_unshield_proof_v2_resolved_paths(
     let spend_scalar = hash_to_scalar(b"iroha.confidential.v3.spend_scalar", &[spend_key]);
     let spend_scalar_bytes = Zeroizing::new(scalar_to_repr_bytes(spend_scalar));
     let asset_tag = derive_confidential_asset_tag_v3(asset_definition_id)?;
-    let chain_tag = derive_confidential_chain_tag_v3(chain_id.as_str())?;
+    let network_tag = derive_confidential_network_tag_v3(network_id)?;
     let input_0 = inputs
         .first()
         .cloned()
@@ -6517,9 +6520,9 @@ fn build_confidential_unshield_proof_v2_resolved_paths(
         input_1_commitment,
     )?;
     let nullifier_0 =
-        derive_confidential_nullifier_v3(spend_key, input_0.rho, asset_tag, chain_tag)?;
+        derive_confidential_nullifier_v3(spend_key, input_0.rho, asset_tag, network_tag)?;
     let nullifier_1 = if let Some(note) = input_1.as_ref() {
-        derive_confidential_nullifier_v3(spend_key, note.rho, asset_tag, chain_tag)?
+        derive_confidential_nullifier_v3(spend_key, note.rho, asset_tag, network_tag)?
     } else {
         [0u8; 32]
     };
@@ -6533,7 +6536,7 @@ fn build_confidential_unshield_proof_v2_resolved_paths(
         input_0_diversifier: input_0.diversifier,
         input_1_diversifier: input_1.as_ref().map_or([0; 32], |note| note.diversifier),
         asset_tag,
-        chain_tag,
+        network_tag,
         input_0_path,
         input_1_path,
     };
@@ -6549,7 +6552,7 @@ fn build_confidential_unshield_proof_v2_resolved_paths(
         root: root_hint,
         public_amount: scalar_to_repr_bytes(scalar_from_u128(public_amount)),
         asset_tag,
-        chain_tag,
+        network_tag,
     };
     let instance_columns = public
         .try_map(|field: ConfidentialUnshieldFullPublicInputV1, bytes| {
@@ -6596,7 +6599,7 @@ fn build_confidential_unshield_proof_v2_resolved_paths(
 /// Build a full confidential unshield proof from an in-memory tree.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn build_confidential_unshield_proof_v2(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
     tree_commitments: &[[u8; 32]],
@@ -6611,7 +6614,7 @@ pub fn build_confidential_unshield_proof_v2(
         return Err("tree commitments do not match the supplied root_hint".to_owned());
     }
     build_confidential_unshield_proof_v2_resolved_paths(
-        chain_id,
+        network_id,
         asset_definition_id,
         spend_key,
         inputs,
@@ -6704,7 +6707,7 @@ fn normalize_confidential_unshield_full_paths_v3(
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
 pub fn build_confidential_unshield_proof_v2_with_paths(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
     input_paths: &[ConfidentialMerklePathV2],
@@ -6715,7 +6718,7 @@ pub fn build_confidential_unshield_proof_v2_with_paths(
     vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialUnshieldProofV2, String> {
     build_confidential_unshield_proof_v2_resolved_paths(
-        chain_id,
+        network_id,
         asset_definition_id,
         spend_key,
         inputs,
@@ -6769,7 +6772,7 @@ impl PreparedConfidentialUnshieldChangeV4 {
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
 fn prepare_confidential_unshield_change_v4_resolved_paths(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
     inputs: &[ConfidentialUnshieldInputV2],
@@ -6798,7 +6801,7 @@ fn prepare_confidential_unshield_change_v4_resolved_paths(
     let spend_scalar = hash_to_scalar(b"iroha.confidential.v3.spend_scalar", &[spend_key]);
     let spend_scalar_bytes = Zeroizing::new(scalar_to_repr_bytes(spend_scalar));
     let asset_tag = derive_confidential_asset_tag_v3(asset_definition_id)?;
-    let chain_tag = derive_confidential_chain_tag_v3(chain_id.as_str())?;
+    let network_tag = derive_confidential_network_tag_v3(network_id)?;
     let input_0 = inputs
         .first()
         .cloned()
@@ -6856,9 +6859,9 @@ fn prepare_confidential_unshield_change_v4_resolved_paths(
         }
     };
     let nullifier_0 =
-        derive_confidential_nullifier_v3(spend_key, input_0.rho, asset_tag, chain_tag)?;
+        derive_confidential_nullifier_v3(spend_key, input_0.rho, asset_tag, network_tag)?;
     let nullifier_1 = if let Some(note) = input_1.as_ref() {
-        derive_confidential_nullifier_v3(spend_key, note.rho, asset_tag, chain_tag)?
+        derive_confidential_nullifier_v3(spend_key, note.rho, asset_tag, network_tag)?
     } else {
         [0u8; 32]
     };
@@ -6875,7 +6878,7 @@ fn prepare_confidential_unshield_change_v4_resolved_paths(
         input_0_diversifier: input_0.diversifier,
         input_1_diversifier: input_1.as_ref().map_or([0; 32], |note| note.diversifier),
         asset_tag,
-        chain_tag,
+        network_tag,
         input_0_path,
         input_1_path,
     };
@@ -6891,7 +6894,7 @@ fn prepare_confidential_unshield_change_v4_resolved_paths(
             root: root_hint,
             public_amount: scalar_to_repr_bytes(scalar_from_u128(public_amount)),
             asset_tag,
-            chain_tag,
+            network_tag,
         },
         nullifiers: [nullifier_0, nullifier_1],
         change_commitment: output_0_commitment,
@@ -6903,7 +6906,7 @@ fn prepare_confidential_unshield_change_v4_resolved_paths(
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
 fn build_confidential_unshield_proof_v3_resolved_paths(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
     inputs: &[ConfidentialUnshieldInputV2],
@@ -6925,7 +6928,7 @@ fn build_confidential_unshield_proof_v3_resolved_paths(
     ensure_confidential_unshield_v3_canonical_vk_box(vk_box)?;
     let (params, _parsed_vk) = parse_vk_for_unshield_v3(circuit_id, vk_box)?;
     let prepared = prepare_confidential_unshield_change_v4_resolved_paths(
-        chain_id,
+        network_id,
         asset_definition_id,
         spend_key,
         inputs,
@@ -6977,7 +6980,7 @@ fn build_confidential_unshield_proof_v3_resolved_paths(
 /// Build a terminal-full or change-preserving V3 unshield proof, deriving input paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn build_confidential_unshield_proof_v3(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
     tree_commitments: &[[u8; 32]],
@@ -6993,7 +6996,7 @@ pub fn build_confidential_unshield_proof_v3(
         return Err("tree commitments do not match the supplied root_hint".to_owned());
     }
     build_confidential_unshield_proof_v3_resolved_paths(
-        chain_id,
+        network_id,
         asset_definition_id,
         spend_key,
         inputs,
@@ -7085,7 +7088,7 @@ fn normalize_confidential_unshield_change_paths_v4(
 /// Prepare the exact secure change-redemption witness embedded by StepEq.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(crate) fn prepare_kagemusha_step_unshield_change_witness_v4_with_paths(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
     input_paths: &[ConfidentialMerklePathV2],
@@ -7101,7 +7104,7 @@ pub(crate) fn prepare_kagemusha_step_unshield_change_witness_v4_with_paths(
         );
     }
     let prepared = prepare_confidential_unshield_change_v4_resolved_paths(
-        chain_id,
+        network_id,
         asset_definition_id,
         spend_key,
         inputs,
@@ -7125,7 +7128,7 @@ pub(crate) fn prepare_kagemusha_step_unshield_change_witness_v4_with_paths(
 /// Build a terminal-full or change-preserving V3 unshield using explicit paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn build_confidential_unshield_proof_v3_with_paths(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     asset_definition_id: &str,
     spend_key: &[u8],
     input_paths: &[ConfidentialMerklePathV2],
@@ -7137,7 +7140,7 @@ pub fn build_confidential_unshield_proof_v3_with_paths(
     vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialUnshieldProofV3, String> {
     build_confidential_unshield_proof_v3_resolved_paths(
-        chain_id,
+        network_id,
         asset_definition_id,
         spend_key,
         inputs,

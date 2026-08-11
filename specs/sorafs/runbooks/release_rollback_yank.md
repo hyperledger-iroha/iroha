@@ -90,7 +90,7 @@ Attach a payload-free rollback record to the release ticket with:
 - signer revocation/rotation receipts when applicable; and
 - the corrective release or follow-up owner.
 
-Record only identifiers, timestamps, statuses, and digests. HSM/KMS handles,
+Record only identifiers, timestamps, statuses, and digests. External-signer/KMS handles,
 private signing material, bearer tokens, registry credentials, WebAuthn
 material, and artifact payloads remain runtime-only and must not enter the
 ticket or readiness summaries. Publish the Ed25519 verification key only in

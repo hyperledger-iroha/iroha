@@ -69,7 +69,8 @@ pub enum Command {
     /// Contract alias helpers
     #[command(subcommand)]
     Alias(AliasCommand),
-    /// Derive a canonical contract address locally from authority, deploy nonce, and dataspace
+    /// Derive a canonical contract address locally from exact network identity, authority, nonce,
+    /// and dataspace
     DeriveAddress(DeriveAddressArgs),
     /// Submit a contract call through Torii (POST /v1/contracts/call)
     Call(CallArgs),
@@ -1225,12 +1226,8 @@ impl DevCallArgs {
                 attempts: status.attempts,
                 elapsed_ms: status.elapsed_ms,
                 block_height: status.block_height,
-                rejection_reason: status.rejection_reason,
                 scope: status.scope,
                 resolved_from: status.resolved_from,
-                summary: status.summary,
-                diagnostics: status.diagnostics,
-                trigger_completions: status.trigger_completions,
                 r#final: status.r#final,
             })
         } else {
@@ -1360,9 +1357,6 @@ impl DevSmokeArgs {
                             "terminal_kind": (status.terminal_kind),
                             "attempts": (status.attempts),
                             "elapsed_ms": (status.elapsed_ms),
-                            "summary": (status.summary),
-                            "diagnostics": (status.diagnostics),
-                            "trigger_completions": (status.trigger_completions),
                             "final": (status.r#final),
                         })
                     } else {
@@ -2233,9 +2227,9 @@ pub struct DeriveAddressArgs {
     /// Successful deploy nonce consumed for address derivation
     #[arg(long)]
     pub deploy_nonce: u64,
-    /// Exact chain identifier committed into the contract address
+    /// Exact genesis-derived network identity committed into the contract address
     #[arg(long)]
-    pub chain_id: ChainId,
+    pub network_id: NetworkId,
     /// Public network profile used to decode the authority account literal
     #[arg(long)]
     pub profile: Option<String>,
@@ -2260,7 +2254,7 @@ impl Run for DeriveAddressArgs {
             .wrap_err("failed to decode --authority")?;
         let dataspace_id = resolve_contract_dataspace_id_hint(&self.dataspace, self.dataspace_id)?;
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            &self.chain_id,
+            &self.network_id,
             &authority,
             self.deploy_nonce,
             dataspace_id,
@@ -2273,7 +2267,7 @@ impl Run for DeriveAddressArgs {
             "dataspace": (self.dataspace),
             "dataspace_id": (dataspace_id.as_u64()),
             "deploy_nonce": (self.deploy_nonce),
-            "chain_id": (self.chain_id),
+            "network_id": (self.network_id),
             "profile": (profile_name),
             "chain_discriminant": (chain_discriminant),
             "contract_address": (contract_address),
@@ -2351,12 +2345,8 @@ struct ContractSubmissionWaitResponse {
     attempts: u64,
     elapsed_ms: u64,
     block_height: Option<u64>,
-    rejection_reason: Option<iroha::data_model::transaction::error::TransactionRejectionReason>,
     scope: String,
     resolved_from: String,
-    summary: String,
-    diagnostics: Vec<iroha_torii_shared::PipelineDiagnostic>,
-    trigger_completions: Vec<iroha_torii_shared::TriggerCompletionSummary>,
     r#final: iroha_torii_shared::PipelineTransactionStatusResponse,
 }
 
@@ -2489,12 +2479,8 @@ impl Run for CallArgs {
                 attempts: status.attempts,
                 elapsed_ms: status.elapsed_ms,
                 block_height: status.block_height,
-                rejection_reason: status.rejection_reason,
                 scope: status.scope,
                 resolved_from: status.resolved_from,
-                summary: status.summary,
-                diagnostics: status.diagnostics,
-                trigger_completions: status.trigger_completions,
                 r#final: status.r#final,
             })?;
         } else {
@@ -5797,7 +5783,12 @@ mod tests {
         let arguments = ContractArgumentRecord::try_new(argument_bytes)
             .expect("bounded contract argument record");
         let contract_address =
-            ContractAddress::derive(&ctx.config().chain, &authority, 1, DataSpaceId::UNIVERSAL)
+            ContractAddress::derive(
+                &ctx.config().network_id,
+                &authority,
+                1,
+                DataSpaceId::UNIVERSAL,
+            )
                 .expect("derive contract address");
 
         let fixture_domain =
@@ -5817,11 +5808,12 @@ mod tests {
         world
             .account_permissions_mut_for_testing()
             .insert(authority.clone(), permissions);
-        let state = State::new_with_chain_for_testing(
+        let state = State::new_with_chain_and_network_id_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
             ctx.config().chain.clone(),
+            ctx.config().network_id,
         );
         {
             let header = BlockHeader::new(
@@ -5852,7 +5844,7 @@ mod tests {
         }
 
         let tx = TransactionBuilder::new(
-            ctx.config().chain.clone(),
+            ctx.config().network_id,
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(DEFAULT_CONTRACT_GAS_LIMIT)),
         )
@@ -6012,7 +6004,9 @@ mod tests {
     fn resolve_contract_target_accepts_contract_address() {
         let authority = fixture_account(0x41);
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
             &authority,
             1,
             iroha::data_model::nexus::DataSpaceId::new(0),
@@ -6123,6 +6117,10 @@ mod tests {
             let key_pair = fixture_key_pair(0xA5);
             let cfg = iroha::config::Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+                network_id:
+                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                        .parse()
+                        .expect("network id"),
                 account,
                 account_chain_discriminant:
                     iroha_config::parameters::defaults::common::chain_discriminant(),
@@ -6228,9 +6226,8 @@ impl Run for SimulateArgs {
         let gas_limit = NonZeroU64::new(self.gas_limit)
             .ok_or_else(|| eyre!("--gas-limit must be greater than zero"))?;
         let metadata = Metadata::default();
-        let chain_id = context.config().chain.clone();
         let tx = TransactionBuilder::new(
-            chain_id,
+            context.config().network_id,
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), Some(gas_limit)),
         )

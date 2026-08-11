@@ -31,7 +31,6 @@ use iroha_data_model::{
     },
     nexus::{DataSpaceId, LaneId},
     parameter::system::SumeragiConsensusMode,
-    prelude::ChainId,
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_telemetry::metrics::{
@@ -52,11 +51,7 @@ fn canonical_block_stream_message() -> Vec<u8> {
     let signer = mochi_core::development_signing_authorities()
         .first()
         .expect("development signer must exist");
-    let chain: ChainId = "mochi-mock-block-stream"
-        .parse()
-        .expect("mock chain id must parse");
-    let mut transaction = TransactionBuilder::new(
-        chain,
+    let mut transaction = TransactionBuilder::new_genesis(
         signer.account_id().clone(),
         FeePaymentIntent::authority(Vec::new(), None),
     );

@@ -5,10 +5,11 @@ import java.util.List;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 
 /**
- * Abstraction for staging transactions while the device is offline or waiting for retry.
+ * Explicit local staging for transactions created while a device is offline.
  *
  * <p>Implementations should preserve insertion order and avoid dropping entries unless an error is
- * returned to the caller.
+ * returned to the caller. SDK transports never drain, submit, or fill this queue automatically;
+ * callers must reconcile each transaction hash before deciding whether it can be replaced.
  */
 public interface PendingTransactionQueue {
 
@@ -23,7 +24,7 @@ public interface PendingTransactionQueue {
   /**
    * Removes and returns all queued transactions in insertion order.
    *
-   * @return list of transactions to be retried
+   * @return list of transactions for explicit reconciliation or operator handling
    * @throws IOException when persistence fails
    */
   List<SignedTransaction> drain() throws IOException;

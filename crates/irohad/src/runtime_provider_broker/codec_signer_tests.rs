@@ -1,7 +1,21 @@
+#[derive(Encode)]
+struct HandshakeRequestWithoutNetworkV1 {
+    chain_id: String,
+    requested_catalog: Vec<ProviderBindingWireV1>,
+    client_nonce: [u8; 32],
+    catalog_digest: [u8; 32],
+    client_transcript_digest: [u8; 32],
+}
+
 #[test]
 fn canonical_framing_rejects_magic_version_kind_trailing_and_oversize() {
-    let request = make_handshake_request("test-chain", vec![signer_binding()], [0x42; 32])
-        .expect("build handshake");
+    let request = make_handshake_request(
+        "test-chain",
+        server_test_network_id(),
+        vec![signer_binding()],
+        [0x42; 32],
+    )
+    .expect("build handshake");
     let frame = encode_frame(
         FRAME_KIND_HANDSHAKE_REQUEST_V1,
         &request,
@@ -16,6 +30,28 @@ fn canonical_framing_rejects_magic_version_kind_trailing_and_oversize() {
         )
         .expect("decode canonical frame"),
         request
+    );
+    let retired = HandshakeRequestWithoutNetworkV1 {
+        chain_id: request.chain_id.clone(),
+        requested_catalog: request.requested_catalog.clone(),
+        client_nonce: request.client_nonce,
+        catalog_digest: request.catalog_digest,
+        client_transcript_digest: request.client_transcript_digest,
+    };
+    let retired_frame = encode_frame(
+        FRAME_KIND_HANDSHAKE_REQUEST_V1,
+        &retired,
+        MAX_HANDSHAKE_FRAME_BYTES_V1,
+    )
+    .expect("encode retired networkless handshake");
+    assert_eq!(
+        decode_frame::<HandshakeRequestV1>(
+            &retired_frame,
+            FRAME_KIND_HANDSHAKE_REQUEST_V1,
+            MAX_HANDSHAKE_FRAME_BYTES_V1,
+        ),
+        Err(BrokerError::Protocol),
+        "the retired networkless request schema must fail closed",
     );
 
     for mutation in 0..3 {
@@ -253,7 +289,7 @@ fn configured_catalog_slots_roundtrip_through_the_canonical_inverse() {
         let catalog = IrohaRuntimeProviderBindingsV1::qualified_for_test(
             "catalog-inverse-chain",
             slot,
-            format!("hsm://production/runtime-slot-{}", slot.wire_id()),
+            format!("runtime://production/runtime-slot-{}", slot.wire_id()),
             1,
             TEST_POLICY_DIGEST,
         );
@@ -264,7 +300,7 @@ fn configured_catalog_slots_roundtrip_through_the_canonical_inverse() {
     }
 
     let mut unknown = signer_binding();
-    for wire_id in [0, 56, u16::MAX] {
+    for wire_id in [0, 60, u16::MAX] {
         unknown.slot = wire_id;
         assert_eq!(unknown.runtime_slot(), Err(BrokerError::BindingMismatch));
     }
@@ -738,9 +774,20 @@ fn broker_server_accepts_exact_subset_and_confines_session_to_it() {
         proof_catalog.iter().next().expect("proof signer binding"),
     )
     .expect("project proof signer binding");
+    assert!(
+        BrokerSession::connect(
+            &policy,
+            proof_catalog.chain_id(),
+            test_network_id(0x16),
+            vec![proof_binding.clone()],
+        )
+        .is_err(),
+        "the same display chain on another genesis lineage must not authenticate",
+    );
     let (session, observations) = BrokerSession::connect(
         &policy,
         proof_catalog.chain_id(),
+        *proof_catalog.network_id(),
         vec![proof_binding.clone()],
     )
     .expect("connect with an exact subset of the server catalog");
@@ -837,7 +884,7 @@ fn soracloud_broker_admission_rejects_explicit_purpose_mismatch() {
     )
     .expect("project signer binding");
     binding.slot = IrohaRuntimeProviderSlotV1::SoracloudRuntimeMutationSigner.wire_id();
-    binding.handle = "hsm://soracloud/runtime-broker-primary".to_owned();
+    binding.handle = "software://sorafs/ai/runtime-broker-primary".to_owned();
     binding
         .native_signer_binding
         .as_mut()
@@ -963,28 +1010,28 @@ fn native_signer_payload_hard_cut_precedes_provider_use() {
     );
     assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 0);
 
-    let cross_chain =
-        native_signer_test_payload_for_chain("other-chain", exact.authority().clone());
-    let cross_chain_request = make_operation_request(
+    let cross_network =
+        native_signer_test_payload_for_network(test_network_id(0x16), exact.authority().clone());
+    let cross_network_request = make_operation_request(
         TEST_SESSION_ID,
         2,
         state.catalog[0].clone(),
         state.observations[0].metadata_digest,
         OPERATION_NATIVE_TRANSACTION_SIGN_V1,
-        encode_native_transaction_payload(&cross_chain)
-            .expect("encode cross-chain native signer payload"),
+        encode_native_transaction_payload(&cross_network)
+            .expect("encode cross-network native signer payload"),
     )
-    .expect("seal cross-chain native signer request");
-    validate_operation_request(&cross_chain_request)
-        .expect("cross-chain payload is structurally canonical");
+    .expect("seal cross-network native signer request");
+    validate_operation_request(&cross_network_request)
+        .expect("cross-network payload is structurally canonical");
     assert_eq!(
-        dispatch_server_operation(&state, &cross_chain_request),
+        dispatch_server_operation(&state, &cross_network_request),
         Err(BrokerError::BindingMismatch)
     );
     assert_eq!(
         signer.sign_calls.load(Ordering::Relaxed),
         0,
-        "the HSM boundary must not see a foreign-chain transaction"
+        "the external signer boundary must not see a foreign-network transaction"
     );
 
     let request = make_operation_request(
@@ -1047,34 +1094,35 @@ fn native_signer_rejects_tampered_and_drifting_provider_outputs() {
 }
 
 #[test]
-fn appeal_finance_signer_rejects_cross_chain_before_provider_use() {
+fn appeal_finance_signer_rejects_cross_network_before_provider_use() {
     let signer = Arc::new(ServerTestAppealFinanceSigner::exact());
     let state = appeal_finance_signer_test_state(signer.clone());
     let exact = state.catalog[0]
         .appeal_finance_signer_binding
         .as_ref()
         .expect("exact appeal-finance signer binding");
-    let cross_chain = native_signer_test_payload_for_chain("other-chain", exact.authority.clone());
-    let cross_chain_request = make_operation_request(
+    let cross_network =
+        native_signer_test_payload_for_network(test_network_id(0x16), exact.authority.clone());
+    let cross_network_request = make_operation_request(
         TEST_SESSION_ID,
         1,
         state.catalog[0].clone(),
         state.observations[0].metadata_digest,
         OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1,
-        encode_transaction_payload_bounded(&cross_chain, MAX_APPEAL_FINANCE_TRANSACTION_BYTES_V1)
-            .expect("encode cross-chain appeal-finance payload"),
+        encode_transaction_payload_bounded(&cross_network, MAX_APPEAL_FINANCE_TRANSACTION_BYTES_V1)
+            .expect("encode cross-network appeal-finance payload"),
     )
-    .expect("seal cross-chain appeal-finance signer request");
-    validate_operation_request(&cross_chain_request)
-        .expect("cross-chain appeal-finance payload is structurally canonical");
+    .expect("seal cross-network appeal-finance signer request");
+    validate_operation_request(&cross_network_request)
+        .expect("cross-network appeal-finance payload is structurally canonical");
     assert_eq!(
-        dispatch_server_operation(&state, &cross_chain_request),
+        dispatch_server_operation(&state, &cross_network_request),
         Err(BrokerError::BindingMismatch)
     );
     assert_eq!(
         signer.sign_calls.load(Ordering::Relaxed),
         0,
-        "the appeal-finance HSM boundary must not see a foreign-chain transaction"
+        "the appeal-finance external signer must not see a foreign-network transaction"
     );
 
     let exact_payload = native_signer_test_payload(exact.authority.clone());
@@ -1259,7 +1307,7 @@ fn moderation_transaction_signer_binding_backend_and_identity_are_exact() {
     );
     for signer in [
         ServerTestModerationTransactionSigner::exact()
-            .with_handle("hsm://moderation/transaction-signer-substituted"),
+            .with_handle("software://sorafs/moderation/substituted"),
         ServerTestModerationTransactionSigner::exact().with_revision(8),
         ServerTestModerationTransactionSigner::exact()
             .with_mode(ServerTestModerationTransactionSignerMode::DriftOnSecondQualification),
@@ -1315,28 +1363,28 @@ fn moderation_transaction_signer_payload_and_result_are_exact() {
     }
     assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 0);
 
-    let cross_chain =
-        native_signer_test_payload_for_chain("other-chain", payload.authority().clone());
-    let cross_chain_request = make_operation_request(
+    let cross_network =
+        native_signer_test_payload_for_network(test_network_id(0x16), payload.authority().clone());
+    let cross_network_request = make_operation_request(
         TEST_SESSION_ID,
         2,
         state.catalog[0].clone(),
         state.observations[0].metadata_digest,
         OPERATION_NATIVE_TRANSACTION_SIGN_V1,
-        encode_native_transaction_payload(&cross_chain)
-            .expect("encode cross-chain moderation payload"),
+        encode_native_transaction_payload(&cross_network)
+            .expect("encode cross-network moderation payload"),
     )
-    .expect("seal cross-chain moderation signer request");
-    validate_operation_request(&cross_chain_request)
-        .expect("cross-chain moderation payload is structurally canonical");
+    .expect("seal cross-network moderation signer request");
+    validate_operation_request(&cross_network_request)
+        .expect("cross-network moderation payload is structurally canonical");
     assert_eq!(
-        dispatch_server_operation(&state, &cross_chain_request),
+        dispatch_server_operation(&state, &cross_network_request),
         Err(BrokerError::BindingMismatch)
     );
     assert_eq!(
         signer.sign_calls.load(Ordering::Relaxed),
         0,
-        "the moderation HSM boundary must not see a foreign-chain transaction"
+        "the moderation external signer must not see a foreign-network transaction"
     );
 
     let request = make_operation_request(
@@ -1492,5 +1540,135 @@ fn moderation_transaction_signer_round_trips_and_poisons_on_substitution() {
             .join()
             .expect("join adversarial moderation signer broker")
             .expect("adversarial moderation signer broker exits cleanly");
+    }
+}
+#[test]
+fn catalog_digest_binds_protocol_and_exact_network_identity() {
+    let catalog = vec![signer_binding()];
+    let network_id = server_test_network_id();
+    let canonical_catalog = encode_canonical(&catalog, MAX_HANDSHAKE_FRAME_BYTES_V1)
+        .expect("encode canonical test catalog");
+    let digest = catalog_digest("test-chain", &network_id, &catalog)
+        .expect("digest chain-bound test catalog");
+    assert_eq!(
+        digest,
+        digest_parts(
+            CATALOG_DIGEST_DOMAIN_V1,
+            &[
+                &BROKER_MAGIC_V1,
+                &BROKER_VERSION_V1.to_be_bytes(),
+                b"test-chain",
+                network_id.as_bytes(),
+                &canonical_catalog,
+            ],
+        )
+    );
+    assert_ne!(
+        digest,
+        catalog_digest("other-chain", &network_id, &catalog)
+            .expect("digest catalog for a different chain")
+    );
+    assert_ne!(
+        digest,
+        catalog_digest("test-chain", &test_network_id(0x16), &catalog)
+            .expect("digest catalog for a different exact network")
+    );
+    let mut substituted_peer = catalog.clone();
+    substituted_peer[0].governance_dag_publisher_peer_id =
+        Some(b"12D3KooWRuntimeBrokerSecondary".to_vec());
+    assert_ne!(
+        digest,
+        catalog_digest("test-chain", &network_id, &substituted_peer)
+            .expect("digest catalog with a substituted publisher peer ID")
+    );
+    let mut substituted_key = catalog.clone();
+    substituted_key[0].governance_dag_publisher_public_key =
+        Some(server_test_request_auth_public_key());
+    assert_ne!(
+        digest,
+        catalog_digest("test-chain", &network_id, &substituted_key)
+            .expect("digest catalog with a substituted publisher key")
+    );
+
+    let mut other_magic = BROKER_MAGIC_V1;
+    other_magic[0] ^= 1;
+    assert_ne!(
+        digest,
+        digest_parts(
+            CATALOG_DIGEST_DOMAIN_V1,
+            &[
+                &other_magic,
+                &BROKER_VERSION_V1.to_be_bytes(),
+                b"test-chain",
+                network_id.as_bytes(),
+                &canonical_catalog,
+            ],
+        )
+    );
+    assert_ne!(
+        digest,
+        digest_parts(
+            CATALOG_DIGEST_DOMAIN_V1,
+            &[
+                &BROKER_MAGIC_V1,
+                &(BROKER_VERSION_V1 + 1).to_be_bytes(),
+                b"test-chain",
+                network_id.as_bytes(),
+                &canonical_catalog,
+            ],
+        )
+    );
+}
+
+#[test]
+fn handshake_rejects_catalog_nonce_session_binding_metadata_and_transcript_confusion() {
+    assert_eq!(
+        make_handshake_request(
+            "test-chain",
+            server_test_network_id(),
+            vec![checkpoint_binding(), signer_binding()],
+            [0x42; 32],
+        ),
+        Err(BrokerError::BindingMismatch),
+        "the requested catalog order is canonical"
+    );
+    assert_eq!(
+        make_handshake_request(
+            "test-chain",
+            server_test_network_id(),
+            vec![signer_binding()],
+            [0; 32],
+        ),
+        Err(BrokerError::BindingMismatch),
+        "a zero nonce cannot bind a fresh session"
+    );
+    let request = make_handshake_request(
+        "test-chain",
+        server_test_network_id(),
+        vec![signer_binding(), checkpoint_binding()],
+        [0x42; 32],
+    )
+    .expect("build handshake");
+    let response = handshake_response(&request);
+    validate_handshake_response(&request, &response).expect("validate exact handshake");
+
+    for mutation in 0..9 {
+        let mut confused = response.clone();
+        match mutation {
+            0 => confused.chain_id.push('x'),
+            1 => confused.network_id = test_network_id(0x16),
+            2 => confused.requested_catalog.swap(0, 1),
+            3 => confused.client_nonce[0] ^= 1,
+            4 => confused.session_id = [0; 32],
+            5 => confused.observations.swap(0, 1),
+            6 => confused.observations[0].binding.handle.push('x'),
+            7 => confused.observations[0].metadata_digest[0] ^= 1,
+            8 => confused.server_transcript_digest[0] ^= 1,
+            _ => unreachable!(),
+        }
+        assert!(
+            validate_handshake_response(&request, &confused).is_err(),
+            "mutation {mutation} must fail"
+        );
     }
 }

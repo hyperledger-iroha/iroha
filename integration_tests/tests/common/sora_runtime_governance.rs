@@ -78,7 +78,9 @@ fn governance_contract_address(contract_id: &str) -> ContractAddress {
         other => panic!("unexpected governance test contract id `{other}`"),
     };
     ContractAddress::derive(
-        &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical test network id"),
         &ALICE_ID,
         deploy_nonce,
         iroha::data_model::nexus::DataSpaceId::UNIVERSAL,

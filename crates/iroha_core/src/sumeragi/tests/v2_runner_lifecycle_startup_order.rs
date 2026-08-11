@@ -76,7 +76,7 @@ fn terminal_sweep_source_partitions_whole_units_before_any_mutation() {
     let sweep = &source[start..end];
 
     let anchors = [
-        "if recovery.chain_id_hash() != chain_id_hash",
+        "if recovery.network_id() != network_id",
         "let route_identities = recovery.route_identities();",
         ".any(|identity| !active_routes.contains(identity))",
         "pub(crate) fn reconcile_pending_autonomous_lifecycle_terminal_outcomes(",
@@ -84,7 +84,7 @@ fn terminal_sweep_source_partitions_whole_units_before_any_mutation() {
         "let initial_snapshot = queue",
         "if !initial_snapshot.is_empty() && !initial_queue_quarantine",
         "let active_routes = active_lifecycle_routes(state, context)?",
-        "let chain_id_hash = Hash::new(context.chain_id.clone().into_inner().as_bytes());",
+        "let network_id = context.network_id;",
         "pending_autonomous_lifecycle_terminal_outcome_inventory()",
         "let mut seen_entrypoint_hashes = BTreeSet::new();",
         "!seen_entrypoint_hashes.insert(key.entrypoint_hash.clone())",
@@ -257,9 +257,7 @@ fn local_producer_queue_custody_is_preflighted_before_cursor_mutation() {
         .find("pub(crate) fn reconcile_autonomous_lifecycle_startup(")
         .expect("lifecycle startup remains source-bound");
     let first_full_inventory = source[startup..]
-        .find(
-            ".active_autonomous_lifecycle_attempt_inventory_with_planner_covered_pending_groups(",
-        )
+        .find(".active_autonomous_lifecycle_attempt_inventory_with_planner_covered_pending_groups(")
         .map(|offset| startup + offset)
         .expect("startup retains a read-only all-attempt preflight");
     let producer_preflight = source[first_full_inventory..]
@@ -280,9 +278,7 @@ fn local_producer_queue_custody_is_preflighted_before_cursor_mutation() {
     assert!(producer_preflight < bootstrap_mutation);
     assert!(producer_preflight < cursor_mutation);
     assert!(
-        source[helper..startup].contains(
-            "local_actor != binding.producer_actor_projection()",
-        ),
+        source[helper..startup].contains("local_actor != binding.producer_actor_projection()",),
         "observer Kura custody must remain independent of producer Queue ownership",
     );
     assert!(

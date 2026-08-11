@@ -21,6 +21,7 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.crypto.NativeSignedTransaction
 import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
+import org.hyperledger.iroha.sdk.testing.TestNetworkIds
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import org.hyperledger.iroha.sdk.tx.norito.SignedTransactionEncoder
 
@@ -215,21 +216,22 @@ class ZkAssetInstructionsTest {
     }
 
     @Test
-    fun registerZkAssetInstructionValidatesModeAndVerifierIds() {
+    fun registerZkAssetInstructionBuildsVerifierControls() {
         val instruction = RegisterZkAssetInstruction.builder()
             .setAsset("rose#wonderland")
-            .setMode(ZkAssetMode.HYBRID)
-            .setAllowShield(true)
-            .setAllowUnshield(false)
+            .setUnshieldVerifyingKey("halo2/ipa:unshield-v3")
+            .setShieldVerifyingKey("halo2/ipa:shield-v3")
             .build()
 
         assertEquals(InstructionKind.REGISTER, instruction.kind)
-        assertEquals("Hybrid", instruction.arguments["mode"])
-        assertEquals("false", instruction.arguments["allow_unshield"])
+        assertEquals("halo2/ipa:unshield-v3", instruction.arguments["vk_unshield"])
+        assertEquals("halo2/ipa:shield-v3", instruction.arguments["vk_shield"])
 
-        assertEquals(0, ZkAssetMode.HYBRID.bridgeCode)
         assertFailsWith<IllegalArgumentException> {
-            ZkAssetMode.fromWireName("ZkNative")
+            RegisterZkAssetInstruction.builder()
+                .setAsset("rose#wonderland")
+                .setShieldVerifyingKey("halo2/ipa:shield-v3")
+                .build()
         }
     }
 
@@ -242,7 +244,7 @@ class ZkAssetInstructionsTest {
         assertFailsWith<IllegalArgumentException> {
                 NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
                     SigningAlgorithm.ED25519,
-                    "chain",
+                    TestNetworkIds.canonical(),
                     AccountAddress.DEFAULT_I105_DISCRIMINANT,
                     "alice",
                 0,
@@ -298,11 +300,11 @@ class ZkAssetInstructionsTest {
 
     @Test
     fun nativeSignerRegisterZkAssetBindsFeePaymentWhenBridgeAvailable() {
-        assertEquals(21, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION)
-        assertEquals(3, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION)
+        assertEquals(22, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(5, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION)
         assertTrue(
             NativeSignerBridge.isNativeAvailable(),
-            "connect_norito_bridge ABI 21 native-signer contract revision 3 is required",
+            "connect_norito_bridge ABI 22 native-signer contract revision 5 is required",
         )
 
         val (privateKey, publicKey) = NativeSignerBridge.keypairFromSeed(
@@ -319,14 +321,11 @@ class ZkAssetInstructionsTest {
 
         val register = RegisterZkAssetInstruction.builder()
             .setAsset(gasAssetId)
-            .setMode(ZkAssetMode.HYBRID)
-            .setAllowShield(true)
-            .setAllowUnshield(true)
             .build()
         assertNativeFeePayment(
             NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
                 algorithm = SigningAlgorithm.ED25519,
-                chainId = "00000042",
+                networkId = TestNetworkIds.canonical(),
                 chainDiscriminant = AccountAddress.DEFAULT_I105_DISCRIMINANT,
                 authority = authority,
                 creationTimeMs = 1_736_000_000_000,
@@ -344,18 +343,12 @@ class ZkAssetInstructionsTest {
     fun registerZkAssetFromArgumentsRoundTrips() {
         val original = RegisterZkAssetInstruction.builder()
             .setAsset("rose#wonderland")
-            .setMode(ZkAssetMode.HYBRID)
-            .setAllowShield(true)
-            .setAllowUnshield(false)
             .setUnshieldVerifyingKey("halo2/ipa:unshield-v3")
             .build()
 
         val restored = RegisterZkAssetInstruction.fromArguments(original.arguments)
 
         assertEquals(original.asset, restored.asset)
-        assertEquals(original.mode, restored.mode)
-        assertEquals(original.allowShield, restored.allowShield)
-        assertEquals(original.allowUnshield, restored.allowUnshield)
         assertEquals(original.unshieldVerifyingKey, restored.unshieldVerifyingKey)
         assertEquals(original.shieldVerifyingKey, restored.shieldVerifyingKey)
         assertEquals(original.arguments, restored.arguments)
@@ -365,7 +358,6 @@ class ZkAssetInstructionsTest {
     fun registerZkAssetFromArgumentsOmitsBlankVerifyingKeys() {
         val original = RegisterZkAssetInstruction.builder()
             .setAsset("rose#wonderland")
-            .setMode(ZkAssetMode.HYBRID)
             .build()
 
         val restored = RegisterZkAssetInstruction.fromArguments(original.arguments)
@@ -385,18 +377,18 @@ class ZkAssetInstructionsTest {
     }
 
     @Test
-    fun registerZkAssetFromArgumentsRejectsUnknownMode() {
+    fun registerZkAssetFromArgumentsRejectsRetiredModeField() {
         val arguments = validRegisterArguments().toMutableMap()
-        arguments["mode"] = "Transparent"
+        arguments["mode"] = "Hybrid"
         assertFailsWith<IllegalArgumentException> {
             RegisterZkAssetInstruction.fromArguments(arguments)
         }
     }
 
     @Test
-    fun registerZkAssetFromArgumentsRejectsNonCanonicalBoolean() {
+    fun registerZkAssetFromArgumentsRejectsRetiredAllowFlag() {
         val arguments = validRegisterArguments().toMutableMap()
-        arguments["allow_shield"] = "yes"
+        arguments["allow_shield"] = "true"
         assertFailsWith<IllegalArgumentException> {
             RegisterZkAssetInstruction.fromArguments(arguments)
         }
@@ -414,9 +406,6 @@ class ZkAssetInstructionsTest {
     private fun validRegisterArguments(): Map<String, String> =
         RegisterZkAssetInstruction.builder()
             .setAsset("rose#wonderland")
-            .setMode(ZkAssetMode.HYBRID)
-            .setAllowShield(true)
-            .setAllowUnshield(false)
             .build()
             .arguments
 

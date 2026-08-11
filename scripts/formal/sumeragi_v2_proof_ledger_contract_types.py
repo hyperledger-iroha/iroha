@@ -16,6 +16,7 @@ class CrossToolProductionCallContract:
     token_consumptions: tuple[str, ...] = ()
     mutation_boundaries: tuple[str, ...] = ()
     mutation_authorization_indices: tuple[int, ...] = ()
+    projection_bindings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ class CrossToolSourceItemSeal:
     item_token_sha256: str
     kind: str = "item"
     brace_context: tuple[tuple[str, ...], ...] = ()
+    required_expressions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -74,7 +74,7 @@ use super::{
 };
 
 #[cfg(test)]
-use super::v2::DeferredPriority;
+use super::v2::{AdapterEquivocationEvidence, DeferredPriority};
 
 const RETRANSMIT_DIVISOR: u32 = 5;
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
@@ -1398,7 +1398,7 @@ impl RuntimeCandidateCausalOrigin {
         semantic_identity: &[u8],
     ) -> Self {
         let mut canonical_bytes = Vec::new();
-        canonical_bytes.extend_from_slice(b"iroha:sumeragi:v2:fresh-runtime-root:v1");
+        canonical_bytes.extend_from_slice(b"iroha:sumeragi:v2:fresh-runtime-root:v2");
         canonical_bytes.push(kind.code());
         append_runtime_identity_u64(&mut canonical_bytes, tag.height());
         append_runtime_identity_u64(&mut canonical_bytes, tag.view());
@@ -1522,6 +1522,98 @@ pub(crate) struct RuntimeLifecycleOwner {
     causal_origin: RuntimeCandidateCausalOrigin,
     lifecycle_ordinal: u128,
     projection_hash: iroha_crypto::Hash,
+}
+
+/// Process-local evidence that one completed service result can enter runtime.
+///
+/// The production worker derives this value only from its retained completion
+/// ownership or exact local-reconstruction queue. It is neither serialized nor
+/// accepted from transport. The complemented ordinal makes accidental mutation
+/// fail closed before the evidence can affect the runnable-owner minimum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ExactServePredecessorCompletionEvidence {
+    lifecycle_ordinal: u128,
+    lifecycle_ordinal_complement: u128,
+}
+
+impl ExactServePredecessorCompletionEvidence {
+    pub(crate) fn try_new(lifecycle_ordinal: u128) -> Option<Self> {
+        let evidence = Self {
+            lifecycle_ordinal,
+            lifecycle_ordinal_complement: !lifecycle_ordinal,
+        };
+        evidence.validate_exact().then_some(evidence)
+    }
+
+    pub(crate) const fn lifecycle_ordinal(self) -> u128 {
+        self.lifecycle_ordinal
+    }
+
+    pub(crate) const fn validate_exact(self) -> bool {
+        self.lifecycle_ordinal > 0 && self.lifecycle_ordinal_complement == !self.lifecycle_ordinal
+    }
+}
+
+/// Process-local evidence that an exact Serve target acquired a newly
+/// runnable, strictly older runtime prefix after previously observing none.
+///
+/// The witness is neither serialized nor exposed outside the consensus
+/// implementation. One continuous older prefix retains one witness even when
+/// its minimum owner changes; only an observed `no older -> older` transition
+/// for the same target increments `episode`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ExactServePredecessorEpisodeWitness {
+    serve_lifecycle_ordinal: u128,
+    predecessor_lifecycle_ordinal: u128,
+    episode: u128,
+}
+
+impl ExactServePredecessorEpisodeWitness {
+    fn try_new(
+        serve_lifecycle_ordinal: u128,
+        predecessor_lifecycle_ordinal: u128,
+        episode: u128,
+    ) -> Option<Self> {
+        let witness = Self {
+            serve_lifecycle_ordinal,
+            predecessor_lifecycle_ordinal,
+            episode,
+        };
+        witness.validate_exact().then_some(witness)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        serve_lifecycle_ordinal: u128,
+        predecessor_lifecycle_ordinal: u128,
+        episode: u128,
+    ) -> Self {
+        Self::try_new(
+            serve_lifecycle_ordinal,
+            predecessor_lifecycle_ordinal,
+            episode,
+        )
+        .expect("exact Serve predecessor episode test witness must be valid")
+    }
+
+    pub(crate) const fn serve_lifecycle_ordinal(self) -> u128 {
+        self.serve_lifecycle_ordinal
+    }
+
+    pub(crate) const fn predecessor_lifecycle_ordinal(self) -> u128 {
+        self.predecessor_lifecycle_ordinal
+    }
+
+    pub(crate) const fn episode(self) -> u128 {
+        self.episode
+    }
+
+    pub(crate) const fn validate_exact(self) -> bool {
+        self.serve_lifecycle_ordinal > 0
+            && self.predecessor_lifecycle_ordinal > 0
+            && self.predecessor_lifecycle_ordinal < self.serve_lifecycle_ordinal
+            && self.episode > 0
+    }
 }
 
 impl RuntimeLifecycleOwner {
@@ -1714,6 +1806,36 @@ impl RuntimeCandidateSemanticStatement {
             && self
                 .execution_commitment
                 .is_none_or(|_| self.subject.is_some())
+    }
+
+    /// Return the frozen height-context identity.
+    pub(crate) const fn context_id(self) -> wire::HeightContextId {
+        self.context_id
+    }
+
+    /// Return the exact execution/certificate round.
+    pub(crate) const fn round(self) -> wire::ConsensusRound {
+        self.round
+    }
+
+    /// Return the exact proposal/body origin round.
+    pub(crate) const fn proposal_round(self) -> wire::ConsensusRound {
+        self.proposal_round
+    }
+
+    /// Return the optional exact block subject.
+    pub(crate) const fn subject(self) -> Option<wire::BlockSubject> {
+        self.subject
+    }
+
+    /// Return inherited Prepare/Commit authority, when present.
+    pub(crate) const fn phase(self) -> Option<wire::GlobalPhase> {
+        self.phase
+    }
+
+    /// Return the deterministic execution commitment paired with authority.
+    pub(crate) const fn execution_commitment(self) -> Option<wire::ExecutionCommitment> {
+        self.execution_commitment
     }
 
     fn binds_exact_body_manifest(self, manifest: &wire::PayloadManifest) -> bool {
@@ -2165,6 +2287,344 @@ pub(crate) struct RuntimeEffectOwnership {
     binding: Option<RuntimeEffectCandidateBinding>,
 }
 
+/// Move-only, ordinal-free authority for one exact adapter effect awaiting
+/// lifecycle admission.
+///
+/// The old runtime owner is consulted only while this sealed value is minted.
+/// Its integrity projection deliberately excludes the runtime lifecycle
+/// ordinal, allowing the coordinator to become the sole logical ordinal
+/// allocator in the production cutover. Fields and construction remain sealed
+/// in this module, so sibling modules cannot assert a causal root, physical
+/// identity, or inherited body statement.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PendingRuntimeEffectBinding {
+    causal_lifecycle_key: iroha_crypto::Hash,
+    effect_kind: u8,
+    effect_identity: iroha_crypto::Hash,
+    candidate_kind: u8,
+    candidate_statement: Option<RuntimeCandidateSemanticStatement>,
+    candidate_semantic_identity: Option<iroha_crypto::Hash>,
+    projection_hash: iroha_crypto::Hash,
+}
+
+fn pending_runtime_effect_binding_projection_hash(
+    causal_lifecycle_key: &iroha_crypto::Hash,
+    effect_kind: u8,
+    effect_identity: &iroha_crypto::Hash,
+    candidate_kind: u8,
+    candidate_statement: Option<RuntimeCandidateSemanticStatement>,
+    candidate_semantic_identity: Option<&iroha_crypto::Hash>,
+) -> iroha_crypto::Hash {
+    let mut projection = Vec::new();
+    projection.extend_from_slice(b"iroha:sumeragi:v2:pending-effect-binding:v1");
+    append_runtime_identity_field(&mut projection, causal_lifecycle_key.as_ref());
+    projection.push(effect_kind);
+    append_runtime_identity_field(&mut projection, effect_identity.as_ref());
+    projection.push(candidate_kind);
+    match candidate_statement {
+        None => projection.push(0),
+        Some(statement) => {
+            projection.push(1);
+            append_runtime_identity_field(&mut projection, &statement.semantic_identity());
+        }
+    }
+    append_optional_runtime_hash(&mut projection, candidate_semantic_identity);
+    iroha_crypto::Hash::new(projection)
+}
+
+impl PendingRuntimeEffectBinding {
+    /// Borrow the immutable runtime causal-origin lifecycle key.
+    pub(crate) const fn causal_lifecycle_key(&self) -> &iroha_crypto::Hash {
+        &self.causal_lifecycle_key
+    }
+
+    /// Borrow the exact physical identity already bound to the complete effect.
+    pub(crate) const fn exact_effect_identity(&self) -> &iroha_crypto::Hash {
+        &self.effect_identity
+    }
+
+    /// Return the route-neutral candidate statement retained by the runtime.
+    pub(crate) const fn candidate_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
+        self.candidate_statement
+    }
+
+    fn validate_exact(&self, effect: &AdapterEffect) -> bool {
+        let exact_candidate = match (
+            self.candidate_kind,
+            self.candidate_statement,
+            self.candidate_semantic_identity.as_ref(),
+        ) {
+            (RUNTIME_CANDIDATE_KIND_NONE, None, None) => true,
+            (kind, Some(statement), Some(identity)) => {
+                kind != RUNTIME_CANDIDATE_KIND_NONE
+                    && statement.validate_exact()
+                    && *identity
+                        == runtime_effect_candidate_semantic_hash(
+                            kind,
+                            &statement.semantic_identity(),
+                        )
+            }
+            _ => false,
+        };
+        let effect_kind = production_adapter_effect_kind(effect);
+        let expected_candidate_kind = production_adapter_effect_candidate_statement(effect)
+            .map_or(RUNTIME_CANDIDATE_KIND_NONE, |(kind, _)| kind);
+        self.effect_kind == effect_kind
+            && self.candidate_kind == expected_candidate_kind
+            && self.effect_identity
+                == runtime_effect_identity_hash(
+                    effect_kind,
+                    &production_adapter_effect_semantic_identity(effect),
+                )
+            && exact_candidate
+            && self.projection_hash
+                == pending_runtime_effect_binding_projection_hash(
+                    &self.causal_lifecycle_key,
+                    self.effect_kind,
+                    &self.effect_identity,
+                    self.candidate_kind,
+                    self.candidate_statement,
+                    self.candidate_semantic_identity.as_ref(),
+                )
+    }
+
+    /// Return whether this sealed pending binding still names the supplied
+    /// complete concrete effect.
+    pub(crate) fn exactly_binds_adapter_effect(&self, effect: &AdapterEffect) -> bool {
+        self.validate_exact(effect)
+    }
+
+    /// Project the exact `StoreBody` successor of one certified Fetch without
+    /// consulting or minting a legacy runtime lifecycle ordinal.
+    ///
+    /// The returned binding retains the Fetch's immutable causal key and full
+    /// authenticated candidate statement while replacing only the concrete
+    /// effect kind and identity. This is the closed handoff needed by the
+    /// lifecycle coordinator's future direct `BodyAvailable` executor; no
+    /// other predecessor/successor pair is accepted here. This pure projection
+    /// is not independently executable authority: the registry must retain it
+    /// inside a borrow-free, move-only parent-to-child transaction before the
+    /// production cutover.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn project_certified_fetch_store_successor(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+    ) -> Option<Self> {
+        let (
+            AdapterEffect::FetchBody {
+                tag: predecessor_tag,
+                round: predecessor_round,
+                subject: predecessor_subject,
+                certificate: Some(_),
+                ..
+            },
+            AdapterEffect::StoreBody {
+                tag: successor_tag,
+                round: successor_round,
+                subject: successor_subject,
+            },
+        ) = (predecessor, successor)
+        else {
+            return None;
+        };
+        if predecessor_tag != successor_tag
+            || predecessor_round != successor_round
+            || predecessor_subject != successor_subject
+            || !self.validate_exact(predecessor)
+        {
+            return None;
+        }
+
+        let inherited = self.candidate_statement?;
+        let candidate =
+            production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
+        if candidate.statement != Some(inherited) {
+            return None;
+        }
+        let effect_kind = production_adapter_effect_kind(successor);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(successor),
+        );
+        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
+            candidate.kind,
+            &candidate.semantic_identity,
+        ));
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &self.causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            candidate.kind,
+            candidate.statement,
+            candidate_semantic_identity.as_ref(),
+        );
+        let successor_binding = Self {
+            causal_lifecycle_key: self.causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind: candidate.kind,
+            candidate_statement: candidate.statement,
+            candidate_semantic_identity,
+            projection_hash,
+        };
+        successor_binding
+            .validate_exact(successor)
+            .then_some(successor_binding)
+    }
+
+    /// Project the exact `ValidateBody` successor of one durable `StoreBody`.
+    ///
+    /// The returned binding retains the Store's immutable causal key and full
+    /// inherited candidate statement while replacing only the concrete effect
+    /// kind and identity. No lifecycle ordinal or independently executable
+    /// authority is minted here: the usable value must remain sealed inside
+    /// the future move-only registry transaction which advances Store to
+    /// Validate.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn project_store_validate_successor(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+    ) -> Option<Self> {
+        let (
+            AdapterEffect::StoreBody {
+                tag: predecessor_tag,
+                round: predecessor_round,
+                subject: predecessor_subject,
+            },
+            AdapterEffect::ValidateBody {
+                tag: successor_tag,
+                round: successor_round,
+                subject: successor_subject,
+            },
+        ) = (predecessor, successor)
+        else {
+            return None;
+        };
+        if predecessor_tag != successor_tag
+            || predecessor_round != successor_round
+            || predecessor_subject != successor_subject
+            || !self.validate_exact(predecessor)
+        {
+            return None;
+        }
+
+        let inherited = self.candidate_statement?;
+        let candidate =
+            production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
+        if candidate.statement != Some(inherited) {
+            return None;
+        }
+        let effect_kind = production_adapter_effect_kind(successor);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(successor),
+        );
+        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
+            candidate.kind,
+            &candidate.semantic_identity,
+        ));
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &self.causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            candidate.kind,
+            candidate.statement,
+            candidate_semantic_identity.as_ref(),
+        );
+        let successor_binding = Self {
+            causal_lifecycle_key: self.causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind: candidate.kind,
+            candidate_statement: candidate.statement,
+            candidate_semantic_identity,
+            projection_hash,
+        };
+        successor_binding
+            .validate_exact(successor)
+            .then_some(successor_binding)
+    }
+
+    /// Project the exact `Apply` successor of one successfully completed
+    /// `ValidateBody` without consulting or minting a legacy lifecycle ordinal.
+    ///
+    /// The causal lifecycle key remains immutable. Candidate authority may
+    /// change only through the already reviewed body-authority lattice:
+    /// ordinary validation acquires Commit authority, Prepare authority is
+    /// promoted by the matching CommitQC, and an existing exact Commit
+    /// statement is retained. The returned binding is deterministic data, not
+    /// independently executable authority; the future move-only Validate
+    /// transaction must keep it sealed until the parent settles and the Apply
+    /// child is admitted atomically.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn project_validate_apply_successor(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+    ) -> Option<Self> {
+        let (
+            AdapterEffect::ValidateBody {
+                tag: predecessor_tag,
+                round: predecessor_round,
+                subject: predecessor_subject,
+            },
+            AdapterEffect::Apply {
+                tag: successor_tag,
+                subject: successor_subject,
+                certificate,
+            },
+        ) = (predecessor, successor)
+        else {
+            return None;
+        };
+        if predecessor_tag != successor_tag
+            || predecessor_subject != successor_subject
+            || certificate.proposal_round != *predecessor_round
+            || certificate.subject != *predecessor_subject
+            || !self.validate_exact(predecessor)
+        {
+            return None;
+        }
+
+        let inherited = self.candidate_statement?;
+        let candidate =
+            production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
+        let successor_statement = candidate.statement?;
+        inherited.commit_refinement_to(successor_statement)?;
+        let effect_kind = production_adapter_effect_kind(successor);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(successor),
+        );
+        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
+            candidate.kind,
+            &candidate.semantic_identity,
+        ));
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &self.causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            candidate.kind,
+            candidate.statement,
+            candidate_semantic_identity.as_ref(),
+        );
+        let successor_binding = Self {
+            causal_lifecycle_key: self.causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind: candidate.kind,
+            candidate_statement: candidate.statement,
+            candidate_semantic_identity,
+            projection_hash,
+        };
+        successor_binding
+            .validate_exact(successor)
+            .then_some(successor_binding)
+    }
+}
+
 impl PartialEq for RuntimeEffectOwnership {
     // Equality names the immutable lifecycle owner, not the replaceable
     // positional effect binding. Fetch-route upgrades and later consumer-stage
@@ -2220,6 +2680,46 @@ impl RuntimeEffectOwnership {
                     effect_kind,
                     &production_adapter_effect_semantic_identity(effect),
                 )
+    }
+
+    /// Mint an ordinal-free lifecycle-admission binding only for the exact
+    /// concrete effect named by this legacy ownership sidecar.
+    ///
+    /// This conversion is the inert migration seam: it does not admit or
+    /// execute work, and the returned projection contains no logical ordinal.
+    pub(crate) fn pending_adapter_effect_binding(
+        &self,
+        effect: &AdapterEffect,
+    ) -> Option<PendingRuntimeEffectBinding> {
+        // TODO: Delete this legacy-owner conversion once the executor mints
+        // the pending binding before coordinator admission in the one-cut
+        // production scheduler switch.
+        if !self.exactly_binds_adapter_effect(effect) {
+            return None;
+        }
+        let binding = self
+            .binding
+            .as_ref()
+            .expect("an exactly bound ownership has a binding");
+        let causal_lifecycle_key = self.owner.causal_origin.lifecycle_key;
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &causal_lifecycle_key,
+            binding.effect_kind,
+            &binding.effect_identity,
+            binding.candidate_kind,
+            binding.candidate_statement,
+            binding.candidate_semantic_identity.as_ref(),
+        );
+        let pending = PendingRuntimeEffectBinding {
+            causal_lifecycle_key,
+            effect_kind: binding.effect_kind,
+            effect_identity: binding.effect_identity,
+            candidate_kind: binding.candidate_kind,
+            candidate_statement: binding.candidate_statement,
+            candidate_semantic_identity: binding.candidate_semantic_identity,
+            projection_hash,
+        };
+        pending.validate_exact(effect).then_some(pending)
     }
 
     /// Return whether this exact predecessor capability authorizes one body
@@ -2491,6 +2991,22 @@ fn append_optional_runtime_identity_bytes(identity: &mut Vec<u8>, value: Option<
     }
 }
 
+fn append_optional_runtime_qc_statement(
+    identity: &mut Vec<u8>,
+    certificate: Option<&wire::QuorumCertificate>,
+) {
+    let Some(certificate) = certificate else {
+        identity.push(0);
+        return;
+    };
+    identity.push(1);
+    append_runtime_identity_field(identity, &certificate.round.encode());
+    append_runtime_identity_field(identity, &certificate.proposal_round.encode());
+    identity.push(certificate.phase as u8);
+    append_runtime_identity_field(identity, &certificate.subject.encode());
+    append_runtime_identity_field(identity, &certificate.execution_commitment.encode());
+}
+
 /// Closed classification of every production adapter effect.
 pub(crate) const fn production_adapter_effect_kind(effect: &AdapterEffect) -> u8 {
     match effect {
@@ -2525,7 +3041,7 @@ pub(crate) const fn production_adapter_effect_kind(effect: &AdapterEffect) -> u8
 /// field and do not introduce a runtime configuration surface.
 pub(crate) fn production_adapter_effect_semantic_identity(effect: &AdapterEffect) -> Vec<u8> {
     let mut identity = Vec::new();
-    identity.extend_from_slice(b"iroha:sumeragi:v2:adapter-effect-semantic:v1");
+    identity.extend_from_slice(b"iroha:sumeragi:v2:adapter-effect-semantic:v2");
     identity.push(production_adapter_effect_kind(effect));
     match effect {
         AdapterEffect::Sign { tag, request } => {
@@ -2582,31 +3098,24 @@ pub(crate) fn production_adapter_effect_semantic_identity(effect: &AdapterEffect
         AdapterEffect::EnterView {
             tag,
             certificate,
-            protected_body,
+            protected_lock,
         } => {
             append_runtime_identity_tag(&mut identity, *tag);
             append_runtime_identity_field(&mut identity, &certificate.encode());
-            match protected_body {
-                None => identity.push(0),
-                Some((round, subject)) => {
-                    identity.push(1);
-                    append_runtime_identity_field(&mut identity, &round.encode());
-                    append_runtime_identity_field(&mut identity, &subject.encode());
-                }
-            }
+            append_optional_runtime_identity_bytes(
+                &mut identity,
+                protected_lock.as_ref().map(norito::codec::Encode::encode),
+            );
         }
-        AdapterEffect::ReportEquivocation {
-            offender,
-            round,
-            kind,
-        } => {
-            append_runtime_identity_field(&mut identity, &offender.encode());
-            append_runtime_identity_field(&mut identity, &round.encode());
-            identity.push(match kind {
+        AdapterEffect::ReportEquivocation { evidence } => {
+            identity.push(match evidence.kind() {
                 super::v2_core::EquivocationKind::Vote => 1,
                 super::v2_core::EquivocationKind::Timeout => 2,
                 super::v2_core::EquivocationKind::Proposal => 3,
             });
+            let (first, second) = evidence.signed_artifact_pair();
+            append_runtime_identity_field(&mut identity, &first);
+            append_runtime_identity_field(&mut identity, &second);
         }
         AdapterEffect::ReportInvalidCertifiedBody {
             subject,
@@ -9734,29 +10243,27 @@ impl RuntimeDriver for SumeragiV2Adapter {
             }
             AdapterEffect::EnterView {
                 certificate,
-                protected_body,
+                protected_lock,
                 ..
             } => {
                 identity.push(6);
                 append_runtime_identity_field(&mut identity, &certificate.round.encode());
-                if let Some((round, subject)) = protected_body {
-                    append_runtime_identity_field(&mut identity, &round.encode());
-                    append_runtime_identity_field(&mut identity, &subject.encode());
-                }
+                // Fresh-root identity retains the complete authenticated lock
+                // statement while excluding interchangeable aggregate carrier
+                // bytes. The exact effect identity above retains both.
+                append_optional_runtime_qc_statement(&mut identity, protected_lock.as_ref());
             }
-            AdapterEffect::ReportEquivocation {
-                offender,
-                round,
-                kind: equivocation_kind,
-            } => {
+            AdapterEffect::ReportEquivocation { evidence } => {
                 identity.push(7);
-                append_runtime_identity_field(&mut identity, &offender.encode());
-                append_runtime_identity_field(&mut identity, &round.encode());
-                identity.push(match equivocation_kind {
+                identity.push(match evidence.kind() {
                     super::v2_core::EquivocationKind::Vote => 1,
                     super::v2_core::EquivocationKind::Timeout => 2,
                     super::v2_core::EquivocationKind::Proposal => 3,
                 });
+                append_runtime_identity_u64(&mut identity, u64::from(evidence.offender_index()));
+                let (first, second) = evidence.canonical_unsigned_statement_pair();
+                append_runtime_identity_field(&mut identity, &first);
+                append_runtime_identity_field(&mut identity, &second);
             }
             AdapterEffect::ReportInvalidCertifiedBody {
                 subject,
@@ -10286,6 +10793,21 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     /// An older FIFO owner hit retryable adapter pressure during that episode.
     /// The target must then proceed; retry cannot become an unbounded barrier.
     exact_serve_predecessor_retry_attempted: bool,
+    /// Retained certified-response target used only by the legacy boolean
+    /// predecessor probe. It must never reset the selected-Serve witness state.
+    retained_response_predecessor_target_ordinal: Option<u128>,
+    /// Whether one older FIFO owner already received its bounded attempt for
+    /// the retained-response target.
+    retained_response_predecessor_retry_attempted: bool,
+    /// Whether the last exact-target observation found a physically retained
+    /// strictly older runtime prefix. Retry-unadmitted suppression deliberately
+    /// leaves this set while the restored owner remains present, so repeated
+    /// polls cannot mint another producer episode.
+    exact_serve_predecessor_physically_present: bool,
+    /// Monotone process-local predecessor episode for the current exact target.
+    exact_serve_predecessor_episode: u128,
+    /// Stable witness for the current continuous older prefix.
+    exact_serve_predecessor_witness: Option<ExactServePredecessorEpisodeWitness>,
     fail_closed: bool,
     fail_closed_reason: Option<String>,
 }
@@ -10379,6 +10901,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             last_scheduler_ownership: None,
             exact_serve_target_ordinal: None,
             exact_serve_predecessor_retry_attempted: false,
+            retained_response_predecessor_target_ordinal: None,
+            retained_response_predecessor_retry_attempted: false,
+            exact_serve_predecessor_physically_present: false,
+            exact_serve_predecessor_episode: 0,
+            exact_serve_predecessor_witness: None,
             fail_closed: false,
             fail_closed_reason: None,
         };
@@ -11973,6 +12500,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn minimum_runnable_lifecycle_ordinal(
         &self,
         now: Instant,
+        completion_evidence: Option<ExactServePredecessorCompletionEvidence>,
     ) -> Result<Option<u128>, EnqueueError> {
         // First validate the complete inventory so excluding passive owners
         // cannot conceal a forged or internally inconsistent capability.
@@ -12014,6 +12542,20 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             {
                 observe(owner)?;
             }
+        }
+        if let Some(evidence) = completion_evidence {
+            if !evidence.validate_exact()
+                || !self
+                    .ingress
+                    .lifecycle_ordinals
+                    .recognizes_minted(evidence.lifecycle_ordinal())
+                    .map_err(|_| EnqueueError::FailClosed)?
+            {
+                return Err(EnqueueError::FailClosed);
+            }
+            let lifecycle_ordinal = evidence.lifecycle_ordinal();
+            minimum =
+                Some(minimum.map_or(lifecycle_ordinal, |ordinal| ordinal.min(lifecycle_ordinal)));
         }
         Ok(minimum)
     }
@@ -12310,14 +12852,146 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         Ok(false)
     }
 
-    /// Freeze every due clock and compare the complete runtime owner set with
+    /// Freeze every due clock and return the current predecessor episode for
     /// one exact Serve ingress ticket from the shared ordinal source.
     ///
     /// The caller publishes executor-retained owners immediately before this
-    /// query. Returning `true` authorizes one bounded producer episode; it does
-    /// not authorize a loop. A runtime owner equal to the external ticket is a
-    /// source-uniqueness violation and latches fail-closed.
+    /// query. A witness authorizes one bounded producer episode; it does not
+    /// authorize a loop. The witness changes only after this actor observes no
+    /// strictly older owner and subsequently observes one for the same target.
+    /// A runtime owner equal to the external ticket is a source-uniqueness
+    /// violation and latches fail-closed.
+    pub(crate) fn exact_serve_predecessor_episode_witness(
+        &mut self,
+        now: Instant,
+        serve_lifecycle_ordinal: u128,
+        completion_evidence: Option<ExactServePredecessorCompletionEvidence>,
+    ) -> Result<Option<ExactServePredecessorEpisodeWitness>, String> {
+        if self.fail_closed {
+            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
+        }
+        let recognized = match self
+            .ingress
+            .lifecycle_ordinals
+            .recognizes_minted(serve_lifecycle_ordinal)
+        {
+            Ok(recognized) => recognized,
+            Err(reason) => {
+                self.latch_fail_closed(reason.clone());
+                return Err(reason);
+            }
+        };
+        if !recognized {
+            self.latch_fail_closed("exact Serve barrier used an unminted lifecycle ordinal");
+            return Err("Sumeragi v2 exact Serve barrier ordinal was invalid".to_owned());
+        }
+        if self.freeze_due_clock_owners(now).is_err() {
+            self.latch_fail_closed("clock lifecycle ownership could not be frozen for Serve");
+            return Err("Sumeragi v2 clock lifecycle ownership could not be frozen".to_owned());
+        }
+        let collision = match self.active_lifecycle_uses_ordinal(serve_lifecycle_ordinal) {
+            Ok(collision) => collision,
+            Err(_) => {
+                self.latch_fail_closed("runtime lifecycle ownership was invalid for Serve");
+                return Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned());
+            }
+        };
+        if collision {
+            self.latch_fail_closed("runtime and Serve claimed one lifecycle ordinal");
+            return Err("Sumeragi v2 lifecycle ordinal ownership collided".to_owned());
+        }
+        if completion_evidence.is_some_and(|evidence| {
+            !evidence.validate_exact() || evidence.lifecycle_ordinal() >= serve_lifecycle_ordinal
+        }) {
+            self.latch_fail_closed(
+                "exact Serve completion evidence was invalid or did not strictly precede its target",
+            );
+            return Err("Sumeragi v2 exact Serve completion evidence was invalid".to_owned());
+        }
+        if self.exact_serve_target_ordinal != Some(serve_lifecycle_ordinal) {
+            self.exact_serve_target_ordinal = Some(serve_lifecycle_ordinal);
+            self.exact_serve_predecessor_retry_attempted = false;
+            self.exact_serve_predecessor_physically_present = false;
+            self.exact_serve_predecessor_episode = 0;
+            self.exact_serve_predecessor_witness = None;
+        }
+        let minimum = match self.minimum_runnable_lifecycle_ordinal(now, completion_evidence) {
+            Ok(minimum) => minimum,
+            Err(_) => {
+                self.latch_fail_closed("runtime lifecycle ownership was invalid for Serve");
+                return Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned());
+            }
+        };
+        let predecessor = minimum.filter(|ordinal| *ordinal < serve_lifecycle_ordinal);
+        if self.exact_serve_predecessor_retry_attempted {
+            // The exact older owner received its bounded attempt and proved
+            // that adapter capacity, not logical order, prevents admission.
+            // Its restored FIFO occurrence remains physically present. Keep
+            // that fact latched while it remains runnable: clearing it here
+            // would turn every poll into a fresh predecessor episode and put
+            // the exact target behind an unbounded retry loop.
+            if predecessor.is_some() {
+                self.exact_serve_predecessor_physically_present = true;
+            } else {
+                self.exact_serve_predecessor_retry_attempted = false;
+                self.exact_serve_predecessor_physically_present = false;
+                self.exact_serve_predecessor_witness = None;
+            }
+            return Ok(None);
+        }
+        let Some(predecessor_lifecycle_ordinal) = predecessor else {
+            self.exact_serve_predecessor_physically_present = false;
+            self.exact_serve_predecessor_witness = None;
+            return Ok(None);
+        };
+        if !self.exact_serve_predecessor_physically_present {
+            let Some(episode) = self.exact_serve_predecessor_episode.checked_add(1) else {
+                self.latch_fail_closed("exact Serve predecessor episode ordinal overflowed");
+                return Err("Sumeragi v2 exact Serve predecessor episode overflowed".to_owned());
+            };
+            let Some(witness) = ExactServePredecessorEpisodeWitness::try_new(
+                serve_lifecycle_ordinal,
+                predecessor_lifecycle_ordinal,
+                episode,
+            ) else {
+                self.latch_fail_closed("exact Serve predecessor episode witness was invalid");
+                return Err(
+                    "Sumeragi v2 exact Serve predecessor episode witness was invalid".to_owned(),
+                );
+            };
+            self.exact_serve_predecessor_episode = episode;
+            self.exact_serve_predecessor_witness = Some(witness);
+            self.exact_serve_predecessor_physically_present = true;
+        }
+        let Some(witness) = self.exact_serve_predecessor_witness else {
+            self.latch_fail_closed("exact Serve predecessor episode lost its witness");
+            return Err("Sumeragi v2 exact Serve predecessor episode lost its witness".to_owned());
+        };
+        if !witness.validate_exact() || witness.serve_lifecycle_ordinal() != serve_lifecycle_ordinal
+        {
+            self.latch_fail_closed("exact Serve predecessor episode changed target identity");
+            return Err(
+                "Sumeragi v2 exact Serve predecessor episode changed target identity".to_owned(),
+            );
+        }
+        Ok(Some(witness))
+    }
+
+    /// Return whether one runnable owner belongs to the currently witnessed
+    /// strictly older prefix of an exact Serve ticket.
+    #[cfg(test)]
     pub(crate) fn older_lifecycle_predates_exact_serve(
+        &mut self,
+        now: Instant,
+        serve_lifecycle_ordinal: u128,
+    ) -> Result<bool, String> {
+        self.exact_serve_predecessor_episode_witness(now, serve_lifecycle_ordinal, None)
+            .map(|witness| witness.is_some())
+    }
+
+    /// Return whether one runnable owner strictly predates a retained
+    /// certified-response target without mutating selected-Serve witness state.
+    pub(crate) fn older_lifecycle_predates_retained_response(
         &mut self,
         now: Instant,
         serve_lifecycle_ordinal: u128,
@@ -12355,32 +13029,25 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             self.latch_fail_closed("runtime and Serve claimed one lifecycle ordinal");
             return Err("Sumeragi v2 lifecycle ordinal ownership collided".to_owned());
         }
-        if self.exact_serve_target_ordinal != Some(serve_lifecycle_ordinal) {
-            self.exact_serve_target_ordinal = Some(serve_lifecycle_ordinal);
-            self.exact_serve_predecessor_retry_attempted = false;
+        if self.retained_response_predecessor_target_ordinal != Some(serve_lifecycle_ordinal) {
+            self.retained_response_predecessor_target_ordinal = Some(serve_lifecycle_ordinal);
+            self.retained_response_predecessor_retry_attempted = false;
         }
-        if self.exact_serve_predecessor_retry_attempted {
-            // The exact older owner received its bounded attempt and proved
-            // that adapter capacity, not logical order, prevents admission.
-            // Keeping the target behind that same restored owner would turn a
-            // retryable condition into a permanent Serve/response deadlock.
-            self.exact_serve_target_ordinal = None;
-            self.exact_serve_predecessor_retry_attempted = false;
-            return Ok(false);
-        }
-        match self.minimum_runnable_lifecycle_ordinal(now) {
-            Ok(minimum) => {
-                let older = minimum.is_some_and(|ordinal| ordinal < serve_lifecycle_ordinal);
-                if !older {
-                    self.exact_serve_target_ordinal = None;
-                }
-                Ok(older)
-            }
+        let minimum = match self.minimum_runnable_lifecycle_ordinal(now, None) {
+            Ok(minimum) => minimum,
             Err(_) => {
                 self.latch_fail_closed("runtime lifecycle ownership was invalid for Serve");
-                Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned())
+                return Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned());
             }
+        };
+        let predecessor_exists = minimum.is_some_and(|ordinal| ordinal < serve_lifecycle_ordinal);
+        if self.retained_response_predecessor_retry_attempted {
+            if !predecessor_exists {
+                self.retained_response_predecessor_retry_attempted = false;
+            }
+            return Ok(false);
         }
+        Ok(predecessor_exists)
     }
 
     fn current_signature_fence_identity(
@@ -12913,6 +13580,12 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                         .is_some_and(|target| owner.lifecycle_ordinal() < target)
                     {
                         self.exact_serve_predecessor_retry_attempted = true;
+                    }
+                    if self
+                        .retained_response_predecessor_target_ordinal
+                        .is_some_and(|target| owner.lifecycle_ordinal() < target)
+                    {
+                        self.retained_response_predecessor_retry_attempted = true;
                     }
                     if self
                         .ingress
@@ -15071,7 +15744,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             .map_err(|error| error.to_string())
     }
 
-    /// Commit one previously checked terminal authority refinement.
+    /// Commit one source-audited terminal refinement through the atomic batch API.
+    #[allow(dead_code)]
     pub(crate) fn commit_body_pipeline_candidate_terminal(
         &mut self,
         effect: &AdapterEffect,
@@ -15085,6 +15759,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     /// after producing the incumbent-owner plan. Executor production uses the
     /// explicit plan/commit pair so its total positional refinement gate sits
     /// between these two operations.
+    #[cfg(test)]
     pub(crate) fn body_pipeline_candidate_has_terminal(
         &mut self,
         effect: &AdapterEffect,
@@ -17879,7 +18554,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let context = wire::HeightContext {
-            chain_id: "sumeragi-v2-runtime-ingress-test".into(),
+            network_id: crate::sumeragi::synthetic_network_id("sumeragi-v2-runtime-ingress-test"),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 1,
             epoch: 1,
@@ -18202,6 +18877,326 @@ mod tests {
     }
 
     #[test]
+    fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
+        let (context, keys) = authenticated_runtime_context();
+        let manifest = runtime_manifest(&context, 0x68);
+        let tag = EventTag::new(context.height, 0, Generation::new(1));
+        let mut certificate = signed_runtime_quorum_certificate_for_phase(
+            &context,
+            &keys,
+            0x69,
+            wire::GlobalPhase::Prepare,
+        );
+        certificate.subject = manifest.subject;
+        let preimage = wire::Vote {
+            round: certificate.round,
+            proposal_round: certificate.proposal_round,
+            phase: certificate.phase,
+            subject: certificate.subject,
+            execution_commitment: certificate.execution_commitment,
+            signer: certificate.signers[0],
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let shares = certificate
+            .signers
+            .iter()
+            .map(|signer| {
+                Signature::new(
+                    keys[usize::try_from(*signer).expect("small signer index")].private_key(),
+                    &preimage,
+                )
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+            &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        )
+        .expect("aggregate exact Fetch certificate");
+        certificate
+            .validate(&context)
+            .expect("exact Fetch certificate is authenticated");
+
+        let fetch = AdapterEffect::FetchBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            certificate: Some(certificate),
+        };
+        let bound = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&fetch),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, 71)],
+        )
+        .expect("bind one exact certified Fetch");
+        let pending = bound[0]
+            .pending_adapter_effect_binding(&fetch)
+            .expect("certified Fetch mints one pending binding");
+        let store = AdapterEffect::StoreBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        let successor = pending
+            .project_certified_fetch_store_successor(&fetch, &store)
+            .expect("certified Fetch derives one exact Store successor");
+        assert!(successor.exactly_binds_adapter_effect(&store));
+        assert_eq!(
+            successor.causal_lifecycle_key(),
+            pending.causal_lifecycle_key(),
+            "the coordinator causal owner survives the direct completion handoff",
+        );
+        assert_eq!(
+            successor.candidate_statement(),
+            pending.candidate_statement()
+        );
+        assert_ne!(
+            successor.exact_effect_identity(),
+            pending.exact_effect_identity()
+        );
+
+        let validate = AdapterEffect::ValidateBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        let validate_successor = successor
+            .project_store_validate_successor(&store, &validate)
+            .expect("exact Store derives one sealed Validate successor");
+        assert!(validate_successor.exactly_binds_adapter_effect(&validate));
+        assert_eq!(
+            validate_successor.causal_lifecycle_key(),
+            successor.causal_lifecycle_key(),
+            "the coordinator causal owner survives the durable-body handoff",
+        );
+        assert_eq!(
+            validate_successor.candidate_statement(),
+            successor.candidate_statement(),
+            "Validate inherits the complete certified body statement",
+        );
+        assert_ne!(
+            validate_successor.exact_effect_identity(),
+            successor.exact_effect_identity()
+        );
+        assert_ne!(
+            validate_successor.projection_hash, successor.projection_hash,
+            "the concrete successor receives a new integrity projection",
+        );
+        assert!(!successor.exactly_binds_adapter_effect(&validate));
+        assert!(!validate_successor.exactly_binds_adapter_effect(&store));
+
+        let wrong_tag = AdapterEffect::StoreBody {
+            tag: EventTag::new(context.height, 0, Generation::new(2)),
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        assert!(
+            pending
+                .project_certified_fetch_store_successor(&fetch, &wrong_tag)
+                .is_none()
+        );
+        let ordinary_fetch = AdapterEffect::FetchBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: None,
+        };
+        assert!(
+            pending
+                .project_certified_fetch_store_successor(&ordinary_fetch, &store)
+                .is_none()
+        );
+
+        let wrong_validate_tag = AdapterEffect::ValidateBody {
+            tag: EventTag::new(context.height, 0, Generation::new(2)),
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        assert!(
+            successor
+                .project_store_validate_successor(&store, &wrong_validate_tag)
+                .is_none()
+        );
+        assert!(
+            successor
+                .project_store_validate_successor(&validate, &validate)
+                .is_none(),
+            "Validate cannot stand in for the exact Store predecessor"
+        );
+        assert!(
+            successor
+                .project_store_validate_successor(&store, &store)
+                .is_none(),
+            "Store cannot stand in for the exact Validate successor"
+        );
+        assert!(
+            validate_successor
+                .project_store_validate_successor(&store, &validate)
+                .is_none(),
+            "the projected successor cannot duplicate predecessor authority"
+        );
+    }
+
+    #[test]
+    fn pending_validate_projects_only_the_exact_commit_authorized_apply_successor() {
+        let (context, keys) = authenticated_runtime_context();
+        let commit = signed_runtime_quorum_certificate(&context, &keys, 0x6A);
+        let tag = EventTag::new(context.height, commit.round.view, Generation::new(2));
+        let store = AdapterEffect::StoreBody {
+            tag,
+            round: commit.proposal_round,
+            subject: commit.subject,
+        };
+        let validate = AdapterEffect::ValidateBody {
+            tag,
+            round: commit.proposal_round,
+            subject: commit.subject,
+        };
+        let apply = AdapterEffect::Apply {
+            tag,
+            subject: commit.subject,
+            certificate: commit.clone(),
+        };
+
+        let local_store = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&store),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, 72)],
+        )
+        .expect("bind one ordinary Store")
+        .pop()
+        .expect("one ordinary Store owner")
+        .pending_adapter_effect_binding(&store)
+        .expect("ordinary Store mints one pending binding");
+        let local_validate = local_store
+            .project_store_validate_successor(&store, &validate)
+            .expect("ordinary Store derives one Validate successor");
+        let local_apply = local_validate
+            .project_validate_apply_successor(&validate, &apply)
+            .expect("a durable CommitQC refines ordinary validation to Apply");
+        assert!(local_apply.exactly_binds_adapter_effect(&apply));
+        assert_eq!(
+            local_apply.causal_lifecycle_key(),
+            local_validate.causal_lifecycle_key()
+        );
+        assert_eq!(
+            local_apply
+                .candidate_statement()
+                .expect("Apply carries its exact candidate statement")
+                .phase(),
+            Some(wire::GlobalPhase::Commit)
+        );
+        assert_ne!(
+            local_apply.exact_effect_identity(),
+            local_validate.exact_effect_identity()
+        );
+
+        let prepare = signed_runtime_quorum_certificate_for_phase(
+            &context,
+            &keys,
+            0x6A,
+            wire::GlobalPhase::Prepare,
+        );
+        let fetch = AdapterEffect::FetchBody {
+            tag,
+            round: prepare.proposal_round,
+            subject: prepare.subject,
+            manifest: None,
+            certified_sources: Vec::new(),
+            certificate: Some(prepare),
+        };
+        let prepare_fetch = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&fetch),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, 73)],
+        )
+        .expect("bind one Prepare-certified Fetch")
+        .pop()
+        .expect("one Prepare-certified Fetch owner")
+        .pending_adapter_effect_binding(&fetch)
+        .expect("Prepare-certified Fetch mints one pending binding");
+        let prepare_store = prepare_fetch
+            .project_certified_fetch_store_successor(&fetch, &store)
+            .expect("Prepare-certified Fetch derives Store");
+        let prepare_validate = prepare_store
+            .project_store_validate_successor(&store, &validate)
+            .expect("Prepare-certified Store derives Validate");
+        let prepare_apply = prepare_validate
+            .project_validate_apply_successor(&validate, &apply)
+            .expect("matching CommitQC promotes Prepare validation to Apply");
+        assert!(prepare_apply.exactly_binds_adapter_effect(&apply));
+        assert_eq!(
+            prepare_apply.candidate_statement(),
+            local_apply.candidate_statement()
+        );
+
+        let wrong_tag_apply = AdapterEffect::Apply {
+            tag: EventTag::new(context.height, commit.round.view, Generation::new(3)),
+            subject: commit.subject,
+            certificate: commit.clone(),
+        };
+        assert!(
+            prepare_validate
+                .project_validate_apply_successor(&validate, &wrong_tag_apply)
+                .is_none()
+        );
+        let prepare_apply_effect = AdapterEffect::Apply {
+            tag,
+            subject: commit.subject,
+            certificate: signed_runtime_quorum_certificate_for_phase(
+                &context,
+                &keys,
+                0x6A,
+                wire::GlobalPhase::Prepare,
+            ),
+        };
+        assert!(
+            prepare_validate
+                .project_validate_apply_successor(&validate, &prepare_apply_effect)
+                .is_none(),
+            "Apply must carry Commit rather than Prepare authority"
+        );
+        let mut changed_commitment = commit;
+        changed_commitment.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"foreign Validate-to-Apply parent state"),
+                Hash::new(b"foreign Validate-to-Apply post state"),
+                Hash::new(b"foreign Validate-to-Apply writes"),
+                1,
+                Hash::new(b"foreign Validate-to-Apply executed block"),
+            );
+        let changed_apply = AdapterEffect::Apply {
+            tag,
+            subject: changed_commitment.subject,
+            certificate: changed_commitment,
+        };
+        assert!(
+            prepare_validate
+                .project_validate_apply_successor(&validate, &changed_apply)
+                .is_none(),
+            "Prepare authority cannot change its inherited execution commitment"
+        );
+        assert!(
+            prepare_validate
+                .project_validate_apply_successor(&store, &apply)
+                .is_none(),
+            "Store cannot stand in for the exact Validate predecessor"
+        );
+        assert!(
+            prepare_apply
+                .project_validate_apply_successor(&validate, &apply)
+                .is_none(),
+            "the projected Apply binding cannot duplicate predecessor authority"
+        );
+    }
+
+    #[test]
     fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         let (context, keys) = authenticated_runtime_context();
         let manifest = runtime_manifest(&context, 0x6A);
@@ -18226,6 +19221,35 @@ mod tests {
         let bound = bind_adapter_effect_batch_ownership(&[store.clone()], vec![owner])
             .expect("one exact StoreBody candidate is within the bound");
         assert!(bound[0].validate_bound_exact());
+        let pending = bound[0]
+            .pending_adapter_effect_binding(&store)
+            .expect("exact bound effect mints one pending binding");
+        assert!(pending.exactly_binds_adapter_effect(&store));
+        let different_legacy_ordinal = bind_adapter_effect_batch_ownership(
+            &[store.clone()],
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, 72)],
+        )
+        .expect("same effect remains bindable under a different legacy ordinal");
+        let mut different_pending = different_legacy_ordinal[0]
+            .pending_adapter_effect_binding(&store)
+            .expect("different legacy owner mints one pending binding");
+        assert_eq!(
+            pending, different_pending,
+            "pending admission authority deliberately excludes the legacy logical ordinal"
+        );
+        let exact_effect_kind = different_pending.effect_kind;
+        different_pending.effect_kind = 0;
+        assert!(!different_pending.exactly_binds_adapter_effect(&store));
+        different_pending.effect_kind = exact_effect_kind;
+        let exact_candidate_kind = different_pending.candidate_kind;
+        different_pending.candidate_kind = RUNTIME_CANDIDATE_KIND_NONE;
+        assert!(!different_pending.exactly_binds_adapter_effect(&store));
+        different_pending.candidate_kind = exact_candidate_kind;
+        let exact_projection_hash = different_pending.projection_hash;
+        different_pending.projection_hash = Hash::new(b"mutated pending projection");
+        assert!(!different_pending.exactly_binds_adapter_effect(&store));
+        different_pending.projection_hash = exact_projection_hash;
+        assert!(different_pending.exactly_binds_adapter_effect(&store));
         let first_owner_projection = production_adapter_effect_candidate_trace_projection(
             &store, &bound[0], 1, 1, 1, 1, 0, 1, true,
         )
@@ -18280,6 +19304,10 @@ mod tests {
             round: manifest.round,
             subject: manifest.subject,
         };
+        assert!(
+            !pending.exactly_binds_adapter_effect(&changed),
+            "the ordinal-free binding still retains the complete physical effect identity"
+        );
         assert_ne!(
             production_adapter_effect_semantic_identity(&store),
             production_adapter_effect_semantic_identity(&changed)
@@ -18354,6 +19382,143 @@ mod tests {
             production_adapter_effect_candidate_semantic_identity(&apply),
             production_adapter_effect_candidate_semantic_identity(&alternate_apply),
             "candidate identity excludes aggregate, signer, and local-incarnation carriers"
+        );
+
+        let protected_lock = signed_runtime_quorum_certificate_for_phase(
+            &context,
+            &keys,
+            0x74,
+            wire::GlobalPhase::Prepare,
+        );
+        let timeout = signed_runtime_timeout_certificate(&context, &keys);
+        let enter_tag = EventTag::new(context.height, 1, Generation::new(2));
+        let enter_view = |protected_lock| AdapterEffect::EnterView {
+            tag: enter_tag,
+            certificate: timeout.clone(),
+            protected_lock: Some(protected_lock),
+        };
+        let exact_enter = enter_view(protected_lock.clone());
+        let mut alternate_lock_carrier = protected_lock.clone();
+        alternate_lock_carrier.signers.reverse();
+        alternate_lock_carrier.aggregate_signature = vec![0xA8; 96];
+        let alternate_carrier_enter = enter_view(alternate_lock_carrier);
+        assert_ne!(
+            production_adapter_effect_semantic_identity(&exact_enter),
+            production_adapter_effect_semantic_identity(&alternate_carrier_enter),
+            "exact EnterView identity retains the authenticated QC carrier"
+        );
+        assert_eq!(
+            <SumeragiV2Adapter as RuntimeDriver>::fresh_effect_semantic_identity(
+                &exact_enter,
+                RuntimeFreshRootKind::StartupRecovery,
+            ),
+            <SumeragiV2Adapter as RuntimeDriver>::fresh_effect_semantic_identity(
+                &alternate_carrier_enter,
+                RuntimeFreshRootKind::StartupRecovery,
+            ),
+            "fresh EnterView identity normalizes interchangeable QC carriers"
+        );
+
+        let mut conflicting_lock = protected_lock;
+        conflicting_lock.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"conflicting EnterView parent state"),
+                Hash::new(b"conflicting EnterView post state"),
+                Hash::new(b"conflicting EnterView ordinary writes"),
+                1,
+                Hash::new(b"conflicting EnterView executed block"),
+            );
+        let conflicting_enter = enter_view(conflicting_lock);
+        assert_ne!(
+            production_adapter_effect_semantic_identity(&exact_enter),
+            production_adapter_effect_semantic_identity(&conflicting_enter),
+            "exact EnterView identity retains the protected execution commitment"
+        );
+        assert_ne!(
+            <SumeragiV2Adapter as RuntimeDriver>::fresh_effect_semantic_identity(
+                &exact_enter,
+                RuntimeFreshRootKind::StartupRecovery,
+            ),
+            <SumeragiV2Adapter as RuntimeDriver>::fresh_effect_semantic_identity(
+                &conflicting_enter,
+                RuntimeFreshRootKind::StartupRecovery,
+            ),
+            "fresh EnterView identity retains the protected lock statement"
+        );
+
+        let first_vote = wire::Vote {
+            round: manifest.round,
+            proposal_round: manifest.round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: manifest.subject,
+            execution_commitment: certificate.execution_commitment,
+            signer: 0,
+            signature: vec![0xB1; 96],
+        };
+        let mut second_vote = first_vote.clone();
+        second_vote.subject = wire::BlockSubject {
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"conflicting diagnostic block")),
+            payload_hash: Hash::new(b"conflicting diagnostic payload"),
+            ..first_vote.subject
+        };
+        second_vote.execution_commitment =
+            wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"conflicting diagnostic parent state"),
+                Hash::new(b"conflicting diagnostic post state"),
+                Hash::new(b"conflicting diagnostic ordinary writes"),
+                1,
+                Hash::new(b"conflicting diagnostic executed block"),
+            );
+        second_vote.signature = vec![0xB2; 96];
+        let diagnostic = AdapterEffect::ReportEquivocation {
+            evidence: AdapterEquivocationEvidence::vote_for_test(
+                first_vote.clone(),
+                second_vote.clone(),
+            ),
+        };
+        let reversed_diagnostic = AdapterEffect::ReportEquivocation {
+            evidence: AdapterEquivocationEvidence::vote_for_test(
+                second_vote.clone(),
+                first_vote.clone(),
+            ),
+        };
+        assert_ne!(
+            production_adapter_effect_semantic_identity(&diagnostic),
+            production_adapter_effect_semantic_identity(&reversed_diagnostic),
+            "exact diagnostic identity retains signed artifact observation order"
+        );
+        assert_eq!(
+            <SumeragiV2Adapter as RuntimeDriver>::fresh_effect_semantic_identity(
+                &diagnostic,
+                RuntimeFreshRootKind::StartupRecovery,
+            ),
+            <SumeragiV2Adapter as RuntimeDriver>::fresh_effect_semantic_identity(
+                &reversed_diagnostic,
+                RuntimeFreshRootKind::StartupRecovery,
+            ),
+            "logical diagnostic identity canonicalizes the unsigned statement pair"
+        );
+
+        let mut resigned_first = first_vote;
+        resigned_first.signature = vec![0xB3; 96];
+        let resigned_diagnostic = AdapterEffect::ReportEquivocation {
+            evidence: AdapterEquivocationEvidence::vote_for_test(resigned_first, second_vote),
+        };
+        assert_ne!(
+            production_adapter_effect_semantic_identity(&diagnostic),
+            production_adapter_effect_semantic_identity(&resigned_diagnostic),
+            "exact diagnostic identity retains complete signed artifacts"
+        );
+        assert_eq!(
+            <SumeragiV2Adapter as RuntimeDriver>::fresh_effect_semantic_identity(
+                &diagnostic,
+                RuntimeFreshRootKind::StartupRecovery,
+            ),
+            <SumeragiV2Adapter as RuntimeDriver>::fresh_effect_semantic_identity(
+                &resigned_diagnostic,
+                RuntimeFreshRootKind::StartupRecovery,
+            ),
+            "logical diagnostic identity excludes signature carrier bytes"
         );
 
         let mut changed_statement = certificate;
@@ -19040,6 +20205,21 @@ mod tests {
         manifest: &wire::PayloadManifest,
     ) {
         assert_eq!(runtime.round_tag(), previous);
+        let protected_lock = wire::QuorumCertificate {
+            round: manifest.round,
+            proposal_round: manifest.round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: manifest.subject,
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"runtime EnterView parent state"),
+                Hash::new(b"runtime EnterView post state"),
+                Hash::new(b"runtime EnterView ordinary writes"),
+                1,
+                Hash::new(b"runtime EnterView executed block"),
+            ),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0xA6; 96],
+        };
         runtime
             .observe_effects_with_test_ownership(
                 Instant::now(),
@@ -19059,7 +20239,7 @@ mod tests {
                             aggregate_signature: vec![0xA5; 96],
                         }],
                     },
-                    protected_body: Some((manifest.round, manifest.subject)),
+                    protected_lock: Some(protected_lock),
                 }],
             )
             .expect("test EnterView retains positional producer ownership");
@@ -19512,7 +20692,7 @@ mod tests {
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
         ingress
-            .configure_roster_for_context(roster.clone(), &context.chain_id, context.da_layout)
+            .configure_roster_for_context(roster.clone(), &context.network_id, context.da_layout)
             .expect("preowned leader-wire geometry");
         ingress.require_leader_wire_lifecycle_gate();
         let capacity =
@@ -19707,7 +20887,7 @@ mod tests {
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
         ingress
-            .configure_roster_for_context(roster.clone(), &context.chain_id, context.da_layout)
+            .configure_roster_for_context(roster.clone(), &context.network_id, context.da_layout)
             .expect("leader-wire runtime fixture geometry");
         ingress.require_leader_wire_lifecycle_gate();
         let capacity =
@@ -22883,10 +24063,27 @@ mod tests {
             .mint_non_fifo_lifecycle_ordinal()
             .expect("external Serve ticket shares the actor ordinal source");
 
+        let first_witness = runtime
+            .exact_serve_predecessor_episode_witness(start, serve_ordinal, None)
+            .expect("older runnable predecessor is visible")
+            .expect("older prefix issues one runtime witness");
+        assert_eq!(first_witness.serve_lifecycle_ordinal(), serve_ordinal);
+        assert_eq!(first_witness.episode(), 1);
+        let retained_response_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("retained response target shares the actor ordinal source");
         assert!(
             runtime
-                .older_lifecycle_predates_exact_serve(start, serve_ordinal)
-                .expect("older runnable predecessor is visible")
+                .older_lifecycle_predates_retained_response(start, retained_response_ordinal)
+                .expect("alternate retained-response target sees the same older owner")
+        );
+        assert_eq!(
+            runtime
+                .exact_serve_predecessor_episode_witness(start, serve_ordinal, None)
+                .expect("alternate target cannot reset selected-Serve witness state"),
+            Some(first_witness),
+            "selected Serve retains one monotone witness across the legacy target probe"
         );
         assert!(matches!(
             runtime.step_and_take_scheduler_ownership_for_test(start),
@@ -22898,13 +24095,96 @@ mod tests {
                 .older_lifecycle_predates_exact_serve(start, serve_ordinal)
                 .expect("retryable pressure cannot become a Serve barrier")
         );
-        assert!(runtime.exact_serve_target_ordinal.is_none());
-        assert!(!runtime.exact_serve_predecessor_retry_attempted);
+        assert_eq!(runtime.exact_serve_target_ordinal, Some(serve_ordinal));
+        assert!(runtime.exact_serve_predecessor_retry_attempted);
+        assert_eq!(
+            runtime.retained_response_predecessor_target_ordinal,
+            Some(retained_response_ordinal)
+        );
+        assert!(runtime.retained_response_predecessor_retry_attempted);
+        assert!(runtime.exact_serve_predecessor_physically_present);
+        assert_eq!(runtime.exact_serve_predecessor_episode, 1);
+        assert_eq!(runtime.exact_serve_predecessor_witness, Some(first_witness));
+        assert!(
+            runtime
+                .exact_serve_predecessor_episode_witness(start, serve_ordinal, None)
+                .expect("the restored predecessor remains a suppressed physical owner")
+                .is_none(),
+            "retry polling cannot mint a second predecessor episode"
+        );
+        assert_eq!(runtime.exact_serve_predecessor_episode, 1);
+        assert!(
+            !runtime
+                .older_lifecycle_predates_retained_response(start, retained_response_ordinal)
+                .expect("alternate target also suppresses the one attempted owner"),
+            "one retry attempt is shared across both exact target comparisons"
+        );
 
         runtime
             .step_and_take_scheduler_ownership_for_test(start)
             .expect("the restored owner remains available after Serve settlement");
         assert_eq!(runtime.driver.delivered, vec![(owner_tag, 7)]);
+        assert!(
+            runtime
+                .exact_serve_predecessor_episode_witness(start, serve_ordinal, None)
+                .expect("settled retry clears its physical-presence latch")
+                .is_none()
+        );
+        assert!(!runtime.exact_serve_predecessor_retry_attempted);
+        assert!(!runtime.exact_serve_predecessor_physically_present);
+        assert!(
+            !runtime
+                .older_lifecycle_predates_retained_response(start, retained_response_ordinal)
+                .expect("settled owner clears alternate-target retry suppression")
+        );
+        assert!(!runtime.retained_response_predecessor_retry_attempted);
+
+        let completed_ordinal = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("completed service owner shares the actor ordinal source");
+        let completed_evidence =
+            ExactServePredecessorCompletionEvidence::try_new(completed_ordinal)
+                .expect("completed service evidence is nonzero and exact");
+        let completed_target = runtime
+            .ingress
+            .mint_non_fifo_lifecycle_ordinal()
+            .expect("new Serve target follows the completed service owner");
+        assert!(
+            runtime
+                .exact_serve_predecessor_episode_witness(start, completed_target, None)
+                .expect("passive ownership alone remains absent")
+                .is_none()
+        );
+        let completed_witness = runtime
+            .exact_serve_predecessor_episode_witness(
+                start,
+                completed_target,
+                Some(completed_evidence),
+            )
+            .expect("completion-qualified owner is accepted")
+            .expect("completion-qualified owner opens one predecessor episode");
+        assert_eq!(
+            completed_witness.predecessor_lifecycle_ordinal(),
+            completed_ordinal
+        );
+        assert_eq!(completed_witness.episode(), 1);
+        assert_eq!(
+            runtime
+                .exact_serve_predecessor_episode_witness(
+                    start,
+                    completed_target,
+                    Some(completed_evidence),
+                )
+                .expect("repeated completion evidence remains stable"),
+            Some(completed_witness)
+        );
+        assert!(
+            runtime
+                .exact_serve_predecessor_episode_witness(start, completed_target, None)
+                .expect("consumed completion evidence closes its episode")
+                .is_none()
+        );
     }
 
     #[test]
@@ -28065,7 +29345,7 @@ mod tests {
             .map(|entry| entry.validator.clone())
             .collect::<Vec<_>>();
         restored_ingress
-            .configure_roster_for_context(roster.clone(), &context.chain_id, context.da_layout)
+            .configure_roster_for_context(roster.clone(), &context.network_id, context.da_layout)
             .expect("restored leader-wire geometry");
         restored_ingress.require_leader_wire_lifecycle_gate();
         let capacity =
@@ -31754,7 +33034,8 @@ mod tests {
             authenticated_network_runtime(&malformed_directory, RuntimeQueueConfig::new(8, 1, 1));
         let mut malformed_manifest = runtime_manifest(&malformed_context, 0x9F);
         let mut foreign_context = malformed_context.clone();
-        foreign_context.chain_id = "foreign-runtime-preflight".into();
+        foreign_context.network_id =
+            crate::sumeragi::synthetic_network_id("foreign-runtime-preflight");
         malformed_manifest.round.context_id = foreign_context.id();
         let next_ordinal = malformed_runtime.ingress.next_admission_ordinal;
         assert_eq!(

@@ -207,7 +207,7 @@ fn nft_lifecycle_scenarios() -> Result<()> {
             .expect("Owner of `nft.domain` can modify NFT");
 
         let modify_nft_tx = TransactionBuilder::new(
-            network.chain_id(),
+            network.network_id(),
             account_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -243,7 +243,7 @@ fn nft_lifecycle_scenarios() -> Result<()> {
 
         let transfer_nft2 = Transfer::nft(account_id.clone(), nft_id.clone(), ALICE_ID.clone());
         let transfer_nft2_tx = TransactionBuilder::new(
-            network.chain_id(),
+            network.network_id(),
             account_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

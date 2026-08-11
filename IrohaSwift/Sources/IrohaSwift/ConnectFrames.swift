@@ -221,8 +221,8 @@ public struct ConnectPong: Codable, Equatable, Sendable {
 }
 
 public struct ConnectConstraints: Codable, Equatable, Sendable {
-    public var chainID: String
-    public init(chainID: String) { self.chainID = chainID }
+    public var networkID: NetworkId
+    public init(networkID: NetworkId) { self.networkID = networkID }
 }
 
 public struct ConnectPermissions: Codable, Equatable, Sendable {
@@ -265,17 +265,17 @@ public struct ConnectWalletMetadata: Codable, Equatable, Sendable {
 }
 
 public struct ConnectSignInProof: Codable, Equatable, Sendable {
-    public var domain: String?
-    public var uri: String?
-    public var statement: String?
-    public var issuedAt: String?
-    public var nonce: String?
+    public var domain: String
+    public var uri: String
+    public var statement: String
+    public var issuedAt: String
+    public var nonce: String
 
-    public init(domain: String? = nil,
-                uri: String? = nil,
-                statement: String? = nil,
-                issuedAt: String? = nil,
-                nonce: String? = nil) {
+    public init(domain: String,
+                uri: String,
+                statement: String,
+                issuedAt: String,
+                nonce: String) {
         self.domain = domain
         self.uri = uri
         self.statement = statement

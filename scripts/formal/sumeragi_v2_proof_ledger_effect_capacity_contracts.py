@@ -1,4 +1,4 @@
-# Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
+# Executed lexically in check_sumeragi_v2_proof_ledger.py.
 
 def _effect_capacity_production_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
@@ -591,6 +591,20 @@ self.finality_completion = Some(FinalityCompletion {
         effects_path,
         consume_effects,
         """
+let ownership = match self.runtime.take_effect_ownership(&effects) {
+    Ok(ownership) => ownership,
+    Err(error) => {
+        return Err(self.close(EffectExecutorError::Runtime(error), services));
+    }
+};
+""",
+        "executor must close fail-stop output while preserving the typed Runtime ownership error",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        consume_effects,
+        """
 let frontier = self
     .runtime
     .reconciliation_frontier()
@@ -799,6 +813,26 @@ pub(crate) fn production_adapter_effect_candidate_admission_disposition(
             errors,
         )
 
+        terminal_effective_statement = _require_qualified_rust_item(
+            runtime_path,
+            runtime_source,
+            "RuntimeBodyCompletionOwnershipPlan",
+            "effective_statement",
+            errors,
+            "replacement-first body-terminal authority selection",
+        )
+        _require_exact_rust_tokens(
+            runtime_path,
+            terminal_effective_statement,
+            """
+fn effective_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
+    self.replacement_statement.or(self.retained_statement)
+}
+""",
+            "body-terminal authority selection must prefer a checked replacement over the retained statement",
+            errors,
+        )
+
         terminal_adoption = _require_qualified_rust_item(
             runtime_path,
             runtime_source,
@@ -969,6 +1003,258 @@ match relation {
             errors,
         )
 
+        terminal_prepare = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "prepare_body_pipeline_completion_refinements",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            terminal_prepare,
+            production_serialized_runtime_context,
+            "non-mutating body-terminal authority batch preparation",
+            errors,
+        )
+        for sequence, description in (
+            (
+                """
+let mut prepared = RuntimePreparedBodyCompletionRefinements::default();
+let mut targets = BTreeSet::new();
+for plan in plans {
+    let Some(replacement) = plan.replacement_statement else {
+        continue;
+    };
+    let Some(incumbent) = plan.retained_statement else {
+        self.latch_fail_closed(
+            "authority upgrade omitted its incumbent body completion statement",
+        );
+        return Err(EnqueueError::FailClosed);
+    };
+    if !replacement.validate_exact() || !targets.insert(plan.target) {
+        self.latch_fail_closed(
+            "authority upgrade had invalid or duplicate body completion targets",
+        );
+        return Err(EnqueueError::FailClosed);
+    }
+""",
+                "body-terminal preparation must reject invalid authority or duplicate targets before staging refinements",
+            ),
+            (
+                """
+let matches = match self
+    .ingress
+    .exact_body_pipeline_completion_refinement_matches(
+        plan.tag,
+        &plan.candidate,
+        plan.target,
+        &plan.retained_owner,
+        incumbent,
+    ) {
+    Ok(matches) => matches,
+    Err(error) => {
+        self.latch_fail_closed(
+            "authority upgrade could not validate its ingress completion owner",
+        );
+        return Err(error);
+    }
+};
+if !matches {
+    self.latch_fail_closed(
+        "authority upgrade changed its ingress body completion owner",
+    );
+    return Err(EnqueueError::FailClosed);
+}
+prepared.ingress.push((plan.target, replacement));
+""",
+                "body-terminal preparation must stage only an exact ingress owner and incumbent authority",
+            ),
+            (
+                """
+if self
+    .driver
+    .deferred_body_pipeline_completion_exact_owner_ordinals(
+        plan.tag,
+        &plan.candidate,
+    )
+    != vec![ordinal]
+{
+    self.latch_fail_closed(
+        "authority upgrade changed its deferred body completion target",
+    );
+    return Err(EnqueueError::FailClosed);
+}
+let Some(existing) = self.deferred_lifecycle_ownership.get(&ordinal) else {
+    self.latch_fail_closed(
+        "authority upgrade lost its deferred body completion owner",
+    );
+    return Err(EnqueueError::FailClosed);
+};
+if existing.owner != plan.retained_owner
+    || existing.candidate_semantic_statement != Some(incumbent)
+{
+    self.latch_fail_closed(
+        "authority upgrade changed its deferred body completion owner",
+    );
+    return Err(EnqueueError::FailClosed);
+}
+let upgraded = match existing
+    .clone()
+    .with_candidate_semantic_statement(Some(replacement))
+{
+    Ok(upgraded) => upgraded,
+    Err(error) => {
+        self.latch_fail_closed(
+            "authority upgrade invalidated its deferred body completion owner",
+        );
+        return Err(error);
+    }
+};
+if prepared.deferred.insert(ordinal, upgraded).is_some() {
+    self.latch_fail_closed(
+        "authority upgrade duplicated its deferred body completion owner",
+    );
+    return Err(EnqueueError::FailClosed);
+}
+""",
+                "body-terminal preparation must stage only one exact deferred owner and incumbent authority",
+            ),
+        ):
+            _require_rust_token_sequence(
+                runtime_path,
+                terminal_prepare,
+                sequence,
+                description,
+                errors,
+            )
+        if terminal_prepare is not None:
+            prepare_tokens = rust_code_tokens(terminal_prepare.source)
+            for forbidden in (
+                "self.ingress.commands.iter_mut()",
+                "self.ingress.reserved_body_available.as_mut()",
+                "self.deferred_lifecycle_ownership.get_mut(",
+            ):
+                if _token_sequence_count(prepare_tokens, rust_code_tokens(forbidden)):
+                    errors.append(
+                        f"{runtime_path}:{terminal_prepare.line}: body-terminal "
+                        "preparation may not mutate live completion authority "
+                        f"through {forbidden}"
+                    )
+
+        terminal_prepared_commit = _require_rust_item(
+            runtime_path,
+            runtime_source,
+            "commit_prepared_body_pipeline_completion_refinements",
+            errors,
+        )
+        _require_rust_item_context(
+            runtime_path,
+            terminal_prepared_commit,
+            production_serialized_runtime_context,
+            "assignment-only prepared body-terminal authority commit",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            terminal_prepared_commit,
+            """
+let ingress_targets_exist = prepared.ingress.iter().all(|(target, _)| match target {
+    RuntimeBodyCompletionStorageTarget::Queued(admission_ordinal) => self
+        .ingress
+        .commands
+        .iter()
+        .any(|queued| queued.admission_ordinal == Some(*admission_ordinal)),
+    RuntimeBodyCompletionStorageTarget::Reserved(admission_ordinal) => self
+        .ingress
+        .reserved_body_available
+        .as_ref()
+        .is_some_and(|reservation| {
+            reservation.admission_ordinal == Some(*admission_ordinal)
+        }),
+    RuntimeBodyCompletionStorageTarget::Deferred(_) => false,
+});
+if !ingress_targets_exist
+    || !prepared
+        .deferred
+        .keys()
+        .all(|ordinal| self.deferred_lifecycle_ownership.contains_key(ordinal))
+{
+    self.latch_fail_closed(
+        "prevalidated authority upgrade lost its body completion target",
+    );
+    return Err(EnqueueError::FailClosed);
+}
+""",
+            "prepared body-terminal commit must validate every ingress and deferred target before assignment",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            terminal_prepared_commit,
+            """
+for (target, replacement) in prepared.ingress {
+    match target {
+        RuntimeBodyCompletionStorageTarget::Queued(admission_ordinal) => {
+            self.ingress
+                .commands
+                .iter_mut()
+                .find(|queued| queued.admission_ordinal == Some(admission_ordinal))
+                .expect("prevalidated queued body completion target remains serialized")
+                .candidate_semantic_statement = Some(replacement);
+        }
+        RuntimeBodyCompletionStorageTarget::Reserved(admission_ordinal) => {
+            let reservation = self
+                .ingress
+                .reserved_body_available
+                .as_mut()
+                .expect("prevalidated body reservation remains serialized");
+            debug_assert_eq!(reservation.admission_ordinal, Some(admission_ordinal));
+            reservation.candidate_semantic_statement = Some(replacement);
+        }
+        RuntimeBodyCompletionStorageTarget::Deferred(_) => {
+            unreachable!("deferred completion targets use the deferred refinement commit")
+        }
+    }
+}
+for (ordinal, replacement) in prepared.deferred {
+    *self
+        .deferred_lifecycle_ownership
+        .get_mut(&ordinal)
+        .expect("prevalidated deferred body completion target remains serialized") =
+        replacement;
+}
+""",
+            "prepared body-terminal commit must use only the reviewed assignment tail",
+            errors,
+        )
+        if terminal_prepared_commit is not None:
+            commit_tokens = rust_code_tokens(terminal_prepared_commit.source)
+            preflight_positions = _token_sequence_positions(
+                commit_tokens,
+                rust_code_tokens("if !ingress_targets_exist || !prepared.deferred.keys().all("),
+            )
+            mutation_positions = tuple(
+                position
+                for mutation in (
+                    "self.ingress.commands.iter_mut()",
+                    "self.ingress.reserved_body_available.as_mut()",
+                    "self.deferred_lifecycle_ownership.get_mut(",
+                )
+                for position in _token_sequence_positions(
+                    commit_tokens, rust_code_tokens(mutation)
+                )
+            )
+            if not (
+                len(preflight_positions) == 1
+                and len(mutation_positions) == 3
+                and preflight_positions[0] < min(mutation_positions)
+            ):
+                errors.append(
+                    f"{runtime_path}:{terminal_prepared_commit.line}: prepared "
+                    "body-terminal commit must validate every target before its "
+                    "three assignment-only mutation seams"
+                )
+
         terminal_lookup = _require_rust_item(
             runtime_path,
             runtime_source,
@@ -1043,6 +1329,59 @@ fn body_pipeline_candidate_terminal_ownership_plan(
 }
 """,
             "body-terminal lookup must select exactly one authorized live or deferred owner without committing it",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            terminal_lookup,
+            """
+if !matches!(
+    effect,
+    AdapterEffect::StoreBody { .. } | AdapterEffect::ValidateBody { .. }
+) {
+    return Ok(None);
+}
+if !ownership.exactly_binds_adapter_effect(effect) {
+    self.latch_fail_closed("body terminal query omitted its exact predecessor capability");
+    return Err("Sumeragi v2 body terminal query failed closed".to_owned());
+}
+""",
+            "body-terminal lookup must reject a missing exact Store or Validate predecessor before scanning terminals",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            terminal_lookup,
+            """
+let mut candidates = self
+    .ingress
+    .commands
+    .iter()
+    .filter_map(|queued| {
+        let evidence = queued.command.body_pipeline_completion_evidence()?;
+        ownership
+            .exactly_authorizes_body_pipeline_successor(effect, queued.tag, &evidence)
+            .then_some((queued.tag, evidence))
+    })
+    .collect::<Vec<_>>();
+for (_, tag, evidence) in self.driver.deferred_body_pipeline_terminal_candidates() {
+    if !ownership.exactly_authorizes_body_pipeline_successor(effect, tag, &evidence) {
+        continue;
+    }
+    candidates.push((tag, evidence));
+}
+let [(tag, candidate)] = candidates.as_slice() else {
+    return if candidates.is_empty() {
+        Ok(None)
+    } else {
+        self.latch_fail_closed(
+            "one body candidate retained multiple terminal completion owners",
+        );
+        Err("Sumeragi v2 body candidate has duplicate terminal owners".to_owned())
+    };
+};
+""",
+            "body-terminal lookup must select exactly one fully authorized queued or deferred terminal",
             errors,
         )
         _require_rust_token_sequence(
@@ -1381,16 +1720,18 @@ fn semantic_identity(self) -> Vec<u8> {
             errors,
         )
         if statement_identity is not None:
-            identity_source = mask_rust_comments(statement_identity.source)
-            domain_statement = (
-                'identity.extend_from_slice('
-                'b"iroha:sumeragi:v2:tla-candidate-semantic:v2");'
+            expected_domain = (
+                'b"iroha:sumeragi:v2:tla-candidate-semantic:v2"'
             )
-            if identity_source.count(domain_statement) != 1:
+            observed_byte_literals = re.findall(
+                r'b"(?:\\.|[^"\\])*"', statement_identity.source
+            )
+            if observed_byte_literals != [expected_domain]:
                 errors.append(
                     f"{runtime_path}:{statement_identity.line}: candidate semantic "
-                    "identity must encode exactly the frozen six-coordinate statement "
-                    "under the v2 domain"
+                    "identity must encode exactly the frozen six-coordinate "
+                    "statement under the v2 domain; expected one byte literal "
+                    f"{expected_domain!r}, found {observed_byte_literals!r}"
                 )
 
         _require_rust_source_token_sequence(
@@ -1845,6 +2186,50 @@ fn effect_candidate_semantic_binding(
 }
 """,
                 "production RuntimeDriver must route every candidate through the typed inheritance and refinement gate",
+                errors,
+            )
+            _require_rust_token_sequence(
+                runtime_path,
+                production_binding,
+                """
+Some((decision_round, proposal_round, decision_subject, commitment))
+    if *round == proposal_round && *subject == decision_subject =>
+{
+    let decision_statement = RuntimeCandidateSemanticStatement::new(
+        decision_round,
+        proposal_round,
+        Some(decision_subject),
+        Some(wire::GlobalPhase::Commit),
+        Some(commitment),
+    );
+""",
+                "durable Decision body recovery must reconstruct Commit authority only for the exact proposal round and subject",
+                errors,
+            )
+            _require_rust_token_sequence(
+                runtime_path,
+                production_binding,
+                """
+if inherited.is_some_and(|parent| {
+    parent.commit_refinement_to(decision_statement).is_none()
+}) {
+    return Err(
+        "Sumeragi v2 durable Decision body recovery conflicted with its causal authority"
+            .to_owned(),
+    );
+}
+Some(decision_statement)
+""",
+                "durable Decision body recovery must reject an incompatible inherited authority before publication",
+                errors,
+            )
+            _require_rust_token_sequence(
+                runtime_path,
+                production_binding,
+                """
+Some(_) | None => inherited.copied(),
+""",
+                "nonmatching or absent durable Decision recovery must preserve only the inherited authority",
                 errors,
             )
 
@@ -2341,7 +2726,7 @@ let prepared =
 self.commit_prepared_body_pipeline_completion_refinements(prepared)?;
 Ok(Some(result))
 """,
-            "in-flight body completion coalescence must return and commit its resolved exact runtime owner",
+            "in-flight body completion coalescence must resolve, refine, and return its one exact incumbent owner",
             errors,
         )
 
@@ -2723,6 +3108,24 @@ let exact_retry = (|| -> Result<bool, EnqueueError> {
             runtime_path,
             reserve_owned_body,
             """
+if let Some((retained_owner, retained_statement)) =
+    self.body_pipeline_completion_is_owned_by(tag, &evidence, ownership)?
+{
+    return BodyAvailableReservation::coalesced_with_lifecycle_owner(
+        tag,
+        manifest,
+        retained_owner,
+        retained_statement,
+    );
+}
+""",
+            "an inexact unpublished retry must retain the exact incumbent lifecycle owner and effective authority",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            reserve_owned_body,
+            """
 match exact_retry {
     Ok(true) => return Ok(existing),
     Ok(false) => self.latch_fail_closed(
@@ -2791,6 +3194,15 @@ RuntimeCommandAdmissionPreflight::Coalesce
 }
 """,
             "an owned retry may not coalesce through a different adapter or tombstone owner",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            reserve_owned_body,
+            """
+let candidate_statement = ownership.candidate_semantic_statement();
+""",
+            "owned BodyAvailable reservation must receive the incumbent effect statement",
             errors,
         )
         _require_rust_token_sequence(
@@ -3694,19 +4106,34 @@ if admission_ordinal == 0
             ),
             (
                 """
-(identity.causal_lifecycle_key() == causal_lifecycle_key
+let matches = self
+    .producer_continuations
+    .iter()
+    .filter_map(|(address, record)| {
+        let identity = record.identity();
+        (identity.causal_lifecycle_key() == causal_lifecycle_key
     && identity.admission_ordinal() == admission_ordinal
     && identity.stage() == producer_stage)
     .then_some((*address, record.clone()))
+    })
+    .collect::<Vec<_>>();
 """,
                 "persistent producer retirement must join the exact lifecycle key, ordinal, and stage",
             ),
             (
                 """
+let [(address, record)] = matches.as_slice() else {
+    return match matches.len() {
+        0 => Ok(false),
+        _ => Err(self.fail_serviced_candidate_store(
+            "restored producer retirement matched multiple bounded addresses".to_owned(),
+        )),
+    };
+};
 self.persist_restored_body_producer_retirement(*address, record)?;
 Ok(true)
 """,
-                "persistent producer retirement must delegate its exact matched owner to the shared persist-first retirement helper",
+                "persistent producer retirement must select one exact record before delegating durable removal",
             ),
         ):
             _require_rust_token_sequence(
@@ -3747,8 +4174,13 @@ if record.status() != ProducerContinuationStatus::Reserved
         .any(|reservation| reservation.address == address)
     || self.pending_producer_handoffs.contains_key(&address)
 {
+    return Err(self.fail_serviced_candidate_store(
+        "restored producer retirement did not own one exact dormant durable record"
+            .to_owned(),
+    ));
+}
 """,
-                "persistent producer retirement must own one exact dormant durable volatile-body record with no live alias",
+                "persistent producer retirement must own one exact dormant durable stage-7 volatile-body record with no live alias",
             ),
             (
                 """
@@ -3803,6 +4235,54 @@ Ok(())
         for sequence, description in (
             (
                 """
+manifest: (marker != 0xBD).then_some(manifest.clone()),
+""",
+                "the restart regression must make BD the unique manifest-less restored Fetch case",
+            ),
+            (
+                """
+if !reserve_completion {
+    assert!(
+        runtime
+            .retire_restored_body_fetch_parent(&reconstructed_fetch, &fetch_ownership)
+            .expect("persist terminal restored fetch-parent retirement")
+    );
+    assert_eq!(runtime.remaining_completion_capacity(), capacity_before);
+    assert!(
+        !runtime
+            .driver()
+            .producer_continuations
+            .contains_key(&restored_address)
+            && !runtime
+                .driver()
+                .durable_producer_continuations
+                .contains_key(&restored_address)
+            && !runtime
+                .driver()
+                .restored_dormant_producer_continuations
+                .contains(&restored_address),
+        "terminal fetch cancellation must remove its dormant stage-7 parent"
+    );
+    drop(runtime.into_driver());
+    let (restarted_again, _startup) = SumeragiV2Adapter::open_with_aggregator(
+        directory.path().join("safety.wal"),
+        verified_genesis(context()),
+        Some(0),
+        reducer::Generation::new(3),
+        [0x11; 32],
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("reopen after terminal restored fetch cancellation");
+    assert!(restarted_again.producer_continuations.is_empty());
+    return;
+}
+""",
+                "pre-reservation restored Fetch cancellation must persist its dormant stage-7 parent before returning",
+            ),
+            (
+                """
 let retired = if materialize_before_retirement {
     runtime
         .commit_body_available(reservation)
@@ -3848,6 +4328,28 @@ if let Some((path, bytes)) = sabotaged_snapshot {
     );
 """,
                 "the injected persistence failure must retain the volatile token and restore every in-memory producer alias",
+            ),
+            (
+                """
+assert!(retired.expect("persist and retire the restored body completion"));
+assert_eq!(runtime.remaining_completion_capacity(), capacity_before);
+assert!(
+!runtime
+    .driver()
+    .producer_continuations
+    .contains_key(&restored_address)
+    && !runtime
+        .driver()
+        .durable_producer_continuations
+        .contains_key(&restored_address)
+    && !runtime
+        .driver()
+        .restored_dormant_producer_continuations
+        .contains(&restored_address),
+    "terminal runtime retirement must persistently release the restored producer"
+);
+""",
+                "reserved stage-7 retirement must observe process, durable, dormant, and capacity release before reopening",
             ),
             (
                 """
@@ -3926,8 +4428,9 @@ assert_restored_stage_seven_retirement_does_not_resurrect(0xB8, true, false, fal
 assert_restored_stage_seven_retirement_does_not_resurrect(0xB9, true, true, false);
 assert_restored_stage_seven_retirement_does_not_resurrect(0xBA, true, false, true);
 assert_restored_stage_seven_retirement_does_not_resurrect(0xBB, false, false, false);
+assert_restored_stage_seven_retirement_does_not_resurrect(0xBD, false, false, false);
 """,
-            "the public regression must cover unpublished, materialized, failed, and pre-reservation Fetch stage-7 retirement",
+            "the public regression must cover unpublished, materialized, failed, manifest-bound pre-reservation, and manifest-less pre-reservation stage-7 retirement",
             errors,
         )
 
@@ -4312,6 +4815,60 @@ SerializedV2Runtime::retire_unpublished_body_available(
             effects_path,
             production_delegate,
             _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256[seal_name],
+            description,
+            errors,
+        )
+
+    for item_name, expected_source, description in (
+        (
+            "plan_body_pipeline_candidate_terminal",
+            """
+fn plan_body_pipeline_candidate_terminal(
+    &mut self,
+    effect: &AdapterEffect,
+    ownership: &RuntimeEffectOwnership,
+) -> Result<Option<RuntimeEffectOwnership>, String> {
+    SerializedV2Runtime::plan_body_pipeline_candidate_terminal(self, effect, ownership)
+}
+""",
+            "production EffectRuntime body-terminal incumbent-owner plan forwarding",
+        ),
+        (
+            "commit_body_pipeline_candidate_terminals",
+            """
+fn commit_body_pipeline_candidate_terminals(
+    &mut self,
+    terminals: &[(&AdapterEffect, &RuntimeEffectOwnership)],
+) -> Result<(), String> {
+    SerializedV2Runtime::commit_body_pipeline_candidate_terminals(self, terminals)
+}
+""",
+            "production EffectRuntime atomic body-terminal authority commit forwarding",
+        ),
+    ):
+        matching = tuple(
+            item
+            for item in rust_items(source, item_name)
+            if item.brace_context == production_effect_runtime_context
+        )
+        if len(matching) != 1:
+            errors.append(
+                f"{effects_path}: require exactly one production EffectRuntime "
+                f"item named {item_name}; found {len(matching)}"
+            )
+            continue
+        production_delegate = matching[0]
+        _require_rust_item_context(
+            effects_path,
+            production_delegate,
+            production_effect_runtime_context,
+            description,
+            errors,
+        )
+        _require_exact_rust_tokens(
+            effects_path,
+            production_delegate,
+            expected_source,
             description,
             errors,
         )

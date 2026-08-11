@@ -8,10 +8,8 @@ import pytest
 import requests
 
 from iroha_python import (
-    Ed25519KeyPair,
     ExplorerCursorMeta,
     ExplorerRwasPage,
-    Instruction,
     ToriiClient,
 )
 
@@ -43,21 +41,6 @@ def response(status: int, payload: object) -> requests.Response:
     result._content = json.dumps(payload).encode("utf-8")
     result.headers["Content-Type"] = "application/json"
     return result
-
-
-def account_address(seed: int, discriminant: int = 0x02F1) -> str:
-    return Ed25519KeyPair.from_private_key(bytes([seed] * 32)).default_account_id(
-        "wonderland",
-        discriminant,
-    )
-
-
-def canonical_proof_attachment(*, vk_name: str) -> dict[str, object]:
-    return {
-        "backend": "halo2/ipa",
-        "proof": {"backend": "halo2/ipa", "bytes": b"proof-bytes"},
-        "vk_ref": {"backend": "halo2/ipa", "name": vk_name},
-    }
 
 
 @pytest.mark.parametrize("quantity", ["1.0", "01", "+1", "-1", 1, None])
@@ -170,38 +153,3 @@ def test_explorer_rwa_list_hard_cuts_retired_page_arguments() -> None:
 
     with pytest.raises(TypeError, match="unexpected keyword argument"):
         client.list_explorer_rwas(page=1, per_page=25)  # type: ignore[call-arg]
-
-
-def test_unshield_instruction_uses_exact_output_free_wire_shape() -> None:
-    instruction = Instruction.unshield_prepared(
-        "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
-        account_address(0x62),
-        "3",
-        ["dd" * 32],
-        canonical_proof_attachment(vk_name="vk_unshield"),
-        root_hint="ff" * 32,
-    )
-    instruction_json = json.loads(instruction.to_json())
-    assert isinstance(instruction_json, dict), (
-        "ABI-21 native Instruction.to_json() must return decoded instruction fields"
-    )
-    unshield_payload = next(
-        nested["Unshield"]
-        for nested in instruction_json.values()
-        if isinstance(nested, dict) and "Unshield" in nested
-    )
-    assert set(unshield_payload) == {
-        "asset",
-        "to",
-        "public_amount",
-        "inputs",
-        "proof",
-        "root_hint",
-    }
-
-    roundtrip = Instruction.from_json(json.dumps(instruction_json))
-    assert roundtrip.to_norito_bytes() == instruction.to_norito_bytes()
-
-    unshield_payload["outputs"] = []
-    with pytest.raises(ValueError, match="invalid instruction JSON|unknown field.*outputs"):
-        Instruction.from_json(json.dumps(instruction_json))

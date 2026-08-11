@@ -5,7 +5,7 @@ use std::{
 
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     block::{
         consensus::{
             CertPhase, LaneBlockCertificateV1, LaneBlockDescriptorV1, LaneBlockProposalV1,
@@ -109,7 +109,7 @@ fn v2_commit_certificate_request(index: u64, requester: &PeerId) -> BlockMessage
     BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::CommitCertificateRequest(wire::CommitCertificateRequest {
             protocol_version: wire::PROTOCOL_VERSION,
-            chain_id: ChainId::from("fair-v2-ingress-test"),
+            network_id: crate::sumeragi::synthetic_network_id("fair-v2-ingress-test"),
             context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
                 b"fair-v2-ingress-context",
             ))),
@@ -572,7 +572,7 @@ fn v2_maximum_structural_proposal_wire(
 }
 
 fn v2_maximum_recovery_wires(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     requester: &PeerId,
     roster_len: usize,
 ) -> (BlockMessage, BlockMessage, BlockMessage) {
@@ -605,7 +605,7 @@ fn v2_maximum_recovery_wires(
     let commit_certificate_request = BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::CommitCertificateRequest(wire::CommitCertificateRequest {
             protocol_version: wire::PROTOCOL_VERSION,
-            chain_id: chain_id.clone(),
+            network_id: *network_id,
             context_id: round.context_id,
             height: u64::MAX,
             requester: requester.clone(),

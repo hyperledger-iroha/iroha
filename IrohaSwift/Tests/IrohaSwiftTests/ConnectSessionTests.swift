@@ -22,11 +22,21 @@ final class ConnectSessionTests: XCTestCase {
         let client = ConnectClient(url: URL(string: "wss://example.test")!,
                                    webSocketFactory: StubWebSocketFactory(task: stub).factory)
         await client.start()
-        let sessionID = Data(repeating: 0x01, count: 32)
-        let session = ConnectSession(sessionID: sessionID, client: client)
-        let open = ConnectOpen(appPublicKey: Data(repeating: 0x02, count: 32),
+        let appPublicKey = Data(repeating: 0x02, count: 32)
+        let nonce = Data(repeating: 0x03, count: 16)
+        let sessionID = try ConnectCrypto.deriveSessionID(
+            networkID: TestNetworkIds.canonical,
+            appPublicKey: appPublicKey,
+            nonce: nonce
+        )
+        let session = try ConnectSession(networkID: TestNetworkIds.canonical,
+                                         appPublicKey: appPublicKey,
+                                         nonce: nonce,
+                                         relayToken: "relay-token",
+                                         client: client)
+        let open = ConnectOpen(appPublicKey: appPublicKey,
                                appMetadata: ConnectAppMetadata(name: "demo", iconURL: nil, description: nil),
-                               constraints: ConnectConstraints(chainID: "chain"),
+                               constraints: ConnectConstraints(networkID: TestNetworkIds.canonical),
                                permissions: ConnectPermissions(methods: ["sign"]))
         try await session.sendOpen(open: open)
         let encoded = try XCTUnwrap(stub.sentData.first)
@@ -37,6 +47,11 @@ final class ConnectSessionTests: XCTestCase {
             XCTAssertEqual(decodedOpen, open)
         } else {
             XCTFail("Expected control frame")
+        }
+        await XCTAssertThrowsErrorAsync(try await session.sendOpen(open: open)) { error in
+            guard case ConnectSessionError.protocolViolation = error else {
+                return XCTFail("expected duplicate Open rejection")
+            }
         }
     }
 
@@ -77,6 +92,45 @@ final class ConnectSessionTests: XCTestCase {
         } else {
             XCTFail("expected approve frame")
         }
+    }
+
+    func testSendOpenRejectsNetworkAndAppKeySubstitution() async throws {
+        let stub = StubWebSocketTask()
+        let client = ConnectClient(url: URL(string: "wss://example.test")!,
+                                   webSocketFactory: StubWebSocketFactory(task: stub).factory)
+        let appPublicKey = Data(repeating: 0x41, count: 32)
+        let session = try ConnectSession(
+            networkID: TestNetworkIds.canonical,
+            appPublicKey: appPublicKey,
+            nonce: Data(repeating: 0x42, count: 16),
+            relayToken: "relay-token",
+            client: client
+        )
+        let wrongNetwork = ConnectOpen(
+            appPublicKey: appPublicKey,
+            appMetadata: nil,
+            constraints: ConnectConstraints(networkID: TestNetworkIds.other),
+            permissions: nil
+        )
+        await XCTAssertThrowsErrorAsync(try await session.sendOpen(open: wrongNetwork)) { error in
+            guard case ConnectSessionError.protocolViolation = error else {
+                return XCTFail("expected wrong-network rejection")
+            }
+        }
+        var wrongAppKey = appPublicKey
+        wrongAppKey[0] ^= 1
+        let wrongApp = ConnectOpen(
+            appPublicKey: wrongAppKey,
+            appMetadata: nil,
+            constraints: ConnectConstraints(networkID: TestNetworkIds.canonical),
+            permissions: nil
+        )
+        await XCTAssertThrowsErrorAsync(try await session.sendOpen(open: wrongApp)) { error in
+            guard case ConnectSessionError.protocolViolation = error else {
+                return XCTFail("expected app-key substitution rejection")
+            }
+        }
+        XCTAssertTrue(stub.sentData.isEmpty)
     }
 
     private static func validEd25519Signature(message: String) throws -> Data {

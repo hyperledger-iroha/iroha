@@ -7,13 +7,14 @@
 //! descending `SemVer` order.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
     error::Error,
     fmt,
+    sync::Arc,
 };
 
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     musubi::{
         MUSUBI_MAX_DEPENDENCIES_V1, MUSUBI_MAX_RESOLUTION_DEPTH_V1, MUSUBI_MAX_RESOLUTION_NODES_V1,
         MusubiArtifactGovernanceStateV1, MusubiDependencyKindV1, MusubiDependencyReqV1,
@@ -24,7 +25,21 @@ use iroha_data_model::{
     name::Name,
 };
 
-use crate::lockfile::{LockedRootV1, LockfileV1};
+use crate::lockfile::{
+    LockedRootV1, LockfileV1, MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1, MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1,
+};
+
+/// Maximum candidate rows retained across one bounded sparse-index collection.
+pub(crate) const MAX_COLLECTED_RESOLVER_ROWS_V1: usize = MUSUBI_MAX_RESOLUTION_NODES_V1 * 16;
+/// Maximum candidate dependency occurrences inspected across one collection.
+pub(crate) const MAX_COLLECTED_RESOLVER_DEPENDENCIES_V1: usize =
+    MUSUBI_MAX_RESOLUTION_NODES_V1 * 16;
+/// Maximum candidate branches evaluated by one deterministic resolution.
+///
+/// One unit is charged on entry to every ordered candidate-loop iteration, including a candidate
+/// rejected immediately for cycle, depth, node, or edge limits. A zero-candidate terminal task
+/// consumes no unit. The counter is global across failed branches and is never rolled back.
+pub(crate) const MAX_RESOLVER_SEARCH_ATTEMPTS_V1: usize = MAX_COLLECTED_RESOLVER_ROWS_V1;
 
 /// One registry requirement declared by a selected workspace root.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -51,7 +66,7 @@ impl WorkspaceDependencyReqV1 {
     }
 }
 
-/// Requirements of one selected workspace package.
+/// Requirements of one selected or recursively reachable local package.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct WorkspaceRootReqV1 {
     /// Canonical namespaced local package selector used as the lock root identity.
@@ -84,13 +99,11 @@ pub enum ResolveModeV1 {
 /// Complete deterministic resolver input.
 #[derive(Clone, Debug)]
 pub struct ResolveRequestV1 {
-    /// Exact chain identity written into a new lock.
-    pub chain_id: ChainId,
-    /// Exact non-zero genesis block identity.
-    pub genesis_hash: [u8; 32],
+    /// Exact genesis-derived deployment identity written into a new lock.
+    pub network_id: NetworkId,
     /// Finalized universal-index snapshot represented by `rows`.
     pub snapshot: MusubiRegistrySnapshotV1,
-    /// Selected workspace roots and their effective requirements.
+    /// Selected and recursively reachable local roots with their effective requirements.
     pub roots: Vec<WorkspaceRootReqV1>,
     /// Resolver-grade sparse-index rows. Input order has no meaning.
     pub rows: Vec<MusubiResolverReleaseRowV1>,
@@ -164,6 +177,8 @@ pub enum ConflictReasonV1 {
     DepthLimit,
     /// The selected graph would exceed the 1,024-node consensus bound.
     NodeLimit,
+    /// The selected graph would exceed the 512-edge consumer-lock bound.
+    EdgeLimit,
 }
 
 /// Minimal deterministic dependency conflict returned after backtracking.
@@ -186,6 +201,10 @@ impl fmt::Display for ResolutionConflictV1 {
             ConflictReasonV1::NodeLimit => {
                 formatter.write_str("dependency graph exceeds 1,024 nodes")
             }
+            ConflictReasonV1::EdgeLimit => write!(
+                formatter,
+                "dependency graph exceeds {MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1} exact edges"
+            ),
         }?;
         for step in &self.chain {
             write!(formatter, "\n  {step}")?;
@@ -201,6 +220,11 @@ pub enum ResolverError {
     InvalidInput(String),
     /// Exhaustive deterministic backtracking found no valid graph.
     Conflict(Box<ResolutionConflictV1>),
+    /// Deterministic candidate backtracking exhausted its fixed work corridor.
+    SearchLimitExceeded {
+        /// Exact candidate-branch attempt ceiling.
+        limit: usize,
+    },
     /// A valid result exists but `--locked` forbids writing it.
     LockChangeRequired,
 }
@@ -218,6 +242,10 @@ impl fmt::Display for ResolverError {
             Self::Conflict(conflict) => {
                 write!(formatter, "dependency resolution failed: {conflict}")
             }
+            Self::SearchLimitExceeded { limit } => write!(
+                formatter,
+                "dependency resolution exceeds {limit} candidate branch attempts"
+            ),
             Self::LockChangeRequired => {
                 formatter.write_str("Musubi.lock must change, but --locked forbids rewriting it")
             }
@@ -229,16 +257,72 @@ impl Error for ResolverError {}
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ParentKey {
-    Root(MusubiPackageSelectorV1),
-    Release(MusubiReleaseIdV1),
+    Root(Arc<MusubiPackageSelectorV1>),
+    Release(Arc<MusubiReleaseIdV1>),
 }
 
 impl ParentKey {
+    fn root(package: MusubiPackageSelectorV1) -> Self {
+        Self::Root(Arc::new(package))
+    }
+
+    fn release(release: MusubiReleaseIdV1) -> Self {
+        Self::Release(Arc::new(release))
+    }
+
+    fn shared_release(release: Arc<MusubiReleaseIdV1>) -> Self {
+        Self::Release(release)
+    }
+
     fn conflict_parent(&self) -> ConflictParentV1 {
         match self {
-            Self::Root(name) => ConflictParentV1::Workspace(name.clone()),
-            Self::Release(release) => ConflictParentV1::Release(release.clone()),
+            Self::Root(name) => ConflictParentV1::Workspace(name.as_ref().clone()),
+            Self::Release(release) => ConflictParentV1::Release(release.as_ref().clone()),
         }
+    }
+}
+
+#[derive(Clone)]
+struct ConflictChainV1 {
+    tail: Arc<ConflictChainNodeV1>,
+}
+
+struct ConflictChainNodeV1 {
+    previous: Option<Arc<Self>>,
+    step: ConflictStepV1,
+    len: usize,
+}
+
+impl ConflictChainV1 {
+    fn first(step: ConflictStepV1) -> Self {
+        Self {
+            tail: Arc::new(ConflictChainNodeV1 {
+                previous: None,
+                step,
+                len: 1,
+            }),
+        }
+    }
+
+    fn push(&self, step: ConflictStepV1) -> Self {
+        Self {
+            tail: Arc::new(ConflictChainNodeV1 {
+                previous: Some(Arc::clone(&self.tail)),
+                step,
+                len: self.tail.len.saturating_add(1),
+            }),
+        }
+    }
+
+    fn to_vec(&self) -> Vec<ConflictStepV1> {
+        let mut steps = Vec::with_capacity(self.tail.len);
+        let mut current = Some(self.tail.as_ref());
+        while let Some(node) = current {
+            steps.push(node.step.clone());
+            current = node.previous.as_deref();
+        }
+        steps.reverse();
+        steps
     }
 }
 
@@ -248,9 +332,9 @@ struct PendingEdge {
     alias: Name,
     kind: MusubiDependencyKindV1,
     package: MusubiPackageIdV1,
-    requirement: MusubiVersionReqV1,
+    requirement: Arc<MusubiVersionReqV1>,
     depth: u16,
-    chain: Vec<ConflictStepV1>,
+    chain: ConflictChainV1,
     // The exact prior edge this task replaces, retained across parent-version backtracking.
     origin: Option<PreviousEdge>,
 }
@@ -273,7 +357,7 @@ impl PendingEdge {
 
 #[derive(Clone)]
 struct PreviousEdge {
-    selected: MusubiReleaseIdV1,
+    selected: Arc<MusubiReleaseIdV1>,
 }
 
 // Exact parent-local identity of one edge that selected the targeted locked node.
@@ -285,8 +369,9 @@ struct PreviousEdgeKey {
 
 #[derive(Clone, Default)]
 struct SearchState {
-    selected: BTreeSet<MusubiReleaseIdV1>,
-    edges: BTreeMap<ParentKey, BTreeMap<Name, MusubiExactDependencyEdgeV1>>,
+    selected: BTreeSet<Arc<MusubiReleaseIdV1>>,
+    edges: BTreeMap<ParentKey, BTreeMap<Name, Arc<MusubiExactDependencyEdgeV1>>>,
+    edge_count: usize,
 }
 
 #[derive(Default)]
@@ -299,6 +384,8 @@ struct PreciseReplay {
 struct Limits {
     nodes: usize,
     depth: u16,
+    edges: usize,
+    attempts: usize,
 }
 
 impl Default for Limits {
@@ -306,6 +393,8 @@ impl Default for Limits {
         Self {
             nodes: MUSUBI_MAX_RESOLUTION_NODES_V1,
             depth: MUSUBI_MAX_RESOLUTION_DEPTH_V1,
+            edges: MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1,
+            attempts: MAX_RESOLVER_SEARCH_ATTEMPTS_V1,
         }
     }
 }
@@ -317,12 +406,11 @@ struct UpdatePlan {
 }
 
 struct Solver {
-    chain_id: ChainId,
-    genesis_hash: [u8; 32],
+    network_id: NetworkId,
     snapshot: MusubiRegistrySnapshotV1,
     roots: Vec<WorkspaceRootReqV1>,
-    rows: BTreeMap<MusubiReleaseIdV1, MusubiResolverReleaseRowV1>,
-    by_package: BTreeMap<MusubiPackageIdV1, Vec<MusubiReleaseIdV1>>,
+    rows: BTreeMap<Arc<MusubiReleaseIdV1>, MusubiResolverReleaseRowV1>,
+    by_package: BTreeMap<MusubiPackageIdV1, Vec<Arc<MusubiReleaseIdV1>>>,
     previous: Option<LockfileV1>,
     preserved: BTreeMap<ParentKey, BTreeMap<Name, MusubiExactDependencyEdgeV1>>,
     locked_nodes: BTreeMap<MusubiReleaseIdV1, MusubiVerificationNodeV1>,
@@ -386,8 +474,10 @@ impl Solver {
         limits: Limits,
         selection_policy: SelectionPolicyV1,
     ) -> Result<Self, ResolverError> {
-        if request.genesis_hash.iter().all(|byte| *byte == 0) {
-            return Err(ResolverError::invalid("genesis hash must not be zero"));
+        if request.network_id.as_bytes()[31] & 1 != 1 {
+            return Err(ResolverError::invalid(
+                "network id must be an exact marked genesis identity",
+            ));
         }
         request
             .snapshot
@@ -396,6 +486,36 @@ impl Solver {
         if request.roots.is_empty() {
             return Err(ResolverError::invalid(
                 "at least one selected workspace root is required",
+            ));
+        }
+        if request.roots.len() > MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1 {
+            return Err(ResolverError::invalid(
+                "workspace roots exceed the consumer-lock bound",
+            ));
+        }
+        if request.rows.len() > MAX_COLLECTED_RESOLVER_ROWS_V1 {
+            return Err(ResolverError::invalid(format!(
+                "resolver candidate input exceeds {MAX_COLLECTED_RESOLVER_ROWS_V1} rows"
+            )));
+        }
+        let candidate_dependency_count = request.rows.iter().try_fold(0_usize, |total, row| {
+            total.checked_add(row.dependencies.len()).ok_or_else(|| {
+                ResolverError::invalid("resolver candidate dependency count overflowed")
+            })
+        })?;
+        if candidate_dependency_count > MAX_COLLECTED_RESOLVER_DEPENDENCIES_V1 {
+            return Err(ResolverError::invalid(format!(
+                "resolver candidate input exceeds {MAX_COLLECTED_RESOLVER_DEPENDENCIES_V1} dependency occurrences"
+            )));
+        }
+        let root_edge_count = request.roots.iter().try_fold(0_usize, |total, root| {
+            total
+                .checked_add(root.dependencies.len())
+                .ok_or_else(|| ResolverError::invalid("workspace root dependency count overflowed"))
+        })?;
+        if root_edge_count > limits.edges {
+            return Err(ResolverError::invalid(
+                "workspace root dependencies exceed the total consumer-lock edge bound",
             ));
         }
         for root in &mut request.roots {
@@ -456,8 +576,8 @@ impl Solver {
                     row.release
                 )));
             }
-            let release = row.release.clone();
-            if rows.insert(release.clone(), row).is_some() {
+            let release = Arc::new(row.release.clone());
+            if rows.insert(Arc::clone(&release), row).is_some() {
                 return Err(ResolverError::invalid(format!(
                     "duplicate resolver row `{release}`"
                 )));
@@ -470,16 +590,14 @@ impl Solver {
             previous
                 .validate()
                 .map_err(|error| ResolverError::invalid(error.to_string()))?;
-            if previous.chain_id != request.chain_id
-                || previous.genesis_hash != request.genesis_hash
-            {
+            if previous.network_id != request.network_id {
                 return Err(ResolverError::invalid(
-                    "existing lock belongs to a different chain or genesis",
+                    "existing lock belongs to a different network",
                 ));
             }
             for root in &previous.roots {
                 preserved.insert(
-                    ParentKey::Root(root.package.clone()),
+                    ParentKey::root(root.package.clone()),
                     root.dependencies
                         .iter()
                         .map(|edge| (edge.alias.clone(), edge.clone()))
@@ -488,7 +606,7 @@ impl Solver {
             }
             for node in &previous.nodes {
                 preserved.insert(
-                    ParentKey::Release(node.release.clone()),
+                    ParentKey::release(node.release.clone()),
                     node.dependencies
                         .iter()
                         .map(|edge| (edge.alias.clone(), edge.clone()))
@@ -526,7 +644,7 @@ impl Solver {
             by_package
                 .entry(release.package.clone())
                 .or_default()
-                .push(release.clone());
+                .push(Arc::clone(release));
         }
         for releases in by_package.values_mut() {
             releases.sort_by(|left, right| {
@@ -538,8 +656,7 @@ impl Solver {
         }
 
         Ok(Self {
-            chain_id: request.chain_id,
-            genesis_hash: request.genesis_hash,
+            network_id: request.network_id,
             snapshot: request.snapshot,
             roots: request.roots,
             rows,
@@ -558,7 +675,8 @@ impl Solver {
 
     fn run(self) -> Result<ResolveOutcomeV1, ResolverError> {
         let pending = self.root_tasks();
-        let state = self.search(SearchState::default(), pending)?;
+        let mut attempts = 0_usize;
+        let state = self.search(SearchState::default(), pending, &mut attempts)?;
         let proposed = self.build_lock(&state)?;
         if let Some(previous) = &self.previous
             && previous.roots == proposed.roots
@@ -578,28 +696,28 @@ impl Solver {
         })
     }
 
-    fn root_tasks(&self) -> Vec<PendingEdge> {
+    fn root_tasks(&self) -> Vec<Arc<PendingEdge>> {
         self.roots
             .iter()
             .flat_map(|root| {
-                let parent = ParentKey::Root(root.package.clone());
+                let parent = ParentKey::root(root.package.clone());
                 root.dependencies.iter().map(move |dependency| {
-                    let chain = vec![PendingEdge::step(
+                    let chain = ConflictChainV1::first(PendingEdge::step(
                         &parent,
                         &dependency.alias,
                         &dependency.package,
                         &dependency.requirement,
-                    )];
-                    PendingEdge {
+                    ));
+                    Arc::new(PendingEdge {
                         parent: parent.clone(),
                         alias: dependency.alias.clone(),
                         kind: dependency.kind,
                         package: dependency.package.clone(),
-                        requirement: dependency.requirement.clone(),
+                        requirement: Arc::new(dependency.requirement.clone()),
                         depth: 1,
                         chain,
                         origin: self.previous_edge(&parent, &dependency.alias, &dependency.package),
-                    }
+                    })
                 })
             })
             .collect()
@@ -607,12 +725,13 @@ impl Solver {
 
     #[expect(
         clippy::too_many_lines,
-        reason = "the recursive resolver state machine keeps candidate selection, conflict evidence, and deterministic backtracking adjacent"
+        reason = "the aggregate 512-edge cap bounds recursion while this state machine keeps candidate selection, conflict evidence, and deterministic backtracking adjacent"
     )]
     fn search(
         &self,
         state: SearchState,
-        mut pending: Vec<PendingEdge>,
+        mut pending: Vec<Arc<PendingEdge>>,
+        attempts: &mut usize,
     ) -> Result<SearchState, ResolverError> {
         if pending.is_empty() {
             if let Some(conflict) = self.precise_conflict(&state) {
@@ -623,15 +742,15 @@ impl Solver {
         let task = pending.remove(0);
         if task.depth > self.limits.depth {
             return Err(ResolverError::Conflict(Box::new(ResolutionConflictV1 {
-                chain: task.chain,
+                chain: task.chain.to_vec(),
                 reason: ConflictReasonV1::DepthLimit,
             })));
         }
-        let preserved_candidate = self.preservable_locked_candidate(&task).cloned();
+        let preserved_candidate = self.preservable_locked_candidate(&task);
         let candidates = self.candidates(&state, &task);
         if candidates.is_empty() {
             return Err(ResolverError::Conflict(Box::new(ResolutionConflictV1 {
-                chain: task.chain,
+                chain: task.chain.to_vec(),
                 reason: ConflictReasonV1::NoCandidate,
             })));
         }
@@ -640,18 +759,25 @@ impl Solver {
         let mut best_conflict = None;
         let mut best_solution = None;
         for candidate in candidates {
-            if Self::would_cycle(&state, &task.parent, &candidate) {
+            if *attempts >= self.limits.attempts {
+                return Err(ResolverError::SearchLimitExceeded {
+                    limit: self.limits.attempts,
+                });
+            }
+            *attempts += 1;
+            if Self::would_cycle(&state, &task.parent, candidate.as_ref()) {
                 select_better_conflict(
                     &mut best_conflict,
                     ResolutionConflictV1 {
-                        chain: task.chain.clone(),
-                        reason: ConflictReasonV1::Cycle(candidate),
+                        chain: task.chain.to_vec(),
+                        reason: ConflictReasonV1::Cycle(candidate.as_ref().clone()),
                     },
                 );
                 continue;
             }
-            if state.selected.contains(&candidate)
-                && let Some(chain) = self.selected_subtree_depth_conflict(&state, &task, &candidate)
+            if state.selected.contains(candidate.as_ref())
+                && let Some(chain) =
+                    self.selected_subtree_depth_conflict(&state, &task, candidate.as_ref())
             {
                 select_better_conflict(
                     &mut best_conflict,
@@ -663,12 +789,12 @@ impl Solver {
                 continue;
             }
             let mut next = state.clone();
-            let is_new = next.selected.insert(candidate.clone());
+            let is_new = next.selected.insert(Arc::clone(&candidate));
             if is_new && next.selected.len() > self.limits.nodes {
                 select_better_conflict(
                     &mut best_conflict,
                     ResolutionConflictV1 {
-                        chain: task.chain.clone(),
+                        chain: task.chain.to_vec(),
                         reason: ConflictReasonV1::NodeLimit,
                     },
                 );
@@ -678,36 +804,68 @@ impl Solver {
                 alias: task.alias.clone(),
                 kind: task.kind,
                 package: task.package.clone(),
-                requirement: task.requirement.clone(),
-                selected: candidate.clone(),
+                requirement: task.requirement.as_ref().clone(),
+                selected: candidate.as_ref().clone(),
             };
-            next.edges
+            match next
+                .edges
                 .entry(task.parent.clone())
                 .or_default()
-                .insert(task.alias.clone(), edge);
+                .entry(task.alias.clone())
+            {
+                Entry::Occupied(mut occupied) => {
+                    occupied.insert(Arc::new(edge));
+                }
+                Entry::Vacant(vacant) => {
+                    let Some(edge_count) = next.edge_count.checked_add(1) else {
+                        select_better_conflict(
+                            &mut best_conflict,
+                            ResolutionConflictV1 {
+                                chain: task.chain.to_vec(),
+                                reason: ConflictReasonV1::EdgeLimit,
+                            },
+                        );
+                        continue;
+                    };
+                    if edge_count > self.limits.edges {
+                        select_better_conflict(
+                            &mut best_conflict,
+                            ResolutionConflictV1 {
+                                chain: task.chain.to_vec(),
+                                reason: ConflictReasonV1::EdgeLimit,
+                            },
+                        );
+                        continue;
+                    }
+                    next.edge_count = edge_count;
+                    vacant.insert(Arc::new(edge));
+                }
+            }
 
             let mut next_pending = Vec::new();
             if is_new {
-                let row = self.rows.get(&candidate).expect("candidate row exists");
-                let parent = ParentKey::Release(candidate.clone());
+                let row = self
+                    .rows
+                    .get(candidate.as_ref())
+                    .expect("candidate row exists");
+                let parent = ParentKey::shared_release(Arc::clone(&candidate));
                 let origin_parent = task
                     .origin
                     .as_ref()
-                    .map(|origin| ParentKey::Release(origin.selected.clone()));
+                    .map(|origin| ParentKey::Release(Arc::clone(&origin.selected)));
                 for dependency in &row.dependencies {
-                    let mut chain = task.chain.clone();
-                    chain.push(PendingEdge::step(
+                    let chain = task.chain.push(PendingEdge::step(
                         &parent,
                         &dependency.alias,
                         &dependency.package,
                         &dependency.requirement,
                     ));
-                    next_pending.push(PendingEdge {
+                    next_pending.push(Arc::new(PendingEdge {
                         parent: parent.clone(),
                         alias: dependency.alias.clone(),
                         kind: MusubiDependencyKindV1::Normal,
                         package: dependency.package.clone(),
-                        requirement: dependency.requirement.clone(),
+                        requirement: Arc::new(dependency.requirement.clone()),
                         depth: task.depth.saturating_add(1),
                         chain,
                         origin: origin_parent.as_ref().and_then(|origin_parent| {
@@ -717,11 +875,11 @@ impl Solver {
                                 &dependency.package,
                             )
                         }),
-                    });
+                    }));
                 }
             }
             next_pending.extend(pending.iter().cloned());
-            match self.search(next, next_pending) {
+            match self.search(next, next_pending, attempts) {
                 Ok(solution) => {
                     // A successful still-valid locked branch wins over
                     // duplicate-version minimization. If that branch cannot
@@ -751,18 +909,22 @@ impl Solver {
         }
         Err(ResolverError::Conflict(Box::new(
             best_conflict.unwrap_or_else(|| ResolutionConflictV1 {
-                chain: task.chain,
+                chain: task.chain.to_vec(),
                 reason: ConflictReasonV1::NoCandidate,
             }),
         )))
     }
 
-    fn candidates(&self, state: &SearchState, task: &PendingEdge) -> Vec<MusubiReleaseIdV1> {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "candidate ordering keeps selected, parent-locked, globally locked, and fresh pointer-shared sources in one auditable precedence chain"
+    )]
+    fn candidates(&self, state: &SearchState, task: &PendingEdge) -> Vec<Arc<MusubiReleaseIdV1>> {
         let preserved = self.preserved_edge(task);
         let update_edge = self.update.as_ref().is_some_and(|update| {
             task.origin
                 .as_ref()
-                .is_some_and(|origin| origin.selected == update.target)
+                .is_some_and(|origin| origin.selected.as_ref() == &update.target)
         });
         let precise = update_edge
             .then(|| {
@@ -796,6 +958,7 @@ impl Solver {
         };
 
         let mut candidates = Vec::new();
+        let mut seen = BTreeSet::new();
         let mut selected = state
             .selected
             .iter()
@@ -804,7 +967,7 @@ impl Solver {
                     && self
                         .update
                         .as_ref()
-                        .is_some_and(|update| **release == update.target))
+                        .is_some_and(|update| release.as_ref() == &update.target))
                     && (fresh(release) || locked(release))
             })
             .cloned()
@@ -816,26 +979,32 @@ impl Solver {
                 .then_with(|| left.cmp(right))
         });
         for release in selected {
-            push_unique(&mut candidates, release);
+            push_unique(&mut candidates, &mut seen, release);
         }
         if !update_edge
             && let Some(edge) = preserved
             && (fresh(&edge.selected) || locked(&edge.selected))
+            && let Some((release, _)) = self.rows.get_key_value(&edge.selected)
         {
-            push_unique(&mut candidates, edge.selected.clone());
+            push_unique(&mut candidates, &mut seen, Arc::clone(release));
         }
         let mut globally_locked = self
             .locked_nodes
             .keys()
-            .filter(|release| {
-                !(update_edge
+            .filter_map(|release| {
+                if (update_edge
                     && self
                         .update
                         .as_ref()
-                        .is_some_and(|update| **release == update.target))
-                    && locked(release)
+                        .is_some_and(|update| release == &update.target))
+                    || !locked(release)
+                {
+                    return None;
+                }
+                self.rows
+                    .get_key_value(release)
+                    .map(|(release, _)| Arc::clone(release))
             })
-            .cloned()
             .collect::<Vec<_>>();
         globally_locked.sort_by(|left, right| {
             right
@@ -844,12 +1013,12 @@ impl Solver {
                 .then_with(|| left.cmp(right))
         });
         for release in globally_locked {
-            push_unique(&mut candidates, release);
+            push_unique(&mut candidates, &mut seen, release);
         }
         if let Some(releases) = self.by_package.get(&task.package) {
             for release in releases {
                 if fresh(release) {
-                    push_unique(&mut candidates, release.clone());
+                    push_unique(&mut candidates, &mut seen, Arc::clone(release));
                 }
             }
         }
@@ -875,7 +1044,7 @@ impl Solver {
             .and_then(|edges| edges.get(alias))
             .filter(|edge| &edge.package == package)
             .map(|edge| PreviousEdge {
-                selected: edge.selected.clone(),
+                selected: Arc::new(edge.selected.clone()),
             })
     }
 
@@ -958,8 +1127,8 @@ impl Solver {
                 .is_ok()
             {
                 let key = (
-                    ParentKey::Root(root.package.clone()),
-                    ParentKey::Root(root.package.clone()),
+                    ParentKey::root(root.package.clone()),
+                    ParentKey::root(root.package.clone()),
                 );
                 replay.paths.insert(key.clone(), Vec::new());
                 pending.insert(key);
@@ -968,8 +1137,8 @@ impl Solver {
         for node in &previous.nodes {
             if let Some(chain) = current_paths.get(&node.release) {
                 let key = (
-                    ParentKey::Release(node.release.clone()),
-                    ParentKey::Release(node.release.clone()),
+                    ParentKey::release(node.release.clone()),
+                    ParentKey::release(node.release.clone()),
                 );
                 if insert_better_chain(&mut replay.paths, key.clone(), chain.clone()) {
                     pending.insert(key);
@@ -1005,7 +1174,7 @@ impl Solver {
                     ));
                     for target_parent in descendants {
                         for occurrence in self.precise_occurrences.iter().filter(|occurrence| {
-                            occurrence.parent == ParentKey::Release(target_parent.clone())
+                            occurrence.parent == ParentKey::release(target_parent.clone())
                         }) {
                             insert_better_chain(
                                 &mut replay.missing,
@@ -1025,8 +1194,8 @@ impl Solver {
                     &current_edge.requirement,
                 ));
                 let next = (
-                    ParentKey::Release(previous_edge.selected.clone()),
-                    ParentKey::Release(current_edge.selected.clone()),
+                    ParentKey::release(previous_edge.selected.clone()),
+                    ParentKey::release(current_edge.selected.clone()),
                 );
                 if insert_better_chain(&mut replay.paths, next.clone(), next_chain) {
                     pending.insert(next);
@@ -1043,7 +1212,7 @@ impl Solver {
         let mut paths = BTreeMap::new();
         let mut pending = BTreeSet::new();
         for root in &self.roots {
-            let parent = ParentKey::Root(root.package.clone());
+            let parent = ParentKey::root(root.package.clone());
             if let Some(edges) = state.edges.get(&parent) {
                 for edge in edges.values() {
                     let chain = vec![PendingEdge::step(
@@ -1063,7 +1232,7 @@ impl Solver {
                 .get(&release)
                 .expect("queued current release path exists")
                 .clone();
-            let parent = ParentKey::Release(release);
+            let parent = ParentKey::release(release);
             if let Some(edges) = state.edges.get(&parent) {
                 for edge in edges.values() {
                     let mut next_chain = chain.clone();
@@ -1093,7 +1262,7 @@ impl Solver {
             })
     }
 
-    fn preservable_locked_candidate(&self, task: &PendingEdge) -> Option<&MusubiReleaseIdV1> {
+    fn preservable_locked_candidate(&self, task: &PendingEdge) -> Option<Arc<MusubiReleaseIdV1>> {
         let edge = self.preserved_edge(task)?;
         if self
             .update
@@ -1102,10 +1271,9 @@ impl Solver {
         {
             return None;
         }
-        self.rows
-            .get(&edge.selected)
-            .is_some_and(|row| self.locked_state_is_preservable(row))
-            .then_some(&edge.selected)
+        let (release, row) = self.rows.get_key_value(&edge.selected)?;
+        self.locked_state_is_preservable(row)
+            .then_some(Arc::clone(release))
     }
 
     fn locked_state_is_preservable(&self, row: &MusubiResolverReleaseRowV1) -> bool {
@@ -1130,7 +1298,7 @@ impl Solver {
         let ParentKey::Release(parent) = parent else {
             return false;
         };
-        if parent == candidate {
+        if parent.as_ref() == candidate {
             return true;
         }
         let mut seen = BTreeSet::new();
@@ -1139,10 +1307,10 @@ impl Solver {
             if !seen.insert(release) {
                 continue;
             }
-            if release == parent {
+            if release == parent.as_ref() {
                 return true;
             }
-            if let Some(edges) = state.edges.get(&ParentKey::Release(release.clone())) {
+            if let Some(edges) = state.edges.get(&ParentKey::release(release.clone())) {
                 pending.extend(edges.values().map(|edge| &edge.selected));
             }
         }
@@ -1156,14 +1324,15 @@ impl Solver {
         candidate: &MusubiReleaseIdV1,
     ) -> Option<Vec<ConflictStepV1>> {
         let mut paths = BTreeMap::new();
-        paths.insert((candidate.clone(), task.depth), task.chain.clone());
-        let mut pending = BTreeSet::from([(task.depth, task.chain.clone(), candidate.clone())]);
+        let root_chain = task.chain.to_vec();
+        paths.insert((candidate.clone(), task.depth), root_chain.clone());
+        let mut pending = BTreeSet::from([(task.depth, root_chain, candidate.clone())]);
 
         while let Some((depth, chain, release)) = pending.pop_first() {
             if paths.get(&(release.clone(), depth)) != Some(&chain) {
                 continue;
             }
-            let parent = ParentKey::Release(release);
+            let parent = ParentKey::release(release);
             let Some(edges) = state.edges.get(&parent) else {
                 continue;
             };
@@ -1196,8 +1365,8 @@ impl Solver {
                 package: root.package.clone(),
                 dependencies: state
                     .edges
-                    .get(&ParentKey::Root(root.package.clone()))
-                    .map(|edges| edges.values().cloned().collect())
+                    .get(&ParentKey::root(root.package.clone()))
+                    .map(|edges| edges.values().map(|edge| edge.as_ref().clone()).collect())
                     .unwrap_or_default(),
             })
             .collect();
@@ -1205,9 +1374,12 @@ impl Solver {
             .selected
             .iter()
             .map(|release| {
-                let row = self.rows.get(release).expect("selected row exists");
+                let row = self
+                    .rows
+                    .get(release.as_ref())
+                    .expect("selected row exists");
                 MusubiVerificationNodeV1 {
-                    release: release.clone(),
+                    release: release.as_ref().clone(),
                     release_digest: row.release_digest,
                     archive_id: row.archive_id,
                     source_digest: row.source_digest,
@@ -1215,20 +1387,14 @@ impl Solver {
                     abi: row.abi,
                     dependencies: state
                         .edges
-                        .get(&ParentKey::Release(release.clone()))
-                        .map(|edges| edges.values().cloned().collect())
+                        .get(&ParentKey::release(release.as_ref().clone()))
+                        .map(|edges| edges.values().map(|edge| edge.as_ref().clone()).collect())
                         .unwrap_or_default(),
                 }
             })
             .collect();
-        LockfileV1::new(
-            self.chain_id.clone(),
-            self.genesis_hash,
-            self.snapshot,
-            roots,
-            nodes,
-        )
-        .map_err(|error| ResolverError::invalid(error.to_string()))
+        LockfileV1::new(self.network_id, self.snapshot, roots, nodes)
+            .map_err(|error| ResolverError::invalid(error.to_string()))
     }
 }
 
@@ -1306,7 +1472,7 @@ fn prepare_precise_occurrences(
     })?;
     let mut occurrences = BTreeSet::new();
     for root in &previous.roots {
-        let parent = ParentKey::Root(root.package.clone());
+        let parent = ParentKey::root(root.package.clone());
         for edge in &root.dependencies {
             if edge.selected == update.target {
                 occurrences.insert(PreviousEdgeKey {
@@ -1317,7 +1483,7 @@ fn prepare_precise_occurrences(
         }
     }
     for node in &previous.nodes {
-        let parent = ParentKey::Release(node.release.clone());
+        let parent = ParentKey::release(node.release.clone());
         for edge in &node.dependencies {
             if edge.selected == update.target {
                 occurrences.insert(PreviousEdgeKey {
@@ -1361,7 +1527,7 @@ fn validate_precise_occurrence_roots(
             continue;
         }
         pending.extend(
-            previous_edges(previous, &ParentKey::Release(release))
+            previous_edges(previous, &ParentKey::release(release))
                 .iter()
                 .map(|edge| edge.selected.clone()),
         );
@@ -1369,8 +1535,8 @@ fn validate_precise_occurrence_roots(
 
     for occurrence in occurrences {
         let rooted = match &occurrence.parent {
-            ParentKey::Root(root) => current_roots.contains(root),
-            ParentKey::Release(release) => reachable.contains(release),
+            ParentKey::Root(root) => current_roots.contains(root.as_ref()),
+            ParentKey::Release(release) => reachable.contains(release.as_ref()),
         };
         if !rooted {
             return Err(ResolverError::invalid(format!(
@@ -1390,13 +1556,13 @@ fn previous_edges<'lock>(
     match parent {
         ParentKey::Root(root) => previous
             .roots
-            .binary_search_by(|candidate| candidate.package.cmp(root))
+            .binary_search_by(|candidate| candidate.package.cmp(root.as_ref()))
             .ok()
             .and_then(|index| previous.roots.get(index))
             .map_or(&[], |root| root.dependencies.as_slice()),
         ParentKey::Release(release) => previous
             .nodes
-            .binary_search_by(|candidate| candidate.release.cmp(release))
+            .binary_search_by(|candidate| candidate.release.cmp(release.as_ref()))
             .ok()
             .and_then(|index| previous.nodes.get(index))
             .map_or(&[], |node| node.dependencies.as_slice()),
@@ -1424,7 +1590,7 @@ fn precise_target_descendants(
         .iter()
         .filter_map(|occurrence| match &occurrence.parent {
             ParentKey::Root(_) => None,
-            ParentKey::Release(release) => Some(release.clone()),
+            ParentKey::Release(release) => Some(release.as_ref().clone()),
         })
         .collect::<BTreeSet<_>>();
     let mut descendants = BTreeMap::<_, BTreeSet<_>>::new();
@@ -1485,8 +1651,12 @@ fn row_matches_locked_node(
             })
 }
 
-fn push_unique(candidates: &mut Vec<MusubiReleaseIdV1>, release: MusubiReleaseIdV1) {
-    if !candidates.contains(&release) {
+fn push_unique(
+    candidates: &mut Vec<Arc<MusubiReleaseIdV1>>,
+    seen: &mut BTreeSet<Arc<MusubiReleaseIdV1>>,
+    release: Arc<MusubiReleaseIdV1>,
+) {
+    if seen.insert(Arc::clone(&release)) {
         candidates.push(release);
     }
 }
@@ -1528,6 +1698,12 @@ mod tests {
     };
 
     use super::*;
+
+    fn network_id() -> NetworkId {
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+            .parse()
+            .expect("network id")
+    }
 
     fn account() -> AccountId {
         let keypair =
@@ -1576,6 +1752,18 @@ mod tests {
     fn root(dependencies: Vec<WorkspaceDependencyReqV1>) -> WorkspaceRootReqV1 {
         WorkspaceRootReqV1 {
             package: "test/app".parse().expect("root selector"),
+            dependencies,
+        }
+    }
+
+    fn indexed_root(
+        index: usize,
+        dependencies: Vec<WorkspaceDependencyReqV1>,
+    ) -> WorkspaceRootReqV1 {
+        WorkspaceRootReqV1 {
+            package: format!("test/app{index}")
+                .parse()
+                .expect("indexed root selector"),
             dependencies,
         }
     }
@@ -1684,8 +1872,7 @@ mod tests {
         snapshot: MusubiRegistrySnapshotV1,
     ) -> ResolveRequestV1 {
         ResolveRequestV1 {
-            chain_id: ChainId::from("musubi-test"),
-            genesis_hash: [0x42; 32],
+            network_id: network_id(),
             snapshot,
             roots,
             rows,
@@ -1693,6 +1880,52 @@ mod tests {
             update: None,
             mode: ResolveModeV1::UpdateLock,
         }
+    }
+
+    fn binary_dead_end_request(
+        prefix_count: usize,
+        snapshot: MusubiRegistrySnapshotV1,
+    ) -> ResolveRequestV1 {
+        const BRANCH_LEVELS: usize = 13;
+        let branches = (0..BRANCH_LEVELS)
+            .map(|index| package(&format!("branch{index}")))
+            .collect::<Vec<_>>();
+        let missing = package("missing-terminal");
+        let mut rows = Vec::with_capacity(BRANCH_LEVELS * 2 + prefix_count);
+        for (index, branch) in branches.iter().enumerate() {
+            let next = branches.get(index + 1).unwrap_or(&missing);
+            for version in ["2.0.0", "1.0.0"] {
+                rows.push(row(
+                    branch,
+                    version,
+                    vec![dependency("next", next, "*")],
+                    snapshot,
+                ));
+            }
+        }
+        let prefixes = (0..prefix_count)
+            .map(|index| package(&format!("prefix{index}")))
+            .collect::<Vec<_>>();
+        for (index, prefix) in prefixes.iter().enumerate() {
+            let next = prefixes.get(index + 1).unwrap_or(&branches[0]);
+            rows.push(row(
+                prefix,
+                "1.0.0",
+                vec![dependency("next", next, "*")],
+                snapshot,
+            ));
+        }
+        let first = prefixes.first().unwrap_or(&branches[0]);
+        request(
+            vec![root(vec![root_dependency(
+                "entry",
+                MusubiDependencyKindV1::Normal,
+                first,
+                "*",
+            )])],
+            rows,
+            snapshot,
+        )
     }
 
     fn root_selection<'a>(lock: &'a LockfileV1, alias: &str) -> &'a MusubiReleaseIdV1 {
@@ -2195,6 +2428,83 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_search_attempts_bound_repeated_failed_subproblems() {
+        let snap = snapshot(34);
+        let parent = package("parent");
+        let missing = package("missing");
+        let roots = vec![root(vec![root_dependency(
+            "parent",
+            MusubiDependencyKindV1::Normal,
+            &parent,
+            "*",
+        )])];
+        let rows = vec![
+            row(
+                &parent,
+                "2.0.0",
+                vec![dependency("missing", &missing, "*")],
+                snap,
+            ),
+            row(&parent, "1.0.0", Vec::new(), snap),
+        ];
+        let bounded = Limits {
+            nodes: 8,
+            depth: 8,
+            edges: 8,
+            attempts: 1,
+        };
+        let first = resolve_with_limits(request(roots.clone(), rows.clone(), snap), bounded)
+            .expect_err("second candidate exceeds one-attempt corridor");
+        let mut reversed = rows.clone();
+        reversed.reverse();
+        let second = resolve_with_limits(request(roots.clone(), reversed, snap), bounded)
+            .expect_err("input order does not alter search fuel");
+        assert_eq!(first, second);
+        assert!(matches!(
+            first,
+            ResolverError::SearchLimitExceeded { limit: 1 }
+        ));
+
+        let resolved = resolve_with_limits(
+            request(roots, rows, snap),
+            Limits {
+                attempts: 2,
+                ..bounded
+            },
+        )
+        .expect("exact attempt corridor reaches the fallback");
+        assert_eq!(
+            root_selection(&resolved.lockfile, "parent").version,
+            version("1.0.0")
+        );
+    }
+
+    #[test]
+    fn production_search_attempt_corridor_is_inclusive_and_order_independent() {
+        let snap = snapshot(35);
+        let exact = resolve(binary_dead_end_request(2, snap))
+            .expect_err("16,384 failed candidate probes remain an ordinary conflict");
+        assert!(matches!(
+            exact,
+            ResolverError::Conflict(conflict)
+                if conflict.reason == ConflictReasonV1::NoCandidate
+        ));
+
+        let request = binary_dead_end_request(3, snap);
+        let mut reversed = request.clone();
+        reversed.rows.reverse();
+        let first = resolve(request).expect_err("16,385th probe exceeds search corridor");
+        let second = resolve(reversed).expect_err("row order does not alter search fuel");
+        assert_eq!(first, second);
+        assert_eq!(
+            first,
+            ResolverError::SearchLimitExceeded {
+                limit: MAX_RESOLVER_SEARCH_ATTEMPTS_V1,
+            }
+        );
+    }
+
+    #[test]
     fn cycles_and_minimal_conflicts_are_deterministic() {
         let snap = snapshot(9);
         let a = package("a");
@@ -2282,6 +2592,8 @@ mod tests {
             Limits {
                 nodes: 10,
                 depth: 1,
+                edges: 10,
+                attempts: MAX_RESOLVER_SEARCH_ATTEMPTS_V1,
             },
         )
         .expect_err("depth bound");
@@ -2295,6 +2607,8 @@ mod tests {
             Limits {
                 nodes: 1,
                 depth: 10,
+                edges: 10,
+                attempts: MAX_RESOLVER_SEARCH_ATTEMPTS_V1,
             },
         )
         .expect_err("node bound");
@@ -2302,6 +2616,311 @@ mod tests {
             panic!("expected node conflict");
         };
         assert_eq!(nodes.reason, ConflictReasonV1::NodeLimit);
+    }
+
+    #[test]
+    fn consumer_lock_root_bound_is_enforced_before_search() {
+        let snap = snapshot(11);
+        let exact_roots = (0..MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1)
+            .map(|index| indexed_root(index, Vec::new()))
+            .collect::<Vec<_>>();
+        let exact = resolve(request(exact_roots.clone(), Vec::new(), snap))
+            .expect("exact root-count bound");
+        assert_eq!(
+            exact.lockfile.roots.len(),
+            MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1
+        );
+
+        let mut too_many_roots = exact_roots;
+        too_many_roots.push(indexed_root(MUSUBI_MAX_CONSUMER_LOCK_ROOTS_V1, Vec::new()));
+        assert!(matches!(
+            resolve(request(too_many_roots, Vec::new(), snap)),
+            Err(ResolverError::InvalidInput(reason)) if reason.contains("workspace roots")
+        ));
+    }
+
+    #[test]
+    fn direct_candidate_rows_are_bounded_before_validation_or_indexing() {
+        let snap = snapshot(30);
+        let candidate = row(&package("candidate"), "1.0.0", Vec::new(), snap);
+        let rows = vec![candidate; MAX_COLLECTED_RESOLVER_ROWS_V1 + 1];
+        assert!(matches!(
+            resolve(request(vec![root(Vec::new())], rows, snap)),
+            Err(ResolverError::InvalidInput(reason))
+                if reason.contains("resolver candidate input exceeds")
+        ));
+    }
+
+    #[test]
+    fn direct_candidate_dependency_work_is_bounded_before_row_indexing() {
+        let snap = snapshot(33);
+        let leaf = package("candidate-leaf");
+        let dependencies = (0..MUSUBI_MAX_DEPENDENCIES_V1)
+            .map(|index| dependency(&format!("leaf{index:03}"), &leaf, "*"))
+            .collect::<Vec<_>>();
+        let candidate = row(&package("candidate-parent"), "1.0.0", dependencies, snap);
+        let row_count = MAX_COLLECTED_RESOLVER_DEPENDENCIES_V1 / MUSUBI_MAX_DEPENDENCIES_V1 + 1;
+        let rows = vec![candidate; row_count];
+        assert!(matches!(
+            resolve(request(vec![root(Vec::new())], rows, snap)),
+            Err(ResolverError::InvalidInput(reason))
+                if reason.contains("dependency occurrences")
+        ));
+    }
+
+    #[test]
+    fn edge_limit_backtracks_and_rejects_only_oversized_branches() {
+        let snap = snapshot(12);
+        let parent = package("parent");
+        let first = package("first");
+        let second = package("second");
+        let roots = vec![root(vec![root_dependency(
+            "parent",
+            MusubiDependencyKindV1::Normal,
+            &parent,
+            "*",
+        )])];
+        let oversized = row(
+            &parent,
+            "2.0.0",
+            vec![
+                dependency("first", &first, "*"),
+                dependency("second", &second, "*"),
+            ],
+            snap,
+        );
+        let leaves = vec![
+            row(&first, "1.0.0", Vec::new(), snap),
+            row(&second, "1.0.0", Vec::new(), snap),
+        ];
+        let limits = Limits {
+            nodes: 8,
+            depth: 8,
+            edges: 2,
+            attempts: MAX_RESOLVER_SEARCH_ATTEMPTS_V1,
+        };
+
+        let unavoidable = root(vec![
+            root_dependency("parent-a", MusubiDependencyKindV1::Normal, &parent, "*"),
+            root_dependency("parent-b", MusubiDependencyKindV1::Normal, &parent, "*"),
+            root_dependency("parent-c", MusubiDependencyKindV1::Normal, &parent, "*"),
+        ]);
+        assert!(matches!(
+            resolve_with_limits(request(vec![unavoidable], Vec::new(), snap), limits),
+            Err(ResolverError::InvalidInput(reason)) if reason.contains("root dependencies")
+        ));
+
+        let mut rows = vec![oversized.clone(), row(&parent, "1.0.0", Vec::new(), snap)];
+        rows.extend(leaves.clone());
+        let resolved = resolve_with_limits(request(roots.clone(), rows, snap), limits)
+            .expect("older lower-edge release fits");
+        assert_eq!(
+            root_selection(&resolved.lockfile, "parent").version,
+            version("1.0.0")
+        );
+
+        let mut exact_rows = vec![oversized.clone()];
+        exact_rows.extend(leaves.clone());
+        let exact = resolve_with_limits(
+            request(roots.clone(), exact_rows, snap),
+            Limits {
+                nodes: 8,
+                depth: 8,
+                edges: 3,
+                attempts: MAX_RESOLVER_SEARCH_ATTEMPTS_V1,
+            },
+        )
+        .expect("exact edge-count bound");
+        assert_eq!(
+            exact
+                .lockfile
+                .roots
+                .iter()
+                .map(|root| root.dependencies.len())
+                .chain(
+                    exact
+                        .lockfile
+                        .nodes
+                        .iter()
+                        .map(|node| node.dependencies.len())
+                )
+                .sum::<usize>(),
+            3
+        );
+
+        let mut oversized_only = vec![oversized];
+        oversized_only.extend(leaves);
+        let error = resolve_with_limits(request(roots, oversized_only, snap), limits)
+            .expect_err("one edge beyond the branch limit");
+        let ResolverError::Conflict(conflict) = error else {
+            panic!("expected edge-limit conflict");
+        };
+        assert_eq!(conflict.reason, ConflictReasonV1::EdgeLimit);
+    }
+
+    #[test]
+    fn production_edge_corridor_backtracks_at_the_exact_bound() {
+        let snap = snapshot(31);
+        let hub = package("hub");
+        let shared_leaf = package("shared-leaf");
+        let child_packages = (0..MUSUBI_MAX_DEPENDENCIES_V1)
+            .map(|index| package(&format!("child{index:03}")))
+            .collect::<Vec<_>>();
+        let hub_dependencies = child_packages
+            .iter()
+            .enumerate()
+            .map(|(index, package)| dependency(&format!("child{index:03}"), package, "*"))
+            .collect::<Vec<_>>();
+        let child_dependencies = |count: usize| {
+            (0..count)
+                .map(|index| dependency(&format!("leaf{index:03}"), &shared_leaf, "*"))
+                .collect::<Vec<_>>()
+        };
+
+        let mut rows = vec![
+            row(&hub, "1.0.0", hub_dependencies, snap),
+            row(
+                &child_packages[0],
+                "2.0.0",
+                child_dependencies(MUSUBI_MAX_DEPENDENCIES_V1),
+                snap,
+            ),
+            row(
+                &child_packages[0],
+                "1.0.0",
+                child_dependencies(MUSUBI_MAX_DEPENDENCIES_V1 - 1),
+                snap,
+            ),
+            row(&shared_leaf, "1.0.0", Vec::new(), snap),
+        ];
+        rows.extend(
+            child_packages[1..]
+                .iter()
+                .map(|package| row(package, "1.0.0", Vec::new(), snap)),
+        );
+        let roots = vec![root(vec![root_dependency(
+            "hub",
+            MusubiDependencyKindV1::Normal,
+            &hub,
+            "*",
+        )])];
+
+        let resolved = resolve(request(roots.clone(), rows.clone(), snap))
+            .expect("the lower-dependency candidate fits the exact production bound");
+        assert_eq!(
+            resolved
+                .lockfile
+                .roots
+                .iter()
+                .map(|root| root.dependencies.len())
+                .chain(
+                    resolved
+                        .lockfile
+                        .nodes
+                        .iter()
+                        .map(|node| node.dependencies.len())
+                )
+                .sum::<usize>(),
+            MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1
+        );
+        assert!(resolved.lockfile.nodes.iter().any(|node| {
+            node.release.package == child_packages[0] && node.release.version == version("1.0.0")
+        }));
+
+        rows.reverse();
+        let reversed = resolve(request(roots.clone(), rows.clone(), snap))
+            .expect("row order does not change the bounded solution");
+        assert_eq!(reversed.lockfile, resolved.lockfile);
+
+        rows.retain(|row| {
+            row.release.package != child_packages[0] || row.release.version != version("1.0.0")
+        });
+        let error = resolve(request(roots, rows, snap))
+            .expect_err("the preferred-only branch exceeds the edge corridor by one");
+        let ResolverError::Conflict(conflict) = error else {
+            panic!("expected edge-limit conflict");
+        };
+        assert_eq!(conflict.reason, ConflictReasonV1::EdgeLimit);
+    }
+
+    #[test]
+    fn recursive_search_clones_only_shared_branch_payloads() {
+        let snap = snapshot(32);
+        let dependency_package = package("shared-payload");
+        let solver = Solver::new(
+            request(
+                vec![root(vec![root_dependency(
+                    "shared-payload",
+                    MusubiDependencyKindV1::Normal,
+                    &dependency_package,
+                    "*",
+                )])],
+                vec![row(&dependency_package, "1.0.0", Vec::new(), snap)],
+                snap,
+            ),
+            Limits::default(),
+            SelectionPolicyV1::PreserveConsumerLock,
+        )
+        .expect("solver fixture");
+        let pending = solver.root_tasks();
+        let cloned_pending = pending.clone();
+        assert!(Arc::ptr_eq(&pending[0], &cloned_pending[0]));
+
+        let first_chain = pending[0].chain.clone();
+        let extended_chain = first_chain.push(PendingEdge::step(
+            &pending[0].parent,
+            &pending[0].alias,
+            &pending[0].package,
+            pending[0].requirement.as_ref(),
+        ));
+        assert!(Arc::ptr_eq(
+            extended_chain
+                .tail
+                .previous
+                .as_ref()
+                .expect("extended chain prefix"),
+            &first_chain.tail
+        ));
+
+        let release = Arc::new(MusubiReleaseIdV1::new(
+            dependency_package.clone(),
+            version("1.0.0"),
+        ));
+        let edge = Arc::new(MusubiExactDependencyEdgeV1 {
+            alias: "shared-payload".parse().expect("alias"),
+            kind: MusubiDependencyKindV1::Normal,
+            package: dependency_package,
+            requirement: requirement("*"),
+            selected: release.as_ref().clone(),
+        });
+        let mut state = SearchState::default();
+        state.selected.insert(Arc::clone(&release));
+        state.edges.insert(
+            pending[0].parent.clone(),
+            BTreeMap::from([(pending[0].alias.clone(), Arc::clone(&edge))]),
+        );
+        let cloned_state = state.clone();
+        assert!(Arc::ptr_eq(
+            state.selected.first().expect("selected release"),
+            cloned_state
+                .selected
+                .first()
+                .expect("cloned selected release")
+        ));
+        assert!(Arc::ptr_eq(
+            state
+                .edges
+                .values()
+                .next()
+                .and_then(|edges| edges.values().next())
+                .expect("selected edge"),
+            cloned_state
+                .edges
+                .values()
+                .next()
+                .and_then(|edges| edges.values().next())
+                .expect("cloned selected edge")
+        ));
     }
 
     #[test]
@@ -2331,8 +2950,16 @@ mod tests {
         let mut with_fallback = request.clone();
         with_fallback.rows.push(row(&parent, "0.9.0", vec![], snap));
 
-        let error = resolve_with_limits(request, Limits { nodes: 8, depth: 2 })
-            .expect_err("reused subtree creates a three-edge path");
+        let error = resolve_with_limits(
+            request,
+            Limits {
+                nodes: 8,
+                depth: 2,
+                edges: 8,
+                attempts: MAX_RESOLVER_SEARCH_ATTEMPTS_V1,
+            },
+        )
+        .expect_err("reused subtree creates a three-edge path");
         let ResolverError::Conflict(conflict) = error else {
             panic!("expected depth conflict");
         };
@@ -2342,8 +2969,16 @@ mod tests {
         assert_eq!(conflict.chain[1].alias.as_ref(), "shared");
         assert_eq!(conflict.chain[2].alias.as_ref(), "leaf");
 
-        let resolved = resolve_with_limits(with_fallback, Limits { nodes: 8, depth: 2 })
-            .expect("depth failure backtracks to the older parent");
+        let resolved = resolve_with_limits(
+            with_fallback,
+            Limits {
+                nodes: 8,
+                depth: 2,
+                edges: 8,
+                attempts: MAX_RESOLVER_SEARCH_ATTEMPTS_V1,
+            },
+        )
+        .expect("depth failure backtracks to the older parent");
         assert_eq!(
             root_selection(&resolved.lockfile, "z-parent").version,
             version("0.9.0")

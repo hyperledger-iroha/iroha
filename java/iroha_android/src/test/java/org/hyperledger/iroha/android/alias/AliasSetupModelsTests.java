@@ -16,6 +16,7 @@ import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.android.util.HashLiteral;
@@ -24,6 +25,13 @@ import org.junit.Test;
 
 /** Tests catalog-free alias names, planner shapes, and local plan verification. */
 public final class AliasSetupModelsTests {
+  private static final NetworkId TEST_NETWORK_ID =
+      NetworkId.parse(
+          "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
+  private static final NetworkId OTHER_NETWORK_ID =
+      NetworkId.parse(
+          "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22");
+
   @Test
   public void parsesCatalogFreeAccountAliasForms() throws Exception {
     final Map<String, Object> fixture = sharedAliasFixture();
@@ -276,6 +284,7 @@ public final class AliasSetupModelsTests {
         AliasPlanApply.buildTransactionPayload(
             new AliasSetupPlanRequestV1(Collections.singletonList(ensure)),
             setupPlan,
+            TEST_NETWORK_ID,
             AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(Collections.emptyList()),
             40_000,
@@ -293,6 +302,7 @@ public final class AliasSetupModelsTests {
         AliasLifecyclePlanApply.buildTransactionPayload(
             new AliasLeaseRenewPlanRequestV1(renewal.renewal()),
             lifecyclePlan,
+            TEST_NETWORK_ID,
             AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(Collections.emptyList()),
             40_000,
@@ -359,9 +369,19 @@ public final class AliasSetupModelsTests {
     final AliasTransactionPlanV1 checksummed =
         new AliasTransactionPlanV1(
             original.body(), HashLiteral.canonicalize(AliasPlanVerifier.canonicalHash(bodyBytes)));
+    final String canonicalJson = JsonEncoder.encode(checksummed.toJsonMap());
+    assert canonicalJson.contains("\"network_id\":\"" + TEST_NETWORK_ID.literal() + "\"");
+    assert !canonicalJson.contains("\"chain_id\"");
     final AliasTransactionPlanV1 parsed =
-        AliasTransactionPlanJsonParser.parse(
-            JsonEncoder.encode(checksummed.toJsonMap()).getBytes(StandardCharsets.UTF_8));
+        AliasTransactionPlanJsonParser.parse(canonicalJson.getBytes(StandardCharsets.UTF_8));
+    try {
+      AliasTransactionPlanJsonParser.parse(
+          canonicalJson.replace("\"network_id\"", "\"chain_id\"")
+              .getBytes(StandardCharsets.UTF_8));
+      throw new AssertionError("retired chain_id plan JSON must fail closed");
+    } catch (final IllegalStateException expected) {
+      // Expected.
+    }
     assert checksummed.equals(parsed);
     assert AliasPlanVerifier.verifyHash(parsed, bodyBytes);
 
@@ -382,17 +402,36 @@ public final class AliasSetupModelsTests {
               assert chainDiscriminant == AccountAddress.DEFAULT_I105_DISCRIMINANT;
               return new DecodedEnsureAliasFrame(ensure, frame.clone());
             },
+            TEST_NETWORK_ID,
             AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(Collections.emptyList()),
             40_000,
             7L,
             Collections.emptyMap());
-    assert parsed.body().chainId().equals(payload.chainId());
+    assert TEST_NETWORK_ID.equals(payload.networkId());
+    assert TEST_NETWORK_ID.equals(parsed.body().networkId());
     assert parsed.body().authority().equals(payload.authority());
     assert payload.timeToLiveMs().orElseThrow() == 9_000L;
     assert payload.executable().isInstructions();
     assert payload.executable().instructions().size() == 1;
     assert EnsureAlias.WIRE_ID.equals(payload.executable().instructions().get(0).name());
+    try {
+      AliasPlanApply.buildTransactionPayload(
+          request,
+          parsed,
+          ignored -> bodyBytes.clone(),
+          (wireId, frame, chainDiscriminant) ->
+              new DecodedEnsureAliasFrame(ensure, frame.clone()),
+          OTHER_NETWORK_ID,
+          AccountAddress.DEFAULT_I105_DISCRIMINANT,
+          FeePaymentIntent.authority(Collections.emptyList()),
+          40_000,
+          null,
+          Collections.emptyMap());
+      throw new AssertionError("a setup plan for another exact NetworkId must fail");
+    } catch (final IllegalArgumentException expected) {
+      assert expected.getMessage().contains("NetworkId");
+    }
   }
 
   @Test
@@ -440,7 +479,7 @@ public final class AliasSetupModelsTests {
         new AliasLifecycleTransactionPlanBodyV1(
             AliasLifecycleTransactionPlanBodyV1.VERSION,
             account(0x11),
-            "test-chain",
+            TEST_NETWORK_ID,
             new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
             request.operation(),
             AliasLifecyclePlanDispositionV1.APPLY,
@@ -453,9 +492,20 @@ public final class AliasSetupModelsTests {
     final AliasLifecycleTransactionPlanV1 plan =
         new AliasLifecycleTransactionPlanV1(
             body, hex(AliasPlanVerifier.canonicalLifecycleHash(bodyBytes)));
+    final String canonicalJson = JsonEncoder.encode(plan.toJsonMap());
+    assert canonicalJson.contains("\"network_id\":\"" + TEST_NETWORK_ID.literal() + "\"");
+    assert !canonicalJson.contains("\"chain_id\"");
     final AliasLifecycleTransactionPlanV1 parsed =
         AliasLifecycleTransactionPlanJsonParser.parse(
-            JsonEncoder.encode(plan.toJsonMap()).getBytes(StandardCharsets.UTF_8));
+            canonicalJson.getBytes(StandardCharsets.UTF_8));
+    try {
+      AliasLifecycleTransactionPlanJsonParser.parse(
+          canonicalJson.replace("\"network_id\"", "\"chain_id\"")
+              .getBytes(StandardCharsets.UTF_8));
+      throw new AssertionError("retired chain_id lifecycle-plan JSON must fail closed");
+    } catch (final IllegalStateException expected) {
+      // Expected.
+    }
     assert plan.equals(parsed);
     assert AliasPlanVerifier.validateLifecycleExecutable(parsed).isEmpty();
     AliasPlanVerifier.requireLifecycleExecutableForRequest(
@@ -475,6 +525,7 @@ public final class AliasSetupModelsTests {
             ignored -> bodyBytes.clone(),
             (wireId, payload, chainDiscriminant) ->
                 new DecodedAliasLifecycleFrame(request.operation(), payload.clone()),
+            TEST_NETWORK_ID,
             AccountAddress.DEFAULT_I105_DISCRIMINANT,
             FeePaymentIntent.authority(Collections.emptyList()),
             40_000,
@@ -482,6 +533,23 @@ public final class AliasSetupModelsTests {
             Collections.emptyMap());
     assert RenewAliasLease.WIRE_ID
         .equals(transaction.executable().instructions().get(0).name());
+    try {
+      AliasLifecyclePlanApply.buildTransactionPayload(
+          request,
+          parsed,
+          ignored -> bodyBytes.clone(),
+          (wireId, payload, chainDiscriminant) ->
+              new DecodedAliasLifecycleFrame(request.operation(), payload.clone()),
+          OTHER_NETWORK_ID,
+          AccountAddress.DEFAULT_I105_DISCRIMINANT,
+          FeePaymentIntent.authority(Collections.emptyList()),
+          40_000,
+          null,
+          Collections.emptyMap());
+      throw new AssertionError("a lifecycle plan for another exact NetworkId must fail");
+    } catch (final IllegalArgumentException expected) {
+      assert expected.getMessage().contains("NetworkId");
+    }
   }
 
   @Test
@@ -495,7 +563,7 @@ public final class AliasSetupModelsTests {
         new AliasLifecycleTransactionPlanBodyV1(
             1,
             account(0x11),
-            "test-chain",
+            TEST_NETWORK_ID,
             new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
             request.operation(),
             AliasLifecyclePlanDispositionV1.NO_OP,
@@ -525,6 +593,7 @@ public final class AliasSetupModelsTests {
           (wireId, payload, chainDiscriminant) -> {
             throw new AssertionError("unreachable");
           },
+          TEST_NETWORK_ID,
           AccountAddress.DEFAULT_I105_DISCRIMINANT,
           FeePaymentIntent.authority(Collections.emptyList()),
           40_000,
@@ -550,7 +619,7 @@ public final class AliasSetupModelsTests {
             1,
             request,
             account(0x11),
-            "test-chain",
+            TEST_NETWORK_ID,
             new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
             new AliasSetupModels.AliasPlanResourceV1(
                 intent, AliasSetupModels.AliasPlanDispositionV1.CREATE, null, 0L),
@@ -666,7 +735,7 @@ public final class AliasSetupModelsTests {
   public void onboardingResponseVerifierBindsReceiptAndHttpStatus() throws Exception {
     final AccountOnboardingPlanReceiptV1 createReceipt =
         new AccountOnboardingPlanReceiptV1(
-            onboardingBody(account(0x11), "test-chain"), "03".repeat(32), "AA");
+            onboardingBody(account(0x11), TEST_NETWORK_ID), "03".repeat(32), "AA");
     final AccountOnboardingResponseV1 unchanged =
         new AccountOnboardingResponseV1(
             account(0x22),
@@ -707,7 +776,7 @@ public final class AliasSetupModelsTests {
         new AccountOnboardingPlanReceiptV1(
             onboardingBody(
                 account(0x11),
-                "test-chain",
+                TEST_NETWORK_ID,
                 AliasSetupModels.AliasPlanDispositionV1.NO_OP),
             "04".repeat(32),
             "AA");
@@ -735,7 +804,7 @@ public final class AliasSetupModelsTests {
     final String authority =
         AccountAddress.fromAccount(signer.generatePublicKey().getEncoded(), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    final AccountOnboardingPlanBodyV1 body = onboardingBody(authority, "test-chain");
+    final AccountOnboardingPlanBodyV1 body = onboardingBody(authority, TEST_NETWORK_ID);
     final byte[] encoded = AliasNoritoCodec.encodeOnboardingPlanBody(body);
     assert Arrays.equals(
         encoded,
@@ -744,16 +813,17 @@ public final class AliasSetupModelsTests {
                 encoded, AccountAddress.DEFAULT_I105_DISCRIMINANT)));
 
     final AccountOnboardingPlanReceiptV1 receipt = signedOnboardingReceipt(body, signer);
-    assert AccountOnboardingReceiptVerifier.verify(receipt);
+    assert AccountOnboardingReceiptVerifier.verify(receipt, body.networkId(), null);
     assert receipt.equals(
-        AccountOnboardingReceiptVerifier.requireValidForRequest(body.request(), receipt));
+        AccountOnboardingReceiptVerifier.requireValidForRequest(
+            body.request(), receipt, body.networkId(), null));
 
     final AccountOnboardingPlanReceiptV1 tampered =
         new AccountOnboardingPlanReceiptV1(
-            onboardingBody(authority, "other-chain"),
+            onboardingBody(authority, OTHER_NETWORK_ID),
             receipt.planHash(),
             receipt.signature());
-    assert !AccountOnboardingReceiptVerifier.verify(tampered);
+    assert !AccountOnboardingReceiptVerifier.verify(tampered, body.networkId(), null);
 
     final Ed25519PrivateKeyParameters wrongSigner =
         new Ed25519PrivateKeyParameters(filled(0x52), 0);
@@ -761,15 +831,18 @@ public final class AliasSetupModelsTests {
         AccountAddress.fromAccount(wrongSigner.generatePublicKey().getEncoded(), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final AccountOnboardingPlanReceiptV1 wrongAuthorityReceipt =
-        signedOnboardingReceipt(onboardingBody(wrongAuthority, "test-chain"), signer);
-    assert !AccountOnboardingReceiptVerifier.verify(wrongAuthorityReceipt);
+        signedOnboardingReceipt(onboardingBody(wrongAuthority, TEST_NETWORK_ID), signer);
+    assert !AccountOnboardingReceiptVerifier.verify(wrongAuthorityReceipt, body.networkId(), null);
 
     final AccountOnboardingPlanReceiptV1 substitutedSelfSignedReceipt =
-        signedOnboardingReceipt(onboardingBody(wrongAuthority, "test-chain"), wrongSigner);
-    assert AccountOnboardingReceiptVerifier.verify(substitutedSelfSignedReceipt);
-    assert !AccountOnboardingReceiptVerifier.verify(substitutedSelfSignedReceipt, authority);
+        signedOnboardingReceipt(onboardingBody(wrongAuthority, TEST_NETWORK_ID), wrongSigner);
+    assert AccountOnboardingReceiptVerifier.verify(
+        substitutedSelfSignedReceipt, body.networkId(), null);
+    assert !AccountOnboardingReceiptVerifier.verify(
+        substitutedSelfSignedReceipt, body.networkId(), authority);
     try {
-      AccountOnboardingReceiptVerifier.requireValid(substitutedSelfSignedReceipt, authority);
+      AccountOnboardingReceiptVerifier.requireValid(
+          substitutedSelfSignedReceipt, body.networkId(), authority);
       throw new AssertionError("expected configured onboarding authority mismatch to fail");
     } catch (final IllegalArgumentException expected) {
       // Expected.
@@ -802,13 +875,14 @@ public final class AliasSetupModelsTests {
     assert vector.get("authority").equals(receipt.body().authority());
     assert vector.get("signature_hex").equals(receipt.signature());
     assert AccountOnboardingReceiptVerifier.verify(
-        receipt, (String) vector.get("authority"));
+        receipt, receipt.body().networkId(), (String) vector.get("authority"));
 
     final char[] tampered = receipt.signature().toCharArray();
     tampered[0] = tampered[0] == '0' ? '1' : '0';
     assert !AccountOnboardingReceiptVerifier.verify(
         new AccountOnboardingPlanReceiptV1(
             receipt.body(), receipt.planHash(), new String(tampered)),
+        receipt.body().networkId(),
         receipt.body().authority());
   }
 
@@ -841,7 +915,7 @@ public final class AliasSetupModelsTests {
         new AliasSetupModels.AliasTransactionPlanBodyV1(
             AliasSetupModels.AliasTransactionPlanBodyV1.VERSION,
             account(0x11),
-            "test-chain",
+            TEST_NETWORK_ID,
             new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
             Collections.singletonList(
                 new AliasSetupModels.AliasPlanResourceV1(
@@ -859,14 +933,14 @@ public final class AliasSetupModelsTests {
   }
 
   private static AccountOnboardingPlanBodyV1 onboardingBody(
-      final String authority, final String chainId) throws Exception {
+      final String authority, final NetworkId networkId) throws Exception {
     return onboardingBody(
-        authority, chainId, AliasSetupModels.AliasPlanDispositionV1.CREATE);
+        authority, networkId, AliasSetupModels.AliasPlanDispositionV1.CREATE);
   }
 
   private static AccountOnboardingPlanBodyV1 onboardingBody(
       final String authority,
-      final String chainId,
+      final NetworkId networkId,
       final AliasSetupModels.AliasPlanDispositionV1 disposition)
       throws Exception {
     final AliasSetupModels.AccountAliasIntent intent = accountIntent();
@@ -877,7 +951,7 @@ public final class AliasSetupModelsTests {
             account(0x22),
             Collections.emptyList()),
         authority,
-        chainId,
+        networkId,
         new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
         new AliasSetupModels.AliasPlanResourceV1(
             intent,

@@ -15,10 +15,7 @@ fn query_signature_decode_from_slice_roundtrip() {
         cursor: NonZeroU64::new(1).expect("nonzero"),
         gas_budget: Some(5),
     };
-    let payload = QueryRequestWithAuthority {
-        authority: authority.clone(),
-        request: QueryRequest::Continue(cursor),
-    };
+    let payload = QueryRequest::Continue(cursor).with_test_authority(authority.clone());
 
     let signature = iroha_crypto::SignatureOf::try_new(key_pair.private_key(), &payload)
         .expect("checked query signature fixture");
@@ -86,10 +83,7 @@ fn query_request_try_sign_matches_compatibility_sign() {
             cursor: NonZeroU64::new(1).expect("nonzero"),
             gas_budget: Some(5),
         };
-        QueryRequestWithAuthority {
-            authority,
-            request: QueryRequest::Continue(cursor),
-        }
+        QueryRequest::Continue(cursor).with_test_authority(authority)
     };
 
     let fallible = make_payload()

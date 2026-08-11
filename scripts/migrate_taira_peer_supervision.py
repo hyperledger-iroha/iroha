@@ -594,7 +594,7 @@ def create_plan(
     genesis = canonical_genesis_path(base)
     require_descendant(genesis, base, "canonical genesis")
     genesis_identity = file_identity(genesis)
-    binary = normalize_absolute(args.irohad or base / "bin" / "irohad", resolve=True)
+    binary = normalize_absolute(args.irohad or base / "bin" / "iroha3d", resolve=True)
     binary_stat_sealed = binary_supports_fast_stat_seal(binary)
     if not binary_stat_sealed:
         require_descendant(binary, base, "--irohad")
@@ -1562,7 +1562,7 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument("--base", required=True, help="absolute deployed Taira base")
     parser.add_argument("--output-dir", required=True, help="new staging directory")
-    parser.add_argument("--irohad", help="validator binary (default: BASE/bin/irohad)")
+    parser.add_argument("--irohad", help="validator binary (default: BASE/bin/iroha3d)")
     parser.add_argument(
         "--python",
         default=sys.executable,

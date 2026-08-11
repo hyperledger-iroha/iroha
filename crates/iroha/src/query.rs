@@ -1,22 +1,26 @@
 //! Functions and types to make queries to the Iroha peer.
 #![allow(clippy::result_large_err)]
 
-use std::{collections::HashMap, fmt::Debug, num::NonZeroU64, thread, time::Duration};
+use std::{
+    collections::HashMap,
+    fmt::Debug,
+    num::NonZeroU64,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use eyre::{Report, Result, eyre};
 use http::{StatusCode, header::CONTENT_TYPE};
 use iroha_data_model::query::QueryOutputBatchBoxTuple;
 use iroha_torii_shared::uri as torii_uri;
 use iroha_version::codec::EncodeVersioned;
-use norito::{codec::Error as NoritoDecodeError, json};
-use reqwest::Error as ReqwestError;
+use norito::json;
 use url::Url;
 
 use crate::{
     client::{APPLICATION_NORITO, Client, QueryResult, ResponseReport, join_torii_url},
     crypto::KeyPair,
     data_model::{
-        ValidationFail,
+        NetworkId, ValidationFail,
         account::AccountId,
         query::{
             Query, QueryOutput, QueryRequest, QueryResponse, QueryWithParams, SingularQuery,
@@ -34,6 +38,7 @@ use crate::{
 struct ClientQueryRequestHead {
     torii_url: Url,
     headers: HashMap<String, String>,
+    network_id: NetworkId,
     account_id: AccountId,
     key_pair: KeyPair,
     request_timeout: Duration,
@@ -78,7 +83,39 @@ impl ClientQueryRequestHead {
     }
 
     fn sign_and_encode(&self, query: QueryRequest) -> Result<Vec<u8>, QueryError> {
-        let with_auth = query.with_authority(self.account_id.clone());
+        let creation_time_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| QueryError::Other(eyre!("system clock precedes Unix epoch: {error}")))?
+            .as_millis()
+            .try_into()
+            .map_err(|_| QueryError::Other(eyre!("query creation time exceeds u64")))?;
+        let time_to_live_ms = NonZeroU64::new(
+            crate::config::DEFAULT_QUERY_TIME_TO_LIVE
+                .as_millis()
+                .try_into()
+                .map_err(|_| QueryError::Other(eyre!("query TTL exceeds u64")))?,
+        )
+        .ok_or_else(|| QueryError::Other(eyre!("query TTL must be nonzero")))?;
+        let mut nonce = [0_u8; 32];
+        for _ in 0..16 {
+            rand::rand_core::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut nonce)
+                .map_err(|error| QueryError::Other(eyre!("query nonce OS RNG failed: {error}")))?;
+            if nonce != [0_u8; 32] {
+                break;
+            }
+        }
+        if nonce == [0_u8; 32] {
+            return Err(QueryError::Other(eyre!(
+                "query nonce OS RNG repeatedly returned the forbidden all-zero value"
+            )));
+        }
+        let with_auth = query.with_authority(
+            self.network_id,
+            self.account_id.clone(),
+            creation_time_ms,
+            time_to_live_ms,
+            nonce,
+        );
         let query = with_auth
             .try_sign(&self.key_pair)
             .map_err(|err| QueryError::Other(eyre!("failed to sign query request: {err}")))?;
@@ -160,100 +197,30 @@ fn decode_query_response_body(body: &[u8]) -> QueryResult<QueryResponse> {
     })
 }
 
-fn send_with_retry<F>(mut make_request: F) -> Result<http::Response<Vec<u8>>, QueryError>
+fn send_once<F>(mut make_request: F) -> Result<http::Response<Vec<u8>>, QueryError>
 where
     F: FnMut() -> Result<DefaultRequestBuilder, QueryError>,
 {
-    const MAX_RETRIES: usize = 1;
-    const RETRY_DELAY: Duration = Duration::from_millis(200);
-    const RETRY_DEADLINE: Duration = Duration::from_secs(1);
-
-    let mut last_err: Option<QueryError> = None;
-    let start = std::time::Instant::now();
-    for attempt in 0..=MAX_RETRIES {
-        let result = make_request().and_then(|builder| {
-            builder
-                .build()
-                .map_err(QueryError::from)
-                .and_then(|req| req.send().map_err(QueryError::from))
-        });
-
-        match result {
-            Ok(resp) => return Ok(resp),
-            Err(err) => {
-                let retryable = is_retryable_query_error(&err);
-                if attempt == MAX_RETRIES || !retryable || start.elapsed() >= RETRY_DEADLINE {
-                    return Err(err);
-                }
-                last_err = Some(err);
-                thread::sleep(RETRY_DELAY);
-            }
-        }
-    }
-
-    Err(last_err.unwrap_or_else(|| QueryError::Other(eyre!("exhausted query retries"))))
+    make_request().and_then(|builder| {
+        builder
+            .build()
+            .map_err(QueryError::from)
+            .and_then(|request| request.send().map_err(QueryError::from))
+    })
 }
 
-fn is_retryable_query_error(err: &QueryError) -> bool {
-    match err {
-        QueryError::Validation(_) | QueryError::ResponseShape(_) => false,
-        QueryError::Other(report) => report.chain().any(|cause| {
-            cause.downcast_ref::<ReqwestError>().map_or_else(
-                || {
-                    cause
-                        .downcast_ref::<std::io::Error>()
-                        .is_some_and(|io_err| {
-                            matches!(
-                                io_err.kind(),
-                                std::io::ErrorKind::ConnectionReset
-                                    | std::io::ErrorKind::ConnectionAborted
-                                    | std::io::ErrorKind::TimedOut
-                                    | std::io::ErrorKind::BrokenPipe
-                                    | std::io::ErrorKind::WouldBlock
-                            )
-                        })
-                },
-                |req_err| req_err.is_timeout() || req_err.is_connect() || req_err.is_request(),
-            )
-        }),
-    }
-}
-
-fn retry_decode_with_send<F, D, T>(make_request: F, decode: D) -> Result<T, QueryError>
+/// Send a signed query exactly once and decode its response.
+///
+/// A transport or response-decode failure is deliberately ambiguous: the node may already have
+/// consumed and executed the signed nonce. Retrying the same bytes would violate one-shot request
+/// semantics, so callers receive the error and may issue a newly signed query if appropriate.
+fn send_once_and_decode<F, D, T>(make_request: F, decode: D) -> Result<T, QueryError>
 where
-    F: FnMut() -> Result<DefaultRequestBuilder, QueryError> + Clone,
+    F: FnMut() -> Result<DefaultRequestBuilder, QueryError>,
     D: Fn(&http::Response<Vec<u8>>) -> QueryResult<T>,
 {
-    const MAX_DECODE_RETRIES: usize = 1;
-    const DECODE_RETRY_DELAY: Duration = Duration::from_millis(100);
-
-    let mut attempt = 0;
-    loop {
-        let make_req = make_request.clone();
-        let response = send_with_retry(make_req)?;
-        match decode(&response) {
-            Ok(value) => return Ok(value),
-            Err(err) => {
-                if is_decode_error(&err) && attempt < MAX_DECODE_RETRIES {
-                    attempt += 1;
-                    thread::sleep(DECODE_RETRY_DELAY);
-                    continue;
-                }
-                return Err(err);
-            }
-        }
-    }
-}
-
-fn is_decode_error(err: &QueryError) -> bool {
-    match err {
-        QueryError::Validation(_) | QueryError::ResponseShape(_) => false,
-        QueryError::Other(report) => report.chain().any(|cause| {
-            cause.is::<NoritoDecodeError>()
-                || cause.is::<norito::json::Error>()
-                || cause.is::<std::str::Utf8Error>()
-        }),
-    }
+    let response = send_once(make_request)?;
+    decode(&response)
 }
 
 fn decode_singular_query_response(
@@ -343,7 +310,7 @@ impl QueryExecutor for Client {
                 Ok(request_head.assemble_body(body.clone()))
             }
         };
-        retry_decode_with_send(make_request, decode_singular_query_response)
+        send_once_and_decode(make_request, decode_singular_query_response)
     }
 
     fn start_query(
@@ -364,7 +331,7 @@ impl QueryExecutor for Client {
         let request = QueryRequest::Start(query);
         let body = request_head.sign_and_encode(request)?;
         let make_request = || Ok(request_head.assemble_body(body.clone()));
-        let response = retry_decode_with_send(make_request, decode_iterable_query_response)?;
+        let response = send_once_and_decode(make_request, decode_iterable_query_response)?;
 
         let (batch, remaining_items, _has_more, cursor) = response.into_parts_with_count_mode();
 
@@ -387,7 +354,7 @@ impl QueryExecutor for Client {
         let request = QueryRequest::Continue(cursor);
         let body = request_head.sign_and_encode(request)?;
         let make_request = || Ok(request_head.assemble_body(body.clone()));
-        let response = retry_decode_with_send(make_request, decode_iterable_query_response)?;
+        let response = send_once_and_decode(make_request, decode_iterable_query_response)?;
 
         let (batch, remaining_items, _has_more, cursor) = response.into_parts_with_count_mode();
 
@@ -404,7 +371,8 @@ impl QueryExecutor for Client {
 mod tests {
     use std::sync::Arc;
 
-    use iroha_data_model::query::executor::prelude::FindExecutorDataModel;
+    use iroha_data_model::query::{SignedQuery, executor::prelude::FindExecutorDataModel};
+    use iroha_version::codec::DecodeVersioned as _;
 
     use super::*;
 
@@ -413,10 +381,15 @@ mod tests {
     }
 
     #[test]
-    fn assemble_sets_norito_accept_header() {
+    fn assemble_binds_network_freshness_and_one_shot_nonce() {
+        let network_id =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([1; iroha_crypto::Hash::LENGTH]),
+            ));
         let head = ClientQueryRequestHead {
             torii_url: Url::parse("http://127.0.0.1:8080").expect("url"),
             headers: HashMap::new(),
+            network_id,
             account_id: iroha_test_samples::ALICE_ID.clone(),
             key_pair: checked_random_keypair(),
             request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
@@ -431,7 +404,7 @@ mod tests {
             .expect("request build");
 
         crate::http_default::with_send_hook(
-            Arc::new(|snapshot| {
+            Arc::new(move |snapshot| {
                 let accept = snapshot
                     .headers
                     .iter()
@@ -439,6 +412,21 @@ mod tests {
                     .map(|(_, value)| value.as_str())
                     .expect("accept header");
                 assert_eq!(accept, APPLICATION_NORITO);
+                let signed = SignedQuery::decode_all_versioned(&snapshot.body)
+                    .expect("decode signed query request");
+                assert_eq!(signed.payload.network_id, network_id);
+                assert!(signed.payload.creation_time_ms > 0);
+                assert_eq!(
+                    signed.payload.time_to_live_ms,
+                    NonZeroU64::new(
+                        crate::config::DEFAULT_QUERY_TIME_TO_LIVE
+                            .as_millis()
+                            .try_into()
+                            .expect("default query TTL fits u64"),
+                    )
+                    .expect("default query TTL is nonzero")
+                );
+                assert_ne!(signed.payload.nonce, [0_u8; 32]);
                 Ok(http::Response::new(Vec::new()))
             }),
             || {
@@ -494,6 +482,28 @@ mod tests {
     }
 }
 impl Client {
+    /// Bind, sign, encode, and execute an arbitrary raw query request.
+    ///
+    /// The client supplies the configured network identity and authority plus
+    /// a fresh creation time, nonzero lifetime, and operating-system nonce.
+    /// This is the canonical boundary for callers that construct a dynamic
+    /// [`QueryRequest`] rather than using a typed query builder.
+    ///
+    /// # Errors
+    /// Returns an error if request binding or signing fails, the HTTP request
+    /// fails, or the server rejects the query.
+    pub fn execute_query_request(
+        &self,
+        request: QueryRequest,
+    ) -> Result<iroha_data_model::query::QueryResponse, QueryError> {
+        self.ensure_data_model_compatibility()
+            .map_err(QueryError::from)?;
+        let request_head = self.get_query_request_head();
+        let body = request_head.sign_and_encode(request)?;
+        let make_request = || Ok(request_head.assemble_body(body.clone()));
+        send_once_and_decode(make_request, decode_query_response)
+    }
+
     /// Execute an arbitrary `SignedQuery` (already signed and Norito-encoded) against the `/query` endpoint.
     /// Returns a typed `QueryResponse` which may be singular or iterable.
     /// # Errors
@@ -515,7 +525,7 @@ impl Client {
             .timeout(self.torii_request_timeout)
             .body(body.to_owned()))
         };
-        retry_decode_with_send(make_request, decode_query_response)
+        send_once_and_decode(make_request, decode_query_response)
     }
 }
 
@@ -527,6 +537,7 @@ impl Client {
         ClientQueryRequestHead {
             torii_url: self.torii_url.clone(),
             headers: self.headers.clone(),
+            network_id: self.network_id,
             account_id: self.account.clone(),
             key_pair: self.key_pair.clone(),
             request_timeout: self.torii_request_timeout,
@@ -582,7 +593,7 @@ impl Client {
         let body = request_head.sign_and_encode(request)?;
         let make_request = || Ok(request_head.assemble_body(body.clone()));
 
-        let response = retry_decode_with_send(make_request, decode_query_response)?;
+        let response = send_once_and_decode(make_request, decode_query_response)?;
 
         Ok(response)
     }
@@ -595,7 +606,7 @@ mod query_errors_handling {
         num::NonZeroU64,
         sync::{
             Arc, Mutex,
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         time::Duration,
     };
@@ -656,14 +667,42 @@ mod query_errors_handling {
         let error = QueryError::from(
             iroha_data_model::query::builder::TypedBatchDowncastError::WrongType { column: 2 },
         );
-        assert!(!is_retryable_query_error(&error));
-        assert!(!is_decode_error(&error));
         assert!(matches!(
             error,
             QueryError::ResponseShape(
                 iroha_data_model::query::builder::TypedBatchDowncastError::WrongType { column: 2 }
             )
         ));
+    }
+
+    #[test]
+    fn signed_query_transport_never_retries_ambiguous_decode_failure() {
+        let sends = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&sends);
+
+        with_mock_http(
+            move |_| {
+                observed.fetch_add(1, Ordering::Relaxed);
+                Ok(Response::builder()
+                    .status(HttpStatusCode::OK)
+                    .header("content-type", APPLICATION_NORITO)
+                    .body(vec![0xFF])
+                    .expect("malformed response"))
+            },
+            || {
+                let make_request = || {
+                    Ok(DefaultRequestBuilder::new(
+                        HttpMethod::POST,
+                        Url::parse("http://localhost:8080/query").expect("query URL"),
+                    )
+                    .body(vec![0xA5]))
+                };
+                send_once_and_decode(make_request, decode_query_response)
+                    .expect_err("malformed response must be reported without retry");
+            },
+        );
+
+        assert_eq!(sends.load(Ordering::Relaxed), 1);
     }
 
     #[test]
@@ -831,6 +870,9 @@ mod query_errors_handling {
         let head = ClientQueryRequestHead {
             torii_url: Url::parse("http://localhost:8080").expect("torii url"),
             headers: HashMap::new(),
+            network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([2; iroha_crypto::Hash::LENGTH]),
+            )),
             account_id,
             key_pair,
             request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
@@ -873,6 +915,7 @@ mod query_errors_handling {
         let (account_id, key_pair) = gen_account_in("wonderland");
         let client = Client {
             chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+            network_id: crate::client::test_network_id(),
             torii_url: Url::parse("http://localhost:8081").expect("torii url"),
             key_pair: key_pair.clone(),
             transaction_ttl: Some(Duration::from_secs(5)),
@@ -929,6 +972,7 @@ mod query_errors_handling {
         let (account_id, key_pair) = gen_account_in("wonderland");
         let client = Client {
             chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+            network_id: crate::client::test_network_id(),
             torii_url: Url::parse("http://localhost:8081").expect("torii url"),
             key_pair,
             transaction_ttl: Some(Duration::from_secs(5)),

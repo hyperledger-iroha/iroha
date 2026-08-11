@@ -16,10 +16,10 @@ use iroha::{
     client::Client,
     crypto::Hash,
     data_model::{
-        Level, ValidationFail,
+        Level, NetworkId, ValidationFail,
         account::{Account, AccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
-        block::consensus_v2::SumeragiV2Status,
+        block::{BlockHeader, consensus_v2::SumeragiV2Status},
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
         isi::{
@@ -47,7 +47,7 @@ use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use iroha_torii::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
-    canonical_request_signature_message, signature_header_value,
+    canonical_network_request_signature_message, signature_header_value,
 };
 use norito::{decode_from_bytes, json::Value as JsonValue};
 use reqwest::StatusCode as HttpStatusCode;
@@ -763,8 +763,14 @@ async fn torii_json_get_as_account(
         .try_into()
         .unwrap_or(u64::MAX);
     let nonce = format!("nexus-app-api-{timestamp_ms}-{}", Hash::new(url.as_str()));
-    let message =
-        canonical_request_signature_message(&Method::GET, &uri, &[], timestamp_ms, &nonce);
+    let message = canonical_network_request_signature_message(
+        &client.network_id,
+        &Method::GET,
+        &uri,
+        &[],
+        timestamp_ms,
+        &nonce,
+    );
     let signature = Signature::try_new(client.key_pair.private_key(), &message)
         .wrap_err("sign canonical app-api request")?;
     let response = routed_http_client()
@@ -1558,10 +1564,10 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
 #[cfg(test)]
 mod tests {
     use super::{
-        ALICE_ID, ALICE_KEYPAIR, AccountId, Algorithm, AssetDefinitionId, DS1_ID_U64,
+        ALICE_ID, ALICE_KEYPAIR, AccountId, Algorithm, AssetDefinitionId, BlockHeader, DS1_ID_U64,
         DS1_LANE_INDEX, DS1_MANIFEST_HASH, DS2_ID_U64, DS2_LANE_INDEX, DS2_MANIFEST_HASH,
-        DataSpaceId, DomainId, ExpectedLaneValidatorBinding, KeyPair, LANE_VALIDATOR_COUNT, LaneId,
-        Level, Log, NEXUS_ALIAS, NEXUS_ID_U64, NEXUS_LANE_INDEX, PeerId,
+        DataSpaceId, DomainId, ExpectedLaneValidatorBinding, Hash, KeyPair, LANE_VALIDATOR_COUNT,
+        LaneId, Level, Log, NEXUS_ALIAS, NEXUS_ID_U64, NEXUS_LANE_INDEX, NetworkId, PeerId,
         RegisterPublicLaneValidator, RoutedJsonResponse, RoutedTransactionSubmitResponse,
         SignedTransaction, TOTAL_PEERS, account_assets_response_contains,
         encode_versioned_signed_transaction, expect_proxy_fanout_headers,
@@ -1575,7 +1581,6 @@ mod tests {
         validator_authority_seed,
     };
     use iroha::data_model::{
-        ChainId,
         da::commitment::{DaProofPolicyBundle, DaProofScheme},
         transaction::TransactionBuilder,
     };
@@ -1759,9 +1764,13 @@ mod tests {
 
     #[test]
     fn versioned_signed_transaction_encoder_prefixes_v1_and_roundtrips_payload() {
-        let chain_id: ChainId = "cross-dataspace-route-encoder".parse().expect("chain id");
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"cross-dataspace-route-encoder-genesis",
+            )),
+        );
         let transaction = TransactionBuilder::new(
-            chain_id,
+            network_id,
             ALICE_ID.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )

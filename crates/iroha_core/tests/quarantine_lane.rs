@@ -35,6 +35,7 @@ fn quarantine_overflow_rejects_one_tx() {
 
     let mut state =
         iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
@@ -48,7 +49,7 @@ fn quarantine_overflow_rejects_one_tx() {
 
     // Build two transactions whose signed metadata opts into the quarantine lane.
     let tx1 = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -56,7 +57,7 @@ fn quarantine_overflow_rejects_one_tx() {
     .with_metadata(quarantine_metadata())
     .sign(kp.private_key());
     let tx2 = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

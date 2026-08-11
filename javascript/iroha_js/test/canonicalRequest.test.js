@@ -2,6 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { ed25519 } from "@noble/curves/ed25519";
 
 import {
   canonicalQueryString,
@@ -9,11 +10,21 @@ import {
   canonicalRequestSignatureMessage,
   buildCanonicalRequestHeaders,
   buildCanonicalJsonRequest,
-  generateKeyPair,
   signEd25519,
   verifyEd25519,
+  NetworkId,
 } from "../src/index.js";
 import { AccountAddress } from "../src/address.js";
+
+const TEST_NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
+
+function deterministicKeyPair(seedByte) {
+  const privateKey = Buffer.alloc(32, seedByte);
+  return {
+    privateKey,
+    publicKey: Buffer.from(ed25519.getPublicKey(privateKey)),
+  };
+}
 
 test("canonical request signing: canonical query sorts pairs", () => {
   const rendered = canonicalQueryString("b=2&a=3&b=1&space=a+b");
@@ -26,9 +37,7 @@ test("canonical request signing: canonical query uses form encoding", () => {
 });
 
 test("canonical request signing: headers include a verifiable signature", () => {
-  const { privateKey, publicKey } = generateKeyPair({
-    seed: Buffer.alloc(32, 7),
-  });
+  const { privateKey, publicKey } = deterministicKeyPair(7);
   const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
   const accountAlias = "alice-1@wonderland";
   const body = Buffer.from('{"foo":1}');
@@ -36,6 +45,7 @@ test("canonical request signing: headers include a verifiable signature", () => 
   const timestampMs = 1_717_171_717_000;
   const nonce = "deterministic-nonce";
   const message = canonicalRequestSignatureMessage({
+    networkId: TEST_NETWORK_ID,
     method: "get",
     path,
     query: "limit=10",
@@ -45,6 +55,7 @@ test("canonical request signing: headers include a verifiable signature", () => 
   });
   const headers = buildCanonicalRequestHeaders({
     accountId: accountAlias,
+    networkId: TEST_NETWORK_ID,
     method: "get",
     path,
     query: "limit=10",
@@ -61,6 +72,7 @@ test("canonical request signing: headers include a verifiable signature", () => 
 
   const i105Headers = buildCanonicalRequestHeaders({
     accountId,
+    networkId: TEST_NETWORK_ID,
     method: "get",
     path,
     query: "limit=10",
@@ -81,10 +93,34 @@ test("canonical request signing: headers include a verifiable signature", () => 
   );
 });
 
-test("canonical request signing: rejects padded auth fields", async () => {
-  const { privateKey, publicKey } = generateKeyPair({
-    seed: Buffer.alloc(32, 11),
+test("canonical request signing: exact NetworkId separates same-label deployments", () => {
+  const networkId = NetworkId.fromBytes(Uint8Array.from({ length: 32 }, (_value, index) =>
+    index === 31 ? 1 : 0,
+  ));
+  const foreignNetworkId = NetworkId.fromBytes(
+    Uint8Array.from({ length: 32 }, (_value, index) => (index === 31 ? 3 : 0)),
+  );
+  const input = {
+    method: "POST",
+    path: "/v1/gov/ballots/plain",
+    body: Buffer.from('{"network_id":"fixture"}'),
+    timestampMs: 1_717_171_717_004,
+    nonce: "exact-network-nonce",
+  };
+  const message = canonicalRequestSignatureMessage({ networkId, ...input });
+  const foreignMessage = canonicalRequestSignatureMessage({
+    networkId: foreignNetworkId,
+    ...input,
   });
+  assert.notDeepEqual(message, foreignMessage);
+  assert.deepEqual(
+    message.subarray(0, "iroha.app.request.network.v1\0".length),
+    Buffer.from("iroha.app.request.network.v1\0", "utf8"),
+  );
+});
+
+test("canonical request signing: rejects padded auth fields", async () => {
+  const { privateKey, publicKey } = deterministicKeyPair(11);
   const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
   const accountAlias = "alice-1@wonderland";
   const timestampMs = 1_717_171_717_003;
@@ -92,6 +128,7 @@ test("canonical request signing: rejects padded auth fields", async () => {
   assert.throws(
     () =>
       canonicalRequestSignatureMessage({
+        networkId: TEST_NETWORK_ID,
         method: "get",
         path: "/v1/accounts",
         timestampMs,
@@ -103,6 +140,7 @@ test("canonical request signing: rejects padded auth fields", async () => {
     () =>
       buildCanonicalRequestHeaders({
         accountId: ` ${accountAlias}`,
+        networkId: TEST_NETWORK_ID,
         method: "get",
         path: "/v1/accounts",
         privateKey,
@@ -115,6 +153,7 @@ test("canonical request signing: rejects padded auth fields", async () => {
     () =>
       buildCanonicalRequestHeaders({
         accountId: accountAlias,
+        networkId: TEST_NETWORK_ID,
         method: "get",
         path: "/v1/accounts",
         privateKey,
@@ -127,6 +166,7 @@ test("canonical request signing: rejects padded auth fields", async () => {
     () =>
       buildCanonicalJsonRequest({
         accountId: `${accountAlias} `,
+        networkId: TEST_NETWORK_ID,
         path: "/v1/accounts",
         body: {},
         privateKey,
@@ -139,6 +179,7 @@ test("canonical request signing: rejects padded auth fields", async () => {
     () =>
       buildCanonicalJsonRequest({
         accountId: accountAlias,
+        networkId: TEST_NETWORK_ID,
         path: "/v1/accounts",
         body: {},
         privateKey,
@@ -159,6 +200,7 @@ test("canonical request signing: rejects padded auth fields", async () => {
       () =>
         buildCanonicalRequestHeaders({
           accountId: invalidAccountId,
+          networkId: TEST_NETWORK_ID,
           method: "get",
           path: "/v1/accounts",
           privateKey,
@@ -172,6 +214,7 @@ test("canonical request signing: rejects padded auth fields", async () => {
       () =>
         buildCanonicalJsonRequest({
           accountId: invalidAccountId,
+          networkId: TEST_NETWORK_ID,
           path: "/v1/accounts",
           body: {},
           privateKey,
@@ -185,9 +228,7 @@ test("canonical request signing: rejects padded auth fields", async () => {
 });
 
 test("canonical request signing: JSON helper signs the exact request body with callback signers", async () => {
-  const { privateKey, publicKey } = generateKeyPair({
-    seed: Buffer.alloc(32, 8),
-  });
+  const { privateKey, publicKey } = deterministicKeyPair(8);
   const accountId = "operator-1@mibank.paynet";
   const path = "/v1/aliases/resolve?b=2&a=1";
   const timestampMs = 1_717_171_717_001;
@@ -196,6 +237,7 @@ test("canonical request signing: JSON helper signs the exact request body with c
 
   const request = await buildCanonicalJsonRequest({
     accountId,
+    networkId: TEST_NETWORK_ID,
     method: "post",
     path,
     body: { alias: "tidal-river-4160@mibank.paynet" },
@@ -223,6 +265,7 @@ test("canonical request signing: JSON helper signs the exact request body with c
   assert.equal(signerInput.body, request.body);
 
   const message = canonicalRequestSignatureMessage({
+    networkId: TEST_NETWORK_ID,
     method: request.method,
     path: "/v1/aliases/resolve",
     query: "b=2&a=1",
@@ -235,9 +278,7 @@ test("canonical request signing: JSON helper signs the exact request body with c
 });
 
 test("canonical request signing: JSON helper includes reverse-proxy base paths", async () => {
-  const { privateKey, publicKey } = generateKeyPair({
-    seed: Buffer.alloc(32, 9),
-  });
+  const { privateKey, publicKey } = deterministicKeyPair(9);
   const accountId = "operator-1@mibank.paynet";
   const timestampMs = 1_717_171_717_002;
   const nonce = "torii-prefix-nonce";
@@ -245,6 +286,7 @@ test("canonical request signing: JSON helper includes reverse-proxy base paths",
 
   const request = await buildCanonicalJsonRequest({
     accountId,
+    networkId: TEST_NETWORK_ID,
     method: "post",
     baseUrl: "https://explorer.example/torii/",
     path: "/v1/aliases/resolve?alias_scope=paynet",
@@ -262,6 +304,7 @@ test("canonical request signing: JSON helper includes reverse-proxy base paths",
   assert.equal(signerInput.query, "alias_scope=paynet");
 
   const message = canonicalRequestSignatureMessage({
+    networkId: TEST_NETWORK_ID,
     method: request.method,
     path: "/torii/v1/aliases/resolve",
     query: "alias_scope=paynet",
@@ -274,13 +317,12 @@ test("canonical request signing: JSON helper includes reverse-proxy base paths",
 });
 
 test("canonical request signing: explicit query overrides query strings in paths", async () => {
-  const { privateKey } = generateKeyPair({
-    seed: Buffer.alloc(32, 10),
-  });
+  const { privateKey } = deterministicKeyPair(10);
   let signerInput = null;
 
   await buildCanonicalJsonRequest({
     accountId: "operator@paynet",
+    networkId: TEST_NETWORK_ID,
     baseUrl: "https://explorer.example/torii",
     path: "/v1/aliases/resolve?ignored=1",
     query: "alias_scope=paynet",

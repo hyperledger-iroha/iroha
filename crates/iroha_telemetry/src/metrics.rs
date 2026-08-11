@@ -8075,7 +8075,7 @@ pub struct Metrics {
     pub sorafs_hedging_billing_finalized_lag_blocks: GenericGauge<AtomicU64>,
     /// First finalized billing journal sequence not yet projected.
     pub sorafs_hedging_billing_next_event_sequence: GenericGauge<AtomicU64>,
-    /// Statements waiting for HSM/KMS signing.
+    /// Statements waiting for external software signing.
     pub sorafs_hedging_billing_ready_for_signing: GenericGauge<AtomicU64>,
     /// Signed statements waiting for immutable publication.
     pub sorafs_hedging_billing_ready_for_publication: GenericGauge<AtomicU64>,
@@ -8211,10 +8211,10 @@ pub struct Metrics {
     pub torii_sorafs_gateway_refusals_total: IntCounterVec,
     /// Canonical SoraFS gateway fixture metadata (value = release timestamp, labels = version/profile/digest).
     pub torii_sorafs_gateway_fixture_info: IntGaugeVec,
-    /// SoraFS pin registry manifest counts grouped by status.
-    pub torii_sorafs_registry_manifests_total: GenericGaugeVec<AtomicU64>,
-    /// SoraFS manifest alias total (active entries tracked on-chain).
-    pub torii_sorafs_registry_aliases_total: GenericGauge<AtomicU64>,
+    /// Consensus-maintained count of retained SoraFS pin lifecycle records.
+    pub torii_sorafs_pin_retained_manifests: GenericGauge<AtomicU64>,
+    /// Consensus-maintained aggregate bytes represented by live SoraFS pins.
+    pub torii_sorafs_pin_live_content_bytes: GenericGauge<AtomicU64>,
     /// Alias cache evaluation outcomes (fresh/refresh/expired/hard-expired).
     pub torii_sorafs_alias_cache_refresh_total: IntCounterVec,
     /// Observed alias proof age when served (seconds).
@@ -8227,16 +8227,6 @@ pub struct Metrics {
     pub torii_sorafs_tls_ech_enabled: IntGauge,
     /// Gauge exposing the canonical SoraFS gateway fixture version (label = version).
     pub torii_sorafs_gateway_fixture_version: IntGaugeVec,
-    /// SoraFS replication order counts grouped by status.
-    pub torii_sorafs_registry_orders_total: GenericGaugeVec<AtomicU64>,
-    /// SoraFS replication SLA outcomes (met, missed, pending).
-    pub torii_sorafs_replication_sla_total: GenericGaugeVec<AtomicU64>,
-    /// Outstanding SoraFS replication backlog (pending order count).
-    pub torii_sorafs_replication_backlog_total: GenericGauge<AtomicU64>,
-    /// Completion latency aggregates for SoraFS replication orders (epochs).
-    pub torii_sorafs_replication_completion_latency_epochs: GaugeVec,
-    /// Deadline slack aggregates for pending SoraFS replication orders (epochs).
-    pub torii_sorafs_replication_deadline_slack_epochs: GaugeVec,
     /// Rejections at the SoraNet privacy ingest endpoints grouped by endpoint/reason.
     pub soranet_privacy_ingest_reject_total: IntCounterVec,
     /// Aggregated SoraNet circuit outcomes keyed by relay mode and bucket start.
@@ -13141,7 +13131,7 @@ impl Default for Metrics {
         .expect("Infallible");
         let sorafs_hedging_billing_ready_for_signing = GenericGauge::new(
             "sorafs_hedging_billing_ready_for_signing",
-            "SoraFS billing statements waiting for HSM/KMS signing",
+            "SoraFS billing statements waiting for external software signing",
         )
         .expect("Infallible");
         let sorafs_hedging_billing_ready_for_publication = GenericGauge::new(
@@ -13832,17 +13822,14 @@ impl Default for Metrics {
             &["version", "profile", "fixtures_digest"],
         )
         .expect("Infallible");
-        let torii_sorafs_registry_manifests_total = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_registry_manifests_total",
-                "SoraFS pin registry manifests grouped by status",
-            ),
-            &["status"],
+        let torii_sorafs_pin_retained_manifests = GenericGauge::new(
+            "torii_sorafs_pin_retained_manifests",
+            "Consensus-maintained retained SoraFS pin lifecycle record count",
         )
         .expect("Infallible");
-        let torii_sorafs_registry_aliases_total = GenericGauge::new(
-            "torii_sorafs_registry_aliases_total",
-            "Total manifest aliases recorded in the SoraFS pin registry",
+        let torii_sorafs_pin_live_content_bytes = GenericGauge::new(
+            "torii_sorafs_pin_live_content_bytes",
+            "Consensus-maintained aggregate content bytes represented by live SoraFS pins",
         )
         .expect("Infallible");
         let torii_sorafs_alias_cache_refresh_total = IntCounterVec::new(
@@ -13896,53 +13883,8 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_sorafs_gateway_fixture_info);
         register_guarded(&registry, &torii_sorafs_gar_violations_total);
         register_guarded(&registry, &torii_sorafs_gateway_refusals_total);
-        let torii_sorafs_registry_orders_total = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_registry_orders_total",
-                "SoraFS replication orders grouped by status",
-            ),
-            &["status"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_replication_sla_total = GenericGaugeVec::new(
-            Opts::new(
-                "torii_sorafs_replication_sla_total",
-                "SoraFS replication SLA outcomes (met, missed, pending)",
-            ),
-            &["outcome"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_replication_backlog_total = GenericGauge::new(
-            "torii_sorafs_replication_backlog_total",
-            "Outstanding SoraFS replication backlog (pending orders)",
-        )
-        .expect("Infallible");
-        let torii_sorafs_replication_completion_latency_epochs = GaugeVec::new(
-            Opts::new(
-                "torii_sorafs_replication_completion_latency_epochs",
-                "Completion latency aggregates for SoraFS replication orders (epochs)",
-            ),
-            &["stat"],
-        )
-        .expect("Infallible");
-        let torii_sorafs_replication_deadline_slack_epochs = GaugeVec::new(
-            Opts::new(
-                "torii_sorafs_replication_deadline_slack_epochs",
-                "Deadline slack aggregates for pending SoraFS replication orders (epochs)",
-            ),
-            &["stat"],
-        )
-        .expect("Infallible");
-        register_guarded(&registry, &torii_sorafs_registry_manifests_total);
-        register_guarded(&registry, &torii_sorafs_registry_aliases_total);
-        register_guarded(&registry, &torii_sorafs_registry_orders_total);
-        register_guarded(&registry, &torii_sorafs_replication_sla_total);
-        register_guarded(&registry, &torii_sorafs_replication_backlog_total);
-        register_guarded(
-            &registry,
-            &torii_sorafs_replication_completion_latency_epochs,
-        );
-        register_guarded(&registry, &torii_sorafs_replication_deadline_slack_epochs);
+        register_guarded(&registry, &torii_sorafs_pin_retained_manifests);
+        register_guarded(&registry, &torii_sorafs_pin_live_content_bytes);
         let soranet_privacy_circuit_events_total = IntCounterVec::new(
             Opts::new(
                 "soranet_privacy_circuit_events_total",
@@ -16482,19 +16424,14 @@ impl Default for Metrics {
             torii_sorafs_gar_violations_total,
             torii_sorafs_gateway_refusals_total,
             torii_sorafs_gateway_fixture_info,
-            torii_sorafs_registry_manifests_total,
-            torii_sorafs_registry_aliases_total,
+            torii_sorafs_pin_retained_manifests,
+            torii_sorafs_pin_live_content_bytes,
             torii_sorafs_alias_cache_refresh_total,
             torii_sorafs_alias_cache_age_seconds,
             torii_sorafs_tls_cert_expiry_seconds,
             torii_sorafs_tls_renewal_total,
             torii_sorafs_tls_ech_enabled,
             torii_sorafs_gateway_fixture_version,
-            torii_sorafs_registry_orders_total,
-            torii_sorafs_replication_sla_total,
-            torii_sorafs_replication_backlog_total,
-            torii_sorafs_replication_completion_latency_epochs,
-            torii_sorafs_replication_deadline_slack_epochs,
             soranet_privacy_ingest_reject_total,
             soranet_privacy_circuit_events_total,
             soranet_privacy_pow_rejects_total,
@@ -18645,65 +18582,16 @@ impl Metrics {
             .inc();
     }
 
-    /// Record the current pin registry snapshot and replication SLA aggregates.
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_sorafs_registry(
+    /// Record the O(1), consensus-maintained global SoraFS pin resource summary.
+    pub fn record_sorafs_pin_resource_usage(
         &self,
-        manifests_pending: u64,
-        manifests_approved: u64,
-        manifests_retired: u64,
-        alias_total: u64,
-        orders_pending: u64,
-        orders_completed: u64,
-        orders_expired: u64,
-        sla_met: u64,
-        sla_missed: u64,
-        completion_latencies: &[f64],
-        deadline_slack_epochs: &[f64],
+        retained_manifests: u64,
+        live_content_bytes: u64,
     ) {
-        self.torii_sorafs_registry_manifests_total
-            .with_label_values(&["pending"])
-            .set(manifests_pending);
-        self.torii_sorafs_registry_manifests_total
-            .with_label_values(&["approved"])
-            .set(manifests_approved);
-        self.torii_sorafs_registry_manifests_total
-            .with_label_values(&["retired"])
-            .set(manifests_retired);
-
-        self.torii_sorafs_registry_aliases_total.set(alias_total);
-
-        self.torii_sorafs_registry_orders_total
-            .with_label_values(&["pending"])
-            .set(orders_pending);
-        self.torii_sorafs_registry_orders_total
-            .with_label_values(&["completed"])
-            .set(orders_completed);
-        self.torii_sorafs_registry_orders_total
-            .with_label_values(&["expired"])
-            .set(orders_expired);
-
-        self.torii_sorafs_replication_backlog_total
-            .set(orders_pending);
-
-        self.torii_sorafs_replication_sla_total
-            .with_label_values(&["met"])
-            .set(sla_met);
-        self.torii_sorafs_replication_sla_total
-            .with_label_values(&["missed"])
-            .set(sla_missed);
-        self.torii_sorafs_replication_sla_total
-            .with_label_values(&["pending"])
-            .set(orders_pending);
-
-        record_gauge_stats(
-            &self.torii_sorafs_replication_completion_latency_epochs,
-            completion_latencies,
-        );
-        record_gauge_stats(
-            &self.torii_sorafs_replication_deadline_slack_epochs,
-            deadline_slack_epochs,
-        );
+        self.torii_sorafs_pin_retained_manifests
+            .set(retained_manifests);
+        self.torii_sorafs_pin_live_content_bytes
+            .set(live_content_bytes);
     }
 
     /// Increment the active fetch gauge for the orchestrator.

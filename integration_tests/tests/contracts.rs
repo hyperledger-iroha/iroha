@@ -784,7 +784,7 @@ pub(super) fn deploy_contract_locally_signed(
         .transpose()?
         .unwrap_or(0);
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        &client.chain,
+        &client.network_id,
         &client.account,
         deploy_nonce,
         iroha_data_model::nexus::DataSpaceId::UNIVERSAL,

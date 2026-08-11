@@ -11,7 +11,7 @@ fn recover_pending_canonical_terminal_outcome(
         entry,
         carrier_block_height,
         carrier_block_hash,
-        expected_chain_hash,
+        expected_network_id,
     ) = recovery.consume_for_v2_apply().ok_or_else(|| {
         V2ReservationLifecycleError::InvalidCarrierCleanupAuthorization {
             detail: "Kura Pending canonical recovery has malformed source coordinates".to_owned(),
@@ -21,7 +21,7 @@ fn recover_pending_canonical_terminal_outcome(
         detail: detail.to_owned(),
     };
     let authenticated =
-        authenticate_committed_canonical_carrier(state, kura, &entry, expected_chain_hash)?;
+        authenticate_committed_canonical_carrier(state, kura, &entry, expected_network_id)?;
     if !reference.matches_entry(&entry)
         || authenticated.reference.entry_hash != reference.entry_hash
         || authenticated.carrier_height.get() != usize::try_from(carrier_block_height)?
@@ -354,7 +354,7 @@ pub(crate) struct LaneReservationReconciliationPlan {
     actions: Vec<ReservationReconciliationAction>,
     direct_release: Vec<crate::queue::LaneQueueReservationKeyV2>,
     deferred_terminal_recovery: AutonomousLifecycleDeferredTerminalRecoveryHandoff,
-    chain_hash: Hash,
+    network_id: NetworkId,
     recovered: usize,
 }
 

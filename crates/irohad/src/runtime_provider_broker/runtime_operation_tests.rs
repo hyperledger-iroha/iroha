@@ -1,5 +1,19 @@
 // Runtime-provider operation, endpoint, ambiguity, and billing regressions.
 
+fn valid_governance_sign_request_payload() -> Vec<u8> {
+    encode_canonical(
+        &PurposeSignRequestWireV1 {
+            purpose: sorafs_node::GovernanceDagSigningPurposeV1::KeyTransition.wire_id(),
+            payload: sorafs_node::governance_dag_key_transition_signing_payload_v1(
+                1, 2, [0x41; 32],
+            )
+            .expect("governance key-transition signing payload"),
+        },
+        MAX_OPERATION_FRAME_BYTES_V1,
+    )
+    .expect("encode governance sign request")
+}
+
 #[test]
 fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
     let webauthn = evidence_viewer_binding(IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn);
@@ -69,7 +83,7 @@ fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
         checkpoint_store_handle: checkpoint.handle.clone(),
         checkpoint_store_revision: checkpoint.revision.expect("revision"),
         checkpoint_store_policy_digest: checkpoint.policy_digest.expect("policy digest"),
-        signer_handle: "hsm://sorafs/evidence-viewer/receipt-primary".to_owned(),
+        signer_handle: "software://sorafs/evidence-viewer/primary".to_owned(),
         signer_public_key: TEST_SIGNER_KEY,
         signature: [0x23; 64],
         revision: [0x24; 32],
@@ -199,8 +213,14 @@ fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
             receipt,
             OPERATION_EVIDENCE_VIEWER_RECEIPT_SIGN_V1,
             encode_canonical(
-                &SignRequestWireV1 {
-                    payload: vec![0x41],
+                &PurposeSignRequestWireV1 {
+                    purpose: sorafs_node::evidence_viewer::EvidenceViewerSigningPurposeV1::Receipt
+                        .wire_id(),
+                    payload: [
+                        b"sorafs.evidence-viewer.receipt-signature.v1".as_slice(),
+                        &[0x41; 32],
+                    ]
+                    .concat(),
                 },
                 MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
             )
@@ -320,7 +340,7 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
     );
 
     let exact_signer = ProviderIngestSignerBindingWireV1 {
-        runtime_handle: "pkcs11://sorafs/provider-ingest/signer-primary".to_owned(),
+        runtime_handle: "software://sorafs/provider-ingest/signer-primary".to_owned(),
         adapter_revision: 3,
         signer_policy_id: [0xA1; 32],
         signer_policy_revision: 1,
@@ -331,7 +351,7 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
     };
     let resolver = ProviderBindingWireV1 {
         slot: IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver.wire_id(),
-        handle: "hsm://sorafs/provider-ingest/resolver-primary".to_owned(),
+        handle: "resolver://sorafs/provider-ingest/primary".to_owned(),
         revision: Some(6),
         policy_digest: Some([0xB2; 32]),
         bootle_lantern_issuance_bindings: None,
@@ -584,12 +604,21 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         );
     }
     assert_eq!(
-        operation_frame_limit(OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1),
+        operation_frame_limit(OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2),
         MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1
     );
-    for operation in
-        OPERATION_PROVIDER_INGEST_RESOLVER_READINESS_V1..=OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1
-    {
+    for operation in [
+        OPERATION_PROVIDER_INGEST_RESOLVER_READINESS_V1,
+        OPERATION_PROVIDER_INGEST_RESOLVE_SIGNER_V1,
+        OPERATION_PROVIDER_INGEST_SIGN_V1,
+        OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1,
+        OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1,
+        OPERATION_PROVIDER_INGEST_RETENTION_LOAD_V1,
+        OPERATION_PROVIDER_INGEST_RETENTION_COMPARE_AND_SWAP_V1,
+        OPERATION_PROVIDER_INGEST_SOURCE_READINESS_V1,
+        OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V2,
+    ] {
+        assert!(operation_is_known(operation));
         assert!(
             operation_frame_limit(operation) <= MAX_OPERATION_FRAME_BYTES_V1,
             "provider-ingest operation {operation} must stay within the process raw-frame ceiling"
@@ -630,19 +659,26 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
     .expect("build provider-ingest sign operation");
     assert_eq!(validate_operation_request(&admitted_request), Ok(()));
     assert_eq!(
-        validate_operation_request_for_session(&admitted_request, "server-test-chain",),
+        validate_operation_request_for_session(
+            &admitted_request,
+            "server-test-chain",
+            &server_test_network_id(),
+        ),
         Ok(())
     );
     assert_eq!(
-        validate_operation_request_for_session(&admitted_request, "other-chain"),
+        validate_operation_request_for_session(
+            &admitted_request,
+            "server-test-chain",
+            &test_network_id(0x16),
+        ),
         Err(BrokerError::BindingMismatch)
     );
-
     let mut substituted_instruction =
         provider_ingest_completion_test_instruction(signer_owner.clone());
     substituted_instruction.expected_assignment_revision += 1;
     let substituted_payload = provider_ingest_completion_test_payload_with_executable(
-        "server-test-chain",
+        server_test_network_id(),
         signer_owner,
         iroha_data_model::transaction::Executable::Instructions(
             vec![iroha_data_model::isi::InstructionBox::from(
@@ -682,7 +718,11 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
         Err(BrokerError::BindingMismatch)
     );
     assert_eq!(
-        validate_operation_request_for_session(&substituted_request, "server-test-chain",),
+        validate_operation_request_for_session(
+            &substituted_request,
+            "server-test-chain",
+            &server_test_network_id(),
+        ),
         Err(BrokerError::BindingMismatch)
     );
 
@@ -694,21 +734,39 @@ fn provider_ingest_wire_roles_bind_exact_public_policy() {
     let context = provider_ingest_completion_test_context(owner.clone());
     let exact_payload = provider_ingest_completion_test_payload(owner.clone());
     assert_eq!(
-        ensure_provider_ingest_completion_payload(&exact_payload, &context, "server-test-chain"),
+        ensure_provider_ingest_completion_payload(
+            &exact_payload,
+            &context,
+            &server_test_network_id(),
+        ),
         Ok(())
     );
-    let cross_chain_payload = iroha_data_model::transaction::TransactionBuilder::new(
-        iroha_data_model::ChainId::from("other-chain"),
+    let cross_network_payload = iroha_data_model::transaction::TransactionBuilder::new(
+        test_network_id(0x16),
         owner.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .into_payload()
-    .expect("build cross-chain provider-ingest payload");
+    .expect("build cross-network provider-ingest payload");
     assert_eq!(
         ensure_provider_ingest_completion_payload(
-            &cross_chain_payload,
+            &cross_network_payload,
             &context,
-            "server-test-chain"
+            &server_test_network_id(),
+        ),
+        Err(BrokerError::BindingMismatch)
+    );
+    let genesis_payload = iroha_data_model::transaction::TransactionBuilder::new_genesis(
+        owner,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .into_payload()
+    .expect("build genesis-domain provider-ingest payload");
+    assert_eq!(
+        ensure_provider_ingest_completion_payload(
+            &genesis_payload,
+            &context,
+            &server_test_network_id(),
         ),
         Err(BrokerError::BindingMismatch)
     );
@@ -731,7 +789,7 @@ fn provider_ingest_signer_wire_pins_exact_assignment_revision() {
 
     let payload = provider_ingest_completion_test_payload(owner);
     assert_eq!(
-        ensure_provider_ingest_completion_payload(&payload, &context, "server-test-chain",),
+        ensure_provider_ingest_completion_payload(&payload, &context, &server_test_network_id(),),
         Ok(())
     );
 
@@ -740,7 +798,11 @@ fn provider_ingest_signer_wire_pins_exact_assignment_revision() {
     let substituted = provider_ingest_signer_context_from_wire(&substituted)
         .expect("decode production-shaped substituted context");
     assert_eq!(
-        ensure_provider_ingest_completion_payload(&payload, &substituted, "server-test-chain",),
+        ensure_provider_ingest_completion_payload(
+            &payload,
+            &substituted,
+            &server_test_network_id(),
+        ),
         Err(BrokerError::BindingMismatch)
     );
 
@@ -763,24 +825,28 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
     let context = provider_ingest_completion_test_context(owner.clone());
     let exact = provider_ingest_completion_test_payload(owner.clone());
     assert_eq!(
-        ensure_provider_ingest_completion_payload(&exact, &context, "server-test-chain",),
+        ensure_provider_ingest_completion_payload(&exact, &context, &server_test_network_id(),),
         Ok(())
     );
 
     let other_executable = provider_ingest_completion_test_payload_with_executable(
-        "server-test-chain",
+        server_test_network_id(),
         owner.clone(),
         iroha_data_model::transaction::Executable::Ivm(
             iroha_data_model::transaction::IvmBytecode::from_compiled(vec![1]),
         ),
     );
     assert_eq!(
-        ensure_provider_ingest_completion_payload(&other_executable, &context, "server-test-chain",),
+        ensure_provider_ingest_completion_payload(
+            &other_executable,
+            &context,
+            &server_test_network_id(),
+        ),
         Err(BrokerError::Rejected)
     );
 
     let wrong_instruction = provider_ingest_completion_test_payload_with_executable(
-        "server-test-chain",
+        server_test_network_id(),
         owner.clone(),
         iroha_data_model::transaction::Executable::Instructions(
             vec![iroha_data_model::isi::InstructionBox::from(
@@ -796,14 +862,14 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ensure_provider_ingest_completion_payload(
             &wrong_instruction,
             &context,
-            "server-test-chain",
+            &server_test_network_id(),
         ),
         Err(BrokerError::Rejected)
     );
 
     let completion = provider_ingest_completion_test_instruction(owner.clone());
     let batch = provider_ingest_completion_test_payload_with_executable(
-        "server-test-chain",
+        server_test_network_id(),
         owner.clone(),
         iroha_data_model::transaction::Executable::Batch(
             vec![
@@ -815,12 +881,12 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ),
     );
     assert_eq!(
-        ensure_provider_ingest_completion_payload(&batch, &context, "server-test-chain",),
+        ensure_provider_ingest_completion_payload(&batch, &context, &server_test_network_id(),),
         Err(BrokerError::Rejected)
     );
 
     let extra_instruction = provider_ingest_completion_test_payload_with_executable(
-        "server-test-chain",
+        server_test_network_id(),
         owner.clone(),
         iroha_data_model::transaction::Executable::Instructions(
             vec![
@@ -837,7 +903,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ensure_provider_ingest_completion_payload(
             &extra_instruction,
             &context,
-            "server-test-chain",
+            &server_test_network_id(),
         ),
         Err(BrokerError::Rejected)
     );
@@ -849,7 +915,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
             .clone(),
     );
     let wrong_payload_owner = provider_ingest_completion_test_payload_with_executable(
-        "server-test-chain",
+        server_test_network_id(),
         other_owner.clone(),
         iroha_data_model::transaction::Executable::Instructions(
             vec![iroha_data_model::isi::InstructionBox::from(
@@ -862,7 +928,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ensure_provider_ingest_completion_payload(
             &wrong_payload_owner,
             &context,
-            "server-test-chain",
+            &server_test_network_id(),
         ),
         Err(BrokerError::BindingMismatch)
     );
@@ -870,42 +936,54 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
     let mut wrong_authority = completion.clone();
     wrong_authority.expected_authority.provider_owner = other_owner;
     let wrong_authority = provider_ingest_completion_test_payload_with_executable(
-        "server-test-chain",
+        server_test_network_id(),
         owner.clone(),
         iroha_data_model::transaction::Executable::Instructions(
             vec![iroha_data_model::isi::InstructionBox::from(wrong_authority)].into(),
         ),
     );
     assert_eq!(
-        ensure_provider_ingest_completion_payload(&wrong_authority, &context, "server-test-chain",),
+        ensure_provider_ingest_completion_payload(
+            &wrong_authority,
+            &context,
+            &server_test_network_id(),
+        ),
         Err(BrokerError::BindingMismatch)
     );
 
     let mut wrong_policy = completion.clone();
     wrong_policy.expected_authority.signer_policy.policy_digest[0] ^= 1;
     let wrong_policy = provider_ingest_completion_test_payload_with_executable(
-        "server-test-chain",
+        server_test_network_id(),
         owner.clone(),
         iroha_data_model::transaction::Executable::Instructions(
             vec![iroha_data_model::isi::InstructionBox::from(wrong_policy)].into(),
         ),
     );
     assert_eq!(
-        ensure_provider_ingest_completion_payload(&wrong_policy, &context, "server-test-chain",),
+        ensure_provider_ingest_completion_payload(
+            &wrong_policy,
+            &context,
+            &server_test_network_id(),
+        ),
         Err(BrokerError::BindingMismatch)
     );
 
     let mut wrong_anchor = completion.clone();
     wrong_anchor.finalized_anchor.block_hash[0] ^= 1;
     let wrong_anchor = provider_ingest_completion_test_payload_with_executable(
-        "server-test-chain",
+        server_test_network_id(),
         owner.clone(),
         iroha_data_model::transaction::Executable::Instructions(
             vec![iroha_data_model::isi::InstructionBox::from(wrong_anchor)].into(),
         ),
     );
     assert_eq!(
-        ensure_provider_ingest_completion_payload(&wrong_anchor, &context, "server-test-chain",),
+        ensure_provider_ingest_completion_payload(
+            &wrong_anchor,
+            &context,
+            &server_test_network_id(),
+        ),
         Err(BrokerError::BindingMismatch)
     );
 
@@ -913,7 +991,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
     wrong_assignment_revision.expected_assignment_revision =
         context.expected_assignment_revision + 1;
     let wrong_assignment_revision = provider_ingest_completion_test_payload_with_executable(
-        "server-test-chain",
+        server_test_network_id(),
         owner.clone(),
         iroha_data_model::transaction::Executable::Instructions(
             vec![iroha_data_model::isi::InstructionBox::from(
@@ -926,7 +1004,7 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         ensure_provider_ingest_completion_payload(
             &wrong_assignment_revision,
             &context,
-            "server-test-chain",
+            &server_test_network_id(),
         ),
         Err(BrokerError::BindingMismatch)
     );
@@ -952,14 +1030,18 @@ fn provider_ingest_completion_signer_accepts_only_exact_completion_schema() {
         zero_anchor_hash,
     ] {
         let payload = provider_ingest_completion_test_payload_with_executable(
-            "server-test-chain",
+            server_test_network_id(),
             owner.clone(),
             iroha_data_model::transaction::Executable::Instructions(
                 vec![iroha_data_model::isi::InstructionBox::from(malformed)].into(),
             ),
         );
         assert_eq!(
-            ensure_provider_ingest_completion_payload(&payload, &context, "server-test-chain",),
+            ensure_provider_ingest_completion_payload(
+                &payload,
+                &context,
+                &server_test_network_id(),
+            ),
             Err(BrokerError::Rejected)
         );
     }
@@ -976,7 +1058,7 @@ fn provider_ingest_completion_signer_rejects_signed_envelope_sidecars() {
         .try_sign(keypair.private_key())
         .expect("sign exact provider-ingest completion");
     assert_eq!(
-        ensure_provider_ingest_completion_transaction(&exact, &context, "server-test-chain",),
+        ensure_provider_ingest_completion_transaction(&exact, &context, &server_test_network_id(),),
         Ok(())
     );
 
@@ -994,7 +1076,11 @@ fn provider_ingest_completion_signer_rejects_signed_envelope_sidecars() {
         .try_sign(keypair.private_key())
         .expect("sign attached provider-ingest completion");
     assert_eq!(
-        ensure_provider_ingest_completion_transaction(&attached, &context, "server-test-chain",),
+        ensure_provider_ingest_completion_transaction(
+            &attached,
+            &context,
+            &server_test_network_id(),
+        ),
         Err(BrokerError::Rejected)
     );
 
@@ -1003,7 +1089,11 @@ fn provider_ingest_completion_signer_rejects_signed_envelope_sidecars() {
         iroha_data_model::transaction::signed::MultisigSignatures::new(Vec::new()),
     );
     assert_eq!(
-        ensure_provider_ingest_completion_transaction(&multisig, &context, "server-test-chain",),
+        ensure_provider_ingest_completion_transaction(
+            &multisig,
+            &context,
+            &server_test_network_id(),
+        ),
         Err(BrokerError::Rejected)
     );
 }
@@ -1015,13 +1105,7 @@ fn operation_response_rejects_session_order_slot_binding_and_digest_confusion() 
 
     let binding = signer_binding();
     let metadata_digest = observation(&binding).metadata_digest;
-    let payload = encode_canonical(
-        &SignRequestWireV1 {
-            payload: vec![1, 2, 3],
-        },
-        MAX_OPERATION_FRAME_BYTES_V1,
-    )
-    .expect("encode operation payload");
+    let payload = valid_governance_sign_request_payload();
     let request = make_operation_request(
         TEST_SESSION_ID,
         9,
@@ -1204,6 +1288,10 @@ fn endpoint_policy_rejects_outage_mode_owner_symlink_and_path_substitution() {
 #[test]
 fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
     let (_directory, _path, policy, listener) = bind_fake_broker();
+    let governance_payload =
+        sorafs_node::governance_dag_key_transition_signing_payload_v1(1, 2, [0x47; 32])
+            .expect("governance key-transition payload");
+    let expected_governance_payload = governance_payload.clone();
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept fake broker client");
         let handshake = read_handshake(&mut stream);
@@ -1228,10 +1316,16 @@ fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
         let sign = read_operation(&mut stream);
         assert_eq!(sign.request_id, 2);
         assert_eq!(sign.operation, OPERATION_SIGN_V1);
-        let decoded =
-            decode_canonical::<SignRequestWireV1>(&sign.payload, MAX_OPERATION_FRAME_BYTES_V1)
-                .expect("decode sign request");
-        assert_eq!(decoded.payload, b"canonical-governance-payload");
+        let decoded = decode_canonical::<PurposeSignRequestWireV1>(
+            &sign.payload,
+            MAX_OPERATION_FRAME_BYTES_V1,
+        )
+        .expect("decode purpose-separated sign request");
+        assert_eq!(
+            decoded.purpose,
+            sorafs_node::GovernanceDagSigningPurposeV1::KeyTransition.wire_id()
+        );
+        assert_eq!(decoded.payload, expected_governance_payload);
         let signature = encode_canonical(
             &SignResultWireV1 {
                 signature: [0x55; 64],
@@ -1262,9 +1356,13 @@ fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
     });
 
     let binding = signer_binding();
-    let (session, observations) =
-        BrokerSession::connect(&policy, "test-chain", vec![binding.clone()])
-            .expect("connect broker session");
+    let (session, observations) = BrokerSession::connect(
+        &policy,
+        "test-chain",
+        server_test_network_id(),
+        vec![binding.clone()],
+    )
+    .expect("connect broker session");
     let publisher_peer_id = binding
         .governance_dag_publisher_peer_id
         .clone()
@@ -1284,8 +1382,12 @@ fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
         sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(7, TEST_POLICY_DIGEST)
     );
     assert_eq!(
-        sorafs_node::GovernanceDagRuntimeSigner::sign(&signer, b"canonical-governance-payload")
-            .expect("sign through broker"),
+        sorafs_node::GovernanceDagRuntimeSigner::sign(
+            &signer,
+            sorafs_node::GovernanceDagSigningPurposeV1::KeyTransition,
+            &governance_payload,
+        )
+        .expect("sign through broker"),
         [0x55; 64]
     );
     sorafs_node::GovernanceDagRuntimeSigner::qualification(&signer).expect("requalify signer");
@@ -1606,9 +1708,13 @@ fn fake_broker_rejects_drift_and_poisoned_session_without_replay() {
     });
 
     let binding = signer_binding();
-    let (session, observations) =
-        BrokerSession::connect(&policy, "test-chain", vec![binding.clone()])
-            .expect("connect broker session");
+    let (session, observations) = BrokerSession::connect(
+        &policy,
+        "test-chain",
+        server_test_network_id(),
+        vec![binding.clone()],
+    )
+    .expect("connect broker session");
     let publisher_peer_id = binding
         .governance_dag_publisher_peer_id
         .clone()
@@ -1671,9 +1777,13 @@ fn fake_broker_reports_cas_ambiguity_and_never_retries() {
     });
 
     let binding = checkpoint_binding();
-    let (session, observations) =
-        BrokerSession::connect(&policy, "test-chain", vec![binding.clone()])
-            .expect("connect broker session");
+    let (session, observations) = BrokerSession::connect(
+        &policy,
+        "test-chain",
+        server_test_network_id(),
+        vec![binding.clone()],
+    )
+    .expect("connect broker session");
     let store = GovernanceDagBrokerCheckpointStore {
         session,
         binding,
@@ -1716,6 +1826,7 @@ fn fake_broker_rejects_substituted_handshake_catalog() {
         response.observations[0].binding = response.requested_catalog[0].clone();
         let transcript = ServerTranscriptFieldsV1 {
             chain_id: response.chain_id.clone(),
+            network_id: response.network_id,
             requested_catalog: response.requested_catalog.clone(),
             client_nonce: response.client_nonce,
             catalog_digest: response.catalog_digest,
@@ -1728,7 +1839,12 @@ fn fake_broker_rejects_substituted_handshake_catalog() {
         send_handshake(&mut stream, &response);
     });
     assert!(matches!(
-        BrokerSession::connect(&policy, "test-chain", vec![signer_binding()]),
+        BrokerSession::connect(
+            &policy,
+            "test-chain",
+            server_test_network_id(),
+            vec![signer_binding()],
+        ),
         Err(BrokerError::BindingMismatch)
     ));
     server.join().expect("join fake broker");

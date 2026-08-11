@@ -154,13 +154,13 @@ pub enum SoranetTransportDelegationError {
         /// Challenge authenticated by the received delegation.
         found: [u8; 32],
     },
-    /// The delegation belongs to another chain.
-    #[error("SoraNet transport delegation chain mismatch (expected {expected}, found {found})")]
-    ChainMismatch {
-        /// Locally configured chain.
-        expected: iroha_data_model::ChainId,
-        /// Chain authenticated by the delegation.
-        found: iroha_data_model::ChainId,
+    /// The delegation belongs to another exact genesis-derived network.
+    #[error("SoraNet transport delegation network mismatch (expected {expected}, found {found})")]
+    NetworkMismatch {
+        /// Locally configured exact network identity.
+        expected: iroha_data_model::NetworkId,
+        /// Exact network identity authenticated by the delegation.
+        found: iroha_data_model::NetworkId,
     },
     /// The delegation belongs to another node.
     #[error("SoraNet transport delegation peer mismatch (expected {expected}, found {found})")]
@@ -331,6 +331,13 @@ pub enum Error {
     InboundTopicCapExceeded,
     /// Handshake preface header invalid
     HandshakeBadPreface,
+    /// Peer handshake belongs to another exact network (expected {expected}, found {found})
+    HandshakeNetworkMismatch {
+        /// Locally configured exact genesis-derived network identity.
+        expected: iroha_data_model::NetworkId,
+        /// Exact network identity advertised and signed by the peer.
+        found: iroha_data_model::NetworkId,
+    },
     /// Peer consensus handshake mismatch ({reason})
     HandshakeConsensusMismatch {
         /// Human-readable mismatch reason (mode/proto/fingerprint/config)

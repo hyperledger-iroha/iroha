@@ -31,10 +31,10 @@ mod tests {
     fn signed_delegation(
         node: &KeyPair,
         transport: &KeyPair,
-        chain_id: &iroha_data_model::ChainId,
+        network_id: &iroha_data_model::NetworkId,
         challenge: super::SoranetTransportDelegationChallenge,
     ) -> super::LocalSoranetTransportDelegationV3 {
-        super::sign_soranet_transport_delegation_v3(node, transport, chain_id, challenge)
+        super::sign_soranet_transport_delegation_v3(node, transport, network_id, challenge)
             .expect("valid test roles must sign a canonical delegation")
     }
 
@@ -69,7 +69,7 @@ mod tests {
 
     async fn read_delegation_wire(
         wire: &[u8],
-        expected_chain_id: &iroha_data_model::ChainId,
+        expected_network_id: &iroha_data_model::NetworkId,
         expected_peer_id: &iroha_data_model::peer::PeerId,
         expected_challenge: &super::SoranetTransportDelegationChallenge,
     ) -> Result<super::VerifiedSoranetTransportDelegationV3, crate::Error> {
@@ -86,7 +86,7 @@ mod tests {
             .expect("delegation wire fixture shutdown must succeed");
         super::read_and_verify_soranet_transport_delegation_v3(
             &mut receiver,
-            expected_chain_id,
+            expected_network_id,
             expected_peer_id,
             expected_challenge,
         )
@@ -97,12 +97,12 @@ mod tests {
     fn soranet_transport_delegation_v3_canonical_roundtrip_is_deterministic() {
         assert_eq!(super::PRE_VERSION, 3);
         let challenge = delegation_test_challenge(0xA5);
-        let chain_id = iroha_data_model::ChainId::from("delegation-canonical-chain");
+        let network_id = test_network_id("delegation-canonical-chain");
         let node = delegation_test_key(0x11, Algorithm::BlsNormal);
         let node_id = iroha_data_model::peer::PeerId::from(node.public_key().clone());
         let transport = delegation_test_key(0x22, Algorithm::Ed25519);
         let transport_public_key = transport.public_key().clone();
-        let signed = signed_delegation(&node, &transport, &chain_id, challenge);
+        let signed = signed_delegation(&node, &transport, &network_id, challenge);
 
         assert!(!signed.canonical_signed_frame.is_empty());
         assert!(
@@ -116,13 +116,13 @@ mod tests {
         );
         assert_eq!(decoded.statement.p2p_preface_version, super::PRE_VERSION);
         assert_eq!(decoded.statement.challenge, challenge);
-        assert_eq!(decoded.statement.chain_id, chain_id);
+        assert_eq!(decoded.statement.network_id, network_id);
         assert_eq!(decoded.statement.node_id, node_id);
         assert_eq!(decoded.statement.transport_public_key, transport_public_key);
 
         let verified = super::verify_soranet_transport_delegation_v3(
             &signed.canonical_signed_frame,
-            &chain_id,
+            &network_id,
             &node_id,
             &challenge,
         )
@@ -137,7 +137,7 @@ mod tests {
         let repeated = signed_delegation(
             &delegation_test_key(0x11, Algorithm::BlsNormal),
             &delegation_test_key(0x22, Algorithm::Ed25519),
-            &chain_id,
+            &network_id,
             challenge,
         );
         assert_eq!(
@@ -149,12 +149,12 @@ mod tests {
 
     #[test]
     fn soranet_transport_delegation_v3_rejects_cross_role_algorithms() {
-        let chain_id = iroha_data_model::ChainId::from("delegation-role-chain");
+        let network_id = test_network_id("delegation-role-chain");
         let challenge = delegation_test_challenge(0x31);
         let error = super::sign_soranet_transport_delegation_v3(
             &delegation_test_key(0x31, Algorithm::Ed25519),
             &delegation_test_key(0x32, Algorithm::Ed25519),
-            &chain_id,
+            &network_id,
             challenge,
         )
         .expect_err("an Ed25519 key must not enter the BLS node role");
@@ -168,7 +168,7 @@ mod tests {
         let error = super::sign_soranet_transport_delegation_v3(
             &delegation_test_key(0x33, Algorithm::BlsNormal),
             &delegation_test_key(0x34, Algorithm::BlsNormal),
-            &chain_id,
+            &network_id,
             challenge,
         )
         .expect_err("a BLS key must not enter the Ed25519 transport role");
@@ -182,14 +182,14 @@ mod tests {
 
     #[test]
     fn soranet_transport_delegation_v3_replay_fails_under_fresh_challenge() {
-        let chain_id = iroha_data_model::ChainId::from("delegation-replay-chain");
+        let network_id = test_network_id("delegation-replay-chain");
         let node = delegation_test_key(0x41, Algorithm::BlsNormal);
         let node_id = iroha_data_model::peer::PeerId::from(node.public_key().clone());
         let transport = delegation_test_key(0x42, Algorithm::Ed25519);
         let old_challenge = delegation_test_challenge(0x43);
         let fresh_challenge = delegation_test_challenge(0x44);
-        let captured = signed_delegation(&node, &transport, &chain_id, old_challenge);
-        let fresh = signed_delegation(&node, &transport, &chain_id, fresh_challenge);
+        let captured = signed_delegation(&node, &transport, &network_id, old_challenge);
+        let fresh = signed_delegation(&node, &transport, &network_id, fresh_challenge);
 
         assert_ne!(
             captured.canonical_signed_frame,
@@ -198,7 +198,7 @@ mod tests {
         assert_ne!(captured.binding, fresh.binding);
         let error = super::verify_soranet_transport_delegation_v3(
             &captured.canonical_signed_frame,
-            &chain_id,
+            &network_id,
             &node_id,
             &fresh_challenge,
         )
@@ -212,7 +212,7 @@ mod tests {
         }
         super::verify_soranet_transport_delegation_v3(
             &fresh.canonical_signed_frame,
-            &chain_id,
+            &network_id,
             &node_id,
             &fresh_challenge,
         )
@@ -220,9 +220,11 @@ mod tests {
     }
 
     #[test]
-    fn soranet_transport_delegation_v3_rejects_wrong_chain_node_version_and_signer() {
-        let signed_chain = iroha_data_model::ChainId::from("delegation-signed-chain");
-        let expected_chain = iroha_data_model::ChainId::from("delegation-expected-chain");
+    fn soranet_transport_delegation_v3_rejects_same_name_different_genesis() {
+        let display_name = iroha_data_model::ChainId::from("delegation-shared-name");
+        let signed_network = test_network_id("delegation-genesis-a");
+        let expected_network = test_network_id("delegation-genesis-b");
+        assert_ne!(signed_network, expected_network);
         let node = delegation_test_key(0x51, Algorithm::BlsNormal);
         let node_id = iroha_data_model::peer::PeerId::from(node.public_key().clone());
         let other_node = delegation_test_key(0x52, Algorithm::BlsNormal);
@@ -231,24 +233,25 @@ mod tests {
         let frame = signed_delegation(
             &node,
             &delegation_test_key(0x54, Algorithm::Ed25519),
-            &signed_chain,
+            &signed_network,
             challenge,
         );
 
         assert!(matches!(
             super::verify_soranet_transport_delegation_v3(
                 &frame.canonical_signed_frame,
-                &expected_chain,
+                &expected_network,
                 &node_id,
                 &challenge,
             ),
-            Err(crate::SoranetTransportDelegationError::ChainMismatch { expected, found })
-                if expected == expected_chain && found == signed_chain
+            Err(crate::SoranetTransportDelegationError::NetworkMismatch { expected, found })
+                if expected == expected_network && found == signed_network
         ));
+        assert_eq!(display_name.as_str(), "delegation-shared-name");
         assert!(matches!(
             super::verify_soranet_transport_delegation_v3(
                 &frame.canonical_signed_frame,
-                &signed_chain,
+                &signed_network,
                 &other_node_id,
                 &challenge,
             ),
@@ -261,7 +264,7 @@ mod tests {
         assert!(matches!(
             super::verify_soranet_transport_delegation_v3(
                 &encode_signed_delegation(&wrong_version),
-                &signed_chain,
+                &signed_network,
                 &node_id,
                 &challenge,
             ),
@@ -277,7 +280,7 @@ mod tests {
         assert!(matches!(
             super::verify_soranet_transport_delegation_v3(
                 &encode_signed_delegation(&wrong_signer),
-                &signed_chain,
+                &signed_network,
                 &node_id,
                 &challenge,
             ),
@@ -287,14 +290,14 @@ mod tests {
 
     #[test]
     fn soranet_transport_delegation_v3_verifier_rejects_wrong_key_roles() {
-        let chain_id = iroha_data_model::ChainId::from("delegation-algorithm-chain");
+        let network_id = test_network_id("delegation-algorithm-chain");
         let challenge = delegation_test_challenge(0x61);
         let ed_node = delegation_test_key(0x62, Algorithm::Ed25519);
         let ed_node_id = iroha_data_model::peer::PeerId::from(ed_node.public_key().clone());
         let non_bls_statement = super::SoranetTransportDelegationStatementV3 {
             p2p_preface_version: super::PRE_VERSION,
             challenge,
-            chain_id: chain_id.clone(),
+            network_id: network_id.clone(),
             node_id: ed_node_id.clone(),
             transport_public_key: delegation_test_key(0x63, Algorithm::Ed25519)
                 .public_key()
@@ -307,7 +310,7 @@ mod tests {
         assert!(matches!(
             super::verify_soranet_transport_delegation_v3(
                 &encode_signed_delegation(&non_bls),
-                &chain_id,
+                &network_id,
                 &ed_node_id,
                 &challenge,
             ),
@@ -323,7 +326,7 @@ mod tests {
         let non_ed_statement = super::SoranetTransportDelegationStatementV3 {
             p2p_preface_version: super::PRE_VERSION,
             challenge,
-            chain_id: chain_id.clone(),
+            network_id: network_id.clone(),
             node_id: bls_node_id.clone(),
             transport_public_key: delegation_test_key(0x65, Algorithm::BlsNormal)
                 .public_key()
@@ -336,7 +339,7 @@ mod tests {
         assert!(matches!(
             super::verify_soranet_transport_delegation_v3(
                 &encode_signed_delegation(&non_ed),
-                &chain_id,
+                &network_id,
                 &bls_node_id,
                 &challenge,
             ),
@@ -350,14 +353,14 @@ mod tests {
 
     #[test]
     fn soranet_transport_delegation_v3_rejects_signature_attacks_and_bit_mutation() {
-        let chain_id = iroha_data_model::ChainId::from("delegation-signature-chain");
+        let network_id = test_network_id("delegation-signature-chain");
         let node = delegation_test_key(0x71, Algorithm::BlsNormal);
         let node_id = iroha_data_model::peer::PeerId::from(node.public_key().clone());
         let challenge = delegation_test_challenge(0x72);
         let frame = signed_delegation(
             &node,
             &delegation_test_key(0x73, Algorithm::Ed25519),
-            &chain_id,
+            &network_id,
             challenge,
         );
         let signed = decode_signed_delegation(&frame.canonical_signed_frame);
@@ -369,7 +372,7 @@ mod tests {
             assert!(matches!(
                 super::verify_soranet_transport_delegation_v3(
                     &encode_signed_delegation(&malformed),
-                    &chain_id,
+                    &network_id,
                     &node_id,
                     &challenge,
                 ),
@@ -385,7 +388,7 @@ mod tests {
         assert!(matches!(
             super::verify_soranet_transport_delegation_v3(
                 &encode_signed_delegation(&all_zero),
-                &chain_id,
+                &network_id,
                 &node_id,
                 &challenge,
             ),
@@ -397,7 +400,7 @@ mod tests {
         assert!(matches!(
             super::verify_soranet_transport_delegation_v3(
                 &encode_signed_delegation(&bit_flipped),
-                &chain_id,
+                &network_id,
                 &node_id,
                 &challenge,
             ),
@@ -407,26 +410,26 @@ mod tests {
 
     #[test]
     fn soranet_transport_delegation_v3_rejects_empty_oversize_truncated_and_trailing() {
-        let chain_id = iroha_data_model::ChainId::from("delegation-frame-chain");
+        let network_id = test_network_id("delegation-frame-chain");
         let node = delegation_test_key(0x81, Algorithm::BlsNormal);
         let node_id = iroha_data_model::peer::PeerId::from(node.public_key().clone());
         let challenge = delegation_test_challenge(0x82);
         let frame = signed_delegation(
             &node,
             &delegation_test_key(0x83, Algorithm::Ed25519),
-            &chain_id,
+            &network_id,
             challenge,
         );
 
         assert!(matches!(
-            super::verify_soranet_transport_delegation_v3(&[], &chain_id, &node_id, &challenge,),
+            super::verify_soranet_transport_delegation_v3(&[], &network_id, &node_id, &challenge,),
             Err(crate::SoranetTransportDelegationError::EmptyFrame)
         ));
         let oversized = vec![0; super::MAX_SORANET_TRANSPORT_DELEGATION_FRAME_BYTES + 1];
         assert!(matches!(
             super::verify_soranet_transport_delegation_v3(
                 &oversized,
-                &chain_id,
+                &network_id,
                 &node_id,
                 &challenge,
             ),
@@ -439,7 +442,10 @@ mod tests {
         truncated.pop();
         assert!(matches!(
             super::verify_soranet_transport_delegation_v3(
-                &truncated, &chain_id, &node_id, &challenge,
+                &truncated,
+                &network_id,
+                &node_id,
+                &challenge,
             ),
             Err(crate::SoranetTransportDelegationError::NonCanonicalEncoding(_))
         ));
@@ -447,14 +453,17 @@ mod tests {
         trailing.push(0);
         assert!(matches!(
             super::verify_soranet_transport_delegation_v3(
-                &trailing, &chain_id, &node_id, &challenge,
+                &trailing,
+                &network_id,
+                &node_id,
+                &challenge,
             ),
             Err(crate::SoranetTransportDelegationError::NonCanonicalEncoding(_))
         ));
         assert!(matches!(
             super::verify_soranet_transport_delegation_v3(
                 &[0xFF; 16],
-                &chain_id,
+                &network_id,
                 &node_id,
                 &challenge,
             ),
@@ -464,18 +473,18 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn soranet_transport_delegation_v3_wire_reader_enforces_boundaries() {
-        let chain_id = iroha_data_model::ChainId::from("delegation-wire-chain");
+        let network_id = test_network_id("delegation-wire-chain");
         let node = delegation_test_key(0x91, Algorithm::BlsNormal);
         let node_id = iroha_data_model::peer::PeerId::from(node.public_key().clone());
         let challenge = delegation_test_challenge(0x92);
         let frame = signed_delegation(
             &node,
             &delegation_test_key(0x93, Algorithm::Ed25519),
-            &chain_id,
+            &network_id,
             challenge,
         );
 
-        let error = read_delegation_wire(&[0, 0], &chain_id, &node_id, &challenge)
+        let error = read_delegation_wire(&[0, 0], &network_id, &node_id, &challenge)
             .await
             .expect_err("zero-length frame must fail");
         assert!(matches!(
@@ -487,7 +496,7 @@ mod tests {
             .expect("wire bound fits u16");
         let error = read_delegation_wire(
             &oversized_len.to_be_bytes(),
-            &chain_id,
+            &network_id,
             &node_id,
             &challenge,
         )
@@ -507,7 +516,7 @@ mod tests {
             &frame.canonical_signed_frame[..frame.canonical_signed_frame.len() - 1],
         );
         assert!(matches!(
-            read_delegation_wire(&truncated_wire, &chain_id, &node_id, &challenge)
+            read_delegation_wire(&truncated_wire, &network_id, &node_id, &challenge)
                 .await
                 .expect_err("EOF inside frame must fail"),
             crate::Error::Io(error) if error.kind() == std::io::ErrorKind::UnexpectedEof
@@ -518,7 +527,7 @@ mod tests {
         let mut trailing_wire = trailing_len.to_be_bytes().to_vec();
         trailing_wire.extend_from_slice(&frame.canonical_signed_frame);
         trailing_wire.push(0);
-        let error = read_delegation_wire(&trailing_wire, &chain_id, &node_id, &challenge)
+        let error = read_delegation_wire(&trailing_wire, &network_id, &node_id, &challenge)
             .await
             .expect_err("trailing payload byte must fail canonical decoding");
         assert!(matches!(
@@ -529,13 +538,13 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn soranet_transport_delegation_v3_prefaces_and_full_duplex_exchange_are_exact() {
-        let chain_id = iroha_data_model::ChainId::from("delegation-duplex-chain");
+        let network_id = test_network_id("delegation-duplex-chain");
         let node = delegation_test_key(0xA1, Algorithm::BlsNormal);
         let node_id = iroha_data_model::peer::PeerId::from(node.public_key().clone());
         let transport = delegation_test_key(0xA2, Algorithm::Ed25519);
         let transport_public_key = transport.public_key().clone();
         let challenge = delegation_test_challenge(0xA3);
-        let server_chain = chain_id.clone();
+        let server_chain = network_id.clone();
         let server_node = node.clone();
         let server_transport = transport.clone();
         let (mut client, mut server) = tokio::io::duplex(2048);
@@ -566,7 +575,7 @@ mod tests {
             .expect("valid server confirmation");
         let verified = super::read_and_verify_soranet_transport_delegation_v3(
             &mut client,
-            &chain_id,
+            &network_id,
             &node_id,
             &challenge,
         )
@@ -600,7 +609,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn v3_delegation_and_mandatory_soranet_kem_complete_full_duplex() {
-        let chain_id = iroha_data_model::ChainId::from("delegation-full-handshake-chain");
+        let network_id = test_network_id("delegation-full-handshake-chain");
         let client_node = delegation_test_key(0xB5, Algorithm::BlsNormal);
         let server_node = delegation_test_key(0xB6, Algorithm::BlsNormal);
         let server_id = iroha_data_model::peer::PeerId::from(server_node.public_key().clone());
@@ -615,7 +624,7 @@ mod tests {
             server_id,
             client_node,
             Connection::from_split(45, client_read, client_write),
-            chain_id.clone(),
+            network_id.clone(),
             Arc::clone(&soranet),
         );
         let connected_from = ConnectedFrom {
@@ -623,7 +632,7 @@ mod tests {
             key_pair: server_node,
             soranet_transport_key_pair: server_transport,
             connection: Connection::from_split(46, server_read, server_write),
-            chain_id,
+            network_id,
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
@@ -653,12 +662,12 @@ mod tests {
     async fn invalid_v3_delegation_stops_connected_to_before_puzzle_or_kem_bytes() {
         use tokio::io::AsyncReadExt;
 
-        let chain_id = iroha_data_model::ChainId::from("delegation-order-chain");
+        let network_id = test_network_id("delegation-order-chain");
         let remote_node = delegation_test_key(0xA4, Algorithm::BlsNormal);
         let remote_node_id = iroha_data_model::peer::PeerId::from(remote_node.public_key().clone());
         let remote_transport = delegation_test_key(0xA5, Algorithm::Ed25519);
         let local_node = delegation_test_key(0xA6, Algorithm::BlsNormal);
-        let server_chain = chain_id.clone();
+        let server_chain = network_id.clone();
         let (client_stream, mut server_stream) = tokio::io::duplex(2048);
         let (client_read, client_write) = tokio::io::split(client_stream);
 
@@ -694,7 +703,7 @@ mod tests {
             remote_node_id,
             local_node,
             Connection::from_split(44, client_read, client_write),
-            chain_id,
+            network_id,
             Arc::new(SoranetHandshakeConfig::defaults()),
         );
         let error = match ConnectedTo::send_client_hello::<ChaCha20Poly1305>(connected).await {
@@ -780,14 +789,14 @@ mod tests {
 
     #[test]
     fn final_handshake_payload_binds_every_v3_delegation_frame_bit() {
-        let chain_id = iroha_data_model::ChainId::from("delegation-binding-chain");
+        let network_id = test_network_id("delegation-binding-chain");
         let node = delegation_test_key(0xB1, Algorithm::BlsNormal);
         let node_id = iroha_data_model::peer::PeerId::from(node.public_key().clone());
         let challenge = delegation_test_challenge(0xB2);
         let frame = signed_delegation(
             &node,
             &delegation_test_key(0xB3, Algorithm::Ed25519),
-            &chain_id,
+            &network_id,
             challenge,
         );
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0xB4; 32])
@@ -799,7 +808,6 @@ mod tests {
         let canonical_payload = handshake_signature_payload::<ChaCha20Poly1305>(
             &cryptographer,
             &hello,
-            &chain_id,
             &frame.binding,
             None,
         );
@@ -812,7 +820,6 @@ mod tests {
         let mutated_payload = handshake_signature_payload::<ChaCha20Poly1305>(
             &cryptographer,
             &hello,
-            &chain_id,
             &mutated_binding,
             None,
         );
@@ -820,7 +827,7 @@ mod tests {
         assert!(matches!(
             super::verify_soranet_transport_delegation_v3(
                 &mutated_frame,
-                &chain_id,
+                &network_id,
                 &node_id,
                 &challenge,
             ),
@@ -859,7 +866,7 @@ mod tests {
             expected_inbound_id,
             outbound_keys,
             Connection::from_split(101, outbound_read, outbound_write),
-            iroha_data_model::ChainId::from("bls-soranet-test-chain"),
+            test_network_id("bls-soranet-test-chain"),
             soranet.clone(),
         );
         let inbound = ConnectedFrom {
@@ -867,7 +874,7 @@ mod tests {
             key_pair: inbound_keys,
             soranet_transport_key_pair: inbound_transport_keys,
             connection: Connection::from_split(102, inbound_read, inbound_write),
-            chain_id: iroha_data_model::ChainId::from("bls-soranet-test-chain"),
+            network_id: test_network_id("bls-soranet-test-chain"),
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
@@ -963,6 +970,7 @@ mod tests {
             .try_to_bytes()
             .expect("fixture public key must be valid");
         HandshakeHelloV1 {
+            network_id: test_network_id("test-chain"),
             algorithm,
             public_key: public_key.to_vec(),
             signature: Vec::new(),
@@ -1017,7 +1025,7 @@ mod tests {
             connection: Connection::from_split(15, receiver_read, receiver_write),
             expected_peer_id: None,
             cryptographer,
-            chain_id: iroha_data_model::ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
             consensus_caps: None,
             confidential_caps: None,
@@ -1067,11 +1075,9 @@ mod tests {
 
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
         let hello = unsigned_handshake_hello(&KeyPair::random(), addr);
-        let chain_id = iroha_data_model::ChainId::from("test-chain");
         let sender_payload = handshake_signature_payload::<ChaCha20Poly1305>(
             &cryptographer,
             &hello,
-            &chain_id,
             &TEST_SORANET_TRANSPORT_BINDING,
             None,
         );
@@ -1079,7 +1085,6 @@ mod tests {
         let receiver_payload = handshake_signature_payload::<ChaCha20Poly1305>(
             &cryptographer,
             &hello,
-            &chain_id,
             &TEST_SORANET_TRANSPORT_BINDING,
             None,
         );
@@ -1088,39 +1093,39 @@ mod tests {
     }
 
     #[test]
-    fn handshake_signature_payload_always_binds_chain_id() {
+    fn handshake_signature_payload_rejects_same_name_different_genesis() {
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
-        let hello = unsigned_handshake_hello(&KeyPair::random(), addr);
+        let mut hello_a = unsigned_handshake_hello(&KeyPair::random(), addr);
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x5A; 32])
             .expect("valid key length");
 
-        let chain_a: iroha_data_model::ChainId =
-            "00000000-0000-0000-0000-000000000001".parse().unwrap();
-        let chain_b: iroha_data_model::ChainId =
-            "00000000-0000-0000-0000-000000000002".parse().unwrap();
+        let display_name = iroha_data_model::ChainId::from("shared-display-name");
+        let network_a = test_network_id("handshake-genesis-a");
+        let network_b = test_network_id("handshake-genesis-b");
+        hello_a.network_id = network_a;
+        let mut hello_b = hello_a.clone();
+        hello_b.network_id = network_b;
         let payload_a = handshake_signature_payload::<ChaCha20Poly1305>(
             &cryptographer,
-            &hello,
-            &chain_a,
+            &hello_a,
             &TEST_SORANET_TRANSPORT_BINDING,
             None,
         );
         let payload_b = handshake_signature_payload::<ChaCha20Poly1305>(
             &cryptographer,
-            &hello,
-            &chain_b,
+            &hello_b,
             &TEST_SORANET_TRANSPORT_BINDING,
             None,
         );
 
         assert_ne!(payload_a, payload_b);
+        assert_eq!(display_name.as_str(), "shared-display-name");
     }
 
     #[test]
     fn handshake_signature_payload_binds_the_full_session_hash() {
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
         let hello = unsigned_handshake_hello(&KeyPair::random(), addr);
-        let chain_id = iroha_data_model::ChainId::from("test-chain");
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x3C; 32])
             .expect("valid key length");
         let mut same_compact_prefix = cryptographer.clone();
@@ -1133,14 +1138,12 @@ mod tests {
         let expected = handshake_signature_payload::<ChaCha20Poly1305>(
             &cryptographer,
             &hello,
-            &chain_id,
             &TEST_SORANET_TRANSPORT_BINDING,
             None,
         );
         let changed = handshake_signature_payload::<ChaCha20Poly1305>(
             &same_compact_prefix,
             &hello,
-            &chain_id,
             &TEST_SORANET_TRANSPORT_BINDING,
             None,
         );
@@ -1160,11 +1163,9 @@ mod tests {
         hello.consensus.mode = Some(ConsensusMode::Permissioned);
         hello.confidential.enabled = Some(true);
         hello.crypto.sm_enabled = Some(false);
-        let chain_id = iroha_data_model::ChainId::from("test-chain");
         let expected = handshake_signature_payload::<ChaCha20Poly1305>(
             &cryptographer,
             &hello,
-            &chain_id,
             &TEST_SORANET_TRANSPORT_BINDING,
             None,
         );
@@ -1176,7 +1177,6 @@ mod tests {
             handshake_signature_payload::<ChaCha20Poly1305>(
                 &cryptographer,
                 &changed,
-                &chain_id,
                 &TEST_SORANET_TRANSPORT_BINDING,
                 None,
             ),
@@ -1190,7 +1190,6 @@ mod tests {
             handshake_signature_payload::<ChaCha20Poly1305>(
                 &cryptographer,
                 &changed,
-                &chain_id,
                 &TEST_SORANET_TRANSPORT_BINDING,
                 None,
             ),
@@ -1204,7 +1203,6 @@ mod tests {
             handshake_signature_payload::<ChaCha20Poly1305>(
                 &cryptographer,
                 &changed,
-                &chain_id,
                 &TEST_SORANET_TRANSPORT_BINDING,
                 None,
             ),
@@ -1218,7 +1216,6 @@ mod tests {
             handshake_signature_payload::<ChaCha20Poly1305>(
                 &cryptographer,
                 &changed,
-                &chain_id,
                 &TEST_SORANET_TRANSPORT_BINDING,
                 None,
             ),
@@ -1232,7 +1229,6 @@ mod tests {
             handshake_signature_payload::<ChaCha20Poly1305>(
                 &cryptographer,
                 &changed,
-                &chain_id,
                 &TEST_SORANET_TRANSPORT_BINDING,
                 None,
             ),
@@ -1244,14 +1240,13 @@ mod tests {
     async fn handshake_rejects_capabilities_changed_after_signing() {
         let key_pair = KeyPair::random();
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
-        let chain_id = iroha_data_model::ChainId::from("test-chain");
+        let network_id = test_network_id("test-chain");
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x4E; 32])
             .expect("valid key length");
         let mut hello = unsigned_handshake_hello(&key_pair, addr);
         let payload = handshake_signature_payload::<ChaCha20Poly1305>(
             &cryptographer,
             &hello,
-            &chain_id,
             &TEST_SORANET_TRANSPORT_BINDING,
             None,
         );
@@ -1272,8 +1267,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn handshake_rejects_peer_from_a_different_chain() {
+    async fn handshake_rejects_same_name_peer_from_a_different_genesis() {
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
+        let display_name = iroha_data_model::ChainId::from("shared-display-name");
         let key_pair = KeyPair::random();
         let cryptographer = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[0x7C; 32])
             .expect("valid key length");
@@ -1287,7 +1283,7 @@ mod tests {
             key_pair,
             connection: Connection::from_split(1, sender_read, sender_write),
             cryptographer: cryptographer.clone(),
-            chain_id: iroha_data_model::ChainId::from("chain-a"),
+            network_id: test_network_id("genesis-a"),
             soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
             consensus_caps: None,
             confidential_caps: None,
@@ -1300,7 +1296,7 @@ mod tests {
             connection: Connection::from_split(2, receiver_read, receiver_write),
             expected_peer_id: None,
             cryptographer,
-            chain_id: iroha_data_model::ChainId::from("chain-b"),
+            network_id: test_network_id("genesis-b"),
             soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
             consensus_caps: None,
             confidential_caps: None,
@@ -1315,7 +1311,7 @@ mod tests {
             Result::<(), crate::Error>::Ok(())
         });
         let error = match GetKey::read_their_public_key(get_key).await {
-            Ok(_) => panic!("a handshake signature from a different chain must be rejected"),
+            Ok(_) => panic!("a handshake from a different genesis must be rejected"),
             Err(error) => error,
         };
         sender
@@ -1323,10 +1319,13 @@ mod tests {
             .expect("sender task panicked")
             .expect("sending handshake should succeed");
 
-        assert!(
-            matches!(error, crate::Error::Keys(_)),
-            "expected signature verification failure, got {error:?}"
-        );
+        assert!(matches!(
+            error,
+            crate::Error::HandshakeNetworkMismatch { expected, found }
+                if expected == test_network_id("genesis-b")
+                    && found == test_network_id("genesis-a")
+        ));
+        assert_eq!(display_name.as_str(), "shared-display-name");
     }
 
     #[test]
@@ -1441,7 +1440,7 @@ mod tests {
             key_pair,
             connection: Connection::from_split(21, sender_read, sender_write),
             cryptographer: cryptographer.clone(),
-            chain_id: iroha_data_model::ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
             consensus_caps: None,
             confidential_caps: sender_caps,
@@ -1455,7 +1454,7 @@ mod tests {
             connection: Connection::from_split(22, receiver_read, receiver_write),
             expected_peer_id: None,
             cryptographer,
-            chain_id: iroha_data_model::ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
             consensus_caps: None,
             confidential_caps: receiver_caps,
@@ -1667,6 +1666,7 @@ mod tests {
             .expect("fixture public key must be valid");
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
         let hello = HandshakeHelloV1 {
+            network_id: test_network_id("test-chain"),
             algorithm: alg,
             public_key: pk_bytes.to_vec(),
             signature: vec![0u8; 64],
@@ -1714,6 +1714,7 @@ mod tests {
             .expect("fixture public key must be valid");
         let addr: SocketAddr = "127.0.0.1:1444".parse().unwrap();
         let hello = HandshakeHelloV1 {
+            network_id: test_network_id("test-chain"),
             algorithm: alg,
             public_key: pk_bytes.to_vec(),
             signature: vec![1u8; 64],
@@ -1795,7 +1796,7 @@ mod tests {
             key_pair,
             connection,
             cryptographer,
-            chain_id: iroha_data_model::ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
             consensus_caps: None,
             confidential_caps: Some(caps),
@@ -1831,7 +1832,7 @@ mod tests {
             key_pair,
             connection: Connection::from_split(1, sender_read, sender_write),
             cryptographer: cryptographer.clone(),
-            chain_id: iroha_data_model::ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
             consensus_caps: None,
             confidential_caps: None,
@@ -1845,7 +1846,7 @@ mod tests {
             connection: Connection::from_split(2, receiver_read, receiver_write),
             expected_peer_id: None,
             cryptographer,
-            chain_id: iroha_data_model::ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
             consensus_caps: None,
             confidential_caps: None,
@@ -1897,6 +1898,7 @@ mod tests {
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[13u8; 32]).unwrap();
         let hello = HandshakeHelloV1 {
+            network_id: test_network_id("test-chain"),
             algorithm,
             public_key: public_key.to_vec(),
             signature: vec![0u8; 64],
@@ -1935,7 +1937,7 @@ mod tests {
             connection: Connection::from_split(15, receiver_read, receiver_write),
             expected_peer_id: None,
             cryptographer,
-            chain_id: iroha_data_model::ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
             consensus_caps: None,
             confidential_caps: None,
@@ -1975,12 +1977,11 @@ mod tests {
             let key_pair = KeyPair::random();
             let cryptographer =
                 Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[13u8; 32]).unwrap();
-            let chain_id = iroha_data_model::ChainId::from("test-chain");
+            let network_id = test_network_id("test-chain");
             let mut hello = unsigned_handshake_hello(&key_pair, addr);
             let payload = handshake_signature_payload::<ChaCha20Poly1305>(
                 &cryptographer,
                 &hello,
-                &chain_id,
                 &TEST_SORANET_TRANSPORT_BINDING,
                 None,
             );
@@ -2002,7 +2003,7 @@ mod tests {
                 connection: Connection::from_split(15, receiver_read, receiver_write),
                 expected_peer_id: None,
                 cryptographer,
-                chain_id: iroha_data_model::ChainId::from("test-chain"),
+                network_id: test_network_id("test-chain"),
                 soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
                 consensus_caps: None,
                 confidential_caps: None,
@@ -2033,12 +2034,11 @@ mod tests {
         .expect("derive checked ML-DSA handshake fixture keypair");
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[14u8; 32]).unwrap();
-        let chain_id = iroha_data_model::ChainId::from("test-chain");
+        let network_id = test_network_id("test-chain");
         let mut hello = unsigned_handshake_hello(&key_pair, addr);
         let payload = handshake_signature_payload::<ChaCha20Poly1305>(
             &cryptographer,
             &hello,
-            &chain_id,
             &TEST_SORANET_TRANSPORT_BINDING,
             None,
         );
@@ -2098,7 +2098,7 @@ mod tests {
                 Some(transport_binding),
             ),
             cryptographer: cryptographer.clone(),
-            chain_id: iroha_data_model::ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
             consensus_caps: None,
             confidential_caps: None,
@@ -2117,7 +2117,7 @@ mod tests {
             ),
             expected_peer_id: None,
             cryptographer,
-            chain_id: iroha_data_model::ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
             consensus_caps: None,
             confidential_caps: None,
@@ -2165,7 +2165,7 @@ mod tests {
                 Some([0x11u8; iroha_crypto::Hash::LENGTH]),
             ),
             cryptographer: cryptographer.clone(),
-            chain_id: iroha_data_model::ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
             consensus_caps: None,
             confidential_caps: None,
@@ -2184,7 +2184,7 @@ mod tests {
             ),
             expected_peer_id: None,
             cryptographer,
-            chain_id: iroha_data_model::ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
             consensus_caps: None,
             confidential_caps: None,
@@ -2233,7 +2233,7 @@ mod tests {
             key_pair: actual_key_pair,
             connection: Connection::from_split(3, sender_read, sender_write),
             cryptographer: cryptographer.clone(),
-            chain_id: iroha_data_model::ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
             consensus_caps: None,
             confidential_caps: None,
@@ -2247,7 +2247,7 @@ mod tests {
             connection: Connection::from_split(4, receiver_read, receiver_write),
             expected_peer_id: Some(expected_peer_id.clone()),
             cryptographer,
-            chain_id: iroha_data_model::ChainId::from("test-chain"),
+            network_id: test_network_id("test-chain"),
             soranet_transport_binding: TEST_SORANET_TRANSPORT_BINDING,
             consensus_caps: None,
             confidential_caps: None,
@@ -2295,7 +2295,7 @@ mod tests {
             .expect("test BLS-normal node key");
         let soranet_transport_key_pair = KeyPair::try_from_seed(vec![0xE5; 32], Algorithm::Ed25519)
             .expect("test Ed25519 transport key");
-        let chain_id = iroha_data_model::ChainId::from("test-chain");
+        let network_id = test_network_id("test-chain");
         let our_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let (r, w) = tokio::io::split(a);
         let conn = Connection::from_split(1, r, w);
@@ -2305,7 +2305,7 @@ mod tests {
             key_pair,
             soranet_transport_key_pair,
             connection: conn,
-            chain_id,
+            network_id,
             consensus_caps: None,
             confidential_caps: None,
             crypto_caps: None,
@@ -2322,3 +2322,5 @@ mod tests {
         assert!(matches!(err, crate::Error::HandshakeBadPreface));
     }
 }
+
+// handshake payload is encoded/decoded as a tuple to avoid extra type definitions

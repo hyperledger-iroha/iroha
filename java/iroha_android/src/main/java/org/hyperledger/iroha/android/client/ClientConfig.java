@@ -166,10 +166,12 @@ public final class ClientConfig {
     return observers;
   }
 
+  /** Policy available to caller-managed replay-safe reads; signed submissions ignore it. */
   public RetryPolicy retryPolicy() {
     return retryPolicy;
   }
 
+  /** Explicit local staging queue; {@link HttpClientTransport} never drains or fills it. */
   public PendingTransactionQueue pendingQueue() {
     return pendingQueue;
   }
@@ -267,6 +269,7 @@ public final class ClientConfig {
     return ConfidentialAssetToriiClient.builder()
         .executor(executor)
         .baseUri(baseUri)
+        .localSigningContext(requireLocalSigningContext())
         .timeout(requestTimeout)
         .defaultHeaders(defaultHeaders)
         .observers(observers)
@@ -327,7 +330,7 @@ public final class ClientConfig {
     private CrashTelemetryHandler.MetadataProvider crashMetadataProvider =
         CrashTelemetryHandler.defaultMetadataProvider();
 
-    /** Enables local draft signing with one immutable, caller-owned chain context. */
+    /** Enables local draft signing with one immutable, caller-owned network identity. */
     public Builder setLocalSigningContext(final LocalSigningContext context) {
       this.localSigningContext = Objects.requireNonNull(context, "localSigningContext");
       return this;
@@ -393,11 +396,13 @@ public final class ClientConfig {
       return this;
     }
 
+    /** Configures caller-managed replay-safe read retries; one-shot requests ignore it. */
     public Builder setRetryPolicy(final RetryPolicy retryPolicy) {
       this.retryPolicy = Objects.requireNonNull(retryPolicy, "retryPolicy");
       return this;
     }
 
+    /** Configures explicit local staging only; submission never drains or fills this queue. */
     public Builder setPendingQueue(final PendingTransactionQueue pendingQueue) {
       this.pendingQueue = pendingQueue;
       return this;
@@ -406,7 +411,7 @@ public final class ClientConfig {
     /**
      * Enables a directory-backed pending queue that persists each transaction as its own envelope
      * file under {@code rootDir}, retaining insertion order across process restarts for OEM/MDM
-     * storage policies.
+     * storage policies. Transaction submission never drains or replays this queue.
      */
     public Builder enableDirectoryPendingQueue(final Path rootDir) {
       Objects.requireNonNull(rootDir, "rootDir");
@@ -421,7 +426,8 @@ public final class ClientConfig {
     /**
      * Enables a file-backed pending queue that persists signed transactions across restarts. The
      * queue stores one Base64-encoded envelope per line and mirrors the Swift/CLI layout so
-     * operators can inspect or replay entries.
+     * operators can inspect entries and explicitly reconcile them. Transaction submission never
+     * drains or replays this queue.
      */
     public Builder enableFilePendingQueue(final Path queueFile) {
       Objects.requireNonNull(queueFile, "queueFile");

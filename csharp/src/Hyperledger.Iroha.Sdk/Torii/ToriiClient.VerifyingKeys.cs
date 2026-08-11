@@ -50,7 +50,7 @@ public sealed partial class ToriiClient
             "/v1/zk/vk/register",
             normalizedRequest,
             "verifying key register response",
-            signingContext.ChainId,
+            signingContext.NetworkId,
             VerifyingKeyDraftOperation.Register,
             cancellationToken);
     }
@@ -69,7 +69,7 @@ public sealed partial class ToriiClient
             "/v1/zk/vk/update",
             normalizedRequest,
             "verifying key update response",
-            signingContext.ChainId,
+            signingContext.NetworkId,
             VerifyingKeyDraftOperation.Update,
             cancellationToken);
     }
@@ -78,7 +78,7 @@ public sealed partial class ToriiClient
         string path,
         TRequest request,
         string context,
-        string expectedChainId,
+        NetworkId expectedNetworkId,
         VerifyingKeyDraftOperation operation,
         CancellationToken cancellationToken)
     {
@@ -108,7 +108,7 @@ public sealed partial class ToriiClient
             document,
             context,
             request!,
-            expectedChainId,
+            expectedNetworkId,
             operation);
     }
 
@@ -300,7 +300,7 @@ public sealed partial class ToriiClient
         JsonDocument document,
         string context,
         object request,
-        string expectedChainId,
+        NetworkId expectedNetworkId,
         VerifyingKeyDraftOperation operation)
     {
         ArgumentNullException.ThrowIfNull(document);
@@ -340,7 +340,7 @@ public sealed partial class ToriiClient
             transactionPayload,
             $"{context}.transaction_payload_b64",
             request,
-            expectedChainId,
+            expectedNetworkId,
             operation);
         var signingMessage = DecodeCanonicalVerifyingKeyDraftBase64(
             signingMessageBase64,
@@ -408,13 +408,13 @@ public sealed partial class ToriiClient
         ReadOnlySpan<byte> payload,
         string context,
         object request,
-        string expectedChainId,
+        NetworkId expectedNetworkId,
         VerifyingKeyDraftOperation operation)
     {
         try
         {
             var cursor = new VerifyingKeyDraftTransactionCursor(payload);
-            var chain = cursor.TakeField("chain");
+            var domain = cursor.TakeField("domain");
             var authority = cursor.TakeField("authority");
             var creationTime = cursor.TakeField("creation_time_ms");
             var executable = cursor.TakeField("executable");
@@ -434,11 +434,10 @@ public sealed partial class ToriiClient
 
             var (authorityAccountId, backend, name, expectedRecord) =
                 ExpectedVerifyingKeyDraft(request);
-            var decodedChain = DecodeVerifyingKeyDraftChainId(chain, $"{context}.chain");
-            if (!string.Equals(decodedChain, expectedChainId, StringComparison.Ordinal))
-            {
-                throw new JsonException($"{context} changed the configured chain.");
-            }
+            RequireVerifyingKeyDraftNetworkDomain(
+                domain,
+                expectedNetworkId,
+                $"{context}.domain");
 
             var decodedAuthority = SccpSubmitValidation.RequireCanonicalAuthority(authority);
             var expectedAuthority = AccountAddress
@@ -590,31 +589,25 @@ public sealed partial class ToriiClient
                 statusTag));
     }
 
-    private static string DecodeVerifyingKeyDraftChainId(
+    private static void RequireVerifyingKeyDraftNetworkDomain(
         ReadOnlySpan<byte> payload,
+        NetworkId expectedNetworkId,
         string context)
     {
-        var chain = new VerifyingKeyDraftTransactionCursor(payload);
-        var encodedString = chain.TakeField($"{context}.value");
-        var value = DecodeVerifyingKeyDraftString(encodedString, $"{context}.value");
-        if (!chain.IsFinished
-            || value.Length is 0 or > 128
-            || !IsChainIdAsciiAlphanumeric(value[0])
-            || !IsChainIdAsciiAlphanumeric(value[^1])
-            || value.Any(static character =>
-                !IsChainIdAsciiAlphanumeric(character)
-                    && character is not ('.' or '_' or ':' or '-')))
+        var domain = new VerifyingKeyDraftTransactionCursor(payload);
+        if (domain.TakeUInt32($"{context}.kind") != 0)
         {
-            throw new JsonException($"{context} is not a canonical ChainId.");
+            throw new JsonException($"{context} must be TransactionDomain::Network.");
         }
 
-        return value;
+        var value = domain.TakeField($"{context}.value");
+        if (!domain.IsFinished
+            || value.Length != NetworkId.ByteLength
+            || !value.SequenceEqual(expectedNetworkId.AsSpan()))
+        {
+            throw new JsonException($"{context} changed the configured network.");
+        }
     }
-
-    private static bool IsChainIdAsciiAlphanumeric(char value) =>
-        value is >= '0' and <= '9'
-            or >= 'A' and <= 'Z'
-            or >= 'a' and <= 'z';
 
     private static void RequireRequestedVerifyingKeyInstruction(
         ReadOnlySpan<byte> payload,

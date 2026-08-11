@@ -19,10 +19,10 @@ from scripts.sumeragi_v2_prebuilt_bundle import (
 
 SOURCE_MANIFEST = "a" * 64
 RELATIVE_BINARIES = (
-    ("irohad", "release/irohad", "default"),
+    ("irohad", "release/iroha3d", "default"),
     (
         "irohad_message_control",
-        "message-control/release/irohad",
+        "message-control/release/iroha3d",
         "message-control",
     ),
     ("iroha", "release/iroha", "default"),
@@ -232,7 +232,7 @@ def test_validate_rejects_mutated_or_non_private_artifacts(
     repo = Path(fixture["repo"])
     bundle = Path(fixture["bundle"])
     manifest_sha256 = str(fixture["manifest_sha256"])
-    binary = bundle / "release" / "irohad"
+    binary = bundle / "release" / "iroha3d"
     release_dir = binary.parent
     original_binary = binary.read_bytes()
     original_binary_mode = stat.S_IMODE(binary.stat().st_mode)
@@ -320,7 +320,7 @@ def test_validate_rejects_wrong_published_modes(
     targets = {
         "bundle": bundle,
         "nested_directory": bundle / "release",
-        "binary": bundle / "release" / "irohad",
+        "binary": bundle / "release" / "iroha3d",
         "manifest": bundle / ".sumeragi-v2-prebuilt-binaries.tsv",
     }
     targets[artifact].chmod(0o700)
@@ -341,7 +341,7 @@ def test_validate_rejects_symlinked_expected_directory(tmp_path: Path) -> None:
     bundle = Path(fixture["bundle"])
     message_control = bundle / "message-control"
     release = message_control / "release"
-    binary = release / "irohad"
+    binary = release / "iroha3d"
     original_binary = binary.read_bytes()
     original_binary_mode = stat.S_IMODE(binary.stat().st_mode)
     bundle.chmod(0o700)
@@ -580,7 +580,7 @@ def test_create_rejects_malformed_or_non_private_tool_stdout(
 
 def test_create_rejects_symlinked_build_output(tmp_path: Path) -> None:
     fixture = _fixture(tmp_path)
-    output = Path(fixture["default_cache"]) / "release" / "irohad"
+    output = Path(fixture["default_cache"]) / "release" / "iroha3d"
     original_output = output.read_bytes()
     original_output_mode = stat.S_IMODE(output.stat().st_mode)
     output.unlink()

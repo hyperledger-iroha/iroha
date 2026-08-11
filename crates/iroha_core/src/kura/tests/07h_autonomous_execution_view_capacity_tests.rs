@@ -34,14 +34,14 @@ fn autonomous_execution_input_preflights_complete_progress_peak_before_mutation(
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("execution-input capacity Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist capacity payload");
     let recovered = kura
-        .recover_autonomous_lane_block_payload(&payload.origin_proposal, chain_id_hash, epoch)
+        .recover_autonomous_lane_block_payload(&payload.origin_proposal, network_id, epoch)
         .expect("recover exact autonomous execution input");
     let artifact = LaneBlockExecutionInputArtifact::new(recovered.clone());
     let payload_bytes = artifact.encode_framed().expect("encode execution input");
@@ -94,7 +94,10 @@ fn autonomous_execution_input_preflights_complete_progress_peak_before_mutation(
         .expect("execution-input exact peak fits");
     let directory_before = snapshot_regular_files_recursively(temp_dir.path());
     let accounting_before = kura.disk_usage.load(Ordering::Relaxed);
-    let reservations_before = kura.post_wsv_lane_artifact_budget_reservations.lock().clone();
+    let reservations_before = kura
+        .post_wsv_lane_artifact_budget_reservations
+        .lock()
+        .clone();
     Arc::get_mut(&mut kura)
         .expect("execution-input capacity Kura is exclusive")
         .max_disk_usage_bytes = exact_limit - 1;
@@ -152,11 +155,11 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("view recovery capacity Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist view recovery payload");
     let descriptor = &payload.origin_proposal.descriptor;
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
@@ -178,7 +181,7 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
         kura.read_autonomous_lane_block_artifact_with_recovery_policy(
             lane.lane_id,
             descriptor.lane_block_height,
-            chain_id_hash,
+            network_id,
             epoch,
             false,
         )
@@ -222,7 +225,7 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
         kura.read_autonomous_lane_block_artifact_with_recovery_policy(
             lane.lane_id,
             descriptor.lane_block_height,
-            chain_id_hash,
+            network_id,
             epoch,
             true,
         )
@@ -247,15 +250,21 @@ fn autonomous_view_recovery_preflights_named_and_atomic_temp_peak() {
         kura.read_autonomous_lane_block_artifact_with_recovery_policy(
             lane.lane_id,
             descriptor.lane_block_height,
-            chain_id_hash,
+            network_id,
             epoch,
             true,
         )
         .is_some(),
         "the exact named-temp plus atomic-temp peak succeeds",
     );
-    assert_eq!(fs::read(&view_path).expect("read promoted view"), valid_bytes);
-    assert!(!temp_path.exists(), "successful recovery removes the named temp");
+    assert_eq!(
+        fs::read(&view_path).expect("read promoted view"),
+        valid_bytes
+    );
+    assert!(
+        !temp_path.exists(),
+        "successful recovery removes the named temp"
+    );
 }
 
 #[test]
@@ -265,11 +274,11 @@ fn autonomous_view_writer_preflights_even_with_named_temp() {
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let (mut kura, _) = Kura::new(&config, &lane_config).expect("view writer capacity Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist view writer payload");
     let descriptor = &payload.origin_proposal.descriptor;
     let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
@@ -325,7 +334,7 @@ fn autonomous_view_writer_preflights_even_with_named_temp() {
             &payload,
             &state,
             &view_path,
-            chain_id_hash,
+            network_id,
             epoch,
         )
     };
@@ -359,12 +368,15 @@ fn autonomous_view_writer_preflights_even_with_named_temp() {
             &payload,
             &state,
             &view_path,
-            chain_id_hash,
+            network_id,
             epoch,
         )
         .expect("exact equal-sized named-temp replacement peak succeeds");
     }
-    assert_eq!(fs::read(&view_path).expect("read rewritten view"), stable_bytes);
+    assert_eq!(
+        fs::read(&view_path).expect("read rewritten view"),
+        stable_bytes
+    );
     assert!(!temp_path.exists());
 }
 
@@ -375,11 +387,11 @@ fn autonomous_view_recovery_corridor_acquires_prune_before_geometry() {
     let lane_config = two_lane_runtime_config();
     let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let (chain_id_hash, epoch, payload) =
+    let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
     let (kura, _) = Kura::new(&config, &lane_config).expect("view lock-order Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+    kura.persist_lane_executable_payload(&payload, network_id, epoch)
         .expect("persist lock-order payload");
     let descriptor = &payload.origin_proposal.descriptor;
     let lane_id = lane.lane_id;
@@ -390,7 +402,7 @@ fn autonomous_view_recovery_corridor_acquires_prune_before_geometry() {
         kura.read_autonomous_lane_block_artifact_with_recovery_policy(
             lane_id,
             lane_block_height,
-            chain_id_hash,
+            network_id,
             epoch,
             false,
         )
@@ -403,11 +415,13 @@ fn autonomous_view_recovery_corridor_acquires_prune_before_geometry() {
         let result = worker_kura.read_autonomous_lane_block_artifact_with_recovery_policy(
             lane_id,
             lane_block_height,
-            chain_id_hash,
+            network_id,
             epoch,
             true,
         );
-        done_tx.send(result.is_some()).expect("report recovery read");
+        done_tx
+            .send(result.is_some())
+            .expect("report recovery read");
     });
     assert!(
         done_rx.recv_timeout(Duration::from_millis(50)).is_err(),

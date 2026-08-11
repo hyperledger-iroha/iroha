@@ -19,10 +19,10 @@ the PY6 gate.
 - Optional: virtualenv tooling (`python3 -m venv .venv && source .venv/bin/activate`)
   to keep dependencies isolated.
 
-> Set `IROHA_TORII_URL`, `IROHA_TORII_AUTH_TOKEN`, and `IROHA_TORII_API_TOKEN`
-> in your shell before running the snippets below. The helpers fall back to the
-> same environment variables that `create_torii_client` and the CLI use in
-> `python/iroha_python/README.md`.
+> Set `IROHA_NETWORK_ID`, `IROHA_TORII_URL`, `IROHA_TORII_AUTH_TOKEN`, and
+> `IROHA_TORII_API_TOKEN` in your shell before running the snippets below.
+> `IROHA_NETWORK_ID` must be the deployment's exact canonical checksummed
+> genesis-derived `NetworkId`, not an operator-selected chain label.
 
 ## 1. Install and configure the SDK
 
@@ -53,8 +53,11 @@ builders and post them to the pipeline endpoint. The example below mirrors the
 quickstart in `python/iroha_python/README.md`.
 
 ```python
+import os
+
 from iroha_python import (
     Instruction,
+    NetworkId,
     build_signed_transaction,
     create_torii_client,
     derive_ed25519_keypair_from_seed,
@@ -66,9 +69,10 @@ authority = pair.default_account_id("wonderland")
 
 instruction = Instruction.register_domain("wonderland")
 tx = build_signed_transaction(
-    chain_id="dev-chain",
+    network_id=NetworkId.parse(os.environ["IROHA_NETWORK_ID"]),
     authority=authority,
     private_key=pair.private_key,
+    fee_payment={"payer": "authority", "value": {"charge_limits": [], "gas_limit": None}},
     instructions=[instruction],
 )
 
@@ -97,8 +101,10 @@ Torii target:
 ```bash
 python -m iroha_python.examples.connect_flow \
   --base-url ${IROHA_TORII_URL:-http://127.0.0.1:8080} \
-  --sid demo-session \
-  --chain-id dev-chain \
+  --sid "${IROHA_CONNECT_SID}" \
+  --network-id "${IROHA_NETWORK_ID}" \
+  --app-public-key "${IROHA_CONNECT_APP_PUBLIC_KEY_HEX}" \
+  --nonce "${IROHA_CONNECT_NONCE_HEX}" \
   --auth-token "${IROHA_TORII_AUTH_TOKEN}" \
   --app-name "Demo dApp" \
   --app-url https://demo.example \
@@ -135,8 +141,10 @@ dashboards can mint Connect previews without shelling out to the CLI. The
 cover this workflow:
 
 ```python
+import os
+
 from iroha_python import (
-    ConnectKeyPair,
+    NetworkId,
     bootstrap_connect_preview_session,
     create_connect_session_preview,
     generate_connect_sid,
@@ -144,10 +152,11 @@ from iroha_python import (
 )
 
 client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
+network_id = NetworkId.parse(os.environ["IROHA_NETWORK_ID"])
 
-# Deterministically derive a SID from the app's public key (optional).
+# Derive the only valid SID for this exact NetworkId, app key, and nonce.
 sid_material = generate_connect_sid(
-    chain_id="dev-chain",
+    network_id=network_id,
     app_public_key=b"\x01" * 32,
     nonce=b"\x02" * 16,
 )
@@ -155,7 +164,7 @@ print("SID (base64url):", sid_material.sid_base64url)
 
 # Build deeplinks + key pair without registering the session.
 preview = create_connect_session_preview(
-    chain_id="dev-chain",
+    network_id=network_id,
     node="https://torii.dev.example",
 )
 print("Wallet URI:", preview.wallet_uri)
@@ -164,7 +173,7 @@ print("App URI:", preview.app_uri)
 # Register the session with Torii and capture the issued tokens.
 result = bootstrap_connect_preview_session(
     client,
-    chain_id="dev-chain",
+    network_id=network_id,
     node="https://torii.dev.example",
 )
 print("Torii SID:", result.preview.sid_base64url)
@@ -186,10 +195,10 @@ and capture the JSON summary along with the issued tokens:
 ```bash
 python -m iroha_python.examples.connect_flow \
   --mode preview \
-  --chain-id dev-chain \
+  --network-id "${IROHA_NETWORK_ID}" \
   --preview-node https://torii.dev.example \
   --preview-register \
-  --preview-output artifacts/connect-preview/dev-chain.json \
+  --preview-output artifacts/connect-preview/exact-network.json \
   --auth-token "${IROHA_TORII_AUTH_TOKEN}"
 ```
 

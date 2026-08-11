@@ -1353,6 +1353,9 @@ fn committed_snapshot_v1(
         .map(|hash| *hash.as_ref())
         .filter(|hash| *hash != [0; 32])
         .ok_or(BootleLanternIssuanceApiErrorV1::PolicyUnavailable)?;
+    if view.network_id().as_bytes() != &canonical_genesis_hash {
+        return Err(BootleLanternIssuanceApiErrorV1::PolicyUnavailable);
+    }
     let policy = view
         .world()
         .privacy_bootle_lantern_issuer_policy_v1(config.issuer_id, config.policy_id)
@@ -1365,10 +1368,10 @@ fn committed_snapshot_v1(
         return Err(BootleLanternIssuanceApiErrorV1::PolicyUnavailable);
     }
     let context = PrivacyStatementContextV1 {
-        chain_id: view.chain_id().clone(),
+        network_id: *view.network_id(),
         action_index: 0,
         transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(context_intent_digest_v1(
-            view.chain_id().as_str().as_bytes(),
+            view.network_id().as_bytes(),
             canonical_genesis_hash,
             policy.record_digest.as_bytes(),
         )?),
@@ -1398,13 +1401,13 @@ fn committed_snapshot_v1(
 }
 
 fn context_intent_digest_v1(
-    chain_id: &[u8],
+    network_id: &[u8; 32],
     canonical_genesis_hash: [u8; 32],
     policy_record_digest: &[u8; 32],
 ) -> Result<[u8; 32], BootleLanternIssuanceApiErrorV1> {
     let mut hasher = Sha256::new();
     hash_frame_v1(&mut hasher, CONTEXT_INTENT_DOMAIN_V1)?;
-    hash_frame_v1(&mut hasher, chain_id)?;
+    hash_frame_v1(&mut hasher, network_id)?;
     hash_frame_v1(&mut hasher, &canonical_genesis_hash)?;
     hash_frame_v1(&mut hasher, policy_record_digest)?;
     let digest: [u8; 32] = hasher.finalize().into();
@@ -2139,10 +2142,13 @@ mod tests {
                         .collect(),
                 })
                 .expect("native active policy");
+            let canonical_genesis_hash = raw(0x32);
             let context = PrivacyStatementContextV1 {
-                chain_id: "bootle-lantern-torii-test"
-                    .parse()
-                    .expect("canonical chain id"),
+                network_id: iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    iroha_crypto::Hash::prehashed(canonical_genesis_hash),
+                )),
                 action_index: 3,
                 transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(raw(0x21)),
                 parameter_id: PrivacyParameterIdV1::new(raw(0x22)),
@@ -2151,7 +2157,6 @@ mod tests {
                 statement_schema_digest: PrivacyStatementSchemaDigestV1::new(raw(0x25)),
                 engine_manifest_digest: PrivacyEngineManifestDigestV1::new(raw(0x26)),
             };
-            let canonical_genesis_hash = raw(0x32);
             let mut authorization_rng = TestRng::seeded(0x510e_527f_ade6_82d1);
             let authorization = issuer_prepare_blind_issuance_authorization_candidate_with_rng_v1(
                 &issuer,

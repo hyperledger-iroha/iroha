@@ -23,7 +23,7 @@ impl Kura {
         phase: AutonomousLaneRetirementQueueSnapshotPhaseV1,
     ) -> Result<AutonomousLaneRetirementSnapshotEvidenceV1> {
         payload
-            .validate(payload.chain_id_hash, payload.epoch)
+            .validate(payload.network_id, payload.epoch)
             .map_err(|error| {
                 Self::invalid_lane_artifact_error(
                     self.store_root.clone(),
@@ -81,7 +81,7 @@ impl Kura {
                 descriptor.lane_id,
                 descriptor.lane_block_height,
                 descriptor.proposal_height,
-                payload.chain_id_hash,
+                payload.network_id,
                 payload.epoch,
                 None,
             )?
@@ -137,7 +137,7 @@ impl Kura {
     pub(crate) fn authorize_autonomous_lane_queue_release_preparation(
         &self,
         retirement: &AutonomousLaneSlotRetirementV1,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> Result<AutonomousLaneQueueReleasePreparationAuthorization> {
         let _prune_guard = self.prune_lock.lock();
@@ -148,7 +148,7 @@ impl Kura {
             self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         if retirement.version != AutonomousLaneSlotRetirementV1::VERSION
-            || retirement.chain_id_hash != expected_chain_id_hash
+            || retirement.network_id != expected_network_id
             || retirement.epoch != expected_epoch
         {
             return Err(Self::invalid_lane_artifact_error(
@@ -170,7 +170,7 @@ impl Kura {
                 retirement.lane_id,
                 retirement.lane_block_height,
                 retirement.proposal_height,
-                expected_chain_id_hash,
+                expected_network_id,
                 expected_epoch,
                 Some(pending_canonical_bytes),
             )?
@@ -242,14 +242,14 @@ impl Kura {
         &self,
         retirement: &AutonomousLaneSlotRetirementV1,
         queue_barrier: &LaneQueueReservationReleaseBarrierV3,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
         authorization: DurableLaneQueueReleaseBarrierAuthorization,
     ) -> Result<AutonomousLaneQueueReleaseFinalizationAuthorization> {
         self.finalize_autonomous_lane_slot_release_inner(
             retirement,
             queue_barrier,
-            expected_chain_id_hash,
+            expected_network_id,
             expected_epoch,
             AutonomousLaneQueueReleaseBarrierGate::Authorized(authorization),
         )
@@ -260,13 +260,13 @@ impl Kura {
         &self,
         retirement: &AutonomousLaneSlotRetirementV1,
         queue_barrier: &LaneQueueReservationReleaseBarrierV3,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
     ) -> Result<()> {
         self.finalize_autonomous_lane_slot_release_inner(
             retirement,
             queue_barrier,
-            expected_chain_id_hash,
+            expected_network_id,
             expected_epoch,
             AutonomousLaneQueueReleaseBarrierGate::DirectTest,
         )
@@ -277,7 +277,7 @@ impl Kura {
         &self,
         retirement: &AutonomousLaneSlotRetirementV1,
         queue_barrier: &LaneQueueReservationReleaseBarrierV3,
-        expected_chain_id_hash: Hash,
+        expected_network_id: iroha_data_model::NetworkId,
         expected_epoch: u64,
         gate: AutonomousLaneQueueReleaseBarrierGate,
     ) -> Result<AutonomousLaneQueueReleaseFinalizationAuthorization> {
@@ -289,7 +289,7 @@ impl Kura {
             self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         if retirement.version != AutonomousLaneSlotRetirementV1::VERSION
-            || retirement.chain_id_hash != expected_chain_id_hash
+            || retirement.network_id != expected_network_id
             || retirement.epoch != expected_epoch
             || retirement.queue_release_barrier()? != *queue_barrier
         {
@@ -311,7 +311,7 @@ impl Kura {
                 retirement.lane_id,
                 retirement.lane_block_height,
                 retirement.proposal_height,
-                expected_chain_id_hash,
+                expected_network_id,
                 expected_epoch,
                 Some(pending_canonical_bytes),
             )?

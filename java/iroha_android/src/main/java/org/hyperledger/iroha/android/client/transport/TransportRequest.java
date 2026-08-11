@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
@@ -17,6 +18,7 @@ public final class TransportRequest {
   private final byte[] body;
   private final Duration timeout;
   private final Long maximumResponseBytes;
+  private final RequestReplayPolicy replayPolicy;
 
   private TransportRequest(
       final String method,
@@ -34,6 +36,7 @@ public final class TransportRequest {
       BoundedResponseBodyReader.validateMaximum(maximumResponseBytes.longValue());
     }
     this.maximumResponseBytes = maximumResponseBytes;
+    this.replayPolicy = deriveReplayPolicy(method, headers, this.body);
   }
 
   public String method() {
@@ -60,6 +63,11 @@ public final class TransportRequest {
   /** Optional inclusive buffered response-body limit, or {@code null} for the executor limit. */
   public Long maximumResponseBytes() {
     return maximumResponseBytes;
+  }
+
+  /** Replay policy derived from the immutable request method, headers, and body. */
+  public RequestReplayPolicy replayPolicy() {
+    return replayPolicy;
   }
 
   public static Builder builder() {
@@ -147,5 +155,27 @@ public final class TransportRequest {
       }
       return copy;
     }
+  }
+
+  private static RequestReplayPolicy deriveReplayPolicy(
+      final String method, final Map<String, List<String>> headers, final byte[] body) {
+    final String normalizedMethod = method.toUpperCase(Locale.ROOT);
+    final boolean readOnlyMethod =
+        "GET".equals(normalizedMethod)
+            || "HEAD".equals(normalizedMethod)
+            || "OPTIONS".equals(normalizedMethod);
+    boolean carriesOneShotHeader = false;
+    for (final String name : headers.keySet()) {
+      final String normalizedName = name.toLowerCase(Locale.ROOT);
+      if ("x-iroha-signature".equals(normalizedName)
+          || "x-iroha-nonce".equals(normalizedName)
+          || "x-iroha-onboarding-token".equals(normalizedName)) {
+        carriesOneShotHeader = true;
+        break;
+      }
+    }
+    return readOnlyMethod && body.length == 0 && !carriesOneShotHeader
+        ? RequestReplayPolicy.RETRY_SAFE
+        : RequestReplayPolicy.ONE_SHOT;
   }
 }

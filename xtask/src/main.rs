@@ -355,6 +355,9 @@ enum CommandKind {
         output: PathBuf,
         verify: bool,
     },
+    NexusConnectFixture {
+        options: nexus::NexusConnectFixtureOptions,
+    },
     SoranetTestnetKit {
         output: PathBuf,
     },
@@ -1662,6 +1665,9 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
             } else {
                 nexus::write_lane_commitment_fixtures(&output)?;
             }
+        }
+        CommandKind::NexusConnectFixture { options } => {
+            nexus::run_nexus_connect_fixture(&options)?;
         }
         CommandKind::SoranetTestnetKit { output } => {
             generate_testnet_kit(output)?;
@@ -5521,6 +5527,9 @@ where
                 suppression_ratio_budget,
             })
         }
+        "nexus-connect-fixture" => Ok(CommandKind::NexusConnectFixture {
+            options: nexus::parse_nexus_connect_fixture_options(args)?,
+        }),
         "nexus-fixtures" => {
             let mut output: Option<PathBuf> = None;
             let mut verify = false;
@@ -10575,7 +10584,7 @@ fn verify_openapi_manifest(
         }
         None => {
             return Err(
-                "manifest missing signature; emit a deterministic --signing-payload, sign it with the release HSM, and provide --signature-envelope <path>"
+                "manifest missing signature; emit a deterministic --signing-payload, sign it with the external software signer, and provide --signature-envelope <path>"
                     .into(),
             );
         }
@@ -11757,6 +11766,24 @@ mod acceleration_state_tests {
             } => {}
             _ => panic!("expected acceleration-state command"),
         }
+    }
+
+    #[test]
+    fn parse_routes_nexus_connect_fixture_to_the_closed_owner() {
+        let root = workspace_root();
+        let args = vec![
+            "xtask".to_owned(),
+            "nexus-connect-fixture".to_owned(),
+            "--check".to_owned(),
+            "--output-root".to_owned(),
+            root.to_string_lossy().into_owned(),
+        ];
+        let command = parse_command(args.into_iter()).expect("parse Nexus fixture command");
+        let CommandKind::NexusConnectFixture { options } = command else {
+            panic!("expected Nexus Connect fixture command");
+        };
+        assert_eq!(options.mode, nexus::NexusConnectFixtureMode::Check);
+        assert_eq!(options.output_root, root);
     }
 
     #[test]
@@ -14288,6 +14315,7 @@ async fn generate_router_openapi_async() -> Result<Option<Value>, Box<dyn Error>
 
     let torii = iroha_torii::Torii::new_with_handle(
         cfg.common.chain.clone(),
+        iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash),
         kiso,
         cfg.torii.clone(),
         queue,
@@ -15068,8 +15096,8 @@ fn parse_rollout_artifact_spec(spec: &str) -> Result<(String, String), Box<dyn E
     Ok((kind, path))
 }
 
-const NORITO_RPC_FIXTURES_USAGE_DESCRIPTION: &str = "    Regenerate canonical Norito-RPC fixtures and their Android/Python/Swift mirrors under the selected output root.";
-const NORITO_RPC_VERIFY_USAGE_DESCRIPTION: &str = "    Re-render and compare canonical Norito-RPC fixture bytes, schema hashes, the compact hash vector, and Android/Python/Swift mirrors; optionally emit a JSON verification report.";
+const NORITO_RPC_FIXTURES_USAGE_DESCRIPTION: &str = "    Regenerate canonical Norito-RPC transaction fixtures, the typed V1 alias-setup fixture, and Android/Python/Swift mirrors under the selected output root.";
+const NORITO_RPC_VERIFY_USAGE_DESCRIPTION: &str = "    Re-render and compare canonical Norito-RPC transaction and alias-setup fixture bytes, schema hashes, the compact hash vector, and Android/Python/Swift mirrors; optionally emit a JSON verification report.";
 
 fn print_usage() {
     eprintln!("xtask usage:");
@@ -15083,7 +15111,7 @@ fn print_usage() {
         "  cargo xtask openapi [--output <path>|--output-root <dir>] [--signature-envelope <path>|--unsigned-manifest] [--signing-payload <path>]"
     );
     eprintln!(
-        "    Generate the Torii OpenAPI spec from a live Torii router. --output-root binds torii.json and manifest.json to one staging-safe canonical directory. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the HSM, then attach --signature-envelope. Defaults to artifacts/openapi/torii.json"
+        "    Generate the Torii OpenAPI spec from a live Torii router. --output-root binds torii.json and manifest.json to one staging-safe canonical directory. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the external software signer, then attach --signature-envelope. Defaults to artifacts/openapi/torii.json"
     );
     eprintln!(
         "  cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]"
@@ -15390,6 +15418,12 @@ fn print_usage() {
     eprintln!("  cargo xtask nexus-fixtures [--out <dir>] [--verify]");
     eprintln!(
         "    Regenerate Nexus lane commitment fixtures (defaults to fixtures/nexus/lane_commitments); pass --verify to ensure existing files match the generated payloads."
+    );
+    eprintln!(
+        "  cargo xtask nexus-connect-fixture (--write|--check) --output-root <absolute-directory>"
+    );
+    eprintln!(
+        "    Build the Rust-owned Nexus Connect transfer SDK fixture; write mode refuses Git checkouts and requires an external staging root."
     );
     eprintln!(
         "  cargo xtask nexus-lane-maintenance --config <path> [--json-out <path|->] [--compact-retired]"

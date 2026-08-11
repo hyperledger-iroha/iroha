@@ -11553,7 +11553,10 @@ fn constrain_kagemusha_eq_secure_relations_v4(
             operation.fields[kagemusha_v2::I_ASSET_SCALE],
         ),
         (topup.asset_tag, operation.fields[kagemusha_v2::I_ASSET_TAG]),
-        (topup.chain_tag, operation.fields[kagemusha_v2::I_CHAIN_TAG]),
+        (
+            topup.network_tag,
+            operation.fields[kagemusha_v2::I_NETWORK_TAG],
+        ),
     ] {
         constrain_equal_if_v4(ctx, range, bindings.is_init, lhs, rhs);
     }
@@ -11599,7 +11602,7 @@ fn constrain_kagemusha_eq_secure_relations_v4(
         bindings.change_commitment,
         bindings.input_root,
         operation.fields[kagemusha_v2::I_ASSET_TAG],
-        operation.fields[kagemusha_v2::I_CHAIN_TAG],
+        operation.fields[kagemusha_v2::I_NETWORK_TAG],
     ]) {
         constrain_equal_if_v4(ctx, range, bindings.is_append, lhs, rhs);
     }
@@ -11628,7 +11631,7 @@ fn constrain_kagemusha_eq_secure_relations_v4(
         bindings.input_root,
         public_amount,
         operation.fields[kagemusha_v2::I_ASSET_TAG],
-        operation.fields[kagemusha_v2::I_CHAIN_TAG],
+        operation.fields[kagemusha_v2::I_NETWORK_TAG],
     ]) {
         constrain_equal_if_v4(ctx, range, bindings.is_redemption, lhs, rhs);
     }

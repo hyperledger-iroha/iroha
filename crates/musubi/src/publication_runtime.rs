@@ -11,9 +11,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt, fs,
-    fs::OpenOptions,
-    io::Read,
+    fmt, io,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -51,6 +49,7 @@ use url::Url;
 
 use crate::{
     atomic_io::{AtomicWriteError, AtomicWriteErrorCode, AtomicWriteRoot},
+    local_file::read_bounded_single_link_regular_file_v1,
     publish::{
         MUSUBI_MAX_PROVIDER_REGISTRATION_ATTEMPTS_V1, PublicationArchiveLocationAdvanceV1,
         PublicationArchiveLocationIntentV1, PublicationArchiveLocationTerminalReasonV1,
@@ -269,7 +268,7 @@ impl PublicationProviderAttestationCheckpointV1 {
             || self.attestation_digest != attestation.digest()
             || self.transaction_hash.iter().all(|byte| *byte == 0)
             || self.transaction_hash != *self.signed_transaction.hash().as_ref()
-            || self.signed_transaction.chain() != &request.chain_id
+            || self.signed_transaction.network_id().copied() != Some(request.network_id())
             || self.signed_transaction.authority() != &request.publisher
             || self.signed_transaction.verify_signature().is_err()
             || !exact_instruction
@@ -462,7 +461,7 @@ impl<V> ProductionPublicationRuntimeV1<V> {
         &self,
         request: &PublicationRequestV1,
     ) -> Result<(), PublicationBackendError> {
-        if &request.chain_id != self.http.chain_id()
+        if request.network_id() != *self.http.network_id()
             || &request.publisher != self.http.publisher()
             || request.ingress_broker != self.bindings.ingress_broker
             || request.seed_provider != self.bindings.seed_provider
@@ -762,8 +761,7 @@ impl<V> ProductionPublicationRuntimeV1<V> {
             operation_id: *operation_id.as_bytes(),
             generation,
             prior_location_ids: sorted_prior_location_ids,
-            chain_id: request.chain_id.clone(),
-            genesis_block_hash: request.genesis_block_hash,
+            network_id: request.network_id(),
             publisher: request.publisher.clone(),
             commitment: request.archive_commitment.clone(),
             verification_lock_digest: request.publication.manifest.verification_lock_digest,
@@ -771,8 +769,7 @@ impl<V> ProductionPublicationRuntimeV1<V> {
             expected_policy_revision: request.expected_policy_revision,
             finalized_registration: MusubiFinalizedArchiveRegistrationEvidenceV1 {
                 version: 1,
-                chain_id: registered.chain_id.clone(),
-                genesis_block_hash: registered.genesis_block_hash,
+                network_id: request.network_id(),
                 transaction_hash: registered.finalized_transaction_hash,
                 snapshot: registered.snapshot,
                 registration: registered.archive.registration_projection(),
@@ -1237,13 +1234,11 @@ fn validate_finalized_archive_page(
             "ARCHIVE_LOCATION_FINALIZED_ARCHIVE_CONFLICT",
         ));
     }
-    if registered.chain_id != request.chain_id
-        || registered.genesis_block_hash != request.genesis_block_hash
+    if registered.network_id != request.network_id
         || expected.archive_id != request.archive_commitment.archive_id()
         || expected.commitment != request.archive_commitment
         || expected.registered_by != request.publisher
-        || page.chain_id != registered.chain_id
-        || page.genesis_hash != registered.genesis_block_hash
+        || page.network_id != request.network_id()
         || observed.archive_id != expected.archive_id
         || observed.commitment != expected.commitment
         || observed.staging_receipt != expected.staging_receipt
@@ -1438,7 +1433,7 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
         plan: &MusubiSeedIngressCarPlanV1,
         car: &mut dyn Read,
     ) -> Result<MusubiSeedIngressReceiptV1, PublicationBackendError> {
-        if expected.chain_id != *self.http.chain_id()
+        if expected.network_id != *self.http.network_id()
             || expected.publisher != *self.http.publisher()
             || expected.ingress_broker != self.bindings.ingress_broker
             || expected.seed_provider != self.bindings.seed_provider
@@ -1754,8 +1749,7 @@ impl<V: PublicationCleanPackageValidatorV1> PublicationRuntimeServicesV1
         let readback_request = MusubiProviderReadbackRequestV1 {
             version: 1,
             operation_id: *operation_id.as_bytes(),
-            chain_id: request.chain_id.clone(),
-            genesis_block_hash: request.genesis_block_hash,
+            network_id: request.network_id(),
             publisher: request.publisher.clone(),
             location: location.clone(),
             provider,
@@ -2053,7 +2047,7 @@ fn load_namespace_delegation(
             .unwrap_or_else(|| Path::new("."))
             .join(path)
     };
-    let bytes = read_bounded_regular(&resolved, MAX_DELEGATION_BYTES).map_err(|_| {
+    let bytes = read_bounded_nonempty_regular(&resolved, MAX_DELEGATION_BYTES).map_err(|_| {
         ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_DELEGATION_INVALID")
     })?;
     let delegation: MusubiNamespaceDelegationV1 =
@@ -2120,313 +2114,22 @@ const fn invalid_publication_config() -> ProductionPublicationConfigurationError
 /// Read one exact bounded platform `client.toml` through a no-follow stable descriptor.
 ///
 /// This is shared by publication, signer-free registry reads, and prepared archive fetching so
-/// all consumers preserve the same single-link and before/after identity checks.
+/// all consumers preserve the same single-link and before/after identity checks. The reader is
+/// qualified on Unix; other targets return [`io::ErrorKind::Unsupported`] before path metadata or
+/// file contents are consulted.
 pub(crate) fn read_bounded_platform_config_v1(path: &Path) -> std::io::Result<Vec<u8>> {
-    read_bounded_regular(path, MAX_CLIENT_CONFIG_BYTES)
+    read_bounded_nonempty_regular(path, MAX_CLIENT_CONFIG_BYTES)
 }
 
-fn read_bounded_regular(path: &Path, maximum: u64) -> std::io::Result<Vec<u8>> {
-    let path_before = fs::symlink_metadata(path)?;
-    if metadata_is_link_or_reparse(&path_before) || !path_before.is_file() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "publication configuration input is not a real regular file",
-        ));
-    }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-
-        // Retain read sharing only. Denying write/delete sharing prevents a cooperating process
-        // from replacing the selected configuration while this descriptor is authoritative.
-        options.share_mode(0x0000_0001);
-    }
-    set_no_follow(&mut options);
-    let mut file = options.open(path)?;
-    let before = file.metadata()?;
-    if metadata_is_link_or_reparse(&before)
-        || !before.is_file()
-        || before.len() == 0
-        || before.len() > maximum
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "publication configuration input is not a bounded regular file",
-        ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-
-        if before.nlink() != 1 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "publication configuration input must not be hard-linked",
-            ));
-        }
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt as _;
-
-        if before.number_of_links() != Some(1)
-            || before.volume_serial_number().is_none()
-            || before.file_index().is_none()
-        {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "publication configuration input must have one stable Windows file identity",
-            ));
-        }
-    }
-    let mut bytes = Vec::with_capacity(usize::try_from(before.len()).unwrap_or(0));
-    file.by_ref()
-        .take(maximum.saturating_add(1))
-        .read_to_end(&mut bytes)?;
-    let bytes_length = u64::try_from(bytes.len()).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "publication configuration input exceeds the supported address width",
-        )
-    })?;
-    let after = file.metadata()?;
-    let path_after = fs::symlink_metadata(path)?;
-    if bytes.is_empty()
-        || bytes_length != before.len()
-        || bytes_length > maximum
-        || metadata_is_link_or_reparse(&path_after)
-        || !same_file_snapshot(&path_before, &before)
-        || !same_file_snapshot(&before, &after)
-        || !same_file_snapshot(&after, &path_after)
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "publication configuration input changed while it was read",
+fn read_bounded_nonempty_regular(path: &Path, maximum: u64) -> io::Result<Vec<u8>> {
+    let bytes = read_bounded_single_link_regular_file_v1(path, maximum)?;
+    if bytes.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "publication input must not be empty",
         ));
     }
     Ok(bytes)
-}
-
-fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
-    metadata.file_type().is_symlink() || metadata_is_windows_reparse_point(metadata)
-}
-
-#[cfg(windows)]
-fn metadata_is_windows_reparse_point(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-
-    metadata.file_attributes() & 0x0000_0400 != 0
-}
-
-#[cfg(not(windows))]
-const fn metadata_is_windows_reparse_point(_metadata: &fs::Metadata) -> bool {
-    false
-}
-
-#[cfg(unix)]
-fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.len() == right.len()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-        && left.nlink() == right.nlink()
-}
-
-#[cfg(windows)]
-fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-        && left.file_type() == right.file_type()
-        && left.file_attributes() == right.file_attributes()
-        && left.file_size() == right.file_size()
-        && left.creation_time() == right.creation_time()
-        && left.last_write_time() == right.last_write_time()
-        && left.number_of_links() == Some(1)
-        && right.number_of_links() == Some(1)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn same_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.len() == right.len() && left.modified().ok() == right.modified().ok()
-}
-
-fn set_no_follow(options: &mut OpenOptions) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        // Nonblocking mode prevents a regular-file-to-FIFO/device substitution from hanging or
-        // triggering device semantics before the descriptor metadata check rejects it.
-        options.custom_flags(platform_no_follow_flag() | platform_nonblocking_flag());
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        // FILE_FLAG_OPEN_REPARSE_POINT makes the final component itself the open target. A
-        // symlink/reparse point consequently fails the regular-file check above.
-        options.custom_flags(0x0020_0000);
-    }
-    #[cfg(not(any(unix, windows)))]
-    let _ = options;
-}
-
-#[cfg(all(
-    target_os = "android",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "riscv64",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))
-))]
-compile_error!(
-    "Musubi secure platform-config reads are not qualified for this Android architecture"
-);
-
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-compile_error!("Musubi secure platform-config reads are not qualified for this Unix target");
-
-#[cfg(all(target_os = "android", target_arch = "riscv64"))]
-const fn platform_no_follow_flag() -> i32 {
-    0x400000
-}
-
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "aarch64", target_arch = "arm")
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-
-#[cfg(all(
-    target_os = "android",
-    any(target_arch = "x86", target_arch = "x86_64")
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    )
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x8000
-}
-
-#[cfg(all(
-    target_os = "linux",
-    not(any(
-        target_arch = "aarch64",
-        target_arch = "arm",
-        target_arch = "m68k",
-        target_arch = "powerpc",
-        target_arch = "powerpc64"
-    ))
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x20000
-}
-
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn platform_no_follow_flag() -> i32 {
-    0x100
-}
-
-#[cfg(all(
-    target_os = "linux",
-    any(
-        target_arch = "mips",
-        target_arch = "mips32r6",
-        target_arch = "mips64",
-        target_arch = "mips64r6"
-    )
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x80
-}
-
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "sparc", target_arch = "sparc64")
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x4000
-}
-
-#[cfg(any(
-    target_os = "android",
-    all(
-        target_os = "linux",
-        not(any(
-            target_arch = "mips",
-            target_arch = "mips32r6",
-            target_arch = "mips64",
-            target_arch = "mips64r6",
-            target_arch = "sparc",
-            target_arch = "sparc64"
-        ))
-    )
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x800
-}
-
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android")),
-    any(
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    )
-))]
-const fn platform_nonblocking_flag() -> i32 {
-    0x4
 }
 
 fn map_transport_error(error: MusubiPublicationRuntimeTransportErrorV1) -> PublicationBackendError {
@@ -2453,20 +2156,31 @@ fn map_registry_error(error: crate::registry::RegistryErrorV1) -> PublicationBac
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Write as _, net::TcpListener, thread};
+    use std::{
+        fs,
+        io::{self, Write as _},
+        net::TcpListener,
+        thread,
+    };
 
-    use iroha::crypto::{Algorithm, ExposedPrivateKey, KeyPair, Signature, SignatureOf};
+    use iroha::crypto::{
+        Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, Signature, SignatureOf,
+    };
+    #[cfg(unix)]
+    use iroha_data_model::musubi::{
+        MusubiNamespaceBindingDigestV1, MusubiNamespaceDelegationApprovalV1,
+        MusubiNamespaceDelegationPayloadV1,
+    };
     use iroha_data_model::{
-        ChainId,
+        NetworkId,
         account::{MultisigMember, MultisigPolicy, address::ChainDiscriminantGuard},
+        block::BlockHeader,
         musubi::{
             MUSUBI_MAX_PUBLICATION_ATTESTATION_APPROVALS_V1, MUSUBI_MIN_HEALTHY_REPLICAS_V1,
             MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1, MusubiArchiveCommitmentV1,
             MusubiArchiveLocationIdV1, MusubiArchiveLocationV1, MusubiArchiveRecordV1,
-            MusubiContentDigestV1, MusubiKotodamaEditionV1, MusubiNamespaceBindingDigestV1,
-            MusubiNamespaceDelegationApprovalV1, MusubiNamespaceDelegationPayloadV1,
-            MusubiNamespaceV1, MusubiPackageIdV1, MusubiPackageScopeV1,
-            MusubiProviderBundleVerificationApprovalV1,
+            MusubiContentDigestV1, MusubiKotodamaEditionV1, MusubiNamespaceV1, MusubiPackageIdV1,
+            MusubiPackageScopeV1, MusubiProviderBundleVerificationApprovalV1,
             MusubiProviderBundleVerificationAttestationV1,
             MusubiProviderBundleVerificationBindingV1, MusubiProviderBundleVerificationPayloadV1,
             MusubiPublicationV1, MusubiRegistrySnapshotV1, MusubiReleaseIdV1,
@@ -2487,6 +2201,12 @@ mod tests {
     use super::*;
     use crate::publish::PublicationBackendFailureClass;
 
+    fn test_network_id(byte: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([byte; Hash::LENGTH]),
+        ))
+    }
+
     fn write_client_config(
         path: &Path,
         extra: &str,
@@ -2497,11 +2217,13 @@ mod tests {
         let key_pair =
             KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("derive fixture key");
         let private_key = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
+        let network_id = test_network_id(0x7b);
         fs::write(
             path,
             format!(
                 r#"
                     chain = "musubi-publication-runtime-test"
+                    network_id = "{network_id}"
                     torii_url = "https://torii.example/"
                     [account]
                     domain = "packages.universal"
@@ -2675,8 +2397,7 @@ mod tests {
             index_revision: 2,
         };
         let request = PublicationRequestV1 {
-            chain_id: ChainId::from("musubi-publication-runtime-test"),
-            genesis_block_hash: [0x7b; 32],
+            network_id: test_network_id(0x7b),
             publisher: publisher.clone(),
             ingress_broker: publisher.clone(),
             seed_provider: ProviderId::new([0x11; 32]),
@@ -2698,8 +2419,7 @@ mod tests {
         let receipt_payload = MusubiSeedIngressReceiptPayloadV1 {
             version: MUSUBI_REGISTRY_VERSION_V1,
             binding: MusubiSeedIngressReceiptBindingV1 {
-                chain_id: request.chain_id.clone(),
-                genesis_block_hash: request.genesis_block_hash,
+                network_id: request.network_id(),
                 publisher: request.publisher.clone(),
                 ingress_broker: request.ingress_broker.clone(),
                 seed_provider: request.seed_provider,
@@ -2739,8 +2459,7 @@ mod tests {
         };
         let registered = PublicationRegisteredArchiveV1 {
             finalized_transaction_hash: [0x7e; 32],
-            chain_id: request.chain_id.clone(),
-            genesis_block_hash: request.genesis_block_hash,
+            network_id: request.network_id,
             snapshot: registered_snapshot,
             archive: archive.clone(),
         };
@@ -2754,8 +2473,7 @@ mod tests {
                 let provider_owner =
                     iroha_data_model::account::AccountId::new(provider_key.public_key().clone());
                 let provider_binding = MusubiProviderBundleVerificationBindingV1 {
-                    chain_id: request.chain_id.clone(),
-                    genesis_block_hash: request.genesis_block_hash,
+                    network_id: request.network_id(),
                     provider_id: ProviderId::new([0x90 + index; 32]),
                     completed_by: provider_owner.clone(),
                     completion_authority: ProviderIngestCompletionAuthorityV1::new(
@@ -2815,8 +2533,7 @@ mod tests {
             },
         };
         let page = MusubiArchiveLocationPageV1 {
-            chain_id: request.chain_id.clone(),
-            genesis_hash: request.genesis_block_hash,
+            network_id: request.network_id(),
             archive,
             items: Vec::new(),
             next_cursor: None,
@@ -2909,7 +2626,7 @@ mod tests {
         let publisher_key =
             KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("publisher key");
         let mut builder = TransactionBuilder::new(
-            fixture.request.chain_id.clone(),
+            fixture.request.network_id(),
             fixture.request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2932,7 +2649,7 @@ mod tests {
         let signer = KeyPair::try_from_seed(vec![signer_seed; 32], Algorithm::Ed25519)
             .expect("provider checkpoint signer");
         let mut builder = TransactionBuilder::new(
-            request.chain_id.clone(),
+            request.network_id(),
             request.publisher.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -3819,16 +3536,14 @@ mod tests {
     #[test]
     fn finalized_rebase_rejects_every_immutable_archive_projection_substitution() {
         enum ProjectionMutation {
-            Chain,
-            Genesis,
+            Network,
             Commitment,
             Receipt,
             Registrant,
         }
 
         for mutation in [
-            ProjectionMutation::Chain,
-            ProjectionMutation::Genesis,
+            ProjectionMutation::Network,
             ProjectionMutation::Commitment,
             ProjectionMutation::Receipt,
             ProjectionMutation::Registrant,
@@ -3836,25 +3551,15 @@ mod tests {
             let mut fixture = rebase_fixture("http://127.0.0.1:9/".parse().expect("dummy URL"));
             advance_rebase_page(&mut fixture, 2);
             match mutation {
-                ProjectionMutation::Chain => {
-                    fixture.page.chain_id = ChainId::from("another-chain");
+                ProjectionMutation::Network => {
+                    fixture.page.network_id = test_network_id(0x91);
                     fixture
                         .page
                         .archive
                         .staging_receipt
                         .payload
                         .binding
-                        .chain_id = fixture.page.chain_id.clone();
-                }
-                ProjectionMutation::Genesis => {
-                    fixture.page.genesis_hash = [0x91; 32];
-                    fixture
-                        .page
-                        .archive
-                        .staging_receipt
-                        .payload
-                        .binding
-                        .genesis_block_hash = fixture.page.genesis_hash;
+                        .network_id = fixture.page.network_id;
                 }
                 ProjectionMutation::Commitment => {
                     fixture.page.archive.commitment.root_cid =
@@ -4169,6 +3874,7 @@ mod tests {
         assert!(!platform_debug.contains(&fixture_private));
     }
 
+    #[cfg(unix)]
     #[test]
     fn provenance_bound_loader_accepts_the_unchanged_image_and_reuses_its_reader() {
         let temporary = tempdir().expect("temporary directory");
@@ -4192,6 +3898,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn provenance_bound_loader_rejects_changed_bytes_before_signer_parsing() {
         let temporary = tempdir().expect("temporary directory");
@@ -4231,6 +3938,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn provenance_bound_loader_rejects_a_different_valid_image() {
         let temporary = tempdir().expect("temporary directory");
@@ -4286,21 +3994,32 @@ mod tests {
         assert_eq!(hard_error.code(), "MUSUBI_PUBLICATION_CONFIG_INVALID");
     }
 
-    #[cfg(windows)]
+    #[cfg(unix)]
     #[test]
-    fn production_loader_rejects_hard_linked_windows_configuration() {
+    fn bounded_platform_config_preserves_the_nonempty_contract() {
         let temporary = tempdir().expect("temporary directory");
-        let target = temporary.path().join("target.toml");
-        let (_signing, _publication) = write_client_config(&target, "");
-        let hard = temporary.path().join("hard.toml");
-        fs::hard_link(&target, &hard).expect("create hard link");
+        let path = temporary.path().join("client.toml");
+        fs::write(&path, b"").expect("write empty configuration");
 
-        let error = load_production_publication_runtime_v1(
-            Some(&hard),
-            UnavailablePublicationCleanPackageValidatorV1,
-        )
-        .expect_err("hard-linked Windows configuration must fail closed");
-        assert_eq!(error.code(), "MUSUBI_PUBLICATION_CONFIG_INVALID");
+        assert_eq!(
+            read_bounded_platform_config_v1(&path)
+                .expect_err("empty platform configuration must fail")
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn bounded_platform_config_is_unsupported_before_path_io() {
+        let parent = tempdir().expect("temporary parent");
+        let path = parent.path().join("must-remain-absent/client.toml");
+
+        let error = read_bounded_platform_config_v1(&path)
+            .expect_err("non-Unix platform configuration must be unsupported");
+
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert!(!path.parent().expect("requested path has a parent").exists());
     }
 
     #[test]
@@ -4335,6 +4054,7 @@ mod tests {
         assert!(parse_service_url("https://seed.example/v1/sorafs/upload/").is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn public_namespace_delegation_file_is_bounded_and_delegate_bound() {
         let temporary = tempdir().expect("temporary directory");

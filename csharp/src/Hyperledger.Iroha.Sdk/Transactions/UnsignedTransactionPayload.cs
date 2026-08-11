@@ -13,16 +13,17 @@ public sealed class UnsignedTransactionPayload
     private readonly ReadOnlyDictionary<string, JsonNode?> metadata;
 
     internal UnsignedTransactionPayload(
-        string chain,
+        NetworkId networkId,
         string authority,
         ulong creationTimeMilliseconds,
         JsonObject executable,
-        ulong? timeToLiveMilliseconds,
+        ulong timeToLiveMilliseconds,
         uint? nonce,
         FeePaymentIntent feePayment,
         IReadOnlyDictionary<string, JsonNode?> metadata)
     {
-        Chain = chain;
+        Domain = new TransactionNetworkDomain(
+            networkId ?? throw new ArgumentNullException(nameof(networkId)));
         Authority = authority;
         CreationTimeMilliseconds = creationTimeMilliseconds;
         this.executable = (JsonObject)executable.DeepClone();
@@ -38,9 +39,9 @@ public sealed class UnsignedTransactionPayload
         this.metadata = new ReadOnlyDictionary<string, JsonNode?>(metadataSnapshot);
     }
 
-    /// <summary>Unique chain identifier.</summary>
-    [JsonPropertyName("chain")]
-    public string Chain { get; }
+    /// <summary>Exact signed replay-protection domain.</summary>
+    [JsonPropertyName("domain")]
+    public TransactionNetworkDomain Domain { get; }
 
     /// <summary>Canonical transaction authority.</summary>
     [JsonPropertyName("authority")]
@@ -54,14 +55,9 @@ public sealed class UnsignedTransactionPayload
     [JsonPropertyName("instructions")]
     public JsonObject Executable => (JsonObject)executable.DeepClone();
 
-    /// <summary>Compatibility alias for <see cref="Executable"/>.</summary>
-    [JsonIgnore]
-    public JsonObject Instructions => Executable;
-
-    /// <summary>Optional transaction time-to-live in milliseconds.</summary>
+    /// <summary>Required positive signature-bound transaction lifetime in milliseconds.</summary>
     [JsonPropertyName("time_to_live_ms")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public ulong? TimeToLiveMilliseconds { get; }
+    public ulong TimeToLiveMilliseconds { get; }
 
     /// <summary>Optional non-zero replay nonce.</summary>
     [JsonPropertyName("nonce")]
@@ -75,4 +71,19 @@ public sealed class UnsignedTransactionPayload
     /// <summary>Exact transaction metadata.</summary>
     [JsonPropertyName("metadata")]
     public IReadOnlyDictionary<string, JsonNode?> Metadata => metadata;
+}
+
+/// <summary>Canonical JSON representation of <c>TransactionDomain::Network</c>.</summary>
+public sealed class TransactionNetworkDomain
+{
+    internal TransactionNetworkDomain(NetworkId networkId)
+    {
+        Value = networkId.ToString();
+    }
+
+    [JsonPropertyName("kind")]
+    public string Kind => "network";
+
+    [JsonPropertyName("value")]
+    public string Value { get; }
 }

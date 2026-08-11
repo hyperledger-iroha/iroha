@@ -25,7 +25,7 @@ use std::{
 };
 
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     events::data::sorafs::SorafsRepairLedgerEventKind,
     sorafs::{
         capacity::{CapacityDisputeOutcome, ProviderId},
@@ -96,8 +96,6 @@ pub const REPUTATION_INGEST_MAX_PAGES_PER_BATCH_V1: u32 = 4_096;
 pub const REPUTATION_INGEST_MAX_CHECKPOINT_BYTES_V1: u64 = 64 * 1024 * 1024;
 /// Minimum checkpoint ceiling accepted by a production policy.
 pub const REPUTATION_INGEST_MIN_CHECKPOINT_BYTES_V1: u64 = 64 * 1024;
-/// Maximum UTF-8 chain identifier bytes bound into V1 ingest material.
-pub const REPUTATION_INGEST_MAX_CHAIN_ID_BYTES_V1: usize = 128;
 /// Hard cap on failed external delivery attempts retained for one release window.
 pub const REPUTATION_UNSIGNED_MATERIAL_MAX_DELIVERY_FAILURES_V1: u32 = 64;
 
@@ -267,8 +265,8 @@ impl ReputationCommittedEventIdentityV1 {
 pub struct ReputationIngestPolicyV1 {
     /// Schema version.
     pub version: u8,
-    /// Exact chain whose finalized views may feed this projector.
-    pub chain_id: ChainId,
+    /// Exact network whose finalized views may feed this projector.
+    pub network_id: NetworkId,
     /// Every source that must be finalized at the release target.
     pub required_sources: ReputationRequiredSourceMaskV1,
     /// Inclusive first block whose events affect this release.
@@ -297,7 +295,7 @@ impl ReputationIngestPolicyV1 {
     /// Construct the strict first-release policy for one finalized block window.
     #[must_use]
     pub fn strict_v1(
-        chain_id: ChainId,
+        network_id: NetworkId,
         window_start_height: u64,
         window_end_height: u64,
         snapshot_trust_policy_digest: [u8; 32],
@@ -305,7 +303,7 @@ impl ReputationIngestPolicyV1 {
     ) -> Self {
         Self {
             version: REPUTATION_INGEST_POLICY_VERSION_V1,
-            chain_id,
+            network_id,
             required_sources: ReputationRequiredSourceMaskV1::ALL_V1,
             window_start_height,
             window_end_height,
@@ -329,8 +327,7 @@ impl ReputationIngestPolicyV1 {
     /// digest, invalid scoring weights, or a resource bound outside hard caps.
     pub fn validate(&self) -> Result<(), ReputationIngestError> {
         if self.version != REPUTATION_INGEST_POLICY_VERSION_V1
-            || self.chain_id.as_str().is_empty()
-            || self.chain_id.as_str().len() > REPUTATION_INGEST_MAX_CHAIN_ID_BYTES_V1
+            || self.network_id.as_bytes()[31] & 1 != 1
             || self.required_sources != ReputationRequiredSourceMaskV1::ALL_V1
             || self.window_start_height == 0
             || self.window_end_height < self.window_start_height
@@ -370,8 +367,8 @@ impl ReputationIngestPolicyV1 {
 /// guessed.
 #[derive(Debug, Clone)]
 pub struct ReputationFinalizedBatchV1 {
-    /// Exact chain from which every page and finalized block timestamp was read.
-    pub chain_id: ChainId,
+    /// Exact network from which every page and finalized block timestamp was read.
+    pub network_id: NetworkId,
     /// Finalized block timestamp read from the same immutable block metadata.
     pub finalized_at_unix_ms: u64,
     /// Ordered pages from `FindSorafsProofOutcomeEvents`.
@@ -420,8 +417,8 @@ pub struct ReputationCommittedFeedCursorV1 {
 pub struct ReputationUnsignedSigningMaterialV1 {
     /// Schema version.
     pub version: u8,
-    /// Exact chain that produced every committed source event.
-    pub chain_id: ChainId,
+    /// Exact network that produced every committed source event.
+    pub network_id: NetworkId,
     /// Digest of the deterministic ingest policy and window.
     pub ingest_policy_digest: [u8; 32],
     /// Digest of the external threshold-signer trust policy.
@@ -677,9 +674,9 @@ pub enum ReputationIngestError {
     /// Policy fields or resource bounds are not canonical for V1.
     #[error("reputation ingest policy is invalid")]
     InvalidPolicy,
-    /// The finalized batch belongs to a different chain.
-    #[error("reputation finalized batch belongs to a different chain")]
-    ChainIdMismatch,
+    /// The finalized batch belongs to a different network.
+    #[error("reputation finalized batch belongs to a different network")]
+    NetworkIdMismatch,
     /// A finalized height/hash pair is empty.
     #[error("reputation finalized identity is invalid")]
     InvalidFinalizedIdentity,
@@ -2062,8 +2059,8 @@ fn prepare_pending_batch(
     batch: &ReputationFinalizedBatchV1,
     policy: &ReputationIngestPolicyV1,
 ) -> Result<PreparedPendingBatch, ReputationIngestError> {
-    if batch.chain_id != policy.chain_id {
-        return Err(ReputationIngestError::ChainIdMismatch);
+    if batch.network_id != policy.network_id {
+        return Err(ReputationIngestError::NetworkIdMismatch);
     }
     if batch.finalized_at_unix_ms == 0 {
         return Err(ReputationIngestError::InvalidFinalizedIdentity);
@@ -3189,7 +3186,7 @@ fn build_signing_material(
         })
         .collect::<Result<Vec<_>, ReputationIngestError>>()?;
     let snapshot_seed = ReputationSnapshotSeedV1 {
-        chain_id: policy.chain_id.clone(),
+        network_id: policy.network_id,
         ingest_policy_digest: policy_digest,
         snapshot_trust_policy_digest: policy.snapshot_trust_policy_digest,
         target_finalized: target,
@@ -3226,7 +3223,7 @@ fn build_signing_material(
     .map_err(|_| ReputationIngestError::CanonicalEncoding)?;
     Ok(ReputationUnsignedSigningMaterialV1 {
         version: REPUTATION_UNSIGNED_MATERIAL_VERSION_V1,
-        chain_id: policy.chain_id.clone(),
+        network_id: policy.network_id,
         ingest_policy_digest: policy_digest,
         snapshot_trust_policy_digest: policy.snapshot_trust_policy_digest,
         window_start_height: policy.window_start_height,
@@ -3243,7 +3240,7 @@ fn build_signing_material(
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
 struct ReputationSnapshotSeedV1 {
-    chain_id: ChainId,
+    network_id: NetworkId,
     ingest_policy_digest: [u8; 32],
     snapshot_trust_policy_digest: [u8; 32],
     target_finalized: ReputationFinalizedIdentityV1,
@@ -3963,7 +3960,7 @@ mod tests {
     use std::fs;
 
     use ed25519_dalek::{Signer, SigningKey};
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::AccountId,
         events::data::sorafs::{
@@ -4006,6 +4003,14 @@ mod tests {
     const TARGET_HASH: [u8; 32] = [0xA1; 32];
     const FINALIZED_AT_MS: u64 = 1_800_000_010_000;
 
+    fn network_id(seed: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(Hash::new(
+                vec![seed; 32],
+            )),
+        )
+    }
+
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
             .expect("derive deterministic account key");
@@ -4039,7 +4044,7 @@ mod tests {
         trust_policy: &ReputationSnapshotTrustPolicyV1,
     ) -> ReputationIngestPolicyV1 {
         ReputationIngestPolicyV1::strict_v1(
-            ChainId::from("reputation-test-chain"),
+            network_id(0x61),
             1,
             TARGET_HEIGHT,
             trust_policy
@@ -4330,7 +4335,7 @@ mod tests {
 
     fn empty_batch() -> ReputationFinalizedBatchV1 {
         ReputationFinalizedBatchV1 {
-            chain_id: ChainId::from("reputation-test-chain"),
+            network_id: network_id(0x61),
             finalized_at_unix_ms: FINALIZED_AT_MS,
             proof_pages: Vec::new(),
             journal_pages: Vec::new(),
@@ -4452,7 +4457,7 @@ mod tests {
             CapacityDisputeOutcome::Upheld,
         );
         ReputationFinalizedBatchV1 {
-            chain_id: ChainId::from("reputation-test-chain"),
+            network_id: network_id(0x61),
             finalized_at_unix_ms: FINALIZED_AT_MS,
             proof_pages: vec![proof_page(
                 TARGET_HASH,
@@ -4956,19 +4961,19 @@ mod tests {
     }
 
     #[test]
-    fn finalized_batch_from_foreign_chain_is_rejected() {
+    fn finalized_batch_from_same_label_foreign_network_is_rejected() {
         let root = TempDir::new().expect("state root");
         let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
         let mut batch = proof_only_batch(
             TARGET_HASH,
             vec![proof_event(1, 6, [0x61; 32], 0, provider(9), 0x11)],
         );
-        batch.chain_id = ChainId::from("foreign-chain");
+        batch.network_id = network_id(0x62);
         assert_eq!(
             service
                 .ingest_finalized_batch(batch)
-                .expect_err("foreign-chain batch rejected"),
-            ReputationIngestError::ChainIdMismatch
+                .expect_err("same-label foreign-network batch rejected"),
+            ReputationIngestError::NetworkIdMismatch
         );
     }
 

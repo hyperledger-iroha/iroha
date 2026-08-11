@@ -236,7 +236,7 @@ fn publisher_authorization_counts_weight_and_revalidates_decoded_policy() {
         version: 1,
         operation,
         operation_id,
-        chain_id: ChainId::from("musubi-runtime-weighted-test"),
+        network_id: test_network_id(0x21),
         publisher,
         request_digest: digest,
         issued_at_ms: 1_000,
@@ -1184,8 +1184,7 @@ fn private_service_constructor_binds_signer_and_seed_backend_identities() {
     let broker = AccountId::new(broker_key.public_key().clone());
     let provider = ProviderId::new([0xa1; 32]);
     let config = MusubiPublicationServiceConfigurationV1 {
-        chain_id: ChainId::from("musubi-constructor-test"),
-        genesis_block_hash: [0xa2; 32],
+        network_id: test_network_id(0xa2),
         ingress_broker: broker.clone(),
         seed_provider: provider,
         max_future_clock_skew_ms: 1_000,
@@ -1317,8 +1316,7 @@ fn private_service_rejects_broker_quorum_larger_than_receipt_bound() {
     );
     let provider = ProviderId::new([0xb5; 32]);
     let config = MusubiPublicationServiceConfigurationV1 {
-        chain_id: ChainId::from("musubi-impossible-broker-test"),
-        genesis_block_hash: [0xb6; 32],
+        network_id: test_network_id(0xb6),
         ingress_broker: broker.clone(),
         seed_provider: provider,
         max_future_clock_skew_ms: 1_000,
@@ -2359,16 +2357,14 @@ fn restored_journal_preserves_completed_idempotency_and_replay_state() {
     let (client, _) = client();
     let binding = MusubiPublicationOperationBindingV1 {
         operation_id: [0x81; 32],
-        chain_id: client.chain,
-        genesis_block_hash: [0x80; 32],
+        network_id: client.network_id,
         publisher: client.account,
         archive_id: ArchiveId::new([0x82; 32]),
         car_body_digest: MusubiContentDigestV1::new([0x83; 32]),
         car_body_length: 99,
     };
     let journal_binding = MusubiPublicationServiceJournalBindingV1 {
-        chain_id: binding.chain_id.clone(),
-        genesis_block_hash: binding.genesis_block_hash,
+        network_id: binding.network_id,
         ingress_broker: binding.publisher.clone(),
         seed_provider: ProviderId::new([0x88; 32]),
     };
@@ -2414,7 +2410,7 @@ fn restored_journal_preserves_completed_idempotency_and_replay_state() {
     );
 
     let mut reset_conflict = retry.clone();
-    reset_conflict.binding.genesis_block_hash = [0x8a; 32];
+    reset_conflict.binding.network_id = test_network_id(0x8a);
     assert_eq!(
         restored.begin(&reset_conflict, 10_002),
         Err(MusubiPublicationServiceJournalErrorV1::Invalid)

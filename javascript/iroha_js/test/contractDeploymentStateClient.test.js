@@ -7,6 +7,7 @@ import { AccountAddress } from "../src/address.js";
 import { verifyEd25519 } from "../src/crypto.browser.js";
 import { canonicalRequestSignatureMessage } from "../src/canonicalRequest.js";
 import { ToriiBrowserClient } from "../src/toriiBrowserClient.js";
+import { NetworkId } from "../src/networkId.js";
 
 const PRIVATE_KEY = Buffer.from(
   "CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53",
@@ -17,6 +18,7 @@ const AUTHORITY = AccountAddress.fromAccount({
   algorithm: "ed25519",
   publicKey: PUBLIC_KEY,
 }).toI105(753);
+const NETWORK_ID = NetworkId.fromBytes(Buffer.alloc(32, 0xa5));
 
 function hashLiteral(hex) {
   const body = hex.toUpperCase();
@@ -54,6 +56,7 @@ test("deployment-state client signs the exact body and validates the exact DTO",
   const nonce = "deployment-state-nonce";
   let observed = null;
   const client = new ToriiBrowserClient("https://torii.example", {
+    networkId: NETWORK_ID,
     fetchImpl: async (url, init) => {
       observed = { url: String(url), init };
       return new Response(JSON.stringify(stateResponse()), {
@@ -83,6 +86,7 @@ test("deployment-state client signs the exact body and validates the exact DTO",
   );
   assert.equal(observed.init.headers["X-Iroha-Account"], "operator@universal");
   const message = canonicalRequestSignatureMessage({
+    networkId: NETWORK_ID,
     method: "POST",
     path: "/v1/contracts/deployment-state",
     body: observed.init.body,

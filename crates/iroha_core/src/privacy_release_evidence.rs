@@ -17,23 +17,23 @@ mod zk_x509;
 pub use network_actions::{
     PrivacyReleaseAnonymousPgcNetworkActionV1, PrivacyReleaseBootleLanternNetworkActionV1,
     PrivacyReleaseFcmpNetworkActionV1, PrivacyReleaseIvmPrivateNoteNetworkActionV1,
-    PrivacyReleaseOrchardNetworkActionV1, PrivacyReleasePqMaspNetworkActionsV1,
-    PrivacyReleaseTransactionContextV1, PrivacyReleaseVeRangeNetworkActionV1,
+    PrivacyReleaseJindoNetworkActionV1, PrivacyReleaseOrchardNetworkActionV1,
+    PrivacyReleasePqMaspNetworkActionsV1, PrivacyReleaseTransactionContextV1,
+    PrivacyReleaseVeRangeNetworkActionV1, PrivacyReleaseVegaNetworkActionV1,
     PrivacyReleaseZkAceNetworkActionV1, build_privacy_release_anonymous_pgc_network_action_v1,
     build_privacy_release_bootle_lantern_network_action_v1,
     build_privacy_release_fcmp_network_action_v1,
     build_privacy_release_ivm_private_note_network_action_v1,
-    build_privacy_release_orchard_network_action_v1,
-    build_privacy_release_pq_masp_network_actions_v1,
+    build_privacy_release_jindo_network_action_v1, build_privacy_release_orchard_network_action_v1,
+    build_privacy_release_pq_masp_network_actions_v1, build_privacy_release_vega_network_action_v1,
     build_privacy_release_verange_network_action_v1,
     build_privacy_release_zk_ace_network_action_v1,
 };
 use retained_native::{run_ivm_private_note_stage_v1, run_pq_masp_stage_v1};
 #[cfg(test)]
 use vega::{
-    VEGA_RELEASE_ACTION_INDEX_V1, VEGA_RELEASE_CHAIN_ID_V1, VEGA_RELEASE_CREATION_TIME_MS_V1,
-    VEGA_RELEASE_NONCE_V1, VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
-    refresh_vega_device_authentication_digest_v1,
+    VEGA_RELEASE_ACTION_INDEX_V1, VEGA_RELEASE_CREATION_TIME_MS_V1, VEGA_RELEASE_NONCE_V1,
+    VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1, refresh_vega_device_authentication_digest_v1,
     require_vega_release_production_native_rejection_v1, vega_release_fixture_v1,
     vega_release_transaction_context_v1, verify_vega_release_production_envelope_v1,
 };
@@ -43,11 +43,13 @@ use vega::{
 };
 use zk_x509::run_zk_x509_stage_v1;
 pub use zk_x509::{
-    PrivacyReleaseZkX509ResourceCertificateV1, PrivacyReleaseZkX509ResourceEnvironmentV1,
-    PrivacyReleaseZkX509ResourceObservationV1, PrivacyReleaseZkX509ResourceProcessLimitsV1,
+    PrivacyReleaseZkX509NetworkActionsV1, PrivacyReleaseZkX509ResourceCertificateV1,
+    PrivacyReleaseZkX509ResourceEnvironmentV1, PrivacyReleaseZkX509ResourceObservationV1,
+    PrivacyReleaseZkX509ResourceProcessLimitsV1, PrivacyReleaseZkX509SemanticReplayV1,
+    build_privacy_release_zk_x509_network_actions_v1,
     build_privacy_release_zk_x509_resource_certificate_v1,
-    privacy_release_expectation_capture_open_v1, privacy_release_expectation_fixture_matches_v1,
-    privacy_release_process_profile_v1,
+    build_privacy_release_zk_x509_semantic_replay_v1, privacy_release_expectation_capture_open_v1,
+    privacy_release_expectation_fixture_matches_v1, privacy_release_process_profile_v1,
     privacy_release_zk_x509_resource_certificate_matches_source_v1,
     privacy_release_zk_x509_resource_environment_v1,
     validate_privacy_release_zk_x509_resource_capture_v1,
@@ -56,6 +58,14 @@ pub use zk_x509::{
 use zk_x509::{
     ZK_X509_RELEASE_PUBLIC_MATERIAL_DOMAIN_V1, zk_x509_release_public_statement_material_v1,
 };
+
+fn release_network_id_from_genesis_hash(hash: [u8; 32]) -> iroha_data_model::NetworkId {
+    iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+        iroha_data_model::block::BlockHeader,
+    >::from_untyped_unchecked(Hash::prehashed(
+        hash,
+    )))
+}
 
 use core::{
     fmt,
@@ -74,7 +84,7 @@ pub use iroha_data_model::privacy::{
 use iroha_data_model::{
     isi::privacy::SubmitPrivacyProofV1,
     metadata::Metadata,
-    prelude::{AccountId, AssetDefinitionId, ChainId, DomainId, Name},
+    prelude::{AccountId, AssetDefinitionId, DomainId, Name, NetworkId},
     privacy::{
         BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_MAX_ALLOWED_VALUES_PER_ATTRIBUTE_V1,
         BOOTLE_LANTERN_MAX_DISCLOSED_ATTRIBUTES_V1, BootleLanternAllowedAttributeValuesV1,
@@ -1514,12 +1524,12 @@ fn ordered_public_statement_material_v1(
 
 fn release_statement_context_from_compiled_profile_v1(
     profile: &CompiledPrivacyProfileV1,
-    chain_id: ChainId,
+    network_id: NetworkId,
     action_index: u32,
     transaction_intent_digest: PrivacyTransactionIntentDigestV1,
 ) -> PrivacyStatementContextV1 {
     PrivacyStatementContextV1 {
-        chain_id,
+        network_id,
         action_index,
         transaction_intent_digest,
         parameter_id: profile.parameter_id,
@@ -1573,9 +1583,9 @@ fn run_zk_ace_stage_v1(
             PrivacyReleaseFailureClassV1::NotApplicable,
         ),
         PrivacyReleaseCaseKindV1::PublicStatementBindingMutation => {
-            let mut cross_chain = public_inputs.clone();
-            cross_chain.statement.context.chain_id =
-                ChainId::from("taira-privacy-release-evidence-cross-context-v1");
+            let mut cross_network = public_inputs.clone();
+            cross_network.statement.context.network_id =
+                release_network_id_from_genesis_hash([0x9f; 32]);
 
             let mut cross_genesis = public_inputs.clone();
             cross_genesis.genesis_hash[0] ^= 0x80;
@@ -1597,7 +1607,7 @@ fn run_zk_ace_stage_v1(
             malformed_statement.statement.amount = 0;
 
             for mutation in [
-                &cross_chain,
+                &cross_network,
                 &cross_genesis,
                 &wrong_policy_id,
                 &wrong_policy_digest,
@@ -1613,7 +1623,7 @@ fn run_zk_ace_stage_v1(
                 }
             }
             (
-                norito::encode_canonical(&cross_chain)
+                norito::encode_canonical(&cross_network)
                     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?,
                 PrivacyReleaseFailureClassV1::PublicStatementBindingRejected,
             )
@@ -1688,7 +1698,7 @@ fn zk_ace_fixture_v1()
 -> Result<(ZkAcePrivacyPublicInputsV1, ZkAcePrivacyWitnessV1), PrivacyReleaseEvidenceErrorClassV1> {
     let witness = ZkAcePrivacyWitnessV1::try_new([0x91; 32], [0x92; 32], [0x93; 32])
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let chain_id = ChainId::from("taira-privacy-release-evidence-v1");
+    let network_id = release_network_id_from_genesis_hash([0x9E; 32]);
     let domain_id = DomainId::try_new("privacy", "universal")
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let asset_name = "zkace"
@@ -1699,7 +1709,7 @@ fn zk_ace_fixture_v1()
     let statement = ZkAcePqAuthorizationStatementV1 {
         context: release_statement_context_from_compiled_profile_v1(
             &profile,
-            chain_id.clone(),
+            network_id,
             0,
             PrivacyTransactionIntentDigestV1::new([0x94; 32]),
         ),
@@ -1718,7 +1728,7 @@ fn zk_ace_fixture_v1()
     let authorization_digest = derive_zk_ace_privacy_authorization_digest(&public_inputs)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     public_inputs.statement.replay_nullifier =
-        witness.replay_nullifier_v1(&authorization_digest, &chain_id);
+        witness.replay_nullifier_v1(&authorization_digest, &network_id);
     Ok((public_inputs, witness))
 }
 
@@ -2427,7 +2437,7 @@ fn anonymous_pgc_bootstrap_material_v1(
     let parameters = AnonymousPgcParametersV1::get()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let binding = TranscriptBindingV1 {
-        chain_id: b"taira-privacy-release-evidence-v1",
+        network_id: &[0x81; 32],
         genesis_hash: [0x81; 32],
         action_index: 0,
         statement_digest: *bootstrap_digest.as_bytes(),
@@ -2520,7 +2530,7 @@ fn anonymous_pgc_binding_v1(
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
     Ok(TranscriptBindingV1 {
-        chain_id: b"taira-privacy-release-evidence-v1",
+        network_id: &[0x81; 32],
         genesis_hash: [0x81; 32],
         action_index: 0,
         statement_digest,
@@ -2561,12 +2571,7 @@ fn evidence_secret_scalar_v1(value: u64) -> SecretScalarV1 {
 }
 
 fn append_p256_binding_material_v1(material: &mut Vec<u8>, binding: &TranscriptBindingV1<'_>) {
-    material.extend_from_slice(
-        &u32::try_from(binding.chain_id.len())
-            .expect("closed evidence chain ID fits u32")
-            .to_be_bytes(),
-    );
-    material.extend_from_slice(binding.chain_id);
+    material.extend_from_slice(binding.network_id);
     material.extend_from_slice(&binding.genesis_hash);
     material.extend_from_slice(&binding.action_index.to_be_bytes());
     material.extend_from_slice(&binding.statement_digest);
@@ -2919,7 +2924,6 @@ fn run_bootle_lantern_stage_v1(
     })
 }
 
-const ZK_AMS_RELEASE_CHAIN_ID_V1: &str = "taira-privacy-release-evidence-v1";
 const ZK_AMS_RELEASE_GENESIS_HASH_V1: [u8; 32] = [0x11; 32];
 const ZK_AMS_RELEASE_BLOCK_TIMESTAMP_MS_V1: u64 = 1_785_024_000_000;
 const ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1: u32 = ZK_AMS_PRIVACY_ACTION_INDEX_V1;
@@ -3005,8 +3009,9 @@ fn run_zk_ams_stage_v1(
     let provision_effect =
         verify_zk_ams_provision_statement_v1(&statement, &binding, &provision_proof_bytes)
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
-    let authoritative_chain_id = ChainId::from(ZK_AMS_RELEASE_CHAIN_ID_V1);
-    if statement.context.chain_id != authoritative_chain_id
+    let authoritative_network_id =
+        release_network_id_from_genesis_hash(ZK_AMS_RELEASE_GENESIS_HASH_V1);
+    if statement.context.network_id != authoritative_network_id
         || statement.context.action_index != ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1
     {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
@@ -3014,7 +3019,7 @@ fn run_zk_ams_stage_v1(
     verify_zk_ams_release_production_envelope_v1(
         &statement,
         &provision_proof_bytes,
-        &authoritative_chain_id,
+        &authoritative_network_id,
         ZK_AMS_RELEASE_GENESIS_HASH_V1,
         ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
     )?;
@@ -3075,7 +3080,7 @@ fn run_zk_ams_stage_v1(
                 || verify_zk_ams_release_production_envelope_v1(
                     &mutated_admission,
                     &admission.proof,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_AMS_RELEASE_GENESIS_HASH_V1,
                     ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1,
                 )
@@ -3100,7 +3105,7 @@ fn run_zk_ams_stage_v1(
                 || verify_zk_ams_release_production_envelope_v1(
                     &mutated_provision,
                     &provision_proof_bytes,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_AMS_RELEASE_GENESIS_HASH_V1,
                     ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
                 )
@@ -3109,20 +3114,19 @@ fn run_zk_ams_stage_v1(
                 return Err(PrivacyReleaseEvidenceErrorClassV1::PublicStatementMutationAccepted);
             }
 
-            let mut wrong_chain = admission.statement.clone();
-            wrong_chain.context.chain_id =
-                ChainId::from("taira-privacy-release-evidence-zk-ams-wrong-chain");
-            let wrong_chain_binding = zk_ams_binding_v1(&wrong_chain)?;
+            let mut wrong_network = admission.statement.clone();
+            wrong_network.context.network_id = release_network_id_from_genesis_hash([0x12; 32]);
+            let wrong_network_binding = zk_ams_binding_v1(&wrong_network)?;
             if verify_zk_ams_batch_admission_v1(
-                &wrong_chain,
-                &wrong_chain_binding,
+                &wrong_network,
+                &wrong_network_binding,
                 &admission.proof,
             )
             .is_ok()
                 || verify_zk_ams_release_production_envelope_v1(
-                    &wrong_chain,
+                    &wrong_network,
                     &admission.proof,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_AMS_RELEASE_GENESIS_HASH_V1,
                     ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1,
                 )
@@ -3144,7 +3148,7 @@ fn run_zk_ams_stage_v1(
                 || verify_zk_ams_release_production_envelope_v1(
                     &wrong_transaction,
                     &provision_proof_bytes,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_AMS_RELEASE_GENESIS_HASH_V1,
                     ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
                 )
@@ -3189,7 +3193,7 @@ fn run_zk_ams_stage_v1(
                 verify_zk_ams_release_production_envelope_v1(
                     &admission.statement,
                     &corrupt_batch_header,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_AMS_RELEASE_GENESIS_HASH_V1,
                     ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1,
                 ),
@@ -3215,7 +3219,7 @@ fn run_zk_ams_stage_v1(
                 verify_zk_ams_release_production_envelope_v1(
                     &admission.statement,
                     &corrupt_batch_interior,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_AMS_RELEASE_GENESIS_HASH_V1,
                     ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1,
                 ),
@@ -3239,7 +3243,7 @@ fn run_zk_ams_stage_v1(
                 verify_zk_ams_release_production_envelope_v1(
                     &admission.statement,
                     truncated_batch,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_AMS_RELEASE_GENESIS_HASH_V1,
                     ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1,
                 ),
@@ -3265,7 +3269,7 @@ fn run_zk_ams_stage_v1(
                     verify_zk_ams_release_production_envelope_v1(
                         &admission.statement,
                         &malformed_batch,
-                        &authoritative_chain_id,
+                        &authoritative_network_id,
                         ZK_AMS_RELEASE_GENESIS_HASH_V1,
                         ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1,
                     ),
@@ -3303,7 +3307,7 @@ fn run_zk_ams_stage_v1(
                     verify_zk_ams_release_production_envelope_v1(
                         &submax_admission.statement,
                         &malformed_batch,
-                        &authoritative_chain_id,
+                        &authoritative_network_id,
                         ZK_AMS_RELEASE_GENESIS_HASH_V1,
                         ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1,
                     ),
@@ -3329,7 +3333,7 @@ fn run_zk_ams_stage_v1(
                 verify_zk_ams_release_production_envelope_v1(
                     &admission.statement,
                     &oversized_batch,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_AMS_RELEASE_GENESIS_HASH_V1,
                     ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1,
                 ),
@@ -3350,7 +3354,7 @@ fn run_zk_ams_stage_v1(
                 verify_zk_ams_release_production_envelope_v1(
                     &statement,
                     &corrupt_provision_header,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_AMS_RELEASE_GENESIS_HASH_V1,
                     ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
                 ),
@@ -3376,7 +3380,7 @@ fn run_zk_ams_stage_v1(
                 verify_zk_ams_release_production_envelope_v1(
                     &statement,
                     &corrupt_provision_interior,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_AMS_RELEASE_GENESIS_HASH_V1,
                     ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
                 ),
@@ -3395,7 +3399,7 @@ fn run_zk_ams_stage_v1(
                 verify_zk_ams_release_production_envelope_v1(
                     &statement,
                     truncated_provision,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     ZK_AMS_RELEASE_GENESIS_HASH_V1,
                     ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1,
                 ),
@@ -3794,8 +3798,9 @@ fn zk_ams_admission_lineage_material_v1(
     let binding = zk_ams_binding_v1(&statement)?;
     let effect = verify_zk_ams_batch_admission_v1(&statement, &binding, &proof)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
-    let authoritative_chain_id = ChainId::from(ZK_AMS_RELEASE_CHAIN_ID_V1);
-    if statement.context.chain_id != authoritative_chain_id
+    let authoritative_network_id =
+        release_network_id_from_genesis_hash(ZK_AMS_RELEASE_GENESIS_HASH_V1);
+    if statement.context.network_id != authoritative_network_id
         || statement.context.action_index != ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1
     {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
@@ -3803,7 +3808,7 @@ fn zk_ams_admission_lineage_material_v1(
     verify_zk_ams_release_production_envelope_v1(
         &statement,
         &proof,
-        &authoritative_chain_id,
+        &authoritative_network_id,
         ZK_AMS_RELEASE_GENESIS_HASH_V1,
         ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1,
     )?;
@@ -3895,7 +3900,7 @@ fn zk_ams_release_transaction_context_v1(
     nonce: u32,
 ) -> Result<ZkAmsPrivacyActionTransactionContextV1, PrivacyReleaseEvidenceErrorClassV1> {
     Ok(ZkAmsPrivacyActionTransactionContextV1 {
-        chain_id: ChainId::from(ZK_AMS_RELEASE_CHAIN_ID_V1),
+        network_id: release_network_id_from_genesis_hash(ZK_AMS_RELEASE_GENESIS_HASH_V1),
         authority: privacy_release_account_v1(39)?,
         creation_time: Duration::from_millis(creation_time_ms),
         time_to_live: Some(Duration::from_secs(60)),
@@ -3982,7 +3987,7 @@ fn zk_ams_binding_v1(
         .digest()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     Ok(TranscriptBindingV1 {
-        chain_id: statement.context.chain_id.as_str().as_bytes(),
+        network_id: statement.context.network_id.as_bytes(),
         genesis_hash: ZK_AMS_RELEASE_GENESIS_HASH_V1,
         action_index: statement.context.action_index,
         statement_digest: *statement_digest.as_bytes(),
@@ -4020,7 +4025,7 @@ fn require_zk_ams_release_production_admission_rejection_v1(
 fn verify_zk_ams_release_production_envelope_v1(
     statement: &IrohaZkAmsStatementV1,
     proof: &[u8],
-    authoritative_chain_id: &ChainId,
+    authoritative_network_id: &NetworkId,
     genesis_hash: [u8; 32],
     authoritative_action_index: u32,
 ) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
@@ -4065,7 +4070,7 @@ fn verify_zk_ams_release_production_envelope_v1(
         PrivacyVerificationContextV1 {
             activation: &activation,
             consensus_limits: &limits,
-            chain_id: authoritative_chain_id,
+            network_id: authoritative_network_id,
             genesis_hash,
             current_height: 2,
             expected_action_index: authoritative_action_index,
@@ -4105,7 +4110,6 @@ fn zk_ams_statement_material_v1(
     Ok(material)
 }
 
-const JINDO_RELEASE_CHAIN_ID_V1: &str = "taira-privacy-release-evidence-v1";
 const JINDO_RELEASE_GENESIS_HASH_V1: [u8; 32] = [0xa7; 32];
 const JINDO_RELEASE_ACTION_INDEX_V1: u32 = 0;
 const JINDO_RELEASE_BLOCK_TIMESTAMP_MS_V1: u64 = 1_800_000_000_124;
@@ -4147,7 +4151,7 @@ fn run_jindo_stage_v1(
     let witness = JindoPrivacyActionWitnessV1::try_new(polynomials, jindo_field_v1(13))
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let context = JindoPrivacyActionTransactionContextV1 {
-        chain_id: ChainId::from(JINDO_RELEASE_CHAIN_ID_V1),
+        network_id: release_network_id_from_genesis_hash(JINDO_RELEASE_GENESIS_HASH_V1),
         authority: AccountId::new(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -4199,7 +4203,7 @@ fn run_jindo_stage_v1(
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let binding = TranscriptBindingV1 {
-        chain_id: statement.context.chain_id.as_str().as_bytes(),
+        network_id: statement.context.network_id.as_bytes(),
         genesis_hash: JINDO_RELEASE_GENESIS_HASH_V1,
         action_index: statement.context.action_index,
         statement_digest: prepared.statement_digest(),
@@ -4214,8 +4218,9 @@ fn run_jindo_stage_v1(
         u32::try_from(JINDO_NATIVE_PROOF_BYTES_V1).expect("closed Jindo proof ceiling fits u32");
     verify_batched_evaluation_v1(&statement, &proof_bytes, &binding, proof_ceiling)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
-    let authoritative_chain_id = ChainId::from(JINDO_RELEASE_CHAIN_ID_V1);
-    if statement.context.chain_id != authoritative_chain_id
+    let authoritative_network_id =
+        release_network_id_from_genesis_hash(JINDO_RELEASE_GENESIS_HASH_V1);
+    if statement.context.network_id != authoritative_network_id
         || statement.context.action_index != JINDO_RELEASE_ACTION_INDEX_V1
     {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
@@ -4223,7 +4228,7 @@ fn run_jindo_stage_v1(
     verify_jindo_release_production_envelope_v1(
         &statement,
         &proof_bytes,
-        &authoritative_chain_id,
+        &authoritative_network_id,
         JINDO_RELEASE_GENESIS_HASH_V1,
         JINDO_RELEASE_ACTION_INDEX_V1,
     )?;
@@ -4261,7 +4266,7 @@ fn run_jindo_stage_v1(
                 verify_jindo_release_production_envelope_v1(
                     &mutated,
                     &proof_bytes,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     JINDO_RELEASE_GENESIS_HASH_V1,
                     JINDO_RELEASE_ACTION_INDEX_V1,
                 ),
@@ -4286,7 +4291,7 @@ fn run_jindo_stage_v1(
                 verify_jindo_release_production_envelope_v1(
                     &statement,
                     &corrupt,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     JINDO_RELEASE_GENESIS_HASH_V1,
                     JINDO_RELEASE_ACTION_INDEX_V1,
                 ),
@@ -4307,7 +4312,7 @@ fn run_jindo_stage_v1(
                 verify_jindo_release_production_envelope_v1(
                     &statement,
                     &corrupt_interior,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     JINDO_RELEASE_GENESIS_HASH_V1,
                     JINDO_RELEASE_ACTION_INDEX_V1,
                 ),
@@ -4324,7 +4329,7 @@ fn run_jindo_stage_v1(
                 verify_jindo_release_production_envelope_v1(
                     &statement,
                     truncated,
-                    &authoritative_chain_id,
+                    &authoritative_network_id,
                     JINDO_RELEASE_GENESIS_HASH_V1,
                     JINDO_RELEASE_ACTION_INDEX_V1,
                 ),
@@ -4379,7 +4384,7 @@ fn require_jindo_release_production_native_rejection_v1(
 fn verify_jindo_release_production_envelope_v1(
     statement: &iroha_data_model::privacy::IrohaJindoPolynomialCommitmentStatementV1,
     proof: &[u8],
-    authoritative_chain_id: &ChainId,
+    authoritative_network_id: &NetworkId,
     genesis_hash: [u8; 32],
     authoritative_action_index: u32,
 ) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
@@ -4418,7 +4423,7 @@ fn verify_jindo_release_production_envelope_v1(
         PrivacyVerificationContextV1 {
             activation: &activation,
             consensus_limits: &limits,
-            chain_id: authoritative_chain_id,
+            network_id: authoritative_network_id,
             genesis_hash,
             current_height: 2,
             expected_action_index: authoritative_action_index,
@@ -4454,7 +4459,6 @@ fn jindo_field_v1(value: u64) -> PrivacyJindoFieldElementV1 {
     PrivacyJindoFieldElementV1::new(encoding)
 }
 
-const ORCHARD_RELEASE_CHAIN_ID_V1: &str = "taira-privacy-release-evidence-orchard-v1";
 const ORCHARD_RELEASE_GENESIS_HASH_V1: [u8; 32] = [0x4f; 32];
 
 fn orchard_release_statement_v1(
@@ -4507,7 +4511,7 @@ fn orchard_release_transaction_payload_v1(
 ) -> Result<TransactionPayload, PrivacyReleaseEvidenceErrorClassV1> {
     let authority = privacy_release_account_v1(0x4d)?;
     let mut builder = TransactionBuilder::new(
-        ChainId::from(ORCHARD_RELEASE_CHAIN_ID_V1),
+        release_network_id_from_genesis_hash(ORCHARD_RELEASE_GENESIS_HASH_V1),
         authority,
         FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000_000)),
     )
@@ -4572,7 +4576,7 @@ fn run_orchard_stage_v1(
     let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let draft_context = PrivacyStatementContextV1 {
-        chain_id: ChainId::from(ORCHARD_RELEASE_CHAIN_ID_V1),
+        network_id: release_network_id_from_genesis_hash(ORCHARD_RELEASE_GENESIS_HASH_V1),
         action_index: 0,
         transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0; 32]),
         parameter_id: profile.parameter_id,

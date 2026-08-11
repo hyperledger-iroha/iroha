@@ -39,10 +39,21 @@
       ];
 
       allBinaries = [
-        "irohad"
-        "iroha"
-        "kagami"
+        {
+          package = "irohad";
+          binary = "iroha3d";
+        }
+        {
+          package = "iroha_cli";
+          binary = "iroha";
+        }
+        {
+          package = "iroha_kagami";
+          binary = "kagami";
+        }
       ];
+
+      allExecutables = map (target: target.binary) allBinaries;
 
       # HACK: A hook to filter out darwin-specific flags when cross-compiling.
       # Those flags being there in the first place is either a bug in nixpkgs or me
@@ -66,7 +77,7 @@
       # Build an Iroha derivation
       mkIroha = {
         target ? system, # target arch to build for
-        binaries ? allBinaries, # which binary to build
+        binaries ? allBinaries, # package/binary targets to build
         name ? "iroha", # resulting derivation name
         features ? [], # feature list forwarded to cargo
         ...
@@ -133,7 +144,7 @@
           cargoBuildOptions = default:
             default
             ++ ["--target" targetTriple]
-            ++ builtins.concatMap (binary: ["-p" binary]) binaries
+            ++ builtins.concatMap (target: ["-p" target.package "--bin" target.binary]) binaries
             ++ (if features == [] then [] else ["--features" (builtins.concatStringsSep "," features)]);
 
           CARGO_BUILD_TARGET = targetTriple;
@@ -155,7 +166,12 @@
           name = target;
           value = mkIroha {
             inherit target;
-            binaries = ["irohad"];
+            binaries = [
+              {
+                package = "irohad";
+                binary = "iroha3d";
+              }
+            ];
             name = "iroha${suffix}-${target}";
             features = features;
           };
@@ -200,11 +216,11 @@
         {
           default = {
             type = "app";
-            program = "${self.packages.${system}.default}/bin/irohad";
+            program = "${self.packages.${system}.default}/bin/iroha3d";
           };
           iroha3 = {
             type = "app";
-            program = "${self.packages.${system}.iroha3}/bin/irohad";
+            program = "${self.packages.${system}.iroha3}/bin/iroha3d";
           };
         }
         // builtins.listToAttrs (map (bin: {
@@ -214,33 +230,8 @@
               program = "${self.packages.${system}.default}/bin/${bin}";
             };
           })
-          allBinaries);
+          allExecutables);
 
-      formatter = alejandra.packages.${system}.default;
-
-      devShells.default = let
-        toolchainPkgs = fenix'.stable;
-        toolchain = fenix'.combine [
-          toolchainPkgs.rustc
-          toolchainPkgs.cargo
-          toolchainPkgs.clippy
-          toolchainPkgs.rustfmt
-          toolchainPkgs.rust-std
-        ];
-      in
-        pkgs.mkShell {
-          nativeBuildInputs = with pkgs; [
-            pkg-config
-            openssl.dev
-            libiconvReal
-            zlib
-            toolchain
-            fenix'.rust-analyzer
-          ];
-
-        };
-    });
-}
       checks = {
         # Shielded Merkle golden vectors check: runs the golden test for iroha_crypto
         shielded-merkle = pkgs.stdenv.mkDerivation {
@@ -268,3 +259,29 @@
           '';
         };
       };
+
+      formatter = alejandra.packages.${system}.default;
+
+      devShells.default = let
+        toolchainPkgs = fenix'.stable;
+        toolchain = fenix'.combine [
+          toolchainPkgs.rustc
+          toolchainPkgs.cargo
+          toolchainPkgs.clippy
+          toolchainPkgs.rustfmt
+          toolchainPkgs.rust-std
+        ];
+      in
+        pkgs.mkShell {
+          nativeBuildInputs = with pkgs; [
+            pkg-config
+            openssl.dev
+            libiconvReal
+            zlib
+            toolchain
+            fenix'.rust-analyzer
+          ];
+
+        };
+    });
+}

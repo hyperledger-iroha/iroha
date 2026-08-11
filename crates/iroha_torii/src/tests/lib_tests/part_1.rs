@@ -270,7 +270,7 @@ const PREBUILT_PRIVACY_ANCHOR_HANDLE: &str = "governance-dag:transparency:primar
 const PREBUILT_TRANSPARENCY_LEADER_LEASE_HANDLE: &str = "sealed-cas:transparency:leader-primary";
 const PREBUILT_FENCED_PRIVACY_HANDLE: &str = "governance-cas:transparency:privacy-primary";
 const PREBUILT_FENCED_PRIVACY_POLICY_DIGEST: [u8; 32] = [0xF7; 32];
-const PREBUILT_GOVERNANCE_SIGNER_HANDLE: &str = "pkcs11:governance:primary";
+const PREBUILT_GOVERNANCE_SIGNER_HANDLE: &str = "software://sorafs/governance-dag/primary";
 const PREBUILT_GOVERNANCE_SIGNER_PEER_ID: &[u8] = b"governance-torii-primary";
 const PREBUILT_GOVERNANCE_SIGNER_POLICY_DIGEST: [u8; 32] = [0x97; 32];
 const PREBUILT_GOVERNANCE_CHECKPOINT_STORE_HANDLE: &str =
@@ -280,6 +280,7 @@ const PREBUILT_GOVERNANCE_CHECKPOINT_STORE_POLICY_DIGEST: [u8; 32] = [0x96; 32];
 #[derive(Debug)]
 struct PrebuiltGovernanceDagSigner {
     key_pair: KeyPair,
+    last_purpose: Mutex<Option<sorafs_node::GovernanceDagSigningPurposeV1>>,
 }
 
 impl PrebuiltGovernanceDagSigner {
@@ -291,6 +292,7 @@ impl PrebuiltGovernanceDagSigner {
         Self {
             key_pair: KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                 .expect("derive prebuilt Governance DAG signer key"),
+            last_purpose: Mutex::new(None),
         }
     }
 
@@ -302,6 +304,10 @@ impl PrebuiltGovernanceDagSigner {
             .expect("serialize prebuilt Governance DAG public key");
         assert_eq!(algorithm, Algorithm::Ed25519);
         bytes.try_into().expect("Ed25519 public key width")
+    }
+
+    fn observed_purpose(&self) -> Option<sorafs_node::GovernanceDagSigningPurposeV1> {
+        *self.last_purpose.lock().expect("signing purpose lock")
     }
 }
 
@@ -329,13 +335,33 @@ impl sorafs_node::GovernanceDagRuntimeSigner for PrebuiltGovernanceDagSigner {
         self.public_key_bytes()
     }
 
-    fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
+    fn sign(
+        &self,
+        purpose: sorafs_node::GovernanceDagSigningPurposeV1,
+        payload: &[u8],
+    ) -> Result<[u8; 64], String> {
+        *self.last_purpose.lock().expect("signing purpose lock") = Some(purpose);
         IrohaSignature::try_new(self.key_pair.private_key(), payload)
             .map_err(|_| "prebuilt Governance DAG signer refused request".to_owned())?
             .payload()
             .try_into()
             .map_err(|_| "prebuilt Governance DAG signature width changed".to_owned())
     }
+}
+
+#[test]
+fn prebuilt_governance_signer_receives_the_exact_purpose() {
+    let signer = PrebuiltGovernanceDagSigner::new();
+    sorafs_node::GovernanceDagRuntimeSigner::sign(
+        &signer,
+        sorafs_node::GovernanceDagSigningPurposeV1::DagHead,
+        b"canonical governance DAG head fixture",
+    )
+    .expect("fixture signer accepts the explicit purpose");
+    assert_eq!(
+        signer.observed_purpose(),
+        Some(sorafs_node::GovernanceDagSigningPurposeV1::DagHead)
+    );
 }
 
 #[derive(Debug)]
@@ -1465,6 +1491,7 @@ async fn new_with_handle_preflights_fused_privacy_before_startup() {
 
     let _ = Torii::new_with_handle(
         ChainId::from("fused-privacy-preflight-test"),
+        signed_query_test_network_id(),
         kiso,
         cfg.torii.clone(),
         queue,
@@ -1543,7 +1570,7 @@ fn zk_ivm_prove_job_id_reports_rng_failure() {
 
 #[tokio::test]
 async fn zk_ivm_job_routes_reject_noncanonical_ids_before_lookup_or_echo() {
-    let app = mk_app_state_for_tests();
+    let app = mk_ivm_prove_app_state_for_tests();
     let invalid = [
         "0123456789abcdef0123456789abcde",
         "0123456789abcdef0123456789abcdef0",
@@ -1551,14 +1578,7 @@ async fn zk_ivm_job_routes_reject_noncanonical_ids_before_lookup_or_echo() {
         "g123456789abcdef0123456789abcdef",
     ];
     for job_id in invalid {
-        let get_error = match handler_zk_ivm_prove_get(
-            State(app.clone()),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            axum::extract::Path(job_id.to_owned()),
-        )
-        .await
-        {
+        let get_error = match call_zk_ivm_prove_get(app.clone(), job_id.to_owned()).await {
             Ok(_) => panic!("GET accepted invalid job id"),
             Err(error) => error,
         };
@@ -1569,14 +1589,7 @@ async fn zk_ivm_job_routes_reject_noncanonical_ids_before_lookup_or_echo() {
             "invalid id must not be reflected"
         );
 
-        let delete_error = match handler_zk_ivm_prove_delete(
-            State(app.clone()),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            axum::extract::Path(job_id.to_owned()),
-        )
-        .await
-        {
+        let delete_error = match call_zk_ivm_prove_delete(app.clone(), job_id.to_owned()).await {
             Ok(_) => panic!("DELETE accepted and echoed invalid job id"),
             Err(error) => error,
         };
@@ -2399,8 +2412,90 @@ fn sample_stark_vk_box(
     iroha_data_model::proof::VerifyingKeyBox::new(backend.to_owned(), bytes)
 }
 
+fn sample_ivm_prove_authority_keypair() -> KeyPair {
+    checked_torii_test_ed25519_keypair(0x83, "derive ZK IVM prove authority fixture key")
+}
+
 fn sample_ivm_prove_authority() -> AccountId {
-    checked_torii_test_account_id(0x83, "derive ZK IVM prove authority fixture key")
+    AccountId::new(sample_ivm_prove_authority_keypair().public_key().clone())
+}
+
+fn mk_ivm_prove_app_state_for_tests() -> SharedAppState {
+    let authority = sample_ivm_prove_authority();
+    mk_app_state_for_tests_with_world(world_with_account(&authority))
+}
+
+fn signed_ivm_prove_headers(
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+) -> HeaderMap {
+    let authority = sample_ivm_prove_authority();
+    let key_pair = sample_ivm_prove_authority_keypair();
+    let mut headers = signed_app_headers(&authority, &key_pair, method, uri, body);
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    headers
+}
+
+async fn call_zk_ivm_prove(
+    app: SharedAppState,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    let method = axum::http::Method::POST;
+    let uri: axum::http::Uri = "/v1/zk/ivm/prove".parse().expect("prove URI");
+    let headers = signed_ivm_prove_headers(&method, &uri, body.as_ref());
+    handler_zk_ivm_prove(
+        State(app),
+        method,
+        uri,
+        headers,
+        crate::loopback_connect_info(),
+        body,
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+async fn call_zk_ivm_prove_get(app: SharedAppState, job_id: String) -> Result<AxResponse, Error> {
+    let method = axum::http::Method::GET;
+    let uri: axum::http::Uri = format!("/v1/zk/ivm/prove/{job_id}")
+        .parse()
+        .expect("prove-job GET URI");
+    let headers = signed_ivm_prove_headers(&method, &uri, &[]);
+    handler_zk_ivm_prove_get(
+        State(app),
+        method,
+        uri,
+        headers,
+        crate::loopback_connect_info(),
+        axum::extract::Path(job_id),
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+async fn call_zk_ivm_prove_delete(
+    app: SharedAppState,
+    job_id: String,
+) -> Result<AxResponse, Error> {
+    let method = axum::http::Method::DELETE;
+    let uri: axum::http::Uri = format!("/v1/zk/ivm/prove/{job_id}")
+        .parse()
+        .expect("prove-job DELETE URI");
+    let headers = signed_ivm_prove_headers(&method, &uri, &[]);
+    handler_zk_ivm_prove_delete(
+        State(app),
+        method,
+        uri,
+        headers,
+        crate::loopback_connect_info(),
+        axum::extract::Path(job_id),
+    )
+    .await
+    .map(IntoResponse::into_response)
 }
 
 fn sample_ivm_fee_payment() -> iroha_data_model::transaction::FeePaymentIntent {
@@ -2815,7 +2910,7 @@ fn register_fee_sponsor_program_for_test(app: &SharedAppState, program_id: FeeSp
     let mut block = app.state.block(header);
     let mut stx = block.transaction();
     iroha_data_model::isi::nexus::CreateFeeSponsorProgram {
-        program: FeeSponsorProgram::new(program_id.clone()),
+        program: FeeSponsorProgram::new(program_id.clone(), program_id.sponsor.clone()),
     }
     .execute(&program_id.sponsor, &mut stx)
     .expect("sponsor may register its program");
@@ -2893,28 +2988,4 @@ fn onboarding_alias_signer_for_test(key_pair: &KeyPair) -> AccountOnboardingSign
         alias_lease_term_years: 1,
         owner_auto_renew: None,
     }
-}
-
-fn assert_onboarding_readiness_blocked(
-    app: &SharedAppState,
-    signer: &AccountOnboardingSigner,
-    message: &str,
-) {
-    let report = validate_account_onboarding_readiness(app.state.as_ref(), signer);
-    assert_ne!(
-        report.status,
-        iroha_data_model::alias_setup::AliasSetupStatusV1::Ready,
-        "{message}: readiness unexpectedly succeeded: {report:?}"
-    );
-    assert!(!report.diagnostics.is_empty(), "{message}");
-}
-
-fn assert_onboarding_readiness_ready(app: &SharedAppState, signer: &AccountOnboardingSigner) {
-    let report = validate_account_onboarding_readiness(app.state.as_ref(), signer);
-    assert_eq!(
-        report.status,
-        iroha_data_model::alias_setup::AliasSetupStatusV1::Ready,
-        "{report:?}"
-    );
-    assert!(report.diagnostics.is_empty());
 }

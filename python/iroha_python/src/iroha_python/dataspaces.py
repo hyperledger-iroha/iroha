@@ -391,7 +391,7 @@ def _summary(
             "Copy the manifest into the configured `nexus.registry.manifest_directory`.",
             "Append the catalog snippet to your Nexus config and bump `[nexus] lane_count`.",
             "Encode the manifest with the listed cargo command before publishing it.",
-            "Restart irohad with `--trace-config` and verify dataspace readiness.",
+            "Restart iroha3d with `--trace-config` and verify dataspace readiness.",
         ],
     }
 

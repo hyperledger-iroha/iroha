@@ -1,4 +1,5 @@
 import type { NexusTransactionCodec } from "./nexus-app.js";
+import type { NetworkId } from "./index.js";
 
 /** Browser-safe structural view of the runtime KotodamaQuantity class. */
 export interface BrowserKotodamaQuantity {
@@ -47,7 +48,10 @@ export type BrowserTransactionMetadataValue =
   | { readonly [key: string]: BrowserTransactionMetadataValue };
 
 export interface BrowserTransferInput {
-  chainId: string;
+  networkId: NetworkId;
+  chain?: never;
+  chainId?: never;
+  chain_id?: never;
   authority: string;
   sourceAssetHoldingId?: string;
   sourceAssetId?: string;
@@ -65,7 +69,10 @@ export interface BrowserTransferInput {
 }
 
 export interface BrowserInstructionTransactionInput {
-  chainId: string;
+  networkId: NetworkId;
+  chain?: never;
+  chainId?: never;
+  chain_id?: never;
   authority: string;
   instructions: readonly object[];
   /** Required signature-bound fee payer, charge maxima, and gas bound. */
@@ -94,7 +101,10 @@ export type BrowserExecutableBatchEntry =
     };
 
 export interface BrowserExecutableBatchInput {
-  chainId: string;
+  networkId: NetworkId;
+  chain?: never;
+  chainId?: never;
+  chain_id?: never;
   authority: string;
   entries: readonly BrowserExecutableBatchEntry[];
   /** Must include `gasLimit` when any entry is a contract call. */
@@ -108,6 +118,8 @@ export interface BrowserExecutableBatchInput {
 }
 
 export interface BrowserTransactionSignable {
+  /** Application-pinned exact NetworkId expected in payloadBytes. */
+  networkId: NetworkId;
   payloadBytes: BrowserTransactionBytes;
   payloadHashHex?: string;
   authority: string;
@@ -116,11 +128,13 @@ export interface BrowserTransactionSignable {
 }
 
 export interface BrowserTransactionSignableConstraints {
+  networkId?: NetworkId | null;
   authority?: string | null;
   signingPublicKey?: BrowserTransactionBytes | string | null;
 }
 
 export interface ValidatedBrowserTransactionSignable {
+  networkId: NetworkId;
   payloadBytes: Uint8Array;
   payloadHashHex: string;
   authority: string;
@@ -164,7 +178,7 @@ export function buildBrowserVerifyingKeyTransactionPayload(
 export function decodeCanonicalVerifyingKeyTransactionPayload(
   payloadBytes: BrowserTransactionBytes,
   constraints: {
-    expectedChainId: string;
+    expectedNetworkId: NetworkId;
     expectedAuthority: string;
     operation: "register" | "update";
   },

@@ -203,6 +203,17 @@ use crate::{
 type SignedTxHash = HashOf<iroha_data_model::transaction::SignedTransaction>;
 type QueuePlanJournalRemoval = (HashOf<TransactionEntrypoint>, Hash, Hash);
 
+#[cfg(test)]
+fn queue_test_network_id() -> iroha_data_model::NetworkId {
+    // Match the exact genesis hash in `iroha_config/iroha_test_config.toml` so
+    // state-free queue fixtures remain in the same domain as `State::new`.
+    let mut genesis_hash = [0; Hash::LENGTH];
+    genesis_hash[Hash::LENGTH - 1] = 1;
+    iroha_data_model::NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed(genesis_hash),
+    ))
+}
+
 fn compatibility_queue_hash(entrypoint_hash: HashOf<TransactionEntrypoint>) -> SignedTxHash {
     HashOf::from_untyped_unchecked(Hash::from(entrypoint_hash))
 }
@@ -265,7 +276,7 @@ pub const QUEUE_PLAN_DURABLE_ADMISSION_VERSION_V2: u16 = 2;
 /// Version of the global admission identity embedded in a strict queue-plan journal record.
 pub const QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2: u16 = 2;
 
-/// Chain/request identity chosen once by ingress before any authority acquires queue ownership.
+/// Exact-network/request identity chosen once by ingress before any authority acquires queue ownership.
 ///
 /// This identity is persisted inside the exact journal record. Together with the record's
 /// canonical enqueue timestamp and claim digest it lets restart recovery reconstruct the same
@@ -274,8 +285,8 @@ pub const QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V2: u16 = 2;
 pub struct QueuePlanGlobalAdmissionIdentityV2 {
     /// Identity layout version.
     pub version: u16,
-    /// Domain-separated digest of the chain identifier.
-    pub chain_id_digest: Hash,
+    /// Domain-separated digest of the exact network identifier.
+    pub network_id_digest: Hash,
     /// Deterministic QueuePlanSynced proxy request identity.
     pub request_id: Hash,
 }
@@ -488,7 +499,7 @@ pub struct QueuePlanDurableAdmissionV2 {
     pub version: u16,
     /// Lifecycle context held stable across routing validation and journal synchronization.
     pub context: QueuePlanAdmissionContextV2,
-    /// Global chain/request identity persisted in the record, when this admission is eligible
+    /// Global exact-network/request identity persisted in the record, when this admission is eligible
     /// for a globally ordered QueuePlan certificate.
     pub global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
     /// Complete routing plan persisted in the journal record.
@@ -830,7 +841,7 @@ pub(crate) struct LaneQueueReservationReleaseBarrierV3 {
     /// Reservation-journal schema version.
     pub(crate) version: u16,
     /// Chain context of the retired payload.
-    pub(crate) chain_id_hash: Hash,
+    pub(crate) network_id: iroha_data_model::NetworkId,
     /// Consensus epoch of the retired payload.
     pub(crate) epoch: u64,
     /// Exact retired coordinator lane.
@@ -872,16 +883,16 @@ impl LaneQueueReservationReleaseBarrierV3 {
         {
             return Err("lane queue release barrier reservation count is out of bounds");
         }
-        if [
-            self.chain_id_hash,
-            self.lane_incarnation,
-            self.origin_descriptor_hash,
-            self.origin_proposal_hash,
-            self.executable_payload_hash,
-            self.retirement_hash,
-        ]
-        .iter()
-        .any(|hash| hash_is_zero(*hash))
+        if self.network_id.as_bytes().iter().all(|byte| *byte == 0)
+            || [
+                self.lane_incarnation,
+                self.origin_descriptor_hash,
+                self.origin_proposal_hash,
+                self.executable_payload_hash,
+                self.retirement_hash,
+            ]
+            .iter()
+            .any(|hash| hash_is_zero(*hash))
         {
             return Err("lane queue release barrier contains a zero identity hash");
         }
@@ -3260,7 +3271,7 @@ impl LaneQueueReservationStore {
         requested: &LaneQueueReservationReleaseBarrierV3,
     ) -> Result<(), LaneQueueReservationError> {
         let same_slot = |existing: &LaneQueueReservationReleaseBarrierV3| {
-            existing.chain_id_hash == requested.chain_id_hash
+            existing.network_id == requested.network_id
                 && existing.epoch == requested.epoch
                 && existing.lane_id == requested.lane_id
                 && existing.dataspace_id == requested.dataspace_id
@@ -10389,7 +10400,7 @@ impl Queue {
         }
         let (max_clock_drift, transaction_limits) = state.transaction_admission_limits();
         let crypto = state.crypto();
-        let chain_id = state.chain_id_ref().clone();
+        let network_id = *state.network_id_ref();
         let replay_observed_at = self.time_source.get_unix_time();
 
         for record in records {
@@ -10412,7 +10423,7 @@ impl Queue {
             })?;
             let accepted = AcceptedTransaction::accept_entrypoint_at_time(
                 record.entrypoint,
-                &chain_id,
+                &network_id,
                 max_clock_drift,
                 transaction_limits.clone(),
                 crypto.as_ref(),
@@ -10498,11 +10509,13 @@ impl Queue {
                             "queue-plan journal transaction {hash} has a malformed global admission binding; retaining its durable record: {reason}"
                         ))
                     })?;
-                let expected_chain_id_digest =
-                    crate::torii_proxy::queue_plan_admission_chain_id_digest(state_view.chain_id());
-                if binding.chain_id_digest != expected_chain_id_digest {
+                let expected_network_id_digest =
+                    crate::torii_proxy::queue_plan_admission_network_id_digest(
+                        state_view.network_id(),
+                    );
+                if binding.network_id_digest != expected_network_id_digest {
                     return Err(invalid(format!(
-                        "queue-plan journal transaction {hash} belongs to another chain; retaining its durable record"
+                        "queue-plan journal transaction {hash} belongs to another network; retaining its durable record"
                     )));
                 }
                 Some(
@@ -12719,10 +12732,12 @@ impl Queue {
             return Ok(None);
         }
         let binding = claim.global_admission_binding()?;
-        let expected_chain_id_digest =
-            crate::torii_proxy::queue_plan_admission_chain_id_digest(state_view.chain_id());
-        if binding.chain_id_digest != expected_chain_id_digest {
-            return Err("durable QueuePlan admission binding belongs to another chain".to_owned());
+        let expected_network_id_digest =
+            crate::torii_proxy::queue_plan_admission_network_id_digest(state_view.network_id());
+        if binding.network_id_digest != expected_network_id_digest {
+            return Err(
+                "durable QueuePlan admission binding belongs to another network".to_owned(),
+            );
         }
         let registry_match = queue_plan_admission_registry_match(
             state_view,
@@ -14473,7 +14488,7 @@ impl Queue {
         }
         if let Some(binding) = expected_admission_binding
             && let Err(reason) =
-                binding.validate_for_request(state.chain_id_ref(), tx.entrypoint(), &routing_plan)
+                binding.validate_for_request(state.network_id_ref(), tx.entrypoint(), &routing_plan)
         {
             return Err(Failure {
                 tx: tx.into(),
@@ -15933,7 +15948,7 @@ impl Queue {
 
     /// Push a transaction using one ingress-authored global admission binding.
     ///
-    /// Every authority persists byte-identical chain/request identity, context, timestamp, and
+    /// Every authority persists byte-identical exact-network/request identity, context, timestamp, and
     /// journal claim. Existing ownership is returned for the same exact transaction, route, and
     /// deterministic global identity; its first durable timestamp and digest remain canonical
     /// when a later ingress retries after losing the response. A genuinely different global
@@ -15963,7 +15978,7 @@ impl Queue {
             .expect("strict global admission must capture lifecycle context");
         let global_admission_identity = outcome
             .global_admission_identity
-            .expect("strict global admission must persist chain/request identity");
+            .expect("strict global admission must persist exact-network/request identity");
         let journal_record_digest = outcome
             .journal_record_digest
             .expect("strict global admission must persist a journal record");
@@ -20263,7 +20278,7 @@ pub mod tests {
             .plan_admission_context_with_state(&state, &routing_plan)
             .expect("capture global guard fixture context");
         let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-            state.chain_id_ref(),
+            state.network_id_ref(),
             transaction.entrypoint(),
             &routing_plan,
             admission_context,
@@ -20324,7 +20339,7 @@ pub mod tests {
             .plan_admission_context_with_state(state, &routing_plan)
             .expect("capture globally certified reservation context");
         let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-            state.chain_id_ref(),
+            state.network_id_ref(),
             transaction.entrypoint(),
             &routing_plan,
             admission_context,
@@ -20476,7 +20491,7 @@ pub mod tests {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                chain_id_digest: Hash::new(b"queue-drain-close-chain"),
+                network_id: super::queue_test_network_id(),
                 lane_id,
                 dataspace_id: lane.dataspace_id,
                 lane_incarnation,
@@ -22229,7 +22244,9 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &validator_primary,
             0,
             DataSpaceId::UNIVERSAL,
@@ -22393,7 +22410,9 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &validator_id,
             0,
             DataSpaceId::UNIVERSAL,
@@ -22476,7 +22495,9 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &validator_id,
             0,
             DataSpaceId::UNIVERSAL,
@@ -22569,14 +22590,18 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &validator,
             0,
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let other_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &validator,
             1,
             DataSpaceId::UNIVERSAL,
@@ -22736,14 +22761,18 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &validator,
             0,
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
         let other_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &validator,
             1,
             DataSpaceId::UNIVERSAL,
@@ -22913,7 +22942,9 @@ pub mod tests {
         let mut world = world_with_test_domains();
         let (validator, keypair) = gen_account_in("wonderland");
         let existing_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
             &validator,
             7,
             DataSpaceId::UNIVERSAL,
@@ -22955,7 +22986,9 @@ pub mod tests {
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let instruction_contract_address =
             iroha_data_model::smart_contract::ContractAddress::derive(
-                &iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+                &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                    .parse()
+                    .expect("canonical test network id"),
                 &validator,
                 8,
                 DataSpaceId::UNIVERSAL,
@@ -24286,7 +24319,7 @@ pub mod tests {
             );
             let binding_timestamp_ms = unbound_claim.enqueue_timestamp_ms.saturating_add(17);
             let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-                state.chain_id_ref(),
+                state.network_id_ref(),
                 tx.entrypoint(),
                 &plan,
                 binding_context.clone(),
@@ -24410,7 +24443,7 @@ pub mod tests {
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture original strict-global retry context");
         let original_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-            state.chain_id_ref(),
+            state.network_id_ref(),
             tx.entrypoint(),
             &plan,
             original_context.clone(),
@@ -24430,7 +24463,7 @@ pub mod tests {
             .len();
 
         let later_same_context_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-            state.chain_id_ref(),
+            state.network_id_ref(),
             tx.entrypoint(),
             &plan,
             original_context,
@@ -24464,7 +24497,7 @@ pub mod tests {
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture height-advanced strict-global retry context");
         let later_height_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-            state.chain_id_ref(),
+            state.network_id_ref(),
             tx.entrypoint(),
             &plan,
             current_context,
@@ -25963,7 +25996,7 @@ pub mod tests {
             .expect("capture admission context");
         let enqueue_timestamp_ms = queue.queue_plan_admission_timestamp_ms();
         let original_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-            state.chain_id_ref(),
+            state.network_id_ref(),
             &entrypoint,
             &plan,
             context.clone(),
@@ -25980,7 +26013,7 @@ pub mod tests {
             .expect("admit original binding");
 
         let successor_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-            state.chain_id_ref(),
+            state.network_id_ref(),
             &entrypoint,
             &plan,
             context.clone(),
@@ -26105,7 +26138,7 @@ pub mod tests {
             .expect("capture strict admission context");
         let enqueue_timestamp_ms = queue.queue_plan_admission_timestamp_ms();
         let mut forged = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-            state.chain_id_ref(),
+            state.network_id_ref(),
             transaction.entrypoint(),
             &routing_plan,
             admission_context.clone(),
@@ -26309,16 +26342,17 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install stateless-rejection journal");
         let (authority, keypair) = gen_account_in("wonderland");
-        let wrong_chain = ChainId::from("wrong-chain-for-queue-journal-replay");
+        let wrong_network_id =
+            crate::sumeragi::synthetic_network_id("wrong-network-for-queue-journal-replay");
         let signed = TransactionBuilder::new_with_time_source(
-            wrong_chain,
+            wrong_network_id,
             authority,
             &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(vec![InstructionBox::from(Log::new(
             Level::INFO,
-            "wrong-chain journal fixture".into(),
+            "wrong-network journal fixture".into(),
         ))])
         .sign(keypair.private_key());
         let unchecked = AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(signed));
@@ -26338,7 +26372,7 @@ pub mod tests {
                 None,
                 true,
             )
-            .expect("persist wrong-chain journal fixture");
+            .expect("persist wrong-network journal fixture");
         let original_len = fs::metadata(&journal_path)
             .expect("stateless-rejection journal metadata")
             .len();
@@ -26351,7 +26385,7 @@ pub mod tests {
             .expect("reopen stateless-rejection journal");
         let error = replay_queue
             .replay_plan_journal(&state)
-            .expect_err("wrong-chain journal entrypoint must fail startup");
+            .expect_err("wrong-network journal entrypoint must fail startup");
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         assert!(
             error
@@ -27728,13 +27762,13 @@ pub mod tests {
     #[test]
     fn proposal_gas_cost_fails_closed_and_charges_signed_runtime_limit() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let chain_id = ChainId::from("proposal-gas-accounting");
+        let network_id = queue_test_network_id();
         let (authority, keypair) = gen_account_in("wonderland");
         let build_unchecked = |executable: Executable,
                                gas_limit: Option<NonZeroU64>|
          -> AcceptedTransaction<'static> {
             let signed = TransactionBuilder::new_with_time_source(
-                chain_id.clone(),
+                network_id,
                 authority.clone(),
                 &time_source,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), gas_limit),

@@ -48,7 +48,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
             .fromAccount(publicKey: destinationSigningKey.publicKey())
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let transfer = TransferRequest(
-            chainId: "taira",
+            networkId: TestNetworkIds.canonical,
             authority: authority,
             assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
             quantity: "1",
@@ -85,7 +85,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
 
         for quantity in ["1.0", "01", "-1", " 1", "1e0"] {
             let transfer = TransferRequest(
-                chainId: "chain",
+                networkId: TestNetworkIds.canonical,
                 authority: authority,
                 assetDefinitionId: assetDefinitionId,
                 quantity: quantity,
@@ -104,7 +104,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
             }
 
             let mint = MintRequest(
-                chainId: "chain",
+                networkId: TestNetworkIds.canonical,
                 authority: authority,
                 assetDefinitionId: assetDefinitionId,
                 quantity: quantity,
@@ -122,7 +122,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
             }
 
             let burn = BurnRequest(
-                chainId: "chain",
+                networkId: TestNetworkIds.canonical,
                 authority: authority,
                 assetDefinitionId: assetDefinitionId,
                 quantity: quantity,
@@ -144,7 +144,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
     func testSetMetadataRejectsMalformedAuthority() throws {
         let targetAccount = try canonicalOwnerLiteral()
         let value = try NoritoJSON(["profile": "demo"])
-        let request = SetMetadataRequest(chainId: "chain",
+        let request = SetMetadataRequest(networkId: TestNetworkIds.canonical,
                                          authority: "alice",
                                          target: .account(targetAccount),
                                          key: "profile",
@@ -170,7 +170,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let authority = "\(i105)@banka.dataspace"
         let targetAccount = try canonicalOwnerLiteral()
         let value = try NoritoJSON(["profile": "demo"])
-        let request = SetMetadataRequest(chainId: "chain",
+        let request = SetMetadataRequest(networkId: TestNetworkIds.canonical,
                                          authority: authority,
                                          target: .account(targetAccount),
                                          key: "profile",
@@ -192,7 +192,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
     func testPersistCouncilRejectsInvalidMemberAccount() throws {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 2, count: 32))
         let authority = try canonicalAuthorityLiteral(from: signingKey)
-        let request = PersistCouncilRequest(chainId: "chain",
+        let request = PersistCouncilRequest(networkId: TestNetworkIds.canonical,
                                             authority: authority,
                                             epoch: 1,
                                             members: ["bob"],
@@ -213,7 +213,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 3, count: 32))
         let authority = try canonicalAuthorityLiteral(from: signingKey)
         let malformed = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#\(try canonicalOwnerLiteral())"
-        let request = RemoveMetadataRequest(chainId: "chain",
+        let request = RemoveMetadataRequest(networkId: TestNetworkIds.canonical,
                                             authority: authority,
                                             target: .asset(malformed),
                                             key: "profile",
@@ -239,7 +239,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
         for quantity in ["-1", "01", "1.0", "1.2300", " 1", "1e0"] {
             XCTAssertThrowsError(
                 try NoritoNativeBridge.shared.encodeTransfer(
-                    chainId: "chain",
+                    networkId: TestNetworkIds.canonical,
                     authority: authority,
                     creationTimeMs: 1,
                     ttlMs: nil,
@@ -257,7 +257,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
             }
             XCTAssertThrowsError(
                 try NoritoNativeBridge.shared.encodeMint(
-                    chainId: "chain",
+                    networkId: TestNetworkIds.canonical,
                     authority: authority,
                     creationTimeMs: 1,
                     ttlMs: nil,
@@ -275,7 +275,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
             }
             XCTAssertThrowsError(
                 try NoritoNativeBridge.shared.encodeBurn(
-                    chainId: "chain",
+                    networkId: TestNetworkIds.canonical,
                     authority: authority,
                     creationTimeMs: 1,
                     ttlMs: nil,
@@ -308,7 +308,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 7, count: 32))
         let authority = try canonicalAuthorityLiteral(from: signingKey)
         let value = try NoritoJSON(["serial": "vault-1"])
-        let request = SetMetadataRequest(chainId: "chain",
+        let request = SetMetadataRequest(networkId: TestNetworkIds.canonical,
                                          authority: authority,
                                          target: .rwa("lot-001"),
                                          key: "serial",
@@ -345,7 +345,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
             from: signingKey,
             networkPrefix: SccpV1.tairaI105DiscriminantV1
         )
-        let request = CastZkBallotRequest(chainId: "chain",
+        let request = CastZkBallotRequest(networkId: TestNetworkIds.canonical,
                                           authority: authority,
                                           electionId: "election-1",
                                           proofB64: "AAAA",
@@ -373,7 +373,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
 
         for amount in ["+1", "01", "1.0", "1.2300", " 1", "1 ", "-1", overflowing] {
             let request = CastPlainBallotRequest(
-                chainId: "chain",
+                networkId: TestNetworkIds.canonical,
                 authority: authority,
                 referendumId: "referendum-1",
                 owner: owner,
@@ -403,7 +403,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let feePayment = FeePaymentIntent.authority(chargeLimits: [], gasLimit: nil)
 
         let plain = CastPlainBallotRequest(
-            chainId: "chain",
+            networkId: TestNetworkIds.canonical,
             authority: authority,
             referendumId: "invalid/referendum",
             owner: owner,
@@ -430,7 +430,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
         }
 
         let zk = CastZkBallotRequest(
-            chainId: "chain",
+            networkId: TestNetworkIds.canonical,
             authority: authority,
             electionId: ".hidden",
             proofB64: "AAAA",
@@ -491,7 +491,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
 
         for (referendumId, proposalIdHex, expectedError) in cases {
             let request = FinalizeReferendumRequest(
-                chainId: "chain",
+                networkId: TestNetworkIds.canonical,
                 authority: authority,
                 referendumId: referendumId,
                 proposalIdHex: proposalIdHex,
@@ -519,7 +519,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
             from: signingKey,
             networkPrefix: SccpV1.tairaI105DiscriminantV1
         )
-        let request = CastZkBallotRequest(chainId: "chain",
+        let request = CastZkBallotRequest(networkId: TestNetworkIds.canonical,
                                           authority: authority,
                                           electionId: "election-1",
                                           proofB64: "AAAA",
@@ -555,7 +555,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
 
         for amount in invalidAmounts {
             let request = CastZkBallotRequest(
-                chainId: "chain",
+                networkId: TestNetworkIds.canonical,
                 authority: authority,
                 electionId: "election-1",
                 proofB64: "AAAA",
@@ -648,7 +648,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
             from: signingKey,
             networkPrefix: SccpV1.tairaI105DiscriminantV1
         )
-        let request = CastZkBallotRequest(chainId: "chain",
+        let request = CastZkBallotRequest(networkId: TestNetworkIds.canonical,
                                           authority: authority,
                                           electionId: "election-1",
                                           proofB64: "AAAA",
@@ -682,7 +682,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let owner = try noncanonicalOwnerLiteral()
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
         let authority = try canonicalAuthorityLiteral(from: signingKey)
-        let request = CastZkBallotRequest(chainId: "chain",
+        let request = CastZkBallotRequest(networkId: TestNetworkIds.canonical,
                                           authority: authority,
                                           electionId: "election-1",
                                           proofB64: "AAAA",

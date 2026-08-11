@@ -55,47 +55,6 @@ impl PruneProofs {
 
 // --- ZK Assets ---
 
-/// Shielded asset mode.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    norito::codec::Decode,
-    norito::codec::Encode,
-    iroha_schema::IntoSchema,
-)]
-pub enum ZkAssetMode {
-    /// Public balances plus the proof-bound Kagemusha confidential ledger.
-    Hybrid,
-}
-
-#[cfg(feature = "json")]
-impl norito::json::JsonSerialize for ZkAssetMode {
-    fn json_serialize(&self, out: &mut String) {
-        let label = match self {
-            ZkAssetMode::Hybrid => "Hybrid",
-        };
-        norito::json::write_json_string(label, out);
-    }
-}
-
-#[cfg(feature = "json")]
-impl norito::json::JsonDeserialize for ZkAssetMode {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let value = parser.parse_string()?;
-        match value.as_str() {
-            "Hybrid" => Ok(ZkAssetMode::Hybrid),
-            other => Err(norito::json::Error::unknown_field(other.to_owned())),
-        }
-    }
-}
-
 isi! {
     /// Register a ZK-capable asset definition with policy and verifying keys.
     #[cfg_attr(
@@ -105,13 +64,7 @@ isi! {
     pub struct RegisterZkAsset {
         /// Asset definition id.
         pub asset: AssetDefinitionId,
-        /// Asset mode.
-        pub mode: ZkAssetMode,
-        /// Allow proof-authenticated Kagemusha public-to-confidential top-ups.
-        pub allow_shield: bool,
-        /// Allow unshielding from shielded to public.
-        pub allow_unshield: bool,
-        /// Verifying key for unshield proofs.
+        /// Verifying key for Kagemusha redemption proofs.
         pub vk_unshield: Option<crate::proof::VerifyingKeyId>,
         /// Canonical Kagemusha top-up shield verifying key.
         pub vk_shield: Option<crate::proof::VerifyingKeyId>,
@@ -120,20 +73,25 @@ isi! {
 
 impl crate::seal::Instruction for RegisterZkAsset {}
 impl RegisterZkAsset {
+    /// Validate the first-release verifier-role relationship.
+    ///
+    /// A shield verifier admits new confidential commitments. It is therefore
+    /// invalid without an unshield verifier that can redeem those commitments.
+    pub fn validate_verifier_roles(&self) -> Result<(), &'static str> {
+        if self.vk_shield.is_some() && self.vk_unshield.is_none() {
+            return Err("vk_shield requires vk_unshield so shielded funds remain redeemable");
+        }
+        Ok(())
+    }
+
     /// Construct a new `RegisterZkAsset` instruction.
     pub fn new(
         asset: AssetDefinitionId,
-        mode: ZkAssetMode,
-        allow_shield: bool,
-        allow_unshield: bool,
         vk_unshield: Option<crate::proof::VerifyingKeyId>,
         vk_shield: Option<crate::proof::VerifyingKeyId>,
     ) -> Self {
         Self {
             asset,
-            mode,
-            allow_shield,
-            allow_unshield,
             vk_unshield,
             vk_shield,
         }
@@ -411,9 +369,6 @@ impl_zk_decode_from_slice!(PruneProofs {
 
 impl_zk_decode_from_slice!(RegisterZkAsset {
     asset: AssetDefinitionId,
-    mode: ZkAssetMode,
-    allow_shield: bool,
-    allow_unshield: bool,
     vk_unshield: Option<crate::proof::VerifyingKeyId>,
     vk_shield: Option<crate::proof::VerifyingKeyId>,
 });
@@ -578,9 +533,6 @@ mod tests {
         assert_slice_roundtrip(PruneProofs::new(Some("halo2/ipa".to_owned())));
         assert_slice_roundtrip(RegisterZkAsset::new(
             asset.clone(),
-            ZkAssetMode::Hybrid,
-            true,
-            true,
             Some(verifying_key("unshield")),
             Some(verifying_key("shield")),
         ));
@@ -636,7 +588,7 @@ mod tests {
         assert_registry_decodes(
             &registry,
             std::any::type_name::<RegisterZkAsset>(),
-            RegisterZkAsset::new(asset.clone(), ZkAssetMode::Hybrid, false, false, None, None),
+            RegisterZkAsset::new(asset.clone(), None, None),
         );
         assert_registry_decodes(
             &registry,
@@ -659,16 +611,26 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "json")]
     #[test]
-    fn zk_asset_mode_rejects_retired_native_mode() {
-        assert_eq!(
-            norito::json::from_str::<ZkAssetMode>("\"Hybrid\"").expect("decode first-release mode"),
-            ZkAssetMode::Hybrid
+    fn shield_verifier_requires_an_unshield_verifier() {
+        let asset = asset_definition_id();
+        let shield = Some(verifying_key("shield"));
+        let unshield = Some(verifying_key("unshield"));
+
+        assert!(
+            RegisterZkAsset::new(asset.clone(), None, shield.clone())
+                .validate_verifier_roles()
+                .is_err()
         );
         assert!(
-            norito::json::from_str::<ZkAssetMode>("\"ZkNative\"").is_err(),
-            "the first-release wire must reject the unusable native-only mode"
+            RegisterZkAsset::new(asset.clone(), unshield.clone(), shield)
+                .validate_verifier_roles()
+                .is_ok()
+        );
+        assert!(
+            RegisterZkAsset::new(asset, unshield, None)
+                .validate_verifier_roles()
+                .is_ok()
         );
     }
 }

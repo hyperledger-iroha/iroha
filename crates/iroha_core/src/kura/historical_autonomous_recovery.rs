@@ -376,7 +376,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 })?;
             record
                 .payload
-                .validate(record.payload.chain_id_hash, record.payload.epoch)
+                .validate(record.payload.network_id, record.payload.epoch)
                 .map_err(|error| {
                     Self::invalid_historical_autonomous_recovery(
                         path.to_path_buf(),
@@ -502,7 +502,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             let recovered = self
                 .recover_autonomous_lane_block_payload_with_sidecar_repair(
                     &record.payload.origin_proposal,
-                    record.payload.chain_id_hash,
+                    record.payload.network_id,
                     record.payload.epoch,
                     false,
                 )
@@ -773,7 +773,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             let descriptor = &record.payload.origin_proposal.descriptor;
             let expected_input = Self::autonomous_lane_block_execution_input_candidate(
                 &record.payload,
-                record.payload.chain_id_hash,
+                record.payload.network_id,
                 record.payload.epoch,
             )
             .map_err(|availability| {
@@ -822,7 +822,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                                     .origin_proposal
                                     .payload_block_hint
                                     .expect("checked present"),
-                                record.payload.chain_id_hash,
+                                record.payload.network_id,
                                 record.payload.epoch,
                             )
                             .is_ok_and(|promoted| promoted == record.payload));
@@ -1224,7 +1224,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 }
                 let artifact = Self::autonomous_lane_block_execution_input_candidate(
                     &record.payload,
-                    record.payload.chain_id_hash,
+                    record.payload.network_id,
                     record.payload.epoch,
                 )
                 .map_err(|availability| {
@@ -1520,7 +1520,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
             let recovered = self
                 .recover_autonomous_lane_block_payload_with_sidecar_repair(
                     &record.payload.origin_proposal,
-                    record.payload.chain_id_hash,
+                    record.payload.network_id,
                     record.payload.epoch,
                     false,
                 )
@@ -1722,7 +1722,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
         ) -> Result<HistoricalAutonomousLaneRecoveryPersistOutcome> {
             match self.persist_lane_executable_payload(
                 &record.payload,
-                record.payload.chain_id_hash,
+                record.payload.network_id,
                 record.payload.epoch,
             )? {
                 LaneBlockAuxiliaryPersistenceOutcome::Persisted => {}

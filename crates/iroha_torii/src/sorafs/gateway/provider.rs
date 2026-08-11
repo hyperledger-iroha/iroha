@@ -96,20 +96,20 @@ mod tests {
     #[test]
     fn provider_binding_uses_central_handle_grammar_and_rejects_zero_qualification() {
         let binding = GatewayProviderBindingV1::try_new(
-            "kms://gateway/acme/primary.v1_slot-a".to_owned(),
+            "runtime://sorafs/gateway-acme/primary.v1_slot-a".to_owned(),
             1,
             [0x51; 32],
         )
         .expect("canonical production provider handle");
         assert_eq!(
             binding.provider_handle(),
-            "kms://gateway/acme/primary.v1_slot-a"
+            "runtime://sorafs/gateway-acme/primary.v1_slot-a"
         );
         for handle in [
             "https://operator:secret@gateway",
             "https://gateway/acme?credential=secret",
             "https://gateway/acme#fragment",
-            "kms://gateway/acme/%70rimary",
+            "runtime://sorafs/gateway-acme/%70rimary",
             "kms:\\gateway\\acme\\primary",
         ] {
             assert_eq!(
@@ -118,19 +118,27 @@ mod tests {
             );
         }
         assert_eq!(
-            GatewayProviderBindingV1::try_new("kms://gateway/acme/dummy".to_owned(), 1, [0x51; 32],),
+            GatewayProviderBindingV1::try_new(
+                "runtime://sorafs/gateway-acme/dummy".to_owned(),
+                1,
+                [0x51; 32],
+            ),
             Err(GatewayProviderBindingErrorV1::TestMarkedHandle)
         );
         assert_eq!(
             GatewayProviderBindingV1::try_new(
-                "kms://gateway/acme/primary".to_owned(),
+                "runtime://sorafs/gateway-acme/primary".to_owned(),
                 0,
                 [0x51; 32],
             ),
             Err(GatewayProviderBindingErrorV1::ZeroRevision)
         );
         assert_eq!(
-            GatewayProviderBindingV1::try_new("kms://gateway/acme/primary".to_owned(), 1, [0; 32],),
+            GatewayProviderBindingV1::try_new(
+                "runtime://sorafs/gateway-acme/primary".to_owned(),
+                1,
+                [0; 32],
+            ),
             Err(GatewayProviderBindingErrorV1::ZeroPolicyDigest)
         );
     }

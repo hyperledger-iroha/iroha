@@ -81,6 +81,7 @@ async fn app_api_router_smoke() {
             .0;
             iroha_torii::Torii::new(
                 ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -98,6 +99,7 @@ async fn app_api_router_smoke() {
         {
             iroha_torii::Torii::new(
                 ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -433,6 +435,7 @@ async fn contract_routes_honor_api_token_requirement() {
             .0;
             iroha_torii::Torii::new(
                 ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,
@@ -450,6 +453,7 @@ async fn contract_routes_honor_api_token_requirement() {
         {
             iroha_torii::Torii::new(
                 ChainId::from("test-chain"),
+                iroha_torii::test_utils::signed_query_network_id(),
                 kiso,
                 cfg.torii.clone(),
                 queue,

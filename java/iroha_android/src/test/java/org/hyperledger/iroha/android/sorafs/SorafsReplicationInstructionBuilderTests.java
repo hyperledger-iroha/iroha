@@ -18,6 +18,7 @@ public final class SorafsReplicationInstructionBuilderTests {
 
   private static final String ORDER_ID =
       "44b3b7c174c8e9c044b3b7c174c8e9c044b3b7c174c8e9c044b3b7c174c8e9c0";
+  private static final String MUSUBI_ARCHIVE_ID = "45".repeat(32);
   private static final String PROVIDER_ID = "11".repeat(32);
   private static final String PROVIDER_OWNER =
       "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
@@ -59,6 +60,21 @@ public final class SorafsReplicationInstructionBuilderTests {
     assert payload.equals(payloadInstruction.orderPayloadBase64()) : "rehydrated payload mismatch";
     assert payloadInstruction.issuedEpoch() == 20 : "issued epoch mismatch";
     assert payloadInstruction.deadlineEpoch() == 28 : "deadline epoch mismatch";
+    assert payloadInstruction.musubiArchiveIdHex() == null
+        : "ordinary order must omit the Musubi archive purpose";
+
+    final IssueReplicationOrderInstruction bound =
+        IssueReplicationOrderInstruction.builder()
+            .setOrderIdHex(ORDER_ID)
+            .setOrderPayloadBase64(payload)
+            .setIssuedEpoch(20)
+            .setDeadlineEpoch(28)
+            .setMusubiArchiveIdHex(MUSUBI_ARCHIVE_ID)
+            .build();
+    assert MUSUBI_ARCHIVE_ID.equals(bound.toArguments().get("musubi_archive_id_hex"))
+        : "Musubi archive argument mismatch";
+    assert bound.equals(IssueReplicationOrderInstruction.fromArguments(bound.toArguments()))
+        : "bound issue argument roundtrip mismatch";
   }
 
   private static void testIssueReplicationOrderRejectsInvalidBase64() {
@@ -139,6 +155,14 @@ public final class SorafsReplicationInstructionBuilderTests {
     }
     assert threw : "Expected oversized order payload to throw";
 
+    threw = false;
+    try {
+      IssueReplicationOrderInstruction.builder().setMusubiArchiveIdHex("00".repeat(32));
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected zero Musubi archive identifier to throw";
+
     final byte[] highBytes = new byte[32];
     java.util.Arrays.fill(highBytes, (byte) 0x80);
     final IssueReplicationOrderInstruction highId =
@@ -147,8 +171,11 @@ public final class SorafsReplicationInstructionBuilderTests {
             .setOrderPayload(new byte[] {1})
             .setIssuedEpoch(1)
             .setDeadlineEpoch(2)
+            .setMusubiArchiveId(highBytes)
             .build();
     assert "80".repeat(32).equals(highId.orderIdHex()) : "raw order id must be fixed-width hex";
+    assert "80".repeat(32).equals(highId.musubiArchiveIdHex())
+        : "raw Musubi archive id must be fixed-width hex";
   }
 
   private static void testCompleteReplicationOrder() {

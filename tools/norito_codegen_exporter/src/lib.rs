@@ -5,4 +5,6 @@
 
 mod norito_rpc;
 
-pub use norito_rpc::{FixtureOptions, JsonOutput, generate_fixtures, run_verify};
+pub use norito_rpc::{
+    AliasSetupFixtureBytes, FixtureOptions, JsonOutput, generate_fixtures, run_verify,
+};

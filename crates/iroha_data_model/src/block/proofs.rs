@@ -398,14 +398,13 @@ mod tests {
 
     #[cfg(feature = "transparent_api")]
     use iroha_crypto::{Algorithm, Signature, SignatureOf};
-    use iroha_crypto::{HashOf, KeyPair, MerkleTree};
+    use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree};
     #[cfg(feature = "transparent_api")]
     use iroha_primitives::const_vec::ConstVec;
     use norito::codec::DecodeAll as _;
 
     use super::*;
     use crate::{
-        ChainId,
         account::AccountId,
         domain::DomainId,
         transaction::{
@@ -430,11 +429,10 @@ mod tests {
 
     fn sample_entrypoint_hash() -> HashOf<TransactionEntrypoint> {
         let keypair = checked_random_keypair();
-        let chain: ChainId = "proof-chain".parse().expect("chain id");
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
-            chain,
+            test_network_id(),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -445,6 +443,12 @@ mod tests {
 
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked block proof fixture keypair")
+    }
+
+    fn test_network_id() -> crate::NetworkId {
+        crate::NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x15; Hash::LENGTH]),
+        ))
     }
 
     #[test]
@@ -634,7 +638,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let context = HeightContext {
-            chain_id: ChainId::from("trusted-proof-anchor-finality"),
+            network_id: test_network_id(),
             protocol_version: PROTOCOL_VERSION,
             height: block.header().height().get(),
             epoch: 0,
@@ -721,10 +725,8 @@ mod tests {
         HashOf<TransactionEntrypoint>,
     ) {
         let keypair = checked_random_keypair();
-        let chain: ChainId = "trusted-proof-anchor".parse().expect("chain id");
         let authority = AccountId::new(keypair.public_key().clone());
-        let transaction = TransactionBuilder::new(
-            chain,
+        let transaction = TransactionBuilder::new_genesis(
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -762,13 +764,17 @@ mod tests {
                 ],
             )
             .expect("fixture entrypoints and results align");
-        let executed_block_wire_hash = block
-            .executed_block_wire_hash()
+        let executed_block_wire = block
+            .encode_wire()
             .expect("fixture executed block wire encodes");
-        let execution_commitment = ExecutionCommitment::without_topups(
+        let executed_block_wire_len =
+            u64::try_from(executed_block_wire.len()).expect("fixture wire length fits u64");
+        let executed_block_wire_hash = Hash::new(&executed_block_wire);
+        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"trusted proof parent state"),
             Hash::new(b"trusted proof post state"),
             Hash::new(b"trusted proof ordinary writes"),
+            executed_block_wire_len,
             executed_block_wire_hash,
         );
         execution_commitment
@@ -909,11 +915,14 @@ mod tests {
     #[test]
     fn trusted_anchor_rejects_cryptographically_finalized_wrong_executed_wire() {
         let (block, _, external_hash, _) = authenticated_block_with_scheduled_entry();
-        let wrong_execution_commitment = ExecutionCommitment::without_topups(
+        let wrong_executed_block_wire = b"different finalized executed block wire";
+        let wrong_execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"wrong-wire parent state"),
             Hash::new(b"wrong-wire post state"),
             Hash::new(b"wrong-wire ordinary writes"),
-            Hash::new(b"different finalized executed block wire"),
+            u64::try_from(wrong_executed_block_wire.len())
+                .expect("wrong fixture wire length fits u64"),
+            Hash::new(wrong_executed_block_wire),
         );
         let artifact = finalized_artifact_for_block(&block, wrong_execution_commitment);
 
@@ -979,13 +988,16 @@ mod tests {
             .map(TransactionResult::hash)
             .collect();
         block.payload.header.result_merkle_root = result_state.result_merkle.root();
-        let execution_commitment = ExecutionCommitment::without_topups(
+        let executed_block_wire = block
+            .encode_wire()
+            .expect("misaligned fixture wire still encodes");
+        let execution_commitment = ExecutionCommitment::without_topups_or_merge_carrier(
             Hash::new(b"misaligned proof parent state"),
             Hash::new(b"misaligned proof post state"),
             Hash::new(b"misaligned proof ordinary writes"),
-            block
-                .executed_block_wire_hash()
-                .expect("misaligned fixture wire still encodes"),
+            u64::try_from(executed_block_wire.len())
+                .expect("misaligned fixture wire length fits u64"),
+            Hash::new(&executed_block_wire),
         );
         let artifact = finalized_artifact_for_block(&block, execution_commitment);
 

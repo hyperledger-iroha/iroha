@@ -5,6 +5,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
+    NetworkId,
     block::{
         BlockHeader,
         consensus::{NativeAmxReceipt, SumeragiLanePayloadOwnership},
@@ -245,8 +246,8 @@ impl CertifiedMergeLedgerReference {
 pub struct AutonomousLanePayloadEnvelopeV1 {
     /// Envelope schema version.
     pub version: u8,
-    /// Hash of the chain identifier that owns the payload.
-    pub chain_id_hash: Hash,
+    /// Exact genesis-derived network identity that owns the payload.
+    pub network_id: NetworkId,
     /// Consensus epoch at the global proposal height.
     pub epoch: u64,
     /// Lane selected for autonomous execution.
@@ -393,7 +394,7 @@ mod tests {
                 9,
                 10,
                 HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent")),
-                Hash::new(b"chain"),
+                NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"chain"))),
                 1,
                 HashOf::new(&validator_set),
                 validator_set,
@@ -581,7 +582,9 @@ mod tests {
         );
         let envelope = AutonomousLanePayloadEnvelopeV1 {
             version: AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1,
-            chain_id_hash: Hash::new(b"autonomous-envelope-chain"),
+            network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                b"autonomous-envelope-genesis",
+            ))),
             epoch: 4,
             lane_id: LaneId::new(2),
             dataspace_id: DataSpaceId::new(9),

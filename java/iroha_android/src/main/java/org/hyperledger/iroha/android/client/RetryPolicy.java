@@ -7,10 +7,11 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * Configurable retry policy for {@link IrohaClient} submissions.
+ * Configurable retry policy for caller-managed, replay-safe HTTP reads.
  *
  * <p>The policy is deterministic: delays are derived from the attempt number and the configured
  * base delay, making it suitable for deterministic playback in tests and mobile environments.
+ * {@link HttpClientTransport} never applies it to signed transactions or other one-shot requests.
  */
 public final class RetryPolicy {
 
@@ -66,8 +67,7 @@ public final class RetryPolicy {
    * Returns true if {@code status} is eligible for retrying regardless of remaining attempts.
    *
    * <p>This mirrors the status-code selection logic used by {@link #shouldRetryResponse(int, ClientResponse)}
-   * without the attempt check so callers can distinguish transient server failures from permanent
-   * rejections when deciding whether to queue a submission.
+   * without the attempt check. It must only be used with a {@code RETRY_SAFE} transport request.
    */
   public boolean isRetryableStatus(final int status) {
     if (retryOnServerError && status >= 500) {

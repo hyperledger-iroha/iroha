@@ -1030,7 +1030,9 @@ fn deterministic_commit_marker_temp_recovers_or_rolls_back_exactly() {
     store
         .append_block_to_chain(block.as_ref())
         .expect("append marker recovery block");
-    store.flush_pending_fsync(true).expect("publish stable marker");
+    store
+        .flush_pending_fsync(true)
+        .expect("publish stable marker");
     let marker = store
         .read_commit_marker()
         .expect("read stable marker")
@@ -1076,7 +1078,9 @@ fn commit_marker_rejects_oversized_deterministic_temp() {
         vec![0_u8; MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES + 1],
     )
     .expect("write oversized marker temp");
-    assert!(matches!(store.read_commit_marker(), Err(Error::IO(_, path)) if path == temporary_path));
+    assert!(
+        matches!(store.read_commit_marker(), Err(Error::IO(_, path)) if path == temporary_path)
+    );
     assert!(temporary_path.is_file());
 }
 
@@ -1093,7 +1097,9 @@ fn commit_marker_rejects_symlinked_deterministic_temp() {
     let target = temp_dir.path().join("marker-temp-target");
     fs::write(&target, b"partial").expect("write marker symlink target");
     symlink(&target, &temporary_path).expect("install marker temp symlink");
-    assert!(matches!(store.read_commit_marker(), Err(Error::IO(_, path)) if path == temporary_path));
+    assert!(
+        matches!(store.read_commit_marker(), Err(Error::IO(_, path)) if path == temporary_path)
+    );
 }
 
 #[test]

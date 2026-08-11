@@ -5,12 +5,14 @@
 //! - `x-iroha-operator-public-key`: operator public key (Iroha multihash string).
 //! - `x-iroha-operator-timestamp-ms`: unix timestamp in milliseconds.
 //! - `x-iroha-operator-nonce`: caller-chosen nonce (unique per request).
-//! - `x-iroha-operator-signature`: base64 signature over the canonical request bytes plus
-//!   `timestamp-ms` and `nonce`.
+//! - `x-iroha-operator-signature`: base64 signature over the exact-network canonical request
+//!   bytes plus `timestamp-ms` and `nonce`.
 //! - `x-iroha-torii-proxy-target-peer-id`: receiver identity for internal Torii-proxy requests.
 //!
-//! Canonical request bytes follow `crate::canonical_request_message`:
+//! Operator signature bytes use a route-specific domain, the exact genesis-derived
+//! `NetworkId`, and then `crate::canonical_request_message`:
 //! ```text
+//! iroha.operator.http-request.network.v1\0 || <network_id[32]> ||
 //! <UPPERCASE_METHOD>\n
 //! <path>\n
 //! <sorted_query_string>\n
@@ -39,7 +41,7 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::parameters::actual::ToriiOperatorSignatures;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
-use iroha_data_model::peer::PeerId;
+use iroha_data_model::{NetworkId, peer::PeerId};
 use rand::{
     rand_core::{TryCryptoRng, TryRngCore},
     rngs::OsRng,
@@ -56,7 +58,8 @@ const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
 const HEADER_TORII_PROXY_TARGET_PEER_ID: &str = "x-iroha-torii-proxy-target-peer-id";
-const TORII_PROXY_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:torii-proxy:http-request:v1";
+const OPERATOR_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha.operator.http-request.network.v1\0";
+const TORII_PROXY_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha.torii-proxy.http-request.network.v1\0";
 
 fn validate_operator_signature_for_public_key(
     signature: &Signature,
@@ -273,6 +276,7 @@ impl IntoResponse for OperatorSignatureError {
 
 /// Signature-based operator authentication state.
 pub struct OperatorSignatures {
+    network_id: NetworkId,
     enabled: bool,
     allow_node_key: bool,
     allowed_public_keys: HashSet<PublicKey>,
@@ -312,6 +316,7 @@ impl OperatorSignatures {
     pub fn new(
         config: ToriiOperatorSignatures,
         node_public_key: PublicKey,
+        network_id: NetworkId,
         max_body_bytes: u64,
         _telemetry: crate::routing::MaybeTelemetry,
     ) -> Result<Self, OperatorSignatureConfigError> {
@@ -327,6 +332,7 @@ impl OperatorSignatures {
         let replay_cache_capacity = config.replay_cache_capacity;
         let allowed_public_keys = config.allowed_public_keys.into_iter().collect();
         Ok(Self {
+            network_id,
             enabled: config.enabled,
             allow_node_key: config.allow_node_key,
             allowed_public_keys,
@@ -447,13 +453,24 @@ impl OperatorSignatures {
     }
 
     fn operator_request_message(
+        network_id: &NetworkId,
         method: &crate::Method,
         uri: &crate::Uri,
         body: &[u8],
         timestamp_ms: u64,
         nonce: &str,
     ) -> Vec<u8> {
-        let mut msg = canonical_request_message(method, uri, body);
+        let canonical_request = canonical_request_message(method, uri, body);
+        let mut msg = Vec::with_capacity(
+            OPERATOR_SIGNATURE_DOMAIN_V1.len()
+                + network_id.as_bytes().len()
+                + canonical_request.len()
+                + nonce.len()
+                + 32,
+        );
+        msg.extend_from_slice(OPERATOR_SIGNATURE_DOMAIN_V1);
+        msg.extend_from_slice(network_id.as_bytes());
+        msg.extend_from_slice(&canonical_request);
         msg.extend_from_slice(b"\n");
         msg.extend_from_slice(timestamp_ms.to_string().as_bytes());
         msg.extend_from_slice(b"\n");
@@ -490,7 +507,14 @@ impl OperatorSignatures {
 
         self.validate_freshness(timestamp_ms, nonce)?;
 
-        let msg = Self::operator_request_message(method, uri, body, timestamp_ms, nonce);
+        let msg = Self::operator_request_message(
+            &self.network_id,
+            method,
+            uri,
+            body,
+            timestamp_ms,
+            nonce,
+        );
         signature
             .verify(&public_key, &msg)
             .map_err(|_| OperatorSignatureError::bad_signature())?;
@@ -547,6 +571,7 @@ impl OperatorSignatures {
     }
 
     fn torii_proxy_request_message(
+        network_id: &NetworkId,
         method: &crate::Method,
         uri: &crate::Uri,
         body: &[u8],
@@ -558,13 +583,16 @@ impl OperatorSignatures {
         let target_peer_id = target_peer_id.to_string();
         let mut message = Vec::with_capacity(
             TORII_PROXY_SIGNATURE_DOMAIN_V1.len()
+                + network_id.as_bytes().len()
                 + target_peer_id.len()
                 + canonical_request.len()
                 + nonce.len()
                 + 32,
         );
         message.extend_from_slice(TORII_PROXY_SIGNATURE_DOMAIN_V1);
-        message.push(b'\n');
+        message.extend_from_slice(network_id.as_bytes());
+        // `NetworkId` is fixed-width, so the following canonical peer-id bytes
+        // cannot be re-framed across network boundaries.
         message.extend_from_slice(target_peer_id.as_bytes());
         message.push(b'\n');
         message.extend_from_slice(&canonical_request);
@@ -603,6 +631,7 @@ impl OperatorSignatures {
 
         self.validate_freshness(timestamp_ms, nonce)?;
         let message = Self::torii_proxy_request_message(
+            &self.network_id,
             method,
             uri,
             body,
@@ -639,15 +668,17 @@ impl OperatorSignatures {
 /// Build operator signature headers for an internal Torii request.
 pub(crate) fn signed_request_headers(
     key_pair: &KeyPair,
+    network_id: &NetworkId,
     method: &crate::Method,
     uri: &crate::Uri,
     body: &[u8],
 ) -> Result<HeaderMap, OperatorSignatureError> {
-    signed_request_headers_with_rng(key_pair, method, uri, body, &mut OsRng)
+    signed_request_headers_with_rng(key_pair, network_id, method, uri, body, &mut OsRng)
 }
 
 fn signed_request_headers_with_rng<R: TryCryptoRng>(
     key_pair: &KeyPair,
+    network_id: &NetworkId,
     method: &crate::Method,
     uri: &crate::Uri,
     body: &[u8],
@@ -656,7 +687,14 @@ fn signed_request_headers_with_rng<R: TryCryptoRng>(
     let timestamp_ms = OperatorSignatures::now_unix_ms();
     let nonce = operator_signature_nonce_with_rng(rng)?;
 
-    let msg = OperatorSignatures::operator_request_message(method, uri, body, timestamp_ms, &nonce);
+    let msg = OperatorSignatures::operator_request_message(
+        network_id,
+        method,
+        uri,
+        body,
+        timestamp_ms,
+        &nonce,
+    );
     let signature = Signature::try_new(key_pair.private_key(), &msg)
         .map_err(|error| OperatorSignatureError::signing(error.to_string()))?;
 
@@ -676,6 +714,7 @@ fn signed_request_headers_with_rng<R: TryCryptoRng>(
 /// route.
 pub(crate) fn signed_torii_proxy_request_headers(
     sender_key_pair: &KeyPair,
+    network_id: &NetworkId,
     target_peer_id: &PeerId,
     method: &crate::Method,
     uri: &crate::Uri,
@@ -683,6 +722,7 @@ pub(crate) fn signed_torii_proxy_request_headers(
 ) -> Result<HeaderMap, OperatorSignatureError> {
     signed_torii_proxy_request_headers_with_rng(
         sender_key_pair,
+        network_id,
         target_peer_id,
         method,
         uri,
@@ -693,6 +733,7 @@ pub(crate) fn signed_torii_proxy_request_headers(
 
 fn signed_torii_proxy_request_headers_with_rng<R: TryCryptoRng>(
     sender_key_pair: &KeyPair,
+    network_id: &NetworkId,
     target_peer_id: &PeerId,
     method: &crate::Method,
     uri: &crate::Uri,
@@ -702,6 +743,7 @@ fn signed_torii_proxy_request_headers_with_rng<R: TryCryptoRng>(
     let timestamp_ms = OperatorSignatures::now_unix_ms();
     let nonce = operator_signature_nonce_with_rng(rng)?;
     let message = OperatorSignatures::torii_proxy_request_message(
+        network_id,
         method,
         uri,
         body,
@@ -938,6 +980,18 @@ mod tests {
             .expect("generate checked ML-DSA operator signature fixture keypair")
     }
 
+    fn test_network_id() -> NetworkId {
+        crate::signed_query_test_network_id()
+    }
+
+    fn foreign_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::prehashed([0xFE; 32]),
+            ),
+        )
+    }
+
     fn operator_signatures_with_capacity(
         key_pair: &KeyPair,
         capacity: usize,
@@ -953,6 +1007,7 @@ mod tests {
         OperatorSignatures::new(
             cfg,
             key_pair.public_key().clone(),
+            test_network_id(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
         )
@@ -982,6 +1037,7 @@ mod tests {
         let error = match OperatorSignatures::new(
             config,
             key_pair.public_key().clone(),
+            test_network_id(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
         ) {
@@ -999,8 +1055,14 @@ mod tests {
         timestamp_ms: u64,
         nonce: &str,
     ) -> HeaderMap {
-        let message =
-            OperatorSignatures::operator_request_message(method, uri, body, timestamp_ms, nonce);
+        let message = OperatorSignatures::operator_request_message(
+            &test_network_id(),
+            method,
+            uri,
+            body,
+            timestamp_ms,
+            nonce,
+        );
         let signature = Signature::try_new(key_pair.private_key(), &message)
             .expect("checked operator signature fixture");
         operator_signature_headers(key_pair, timestamp_ms, nonce, &signature)
@@ -1016,6 +1078,7 @@ mod tests {
         nonce: &str,
     ) -> HeaderMap {
         let message = OperatorSignatures::torii_proxy_request_message(
+            &test_network_id(),
             method,
             uri,
             body,
@@ -1062,6 +1125,7 @@ mod tests {
         let auth = OperatorSignatures::new(
             cfg,
             key_pair.public_key().clone(),
+            test_network_id(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
         )
@@ -1071,6 +1135,7 @@ mod tests {
         let ts = OperatorSignatures::now_unix_ms();
         let nonce = "nonce-1";
         let msg = OperatorSignatures::operator_request_message(
+            &test_network_id(),
             &crate::Method::POST,
             &uri,
             body,
@@ -1111,6 +1176,69 @@ mod tests {
             .err()
             .expect("second use rejected");
         assert_eq!(err.code, "operator_signature_replay");
+    }
+
+    #[test]
+    fn operator_and_proxy_signatures_reject_foreign_exact_network() {
+        let key_pair = checked_ed25519_keypair();
+        let auth = operator_signatures_with_capacity(&key_pair, 8);
+        let uri: crate::Uri = "/v1/internal/torii/proxy".parse().expect("proxy URI");
+        let body = b"canonical-norito-request";
+        let timestamp_ms = OperatorSignatures::now_unix_ms();
+
+        let operator_message = OperatorSignatures::operator_request_message(
+            &foreign_network_id(),
+            &crate::Method::POST,
+            &uri,
+            body,
+            timestamp_ms,
+            "foreign-network-operator",
+        );
+        let operator_signature = Signature::try_new(key_pair.private_key(), &operator_message)
+            .expect("foreign-network operator signature");
+        let operator_headers = operator_signature_headers(
+            &key_pair,
+            timestamp_ms,
+            "foreign-network-operator",
+            &operator_signature,
+        );
+        let operator_error = auth
+            .authorize_bytes(&operator_headers, &crate::Method::POST, &uri, body)
+            .expect_err("same route and label on another genesis must fail operator admission");
+        assert_eq!(operator_error.code, "operator_signature_bad");
+
+        let receiver = PeerId::from(checked_ed25519_keypair().public_key().clone());
+        let proxy_message = OperatorSignatures::torii_proxy_request_message(
+            &foreign_network_id(),
+            &crate::Method::POST,
+            &uri,
+            body,
+            timestamp_ms,
+            "foreign-network-proxy",
+            &receiver,
+        );
+        let proxy_signature = Signature::try_new(key_pair.private_key(), &proxy_message)
+            .expect("foreign-network proxy signature");
+        let mut proxy_headers = operator_signature_headers(
+            &key_pair,
+            timestamp_ms,
+            "foreign-network-proxy",
+            &proxy_signature,
+        );
+        proxy_headers.insert(
+            HEADER_TORII_PROXY_TARGET_PEER_ID,
+            receiver.to_string().parse().expect("proxy target header"),
+        );
+        let proxy_error = auth
+            .authorize_torii_proxy_bytes(
+                &proxy_headers,
+                &crate::Method::POST,
+                &uri,
+                body,
+                &receiver,
+            )
+            .expect_err("same proxy target on another genesis must fail admission");
+        assert_eq!(proxy_error.code, "operator_signature_bad");
     }
 
     #[test]
@@ -1359,6 +1487,7 @@ mod tests {
         let uri: crate::Uri = "/v1/internal/torii/proxy".parse().expect("Torii proxy URI");
         let headers = signed_torii_proxy_request_headers(
             &remote_peer,
+            app.state.network_id_ref(),
             &receiver,
             &crate::Method::POST,
             &uri,
@@ -1612,6 +1741,7 @@ mod tests {
         let auth = OperatorSignatures::new(
             cfg,
             checked_ed25519_keypair().public_key().clone(),
+            test_network_id(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
         )
@@ -1619,8 +1749,14 @@ mod tests {
 
         let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
         let body = b"{\"foo\":1}";
-        let headers = signed_request_headers(&key_pair, &crate::Method::POST, &uri, body)
-            .expect("operator signature headers");
+        let headers = signed_request_headers(
+            &key_pair,
+            &test_network_id(),
+            &crate::Method::POST,
+            &uri,
+            body,
+        )
+        .expect("operator signature headers");
 
         auth.authorize_bytes(&headers, &crate::Method::POST, &uri, body)
             .expect("valid signature");
@@ -1640,6 +1776,7 @@ mod tests {
         let auth = OperatorSignatures::new(
             cfg,
             checked_ed25519_keypair().public_key().clone(),
+            test_network_id(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
         )
@@ -1647,8 +1784,14 @@ mod tests {
 
         let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
         let body = b"{\"foo\":1}";
-        let headers = signed_request_headers(&key_pair, &crate::Method::POST, &uri, body)
-            .expect("ML-DSA operator signature headers");
+        let headers = signed_request_headers(
+            &key_pair,
+            &test_network_id(),
+            &crate::Method::POST,
+            &uri,
+            body,
+        )
+        .expect("ML-DSA operator signature headers");
 
         auth.authorize_bytes(&headers, &crate::Method::POST, &uri, body)
             .expect("valid ML-DSA signature");
@@ -1668,14 +1811,21 @@ mod tests {
         let auth = OperatorSignatures::new(
             cfg,
             checked_ed25519_keypair().public_key().clone(),
+            test_network_id(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
         )
         .expect("valid operator-signature test config");
         let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
         let body = b"{\"foo\":1}";
-        let mut headers = signed_request_headers(&key_pair, &crate::Method::POST, &uri, body)
-            .expect("operator signature headers");
+        let mut headers = signed_request_headers(
+            &key_pair,
+            &test_network_id(),
+            &crate::Method::POST,
+            &uri,
+            body,
+        )
+        .expect("operator signature headers");
         headers.insert(
             HEADER_OPERATOR_SIGNATURE,
             BASE64_STANDARD
@@ -1705,6 +1855,7 @@ mod tests {
         let auth = OperatorSignatures::new(
             cfg,
             checked_ed25519_keypair().public_key().clone(),
+            test_network_id(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
         )
@@ -1716,8 +1867,14 @@ mod tests {
             ("small-order", ED25519_SMALL_ORDER_POINT),
             ("noncanonical", ED25519_NONCANONICAL_IDENTITY),
         ] {
-            let mut headers = signed_request_headers(&key_pair, &crate::Method::POST, &uri, body)
-                .expect("operator signature headers");
+            let mut headers = signed_request_headers(
+                &key_pair,
+                &test_network_id(),
+                &crate::Method::POST,
+                &uri,
+                body,
+            )
+            .expect("operator signature headers");
             let signature_str = headers
                 .get(HEADER_OPERATOR_SIGNATURE)
                 .expect("signature header")
@@ -1760,6 +1917,7 @@ mod tests {
         let auth = OperatorSignatures::new(
             cfg,
             checked_ed25519_keypair().public_key().clone(),
+            test_network_id(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
         )
@@ -1768,8 +1926,14 @@ mod tests {
         let body = b"{\"foo\":1}";
 
         for label in ["short", "overlong"] {
-            let mut headers = signed_request_headers(&key_pair, &crate::Method::POST, &uri, body)
-                .expect("ML-DSA operator signature headers");
+            let mut headers = signed_request_headers(
+                &key_pair,
+                &test_network_id(),
+                &crate::Method::POST,
+                &uri,
+                body,
+            )
+            .expect("ML-DSA operator signature headers");
             let signature_str = headers
                 .get(HEADER_OPERATOR_SIGNATURE)
                 .expect("signature header")
@@ -1820,13 +1984,20 @@ mod tests {
         let auth = OperatorSignatures::new(
             cfg,
             key_pair.public_key().clone(),
+            test_network_id(),
             1024,
             crate::routing::MaybeTelemetry::disabled(),
         )
         .expect("valid operator-signature test config");
         let uri: crate::Uri = iroha_torii_shared::uri::CONFIGURATION.parse().unwrap();
-        let headers = signed_request_headers(&key_pair, &crate::Method::GET, &uri, &[])
-            .expect("operator signature headers");
+        let headers = signed_request_headers(
+            &key_pair,
+            &test_network_id(),
+            &crate::Method::GET,
+            &uri,
+            &[],
+        )
+        .expect("operator signature headers");
 
         auth.authorize_bytes(&headers, &crate::Method::GET, &uri, &[])
             .expect("generated headers should verify");
@@ -1840,9 +2011,15 @@ mod tests {
             .expect("configuration URI");
         let mut rng = FailingOperatorNonceRng;
 
-        let error =
-            signed_request_headers_with_rng(&key_pair, &crate::Method::GET, &uri, &[], &mut rng)
-                .expect_err("RNG failure must be reported");
+        let error = signed_request_headers_with_rng(
+            &key_pair,
+            &test_network_id(),
+            &crate::Method::GET,
+            &uri,
+            &[],
+            &mut rng,
+        )
+        .expect_err("RNG failure must be reported");
 
         assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(error.code, "operator_signature_nonce_rng");
@@ -1870,6 +2047,7 @@ mod tests {
         assert!(!app.operator_auth.is_enabled());
 
         let node_public_key = app.da_receipt_signer.public_key().clone();
+        let network_id = *app.state.network_id_ref();
         let telemetry = app.telemetry.clone();
         let mut cfg = ToriiOperatorSignatures::default();
         cfg.enabled = false;
@@ -1879,6 +2057,7 @@ mod tests {
             OperatorSignatures::new(
                 cfg,
                 node_public_key,
+                network_id,
                 iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.get(),
                 telemetry,
             )

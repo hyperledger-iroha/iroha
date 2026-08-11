@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use iroha_crypto::{Hash, HashOf, PublicKey, Signature};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     block::{
         BlockHeader, BlockSignature, SignedBlock,
         consensus::{LaneBlockCertificateV1, LaneBlockProposalV1, LaneBlockQcV1},
@@ -1110,7 +1110,7 @@ const KURA_REPLICA_ADVERT_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:kura-replica-adve
 struct KuraReplicaAdvertSignaturePreimageV1 {
     domain: Vec<u8>,
     version: u16,
-    chain_id: ChainId,
+    network_id: NetworkId,
     height: u64,
     block_hash: HashOf<BlockHeader>,
     executed_block_wire_len: u64,
@@ -1130,8 +1130,8 @@ struct KuraReplicaAdvertSignaturePreimageV1 {
 pub struct KuraReplicaAdvertV1 {
     /// Advert layout version; must equal [`KURA_REPLICA_ADVERT_VERSION_V1`].
     pub version: u16,
-    /// Finalized chain identifier, preventing cross-chain replay.
-    pub chain_id: ChainId,
+    /// Finalized genesis-derived network identity, preventing cross-network replay.
+    pub network_id: NetworkId,
     /// Height of the advertised canonical block.
     pub height: u64,
     /// Hash of the advertised canonical block.
@@ -1157,7 +1157,7 @@ impl KuraReplicaAdvertV1 {
         KuraReplicaAdvertSignaturePreimageV1 {
             domain: KURA_REPLICA_ADVERT_SIGNATURE_DOMAIN_V1.to_vec(),
             version: self.version,
-            chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
             height: self.height,
             block_hash: self.block_hash,
             executed_block_wire_len: self.executed_block_wire_len,
@@ -1209,7 +1209,7 @@ mod tests {
 
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
-        AccountId, ChainId, Level,
+        AccountId, Level,
         consensus::{
             PreviousRosterEvidence, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
         },
@@ -1242,13 +1242,11 @@ mod tests {
     }
 
     fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
-        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
-            .parse()
-            .expect("valid chain id");
+        let network_id = crate::sumeragi::synthetic_network_id("sumeragi-message-test");
         let keypair = checked_random_keypair_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let mut builder = TransactionBuilder::new(
-            chain_id,
+            network_id,
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -2825,7 +2823,7 @@ mod tests {
             .expect("derive Kura replica advert signer");
         let mut advert = KuraReplicaAdvertV1 {
             version: KURA_REPLICA_ADVERT_VERSION_V1,
-            chain_id: ChainId::from("kura-replica-advert-test"),
+            network_id: crate::sumeragi::synthetic_network_id("kura-replica-advert-test"),
             height: 17,
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replica-block")),
             executed_block_wire_len: 4096,
@@ -2849,9 +2847,9 @@ mod tests {
             .expect("exact signed advert is valid");
 
         let mut mutations = Vec::new();
-        let mut wrong_chain = advert.clone();
-        wrong_chain.chain_id = ChainId::from("other-chain");
-        mutations.push(wrong_chain);
+        let mut wrong_network = advert.clone();
+        wrong_network.network_id = crate::sumeragi::synthetic_network_id("other-network");
+        mutations.push(wrong_network);
         let mut wrong_height = advert.clone();
         wrong_height.height += 1;
         mutations.push(wrong_height);

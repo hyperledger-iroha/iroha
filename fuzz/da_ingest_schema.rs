@@ -2,12 +2,13 @@
 
 use arbitrary::Arbitrary;
 use flate2::{
-    write::{DeflateEncoder, GzEncoder},
     Compression as FlateCompression,
+    write::{DeflateEncoder, GzEncoder},
 };
-use iroha_crypto::{Algorithm, KeyPair, Signature};
-use iroha_data_model::da::prelude::*;
-use iroha_data_model::nexus::LaneId;
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+use iroha_data_model::{
+    NetworkId, account::AccountId, block::BlockHeader, da::prelude::*, nexus::LaneId,
+};
 use libfuzzer_sys::fuzz_target;
 use norito::{decode_from_bytes, to_bytes};
 use std::io::Write;
@@ -164,9 +165,6 @@ fn build_case(seed: FuzzCase) -> ConstructedCase {
 
     let keypair = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
         .expect("fixed fuzz signing seed must derive an Ed25519 key");
-    let submitter = keypair.public_key().clone();
-    let signature = Signature::try_new(keypair.private_key(), &payload)
-        .expect("fixed Ed25519 key must sign the fuzz payload");
 
     let mut manifest = None;
     let manifest_bytes = if seed.include_manifest {
@@ -200,7 +198,11 @@ fn build_case(seed: FuzzCase) -> ConstructedCase {
         None
     };
 
-    let request = DaIngestRequest {
+    let request = DaIngestRequestIntentV1 {
+        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0xA5; 32]),
+        )),
+        owner: AccountId::new(keypair.public_key().clone()),
         client_blob_id,
         lane_id: LaneId::new(seed.lane),
         epoch: seed.epoch,
@@ -211,13 +213,14 @@ fn build_case(seed: FuzzCase) -> ConstructedCase {
         retention_policy,
         chunk_size,
         total_size,
+        payload_hash: BlobDigest::new(iroha_crypto::blake3_256(&payload)),
         compression,
         norito_manifest: manifest_bytes,
         payload: encoded_payload,
         metadata: extra_metadata,
-        submitter,
-        signature,
-    };
+    }
+    .try_sign(&keypair)
+    .expect("fixed Ed25519 key must sign the fuzz request");
 
     ConstructedCase { request, manifest }
 }

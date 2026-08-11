@@ -2,17 +2,34 @@ package org.hyperledger.iroha.sdk.client
 
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import java.security.KeyPair
+import java.security.KeyPairGenerator
+import java.security.Signature
+import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 
 class ConfidentialAssetToriiClientTest {
+    private val networkId = NetworkId.parse(
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0",
+    )
+    private val otherNetworkId = NetworkId.parse(
+        "hash:0E5751C026E543B2E8AB2EB06099DAA1D1E5DF47778F7787FAAB45CDF12FE3A9#6A22",
+    )
+    private val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+
     @Test
     fun rootsUsesCanonicalPostPathAndParsesBody() {
         val root = "01".repeat(32)
@@ -30,15 +47,21 @@ class ConfidentialAssetToriiClientTest {
         val client = ConfidentialAssetToriiClient.builder()
             .executor(executor)
             .baseUri(URI.create("https://example.com"))
+            .localSigningContext(LocalSigningContext(networkId))
             .build()
 
-        val response = client.getZkAssetRoots(ZkRootsRequest("usd#bank", 7)).join()
+        val auth = canonicalAuth("zk-roots-1")
+        val response = client.getZkAssetRoots(ZkRootsRequest("usd#bank", 7), auth).join()
 
         assertEquals("POST", executor.lastRequest.method)
         assertEquals("/v1/zk/roots", executor.lastRequest.uri.path)
         assertEquals("application/json", firstHeader(executor.lastRequest, "Accept"))
         assertEquals("application/json", firstHeader(executor.lastRequest, "Content-Type"))
         assertEquals("""{"asset_id":"usd#bank","max":7}""", executor.lastBody)
+        assertEquals(RequestReplayPolicy.ONE_SHOT, executor.lastRequest.replayPolicy)
+        assertEquals(1, executor.requestCount)
+        assertCanonicalSignature(executor.lastRequest, networkId, keyPair, "zk-roots-1", true)
+        assertCanonicalSignature(executor.lastRequest, otherNetworkId, keyPair, "zk-roots-1", false)
         assertEquals(root, response.latest)
         assertEquals(listOf(root), response.roots)
         assertEquals(7, response.evaluatedBlockHeight)
@@ -83,10 +106,12 @@ class ConfidentialAssetToriiClientTest {
         val client = ConfidentialAssetToriiClient.builder()
             .executor(executor)
             .baseUri(URI.create("https://example.com"))
+            .localSigningContext(LocalSigningContext(networkId))
             .build()
 
         val response = client.getZkAssetMerklePaths(
             ZkMerklePathRequest("usd#bank", listOf(ByteArray(32) { 2 })),
+            canonicalAuth("zk-paths-1"),
         ).join()
 
         assertEquals("POST", executor.lastRequest.method)
@@ -282,15 +307,39 @@ class ConfidentialAssetToriiClientTest {
         val client = ConfidentialAssetToriiClient.builder()
             .executor(CapturingExecutor("""{"error":"not ready"}""", status = 503, message = "Unavailable"))
             .baseUri(URI.create("https://example.com"))
+            .localSigningContext(LocalSigningContext(networkId))
             .build()
 
         val error = assertFailsWith<CompletionException> {
-            client.getZkAssetRoots(ZkRootsRequest("usd#bank")).join()
+            client.getZkAssetRoots(ZkRootsRequest("usd#bank"), canonicalAuth("zk-failure-1")).join()
         }.cause
 
         require(error is ConfidentialAssetToriiException)
         assertEquals(503, error.statusCode)
         require(error.message?.contains("/v1/zk/roots") == true)
+    }
+
+    @Test
+    fun canonicalAuthConfigurationFailsClosedBeforeDispatch() {
+        val executor = CapturingExecutor("{}")
+        assertFailsWith<IllegalStateException> {
+            ConfidentialAssetToriiClient.builder()
+                .executor(executor)
+                .baseUri(URI.create("https://example.com"))
+                .build()
+        }
+        assertEquals(0, executor.requestCount)
+
+        val client = ConfidentialAssetToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .localSigningContext(LocalSigningContext(networkId))
+            .addHeader("x-IROHA-signature", "forged")
+            .build()
+        assertFailsWith<IllegalArgumentException> {
+            client.getZkAssetRoots(ZkRootsRequest("usd#bank"), canonicalAuth("zk-header-1"))
+        }
+        assertEquals(0, executor.requestCount)
     }
 
     private class CapturingExecutor(
@@ -300,8 +349,10 @@ class ConfidentialAssetToriiClientTest {
     ) : HttpTransportExecutor {
         lateinit var lastRequest: TransportRequest
         var lastBody: String = ""
+        var requestCount: Int = 0
 
         override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
+            requestCount++
             lastRequest = request
             lastBody = String(request.body, StandardCharsets.UTF_8)
             return CompletableFuture.completedFuture(
@@ -319,6 +370,36 @@ class ConfidentialAssetToriiClientTest {
         .firstOrNull { it.key.equals(name, ignoreCase = true) }
         ?.value
         ?.firstOrNull()
+
+    private fun canonicalAuth(nonce: String): ToriiCanonicalRequestAuth =
+        ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_000L, nonce)
+
+    private fun assertCanonicalSignature(
+        request: TransportRequest,
+        expectedNetworkId: NetworkId,
+        signingKeyPair: KeyPair,
+        nonce: String,
+        expected: Boolean,
+    ) {
+        val encoded = assertNotNull(firstHeader(request, CanonicalRequestSigner.HEADER_SIGNATURE))
+        val verifier = Signature.getInstance("Ed25519")
+        verifier.initVerify(signingKeyPair.public)
+        verifier.update(
+            CanonicalRequestSigner.canonicalRequestSignatureMessage(
+                expectedNetworkId,
+                request.method,
+                request.uri,
+                request.body,
+                1_700_000_000_000L,
+                nonce,
+            ),
+        )
+        if (expected) {
+            assertTrue(verifier.verify(Base64.getDecoder().decode(encoded)))
+        } else {
+            assertFalse(verifier.verify(Base64.getDecoder().decode(encoded)))
+        }
+    }
 
     private fun merklePathPayload(
         root: String,

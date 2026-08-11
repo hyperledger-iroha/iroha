@@ -220,7 +220,7 @@ decisions are mandatory before `CircuitVerifierUnavailable` can be removed.
 
 ## ABI-21 and artifact V4 contract
 
-The current contract is bridge ABI `21`, manifest schema
+The current contract is bridge ABI `22`, manifest schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v4`, proof backend
 `halo2/ipa-pasta-cycle-compact-v5`, and transcript profile
 `kagemusha-pasta-cycle-poseidon-compact-v5`. These values carry no mode field. The two
@@ -394,7 +394,7 @@ python3 scripts/run_kagemusha_v4_generation.py \
   <binary_path-from-sealed-build-report> \
   generate-candidate \
   --out-dir <new-directory> \
-  --chain-id <chain> --asset-definition-id <asset> --asset-scale <u32> \
+  --network-id <canonical-network-id> --asset-definition-id <asset> --asset-scale <u32> \
   --generation <id> --parameter-generation <id> \
   --source-commit <40-lower-hex> --source-tree-sha256 <64-lower-hex> \
   --activation-height <u64> --withdrawal-height <u64> \

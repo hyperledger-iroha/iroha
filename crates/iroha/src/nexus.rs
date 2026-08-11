@@ -7,12 +7,10 @@
 use std::collections::HashSet;
 
 use iroha_crypto::HashOf;
-pub use iroha_data_model::nexus::LaneRelayQuorumContext;
 use iroha_data_model::{
     block::{BlockHeader, consensus::LaneBlockCommitment},
-    consensus::Qc,
     da::commitment::DaCommitmentBundle,
-    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError},
+    nexus::{DataSpaceId, LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope, LaneRelayError},
 };
 use iroha_logger::prelude::*;
 use thiserror::Error;
@@ -50,24 +48,12 @@ impl CrossLaneTransferProof {
         Self { envelope }
     }
 
-    /// Validate QC subject, DA hash, and settlement hash.
+    /// Validate the structural DA and settlement bindings.
     ///
     /// # Errors
     /// Returns an error if the inner relay envelope fails validation.
     pub fn verify(&self) -> Result<(), CrossLaneProofError> {
         self.envelope.verify()?;
-        Ok(())
-    }
-
-    /// Validate the relay envelope with explicit quorum parameters.
-    ///
-    /// # Errors
-    /// Returns an error if the inner relay envelope fails validation or does not satisfy the quorum constraints.
-    pub fn verify_with_quorum(
-        &self,
-        quorum: LaneRelayQuorumContext,
-    ) -> Result<(), CrossLaneProofError> {
-        self.envelope.verify_with_quorum(quorum)?;
         Ok(())
     }
 
@@ -82,10 +68,10 @@ impl CrossLaneTransferProof {
 #[derive(Debug)]
 pub struct CrossLaneTransferBuilder {
     block_header: BlockHeader,
-    commit_qc: Option<Qc>,
     da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
     settlement_commitment: LaneBlockCommitment,
     rbc_bytes_total: u64,
+    finality_authority: Option<LaneFinalityAuthorityV1>,
 }
 
 impl CrossLaneTransferBuilder {
@@ -94,16 +80,15 @@ impl CrossLaneTransferBuilder {
     #[allow(clippy::large_types_passed_by_value)]
     pub fn new(
         block_header: BlockHeader,
-        commit_qc: Option<Qc>,
         da_commitment_hash: Option<HashOf<DaCommitmentBundle>>,
         settlement_commitment: LaneBlockCommitment,
     ) -> Self {
         Self {
             block_header,
-            commit_qc,
             da_commitment_hash,
             settlement_commitment,
             rbc_bytes_total: 0,
+            finality_authority: None,
         }
     }
 
@@ -114,6 +99,13 @@ impl CrossLaneTransferBuilder {
         self
     }
 
+    /// Attach a compact authority reference obtained from finalized node output.
+    #[must_use]
+    pub fn with_finality_authority(mut self, authority: LaneFinalityAuthorityV1) -> Self {
+        self.finality_authority = Some(authority);
+        self
+    }
+
     /// Build the relay envelope and wrap it in a proof helper.
     ///
     /// # Errors
@@ -121,11 +113,11 @@ impl CrossLaneTransferBuilder {
     pub fn build(self) -> Result<CrossLaneTransferProof, CrossLaneProofError> {
         let envelope = LaneRelayEnvelope::new(
             self.block_header,
-            self.commit_qc,
             self.da_commitment_hash,
             self.settlement_commitment,
             self.rbc_bytes_total,
-        )?;
+        )?
+        .with_finality_authority(self.finality_authority);
         Ok(CrossLaneTransferProof::new(envelope))
     }
 }
@@ -178,14 +170,14 @@ pub fn verify_lane_relay_envelopes(
 mod tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::Hash;
+    use iroha_crypto::{Hash, MerkleProof};
     use iroha_data_model::{
-        block::consensus::{
-            LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata, LaneVolatilityClass,
-            PERMISSIONED_TAG,
-        },
-        consensus::{
-            CertPhase, Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash,
+        block::{
+            consensus::{
+                LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
+                LaneVolatilityClass,
+            },
+            consensus_v2::finality::V2FinalityArtifact,
         },
         nexus::LaneId,
     };
@@ -236,33 +228,14 @@ mod tests {
         header
     }
 
-    fn sample_commit_qc(
-        header: &BlockHeader,
-        parent_state_root: Hash,
-        post_state_root: Hash,
-        signers_bitmap: Vec<u8>,
-        bls_aggregate_signature: Vec<u8>,
-    ) -> Qc {
-        let validator_set: Vec<iroha_data_model::peer::PeerId> = Vec::new();
-        Qc {
-            phase: CertPhase::Commit,
-            subject_block_hash: header.hash(),
-            parent_state_root,
-            post_state_root,
-            height: header.height().get(),
-            view: header.view_change_index(),
-            epoch: 0,
-            chain_order_hash: default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap,
-                bls_aggregate_signature,
-            },
+    fn sample_finality_authority(header: &BlockHeader) -> LaneFinalityAuthorityV1 {
+        LaneFinalityAuthorityV1 {
+            version: 1,
+            global_block_height: header.height().get(),
+            finality_artifact_hash: HashOf::<V2FinalityArtifact>::from_untyped_unchecked(
+                Hash::new(b"sdk-finality-artifact"),
+            ),
+            statement_proof: MerkleProof::from_audit_path(0, Vec::new()),
         }
     }
 
@@ -273,15 +246,10 @@ mod tests {
         let da_hash = Some(HashOf::from_untyped_unchecked(Hash::new([0xAA; 4]))); // short input OK
         let header = header_with_da_hash(NonZeroU64::new(5).expect("nonzero height"), da_hash);
         let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
-        let qc = sample_commit_qc(
-            &header,
-            Hash::new([0xBA; 4]),
-            Hash::new([0xBB; 4]),
-            vec![0b1010_0001],
-            vec![0xCC; 48],
-        );
+        let authority = sample_finality_authority(&header);
 
-        let proof = CrossLaneTransferBuilder::new(header, Some(qc), da_hash, settlement)
+        let proof = CrossLaneTransferBuilder::new(header, da_hash, settlement)
+            .with_finality_authority(authority.clone())
             .with_rbc_bytes_total(64)
             .build()
             .expect("builder should produce a valid envelope");
@@ -289,103 +257,19 @@ mod tests {
         proof.verify().expect("verification should succeed");
         assert_eq!(proof.envelope().block_height, header.height().get());
         assert_eq!(proof.envelope().rbc_bytes_total, 64);
+        assert_eq!(proof.envelope().finality_authority, Some(authority));
     }
 
     #[test]
-    fn builder_rejects_mismatched_qc() {
+    fn builder_preserves_pending_envelopes_without_authority() {
         let lane_id = LaneId::new(1);
         let dataspace_id = DataSpaceId::new(2);
         let header = header_with_da_hash(NonZeroU64::new(9).expect("nonzero height"), None);
         let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
-        let mut qc = sample_commit_qc(
-            &header,
-            Hash::new([0x00; 4]),
-            Hash::new([]),
-            vec![0x01],
-            vec![0x01],
-        );
-        // Break QC subject to trigger validation failure.
-        qc.subject_block_hash = HashOf::from_untyped_unchecked(Hash::new([0xFF; 4]));
-        let err = CrossLaneTransferBuilder::new(header, Some(qc), None, settlement)
+        let proof = CrossLaneTransferBuilder::new(header, None, settlement)
             .build()
-            .expect_err("expected QC subject mismatch");
-        assert!(matches!(
-            err,
-            CrossLaneProofError::Relay(LaneRelayError::QcSubjectMismatch)
-        ));
-    }
-
-    #[test]
-    fn proof_quorum_validation_passes_for_sufficient_signers() {
-        let lane_id = LaneId::new(2);
-        let dataspace_id = DataSpaceId::new(3);
-        let header = header_with_da_hash(NonZeroU64::new(5).expect("nonzero height"), None);
-        let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
-        let qc = sample_commit_qc(
-            &header,
-            Hash::new([0x21; 4]),
-            Hash::new([0x22; 4]),
-            vec![0b0001_1111],
-            vec![0xAA; 48],
-        );
-
-        let proof = CrossLaneTransferBuilder::new(header, Some(qc), None, settlement)
-            .build()
-            .expect("valid proof");
-        let quorum = LaneRelayQuorumContext::new(8, 4).expect("quorum");
-
-        proof
-            .verify_with_quorum(quorum)
-            .expect("quorum check should pass");
-    }
-
-    #[test]
-    fn proof_quorum_validation_rejects_insufficient_signers() {
-        let lane_id = LaneId::new(4);
-        let dataspace_id = DataSpaceId::new(5);
-        let header = header_with_da_hash(NonZeroU64::new(5).expect("nonzero height"), None);
-        let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
-        let qc = sample_commit_qc(
-            &header,
-            Hash::new([0x32; 4]),
-            Hash::new([0x33; 4]),
-            vec![0b0000_0001],
-            vec![0xBB; 48],
-        );
-
-        let proof = CrossLaneTransferBuilder::new(header, Some(qc), None, settlement)
-            .build()
-            .expect("valid proof");
-        let quorum = LaneRelayQuorumContext::new(6, 3).expect("quorum");
-
-        let err = proof
-            .verify_with_quorum(quorum)
-            .expect_err("quorum should fail");
-        assert!(matches!(
-            err,
-            CrossLaneProofError::Relay(LaneRelayError::InsufficientQuorum { .. })
-        ));
-    }
-
-    #[test]
-    fn proof_quorum_validation_rejects_missing_qc() {
-        let lane_id = LaneId::new(6);
-        let dataspace_id = DataSpaceId::new(7);
-        let header = header_with_da_hash(NonZeroU64::new(5).expect("nonzero height"), None);
-        let settlement = sample_settlement(lane_id, dataspace_id, header.height().get());
-
-        let proof = CrossLaneTransferBuilder::new(header, None, None, settlement)
-            .build()
-            .expect("proof without QC");
-        let quorum = LaneRelayQuorumContext::new(5, 3).expect("quorum");
-
-        let err = proof
-            .verify_with_quorum(quorum)
-            .expect_err("missing qc must fail");
-        assert!(matches!(
-            err,
-            CrossLaneProofError::Relay(LaneRelayError::MissingQc)
-        ));
+            .expect("pending proof without authority");
+        assert!(proof.envelope().finality_authority.is_none());
     }
 
     #[test]

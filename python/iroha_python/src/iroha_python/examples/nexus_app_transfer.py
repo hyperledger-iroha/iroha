@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from iroha_python import NetworkId
+from iroha_python.connect import ConnectUri, build_connect_uri, generate_connect_sid
 from iroha_python.nexus_app import (
     NexusAppClient,
     NexusAppConfig,
@@ -10,16 +12,13 @@ from iroha_python.nexus_app import (
     NexusWalletSignature,
 )
 
-
 ACCOUNT_ID = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"
 DESTINATION_ACCOUNT_ID = "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L"
 SOURCE_ASSET_ID = f"7EAD8EFYUx1aVKZPUU1fyKvr8dF1#{ACCOUNT_ID}"
 SIGNING_PUBLIC_KEY = bytes.fromhex(
     "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
 )
-PAYLOAD_BYTES = bytes.fromhex(
-    "0c0b0a746573742d636861696e4f000000004a2100000000000000010001d0014a01b201320174012b01b401ab013a0113016801bd0146011501e401e601d00122014a01b7011a0101016b01af0185012001a3013201c9017701870137080068e5cf8b010000ac0200000000a60201000000000000009c020f0e69726f68612e7472616e736665728a0202010000000000004e5254300000a4174c78d6341f8f98fc2adae8ed67b900da000000000000006356adc8a15d041a0202000000d401764f000000004a2100000000000000010001d0014a01b201320174012b01b401ab013a0113016801bd0146011501e401e601d00122014a01b7011a0101016b01af0185012001a3013201c90177018701372001be01f5013c011c01cd0117014901e1018001df01ba01d60151019b01fd016604000000000c0602000000d20404020000004f000000004a2100000000000000010001a0019a01a501f4017a016701590180012f01f9015501f801dc012d012a011401a501c9019d012301be019701f801640112017f01f901380134015501a401f00a010830750000000000000601040700000010000000000b08000000000000000001002801000000000000001f0807707572706f7365151413226e657875732d6170702d66697874757265220100"
-)
+PAYLOAD_BYTES = b"nexus-app-transfer-demo-v1"
 WALLET_SIGNATURE = bytes.fromhex(
     "d39065822f28108f70f8089f64357cc33a0072e45aa65f6b3e2696b93a3d9779d376ddf19c8e7dabce79a484275b681dea5213df060848d8fe098edeebcc3c07"
 )
@@ -32,9 +31,28 @@ FEE_PAYMENT = {
 
 class DemoConnectTransport:
     def start_connect(self, options, config):
+        _ = options
+        app_public_key = bytes([0x41]) * 32
+        nonce = bytes([0x51]) * 16
+        sid = generate_connect_sid(
+            network_id=config.network_id,
+            app_public_key=app_public_key,
+            nonce=nonce,
+        )
+        wallet_uri = build_connect_uri(
+            ConnectUri(
+                sid=sid.sid_base64url,
+                network_id=config.network_id,
+                app_public_key=app_public_key,
+                nonce=nonce,
+            )
+        )
         return NexusConnectSession(
-            sid="sid-demo-1",
-            wallet_launch_uri="iroha://connect?sid=sid-demo-1&role=wallet",
+            sid=sid.sid_base64url,
+            network_id=config.network_id,
+            app_public_key=app_public_key,
+            nonce=nonce,
+            wallet_launch_uri=f"{wallet_uri}&role=wallet",
         )
 
     def await_approval(self, session, config):
@@ -73,7 +91,9 @@ class DemoToriiClient:
 
 def main() -> None:
     client = NexusAppClient(
-        NexusAppConfig(chain_id="test-chain"),
+        NexusAppConfig(
+            network_id=NetworkId.from_bytes(bytes([0xA5]) * 32),
+        ),
         connect_transport=DemoConnectTransport(),
         transaction_codec=DemoTransactionCodec(),
         torii_client=DemoToriiClient(),

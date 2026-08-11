@@ -1,3 +1,7 @@
+//! End-to-end supervisor integration tests backed by the gated Kagami test stub.
+
+#![cfg(feature = "dev-tools")]
+
 use std::{
     collections::HashSet,
     fs,

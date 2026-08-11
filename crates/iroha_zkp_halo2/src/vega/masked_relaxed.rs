@@ -210,6 +210,51 @@ pub(super) struct MaskedRelaxedPrecomputationV1 {
     folded_witness: SecretRelaxedWitness,
 }
 
+/// Own all caller-supplied circuit witnesses before the first fallible check.
+///
+/// Processed witnesses are moved into narrower RAII owners; any unprocessed
+/// witness remains here and is erased on success, error, or unwind.
+struct SecretCircuitAssignmentsV1(Vec<CircuitAssignment>);
+
+impl SecretCircuitAssignmentsV1 {
+    fn new(assignments: Vec<CircuitAssignment>) -> Self {
+        Self(assignments)
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn first(&self) -> Option<&CircuitAssignment> {
+        self.0.first()
+    }
+
+    fn iter(&self) -> core::slice::Iter<'_, CircuitAssignment> {
+        self.0.iter()
+    }
+
+    fn iter_mut(&mut self) -> core::slice::IterMut<'_, CircuitAssignment> {
+        self.0.iter_mut()
+    }
+}
+
+impl Drop for SecretCircuitAssignmentsV1 {
+    fn drop(&mut self) {
+        for assignment in &mut self.0 {
+            clear_secret_scalar_slice_v1(&mut assignment.witness);
+        }
+        #[cfg(test)]
+        if self
+            .0
+            .iter()
+            .all(|assignment| assignment.witness.iter().all(|value| value.is_zero()))
+        {
+            let _ = SECRET_ASSIGNMENT_WITNESS_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+    }
+}
+
 impl MaskedRelaxedPrecomputationV1 {
     pub(super) fn folded_witness(&self) -> &RelaxedWitness {
         &self.folded_witness
@@ -248,10 +293,11 @@ pub(super) fn precompute_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
     domain: &'static [u8],
     context_frame: &[u8],
     commitment_key_label: &[u8],
-    mut assignments: Vec<CircuitAssignment>,
+    assignments: Vec<CircuitAssignment>,
     worker_count: usize,
     random: &mut R,
 ) -> Result<MaskedRelaxedPrecomputationV1, MaskedRelaxedErrorV1> {
+    let mut assignments = SecretCircuitAssignmentsV1::new(assignments);
     validate_count(assignments.len())?;
     validate_worker_count(worker_count)?;
     if domain.is_empty() || context_frame.is_empty() || commitment_key_label.is_empty() {
@@ -267,7 +313,7 @@ pub(super) fn precompute_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
     }) {
         return Err(MaskedRelaxedErrorV1::InvalidProfile);
     }
-    for assignment in &assignments {
+    for assignment in assignments.iter() {
         shape
             .validate_relaxed_assignment(
                 &assignment.witness,
@@ -295,16 +341,18 @@ pub(super) fn precompute_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
     let mut strict_instances = Vec::with_capacity(assignments.len());
     let mut folds = Vec::with_capacity(assignments.len());
 
-    for assignment in &mut assignments {
-        let values = core::mem::take(&mut assignment.witness);
-        let blindings = SecretScalars::new(sample_nonzero_scalars(
+    for assignment in assignments.iter_mut() {
+        let mut regular_witness = SecretWitness::new(Witness {
+            values: core::mem::take(&mut assignment.witness),
+            blindings: Vec::new(),
+        });
+        #[cfg(test)]
+        maybe_fail_after_strict_witness_handoff_v1()?;
+        let mut blindings = SecretScalars::new(sample_nonzero_scalars(
             random,
             dimensions.witness_commitment_points,
         )?);
-        let regular_witness = SecretWitness::new(Witness {
-            values,
-            blindings: blindings.to_vec(),
-        });
+        regular_witness.0.blindings = core::mem::take(&mut *blindings);
         let regular_instance = Instance {
             witness_commitment: key
                 .commit(&regular_witness.values, &regular_witness.blindings)
@@ -389,6 +437,8 @@ pub(super) fn prove_precomputed_masked_relaxed_v1(
     // Take ownership immediately so every success and error path scrubs the
     // materialized folded witness on return.
     let folded_witness = SecretRelaxedWitness::new(folded_witness);
+    #[cfg(test)]
+    maybe_panic_after_precomputed_witness_handoff_v1();
     prove_precomputed_masked_relaxed_inner_v1(
         domain,
         context_frame,
@@ -915,15 +965,9 @@ fn push_frame(output: &mut Vec<u8>, tag: u8, value: &[u8]) -> Result<(), MaskedR
 fn sample_scalar<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
 ) -> Result<Scalar, MaskedRelaxedErrorV1> {
-    let mut wide = [0_u8; 64];
-    let result = random.fill_bytes(&mut wide);
-    if let Err(error) = result {
-        wide.fill(0);
-        return Err(error.into());
-    }
-    let scalar = Scalar::from_uniform_le_bytes(wide);
-    wide.fill(0);
-    Ok(scalar)
+    let mut wide = SecretScalarEntropyV1::zeroed();
+    random.fill_bytes(wide.as_mut_slice())?;
+    Ok(Scalar::from_uniform_le_bytes_ref(wide.as_array()))
 }
 
 fn sample_nonzero_scalar<R: MaskedRelaxedRandomSourceV1>(
@@ -1023,6 +1067,46 @@ fn wire_to_scalar_array<const N: usize>(
         .map_err(|_| MaskedRelaxedErrorV1::InvalidProofEncoding)
 }
 
+const MASKED_RELAXED_SCALAR_ENTROPY_BYTES_V1: usize = 64;
+
+fn clear_secret_byte_slice_v1(bytes: &mut [u8]) {
+    let bytes = core::hint::black_box(bytes);
+    bytes.fill(0);
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *bytes);
+}
+
+/// Fixed-size entropy owner cleared on success, error, and unwind.
+struct SecretScalarEntropyV1([u8; MASKED_RELAXED_SCALAR_ENTROPY_BYTES_V1]);
+
+impl SecretScalarEntropyV1 {
+    const fn zeroed() -> Self {
+        Self([0; MASKED_RELAXED_SCALAR_ENTROPY_BYTES_V1])
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+
+    fn as_array(&self) -> &[u8; MASKED_RELAXED_SCALAR_ENTROPY_BYTES_V1] {
+        &self.0
+    }
+}
+
+impl Drop for SecretScalarEntropyV1 {
+    fn drop(&mut self) {
+        let bytes = core::hint::black_box(&mut self.0);
+        clear_secret_byte_slice_v1(bytes);
+        #[cfg(test)]
+        if bytes.iter().all(|byte| *byte == 0) {
+            let _ = SECRET_SCALAR_ENTROPY_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *bytes);
+    }
+}
+
 struct SecretScalar(Scalar);
 
 impl SecretScalar {
@@ -1041,11 +1125,139 @@ impl Deref for SecretScalar {
 
 impl Drop for SecretScalar {
     fn drop(&mut self) {
-        self.0 = Scalar::zero();
+        let value = core::hint::black_box(&mut self.0);
+        value.clear_secret();
+        #[cfg(test)]
+        if value.is_zero() {
+            let _ = SECRET_SCALAR_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *value);
     }
 }
 
 struct SecretScalars(Vec<Scalar>);
+
+fn clear_secret_scalar_slice_v1(values: &mut [Scalar]) {
+    let values = core::hint::black_box(values);
+    for value in values.iter_mut() {
+        value.clear_secret();
+    }
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *values);
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static SECRET_ASSIGNMENT_WITNESS_ZEROIZED_DROPS_V1: core::cell::Cell<usize> = const {
+        core::cell::Cell::new(0)
+    };
+    static SECRET_SCALAR_ENTROPY_ZEROIZED_DROPS_V1: core::cell::Cell<usize> = const {
+        core::cell::Cell::new(0)
+    };
+    static SECRET_SCALAR_ZEROIZED_DROPS_V1: core::cell::Cell<usize> = const {
+        core::cell::Cell::new(0)
+    };
+    static SECRET_SCALARS_ZEROIZED_DROPS_V1: core::cell::Cell<usize> = const {
+        core::cell::Cell::new(0)
+    };
+    static SECRET_WITNESS_ZEROIZED_DROPS_V1: core::cell::Cell<usize> = const {
+        core::cell::Cell::new(0)
+    };
+    static SECRET_RELAXED_WITNESS_ZEROIZED_CLEARS_V1: core::cell::Cell<usize> = const {
+        core::cell::Cell::new(0)
+    };
+    static PANIC_AFTER_PRECOMPUTED_WITNESS_HANDOFF_V1: core::cell::Cell<bool> = const {
+        core::cell::Cell::new(false)
+    };
+    static STRICT_WITNESS_HANDOFF_FAULT_V1: core::cell::Cell<u8> = const {
+        core::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn secret_assignment_witness_zeroized_drop_count_v1() -> usize {
+    SECRET_ASSIGNMENT_WITNESS_ZEROIZED_DROPS_V1
+        .try_with(core::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn secret_scalar_entropy_zeroized_drop_count_v1() -> usize {
+    SECRET_SCALAR_ENTROPY_ZEROIZED_DROPS_V1
+        .try_with(core::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn secret_scalar_zeroized_drop_count_v1() -> usize {
+    SECRET_SCALAR_ZEROIZED_DROPS_V1
+        .try_with(core::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn secret_scalars_zeroized_drop_count_v1() -> usize {
+    SECRET_SCALARS_ZEROIZED_DROPS_V1
+        .try_with(core::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn secret_witness_zeroized_drop_count_v1() -> usize {
+    SECRET_WITNESS_ZEROIZED_DROPS_V1
+        .try_with(core::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn secret_relaxed_witness_zeroized_clear_count_v1() -> usize {
+    SECRET_RELAXED_WITNESS_ZEROIZED_CLEARS_V1
+        .try_with(core::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+fn arm_error_after_strict_witness_handoff_v1() {
+    let _ = STRICT_WITNESS_HANDOFF_FAULT_V1.try_with(|fault| fault.set(1));
+}
+
+#[cfg(test)]
+fn arm_panic_after_strict_witness_handoff_v1() {
+    let _ = STRICT_WITNESS_HANDOFF_FAULT_V1.try_with(|fault| fault.set(2));
+}
+
+#[cfg(test)]
+fn maybe_fail_after_strict_witness_handoff_v1() -> Result<(), MaskedRelaxedErrorV1> {
+    match STRICT_WITNESS_HANDOFF_FAULT_V1
+        .try_with(|fault| fault.replace(0))
+        .unwrap_or(0)
+    {
+        0 => Ok(()),
+        1 => Err(MaskedRelaxedErrorV1::Random(
+            MaskedRelaxedRandomErrorV1::Unavailable,
+        )),
+        2 => panic!("injected panic after strict witness handoff"),
+        _ => unreachable!("strict witness handoff fault mode is bounded"),
+    }
+}
+
+#[cfg(test)]
+fn arm_panic_after_precomputed_witness_handoff_v1() {
+    let _ = PANIC_AFTER_PRECOMPUTED_WITNESS_HANDOFF_V1.try_with(|armed| armed.set(true));
+}
+
+#[cfg(test)]
+fn maybe_panic_after_precomputed_witness_handoff_v1() {
+    let should_panic = PANIC_AFTER_PRECOMPUTED_WITNESS_HANDOFF_V1
+        .try_with(|armed| armed.replace(false))
+        .unwrap_or(false);
+    assert!(
+        !should_panic,
+        "injected panic after precomputed folded-witness handoff"
+    );
+}
 
 impl SecretScalars {
     fn new(values: Vec<Scalar>) -> Self {
@@ -1069,7 +1281,15 @@ impl DerefMut for SecretScalars {
 
 impl Drop for SecretScalars {
     fn drop(&mut self) {
-        self.0.fill(Scalar::zero());
+        let values = core::hint::black_box(&mut self.0);
+        clear_secret_scalar_slice_v1(values);
+        #[cfg(test)]
+        if values.iter().all(|value| value.is_zero()) {
+            let _ = SECRET_SCALARS_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *values);
     }
 }
 
@@ -1091,8 +1311,18 @@ impl Deref for SecretWitness {
 
 impl Drop for SecretWitness {
     fn drop(&mut self) {
-        self.0.values.fill(Scalar::zero());
-        self.0.blindings.fill(Scalar::zero());
+        let witness = core::hint::black_box(&mut self.0);
+        clear_secret_scalar_slice_v1(&mut witness.values);
+        clear_secret_scalar_slice_v1(&mut witness.blindings);
+        #[cfg(test)]
+        if witness.values.iter().all(|value| value.is_zero())
+            && witness.blindings.iter().all(|value| value.is_zero())
+        {
+            let _ = SECRET_WITNESS_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *witness);
     }
 }
 
@@ -1104,11 +1334,32 @@ impl SecretRelaxedWitness {
     }
 
     fn replace(&mut self, witness: RelaxedWitness) {
-        self.0.values.fill(Scalar::zero());
-        self.0.witness_blindings.fill(Scalar::zero());
-        self.0.error.fill(Scalar::zero());
-        self.0.error_blindings.fill(Scalar::zero());
+        self.clear_secret();
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
         self.0 = witness;
+        let _ = core::hint::black_box(&mut self.0);
+    }
+
+    fn clear_secret(&mut self) {
+        let witness = core::hint::black_box(&mut self.0);
+        clear_secret_scalar_slice_v1(&mut witness.values);
+        clear_secret_scalar_slice_v1(&mut witness.witness_blindings);
+        clear_secret_scalar_slice_v1(&mut witness.error);
+        clear_secret_scalar_slice_v1(&mut witness.error_blindings);
+        #[cfg(test)]
+        if witness.values.iter().all(|value| value.is_zero())
+            && witness
+                .witness_blindings
+                .iter()
+                .all(|value| value.is_zero())
+            && witness.error.iter().all(|value| value.is_zero())
+            && witness.error_blindings.iter().all(|value| value.is_zero())
+        {
+            let _ = SECRET_RELAXED_WITNESS_ZEROIZED_CLEARS_V1
+                .try_with(|clears| clears.set(clears.get().saturating_add(1)));
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *witness);
     }
 }
 
@@ -1122,10 +1373,7 @@ impl Deref for SecretRelaxedWitness {
 
 impl Drop for SecretRelaxedWitness {
     fn drop(&mut self) {
-        self.0.values.fill(Scalar::zero());
-        self.0.witness_blindings.fill(Scalar::zero());
-        self.0.error.fill(Scalar::zero());
-        self.0.error_blindings.fill(Scalar::zero());
+        self.clear_secret();
     }
 }
 
@@ -1155,6 +1403,15 @@ mod tests {
             _destination: &mut [u8],
         ) -> Result<(), MaskedRelaxedRandomErrorV1> {
             Err(MaskedRelaxedRandomErrorV1::Unavailable)
+        }
+    }
+
+    struct PanicRandom;
+
+    impl MaskedRelaxedRandomSourceV1 for PanicRandom {
+        fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            destination[0] = 0xa5;
+            panic!("injected entropy-source panic after a partial write");
         }
     }
 
@@ -1272,6 +1529,27 @@ mod tests {
         }
     }
 
+    fn strict_assignment(value: u64) -> CircuitAssignment {
+        let shape = precomputed_test_shape();
+        let mut witness = vec![Scalar::zero(); shape.variable_count()];
+        witness[0] = s(value);
+        let assignment = CircuitAssignment {
+            shape,
+            witness,
+            public_inputs: vec![s(value)],
+        };
+        assignment
+            .shape
+            .validate_relaxed_assignment(
+                &assignment.witness,
+                Scalar::one(),
+                &assignment.public_inputs,
+                &vec![Scalar::zero(); assignment.shape.constraint_count()],
+            )
+            .expect("strict test assignment satisfies W[0] * u = x[0]");
+        assignment
+    }
+
     #[test]
     fn random_health_rejects_unavailable_zero_and_constant_sources() {
         assert_eq!(
@@ -1291,8 +1569,201 @@ mod tests {
     }
 
     #[test]
+    fn scalar_entropy_owner_and_secret_scalar_clear_on_every_exit_class() {
+        let entropy_before = secret_scalar_entropy_zeroized_drop_count_v1();
+        sample_scalar(&mut CounterRandom(0x510e_527f_ade6_82d1)).expect("healthy scalar entropy");
+        assert_eq!(
+            secret_scalar_entropy_zeroized_drop_count_v1(),
+            entropy_before + 1
+        );
+
+        let entropy_before = secret_scalar_entropy_zeroized_drop_count_v1();
+        assert_eq!(
+            sample_scalar(&mut FailureRandom),
+            Err(MaskedRelaxedErrorV1::Random(
+                MaskedRelaxedRandomErrorV1::Unavailable
+            ))
+        );
+        assert_eq!(
+            secret_scalar_entropy_zeroized_drop_count_v1(),
+            entropy_before + 1
+        );
+
+        let entropy_before = secret_scalar_entropy_zeroized_drop_count_v1();
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = sample_scalar(&mut PanicRandom);
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(
+            secret_scalar_entropy_zeroized_drop_count_v1(),
+            entropy_before + 1
+        );
+
+        let scalar_before = secret_scalar_zeroized_drop_count_v1();
+        drop(SecretScalar::new(s(9)));
+        assert_eq!(secret_scalar_zeroized_drop_count_v1(), scalar_before + 1);
+    }
+
+    #[test]
+    fn witness_owners_clear_after_precompute_error_and_unwind() {
+        let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
+        let entropy_before = secret_scalar_entropy_zeroized_drop_count_v1();
+        let scalar_before = secret_scalar_zeroized_drop_count_v1();
+        let scalars_before = secret_scalars_zeroized_drop_count_v1();
+        let witness_before = secret_witness_zeroized_drop_count_v1();
+        let mut random = CounterRandom(0x1f83_d9ab_fb41_bd6b);
+        let precomputation = precompute_masked_relaxed_v1(
+            TEST_DOMAIN,
+            TEST_CONTEXT,
+            TEST_KEY_LABEL,
+            vec![strict_assignment(13)],
+            1,
+            &mut random,
+        )
+        .expect("precomputation succeeds");
+        assert_eq!(
+            secret_assignment_witness_zeroized_drop_count_v1(),
+            assignment_before + 1
+        );
+        assert!(secret_scalar_entropy_zeroized_drop_count_v1() > entropy_before);
+        assert!(secret_scalar_zeroized_drop_count_v1() > scalar_before);
+        assert!(secret_scalars_zeroized_drop_count_v1() > scalars_before);
+        assert!(secret_witness_zeroized_drop_count_v1() > witness_before);
+        let relaxed_before = secret_relaxed_witness_zeroized_clear_count_v1();
+        drop(precomputation);
+        assert_eq!(
+            secret_relaxed_witness_zeroized_clear_count_v1(),
+            relaxed_before + 1
+        );
+
+        let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
+        let witness_before = secret_witness_zeroized_drop_count_v1();
+        arm_error_after_strict_witness_handoff_v1();
+        assert!(matches!(
+            precompute_masked_relaxed_v1(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                vec![strict_assignment(17)],
+                1,
+                &mut CounterRandom(0x5be0_cd19_137e_2179),
+            ),
+            Err(MaskedRelaxedErrorV1::Random(
+                MaskedRelaxedRandomErrorV1::Unavailable
+            ))
+        ));
+        assert_eq!(
+            secret_assignment_witness_zeroized_drop_count_v1(),
+            assignment_before + 1
+        );
+        assert_eq!(secret_witness_zeroized_drop_count_v1(), witness_before + 1);
+
+        let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
+        let witness_before = secret_witness_zeroized_drop_count_v1();
+        arm_panic_after_strict_witness_handoff_v1();
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = precompute_masked_relaxed_v1(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                vec![strict_assignment(18)],
+                1,
+                &mut CounterRandom(0xa54f_f53a_5f1d_36f1),
+            );
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(
+            secret_assignment_witness_zeroized_drop_count_v1(),
+            assignment_before + 1
+        );
+        assert_eq!(secret_witness_zeroized_drop_count_v1(), witness_before + 1);
+
+        let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
+        assert!(matches!(
+            precompute_masked_relaxed_v1(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                vec![strict_assignment(19)],
+                1,
+                &mut FailureRandom,
+            ),
+            Err(MaskedRelaxedErrorV1::Random(
+                MaskedRelaxedRandomErrorV1::Unavailable
+            ))
+        ));
+        assert_eq!(
+            secret_assignment_witness_zeroized_drop_count_v1(),
+            assignment_before + 1
+        );
+
+        let assignment_before = secret_assignment_witness_zeroized_drop_count_v1();
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = precompute_masked_relaxed_v1(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                vec![strict_assignment(23)],
+                1,
+                &mut PanicRandom,
+            );
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(
+            secret_assignment_witness_zeroized_drop_count_v1(),
+            assignment_before + 1
+        );
+
+        let fixture = precomputed_fixture(&[17]);
+        let relaxed_before = secret_relaxed_witness_zeroized_clear_count_v1();
+        assert_eq!(
+            prove_precomputed_masked_relaxed_v1(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                &fixture.shape,
+                &fixture.mask,
+                &fixture.strict,
+                &fixture.folds,
+                fixture.folded_witness.clone(),
+                0,
+            ),
+            Err(MaskedRelaxedErrorV1::InvalidWorkerCount {
+                actual: 0,
+                max: MAX_COMMITMENT_WORKERS,
+            })
+        );
+        assert_eq!(
+            secret_relaxed_witness_zeroized_clear_count_v1(),
+            relaxed_before + 1
+        );
+
+        let relaxed_before = secret_relaxed_witness_zeroized_clear_count_v1();
+        arm_panic_after_precomputed_witness_handoff_v1();
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = prove_precomputed_masked_relaxed_v1(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                &fixture.shape,
+                &fixture.mask,
+                &fixture.strict,
+                &fixture.folds,
+                fixture.folded_witness.clone(),
+                1,
+            );
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(
+            secret_relaxed_witness_zeroized_clear_count_v1(),
+            relaxed_before + 1
+        );
+    }
+
+    #[test]
     fn precomputed_history_round_trips_and_binds_ordered_public_inputs() {
         let fixture = precomputed_fixture(&[3, 5]);
+        let relaxed_before = secret_relaxed_witness_zeroized_clear_count_v1();
         let proof = prove_precomputed_masked_relaxed_v1(
             TEST_DOMAIN,
             TEST_CONTEXT,
@@ -1305,6 +1776,10 @@ mod tests {
             1,
         )
         .expect("full history produces terminal proof");
+        assert_eq!(
+            secret_relaxed_witness_zeroized_clear_count_v1(),
+            relaxed_before + 1
+        );
         let public_inputs = fixture
             .strict
             .iter()

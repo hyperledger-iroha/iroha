@@ -290,18 +290,18 @@ class SorafsReferenceValidatorsTest {
         assertEquals(1, SorafsOrderbookSide.BID.bridgeCode)
         assertEquals(3, SorafsOrderbookTier.ARCHIVE.bridgeCode)
         assertEquals(4, SorafsOrderbookCancelReason.REPLACED.bridgeCode)
-        assertEquals(21, SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION)
+        assertEquals(22, SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION)
         assertTrue(!SorafsReferenceValidators.isBridgeAbiSupported(20))
-        assertTrue(SorafsReferenceValidators.isBridgeAbiSupported(21))
-        assertTrue(!SorafsReferenceValidators.isBridgeAbiSupported(22))
-        assertTrue(!SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, false))
-        assertTrue(SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, true))
-        assertTrue(!SorafsReferenceValidators.isFixtureBundleBridgeSupported(21, false))
-        assertTrue(SorafsReferenceValidators.isFixtureBundleBridgeSupported(21, true))
-        assertTrue(!SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(21, false))
-        assertTrue(SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(21, true))
-        assertTrue(!SorafsReferenceValidators.isAppealFinanceBridgeSupported(21, false))
-        assertTrue(SorafsReferenceValidators.isAppealFinanceBridgeSupported(21, true))
+        assertTrue(SorafsReferenceValidators.isBridgeAbiSupported(22))
+        assertTrue(!SorafsReferenceValidators.isBridgeAbiSupported(21))
+        assertTrue(!SorafsReferenceValidators.isGovernanceDagBridgeSupported(22, false))
+        assertTrue(SorafsReferenceValidators.isGovernanceDagBridgeSupported(22, true))
+        assertTrue(!SorafsReferenceValidators.isFixtureBundleBridgeSupported(22, false))
+        assertTrue(SorafsReferenceValidators.isFixtureBundleBridgeSupported(22, true))
+        assertTrue(!SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(22, false))
+        assertTrue(SorafsReferenceValidators.isGovernanceLogNodeBridgeSupported(22, true))
+        assertTrue(!SorafsReferenceValidators.isAppealFinanceBridgeSupported(22, false))
+        assertTrue(SorafsReferenceValidators.isAppealFinanceBridgeSupported(22, true))
         assertEquals(64, SorafsReferenceValidators.GOVERNANCE_DAG_MAX_BLOCKS_V1)
         assertEquals(32, SorafsReferenceValidators.GOVERNANCE_DAG_CID_BYTES_V1)
         assertEquals(67_108_864, SorafsReferenceValidators.REFERENCE_MAX_INPUT_BYTES_V1)
@@ -648,7 +648,7 @@ class SorafsReferenceValidatorsTest {
     fun validatesAppealFinanceCancelAssetLockProfiles() {
         assertTrue(
             SorafsReferenceValidators.isNativeAvailable(),
-            "ABI-21 appeal-finance reference bridge is required",
+            "ABI-22 appeal-finance reference bridge is required",
         )
         val profiles =
             listOf(
@@ -1019,12 +1019,12 @@ class SorafsReferenceValidatorsTest {
 
     private fun requireGovernanceDagNativeBridge() {
         requireNativeBridge(
-            "ABI-21 connect_norito_bridge with Governance DAG symbols is required.",
+            "ABI-22 connect_norito_bridge with Governance DAG symbols is required.",
         )
     }
 
     private fun requireNativeBridge(
-        requiredMessage: String = "ABI-21 connect_norito_bridge is required.",
+        requiredMessage: String = "ABI-22 connect_norito_bridge is required.",
     ) {
         if (SorafsReferenceValidators.isNativeAvailable()) {
             return

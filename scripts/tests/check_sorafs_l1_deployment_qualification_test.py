@@ -42,15 +42,18 @@ def valid_manifest() -> dict:
         "deployment": {
             "deployment_id": DEPLOYMENT_ID,
             "environment": ENVIRONMENT,
+            "network": MODULE.taira_constants.NETWORK_NAME,
+            "chain_id": MODULE.taira_constants.CHAIN_ID,
+            "chain_discriminant": MODULE.taira_constants.CHAIN_DISCRIMINANT,
         },
         "validators": [
             {
-                "validator_id": f"validator-{suffix}",
+                "validator_id": validator_id,
                 "voting": True,
                 "da_enabled": True,
                 "rbc_enabled": True,
             }
-            for suffix in ("a", "b", "c", "d")
+            for validator_id in MODULE.taira_constants.SLUGS
         ],
         "storage_providers": [
             {"provider_id": "provider-a", "operator_id": "storage-operator-a"},
@@ -137,7 +140,9 @@ def test_complete_topology_is_configuration_qualified_only() -> None:
     assert summary["qualification_scope"] == "pre-deployment-configuration"
     assert summary["live_evidence_recognized"] is False
     assert summary["promotion_eligible"] is False
+    assert summary["deployment"] == valid_manifest()["deployment"]
     assert summary["validator_count"] == 4
+    assert summary["validator_ids"] == list(MODULE.taira_constants.SLUGS)
     assert summary["storage_provider_count"] == 2
     assert summary["gateway_count"] == 2
     assert summary["governance_dag_instance_count"] == 2
@@ -176,6 +181,24 @@ def test_schema_complete_production_topology_example_qualifies() -> None:
 @pytest.mark.parametrize(
     ("mutation", "diagnostic"),
     [
+        (
+            lambda payload: payload["deployment"].update(network="minamoto"),
+            "deployment.network must be exactly `taira`",
+        ),
+        (
+            lambda payload: payload["deployment"].update(chain_id="00" * 16),
+            "deployment.chain_id must match the canonical Taira chain",
+        ),
+        (
+            lambda payload: payload["deployment"].update(chain_discriminant=0),
+            "deployment.chain_discriminant must match the canonical Taira discriminator",
+        ),
+        (
+            lambda payload: payload["validators"][0].update(
+                validator_id="minamoto-validator-1"
+            ),
+            "validators must match the canonical Taira validator identities in order",
+        ),
         (
             lambda payload: payload["validators"].pop(),
             "validators must contain exactly 4 voting validators",

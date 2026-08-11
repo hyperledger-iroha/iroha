@@ -6,14 +6,17 @@
 //! finalize and validate the credential before any presentation proof is
 //! produced. There is no direct or trusted-issuance shortcut.
 
-use iroha_data_model::privacy::{
-    BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
-    BootleLanternAttributeValueV1, BootleLanternDisclosedAttributeV1,
-    BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPolicyV1,
-    BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
-    IrohaBootleLanternAnoncredStatementV1, PrivacyBootleLanternIssuerPolicyDigestV1,
-    PrivacyIssuerIdV1, PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
-    PrivacyStatementContextV1,
+use iroha_data_model::{
+    NetworkId,
+    privacy::{
+        BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
+        BootleLanternAttributeValueV1, BootleLanternDisclosedAttributeV1,
+        BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPolicyV1,
+        BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1,
+        IrohaBootleLanternAnoncredStatementV1, PrivacyBootleLanternIssuerPolicyDigestV1,
+        PrivacyIssuerIdV1, PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
+        PrivacyStatementContextV1,
+    },
 };
 use rand_core_06::{CryptoRng, OsRng, RngCore};
 use sha2::{Digest as _, Sha256};
@@ -125,8 +128,8 @@ pub struct BootleLanternIssuerPolicyMetadataV1 {
 /// Public inputs committed by the peer-1 Taira provider qualification digest.
 #[derive(Clone, Copy, Debug)]
 pub struct TairaBootleLanternBrokerQualificationInputsV1<'a> {
-    /// Exact chain identifier advertised by the broker handshake.
-    pub chain_id: &'a str,
+    /// Exact genesis-header-derived network identity advertised by the broker handshake.
+    pub network_id: NetworkId,
     /// Exact production runtime-provider handle.
     pub runtime_provider_handle: &'a str,
     /// Non-zero provider-policy revision.
@@ -1977,8 +1980,7 @@ pub fn taira_bootle_lantern_broker_contract_digest_v1() -> [u8; 32] {
 pub fn derive_taira_bootle_lantern_broker_qualification_digest_v1(
     inputs: &TairaBootleLanternBrokerQualificationInputsV1<'_>,
 ) -> Result<[u8; 32], TairaBootleLanternBrokerQualificationErrorV1> {
-    if inputs.chain_id.is_empty()
-        || inputs.runtime_provider_handle.is_empty()
+    if inputs.runtime_provider_handle.is_empty()
         || inputs.runtime_provider_revision == 0
         || inputs.issuer_id.is_zero()
         || inputs.policy_id.is_zero()
@@ -2000,7 +2002,7 @@ pub fn derive_taira_bootle_lantern_broker_qualification_digest_v1(
     let digest = taira_length_framed_digest_v1(
         TAIRA_QUALIFICATION_DIGEST_DOMAIN_V1,
         &[
-            inputs.chain_id.as_bytes(),
+            inputs.network_id.as_bytes(),
             inputs.runtime_provider_handle.as_bytes(),
             &inputs.runtime_provider_revision.to_be_bytes(),
             inputs.issuer_id.as_bytes(),
@@ -2594,9 +2596,13 @@ mod tests {
         atomic::{AtomicU32, Ordering},
     };
 
-    use iroha_data_model::privacy::{
-        PrivacyEngineManifestDigestV1, PrivacyStatementSchemaDigestV1,
-        PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{
+        block::BlockHeader,
+        privacy::{
+            PrivacyEngineManifestDigestV1, PrivacyStatementSchemaDigestV1,
+            PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
+        },
     };
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
 
@@ -2741,11 +2747,15 @@ mod tests {
         [byte; 32]
     }
 
+    fn network_id(byte: u8) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(raw(byte)),
+        ))
+    }
+
     fn statement_context_v1() -> PrivacyStatementContextV1 {
         PrivacyStatementContextV1 {
-            chain_id: "bootle-lantern-issuer-test"
-                .parse()
-                .expect("valid chain id"),
+            network_id: network_id(0x32),
             action_index: 3,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(raw(1)),
             parameter_id: PrivacyParameterIdV1::new(raw(2)),
@@ -3664,11 +3674,9 @@ mod tests {
         let fixture = issuance_fixture_v1();
         let mut contexts = Vec::new();
 
-        let mut chain = fixture.context.clone();
-        chain.chain_id = "bootle-lantern-other-chain"
-            .parse()
-            .expect("valid chain id");
-        contexts.push(chain);
+        let mut network = fixture.context.clone();
+        network.network_id = network_id(0x33);
+        contexts.push(network);
         let mut parameter_id = fixture.context.clone();
         parameter_id.parameter_id = PrivacyParameterIdV1::new(raw(0x81));
         contexts.push(parameter_id);
@@ -4077,7 +4085,7 @@ mod tests {
         let stable_principal_digest: [u8; 32] =
             Sha256::digest(b"taira-shared-stable-principal-fixture").into();
         let inputs = TairaBootleLanternBrokerQualificationInputsV1 {
-            chain_id: "fc56984b-2be7-431d-840e-21514d1883f0",
+            network_id: network_id(0x32),
             runtime_provider_handle: "runtime://privacy/bootle-lantern/taira-primary",
             runtime_provider_revision: 1,
             issuer_id: fixture.policy.issuer_id,
@@ -4092,7 +4100,7 @@ mod tests {
         let revision_bytes = inputs.runtime_provider_revision.to_be_bytes();
         let lifetime_bytes = inputs.authorization_lifetime_blocks.to_be_bytes();
         let fields = [
-            inputs.chain_id.as_bytes(),
+            inputs.network_id.as_bytes(),
             inputs.runtime_provider_handle.as_bytes(),
             revision_bytes.as_slice(),
             inputs.issuer_id.as_bytes(),
@@ -4148,7 +4156,7 @@ mod tests {
     fn taira_qualification_rejects_weak_or_mismatched_public_inputs() {
         let fixture = issuance_fixture_v1();
         let mut inputs = TairaBootleLanternBrokerQualificationInputsV1 {
-            chain_id: "fc56984b-2be7-431d-840e-21514d1883f0",
+            network_id: network_id(0x32),
             runtime_provider_handle: "runtime://privacy/bootle-lantern/taira-primary",
             runtime_provider_revision: 1,
             issuer_id: fixture.policy.issuer_id,

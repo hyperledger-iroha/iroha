@@ -121,12 +121,12 @@ mod device_authority_p256_tests {
         issued_at_ms: u64,
         expires_at_ms: u64,
     ) -> KagemushaRecipientPaymentRequestV2 {
-        let chain_id: ChainId = "kagemusha-request-boundary".parse().expect("test chain id");
+        let network_id = kagemusha_test_network_id("kagemusha-request-boundary");
         let asset = asset("cash");
         let amount = KagemushaScaledAmountV2::new(500, 2).expect("test amount");
         let receiver_public_key = device_public_key(receiver_key);
         let payload = KagemushaRecipientPaymentRequestSigningPayloadV2 {
-            chain_id: chain_id.clone(),
+            network_id,
             asset: asset.clone(),
             amount,
             recipient: account(51),
@@ -138,7 +138,7 @@ mod device_authority_p256_tests {
             issued_at_ms,
             expires_at_ms,
             recipient_output: KagemushaSpendableNoteDescriptorV2 {
-                chain_id,
+                network_id,
                 asset,
                 note_commitment: [0x52; 32],
                 spend_nullifier: [0x53; 32],
@@ -175,7 +175,7 @@ mod device_authority_p256_tests {
         let recipient_request_digest = request.digest().expect("request digest");
         let operation_id = [0x58; 32];
         let statement = KagemushaRecursiveSpendPublicStatementV4 {
-            chain_id: request.chain_id().clone(),
+            network_id: *request.network_id(),
             asset: request.asset().clone(),
             asset_scale: request.amount().scale,
             final_root: [0x59; 32],
@@ -502,7 +502,7 @@ mod device_authority_p256_tests {
             root: bundle.statement.final_root,
             public_amount: kagemusha_confidential_amount_encoding_v2(amount.atomic_units),
             asset_tag: [0x61; 32],
-            chain_tag: [0x62; 32],
+            network_tag: [0x62; 32],
         };
         let backend = bundle.recursive_proof.verifier_key_id.backend.clone();
         let request = KagemushaRecursiveSpendRedeemRequestV4 {
@@ -516,7 +516,7 @@ mod device_authority_p256_tests {
                 bundle.recursive_proof.verifier_key_id.clone(),
             ),
             redemption: KagemushaRecursiveSpendRedemptionIntentV4 {
-                chain_id: bundle.statement.chain_id.clone(),
+                network_id: bundle.statement.network_id,
                 asset: bundle.statement.asset.clone(),
                 input_note: bundle.statement.current_note.clone(),
                 parent_branch_claims: bundle.statement.branch_claims.clone(),

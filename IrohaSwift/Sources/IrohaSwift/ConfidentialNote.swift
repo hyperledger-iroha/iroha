@@ -12,7 +12,7 @@ public enum ConfidentialNoteError: Error, Equatable, LocalizedError {
             return "Invalid confidential note field: \(field)."
         case .bridgeUnavailable:
             return NoritoNativeBridge.bridgeUnavailableMessage(
-                "BLAKE3 native bridge is required for confidential note derivation."
+                "The canonical confidential V3 native bridge is required for note derivation."
             )
         case .cryptographyFailed:
             return "Confidential note cryptography failed."
@@ -25,7 +25,7 @@ public struct ConfidentialNoteOpening: Equatable, Sendable {
     public let spendKey: Data
     public let ownerTag: Data
     public let asset: String
-    public let chainId: String
+    public let networkId: NetworkId
     public let amount: String
 
     public init(
@@ -33,14 +33,18 @@ public struct ConfidentialNoteOpening: Equatable, Sendable {
         spendKey: Data,
         ownerTag: Data,
         asset: String,
-        chainId: String,
+        networkId: NetworkId,
         amount: String
     ) throws {
-        self.rho = try ConfidentialNoteCrypto.fixedBytes(rho, count: 32, field: "rho")
-        self.spendKey = try ConfidentialNoteCrypto.nonEmptyBytes(spendKey, field: "spendKey")
+        self.rho = try ConfidentialNoteCrypto.fixedNonZeroBytes(rho, count: 32, field: "rho")
+        self.spendKey = try ConfidentialNoteCrypto.fixedNonZeroBytes(
+            spendKey,
+            count: 32,
+            field: "spendKey"
+        )
         self.ownerTag = try ConfidentialNoteCrypto.fixedScalar(ownerTag, field: "ownerTag")
         self.asset = try ConfidentialNoteCrypto.canonicalText(asset, field: "asset")
-        self.chainId = try ConfidentialNoteCrypto.canonicalText(chainId, field: "chainId")
+        self.networkId = networkId
         self.amount = try ConfidentialNoteCrypto.canonicalU128(amount, field: "amount")
     }
 
@@ -48,7 +52,7 @@ public struct ConfidentialNoteOpening: Equatable, Sendable {
         rho: Data,
         spendKey: Data,
         asset: String,
-        chainId: String,
+        networkId: NetworkId,
         amount: String
     ) throws -> ConfidentialNoteOpening {
         try ConfidentialNoteOpening(
@@ -56,7 +60,7 @@ public struct ConfidentialNoteOpening: Equatable, Sendable {
             spendKey: spendKey,
             ownerTag: ConfidentialOwnerTag.deriveFromSpendKey(spendKey),
             asset: asset,
-            chainId: chainId,
+            networkId: networkId,
             amount: amount
         )
     }
@@ -66,7 +70,7 @@ public struct ConfidentialNoteOpening: Equatable, Sendable {
         spendKey: Data,
         diversifier: Data,
         asset: String,
-        chainId: String,
+        networkId: NetworkId,
         amount: String
     ) throws -> ConfidentialNoteOpening {
         try ConfidentialNoteOpening(
@@ -77,107 +81,81 @@ public struct ConfidentialNoteOpening: Equatable, Sendable {
                 diversifier: diversifier
             ),
             asset: asset,
-            chainId: chainId,
+            networkId: networkId,
             amount: amount
         )
     }
 }
 
 public enum ConfidentialOwnerTag {
-    public static func defaultDiversifier() -> Data {
-        PastaFp.one.canonicalBytes()
+    public static func defaultDiversifier() throws -> Data {
+        try ConfidentialNoteNativeDerivation.defaultDiversifierV3()
     }
 
     public static func deriveDiversifier(_ seed: Data) throws -> Data {
-        try ConfidentialNoteCrypto.hashToScalar(
-            label: "iroha.confidential.v2.diversifier",
-            parts: [seed]
-        ).canonicalBytes()
+        guard !seed.isEmpty, seed.count <= 4_096 else {
+            throw ConfidentialNoteError.invalidField("seed")
+        }
+        return try ConfidentialNoteNativeDerivation.deriveDiversifierV3(seed: seed)
     }
 
     public static func deriveFromSpendKey(_ spendKey: Data) throws -> Data {
-        try deriveFromSpendKeyWithDiversifier(spendKey, diversifier: defaultDiversifier())
+        try deriveFromSpendKeyWithDiversifier(
+            spendKey,
+            diversifier: try defaultDiversifier()
+        )
     }
 
     public static func deriveFromSpendKeyWithDiversifier(
         _ spendKey: Data,
         diversifier: Data
     ) throws -> Data {
-        let spendScalar = try ConfidentialNoteCrypto.hashToScalar(
-            label: "iroha.confidential.v2.spend_scalar",
-            parts: [ConfidentialNoteCrypto.nonEmptyBytes(spendKey, field: "spendKey")]
+        let spendKey = try ConfidentialNoteCrypto.fixedNonZeroBytes(
+            spendKey,
+            count: 32,
+            field: "spendKey"
         )
-        let diversifierScalar = try ConfidentialNoteCrypto.scalar(
+        let diversifier = try ConfidentialNoteCrypto.fixedScalar(
             diversifier,
             field: "diversifier"
         )
-        return ConfidentialNoteCrypto.poseidonPair(spendScalar, diversifierScalar).canonicalBytes()
+        return try ConfidentialNoteNativeDerivation.deriveOwnerTagV3(
+            spendKey: spendKey,
+            diversifier: diversifier
+        )
     }
 }
 
 public enum ConfidentialNoteCommitment {
     public static func deriveFromOpening(_ opening: ConfidentialNoteOpening) throws -> Data {
-        let amount = try ConfidentialNoteCrypto.scalarFromU128(opening.amount)
-        let rho = try ConfidentialNoteCrypto.hashToScalar(
-            label: "iroha.confidential.v2.note_rho",
-            parts: [opening.rho]
+        try ConfidentialNoteNativeDerivation.deriveNoteCommitmentV3(
+            asset: Data(opening.asset.utf8),
+            amount: Data(opening.amount.utf8),
+            rho: opening.rho,
+            ownerTag: opening.ownerTag
         )
-        let ownerTag = try ConfidentialNoteCrypto.scalar(opening.ownerTag, field: "ownerTag")
-        let assetTag = try ConfidentialNoteCrypto.scalar(
-            ConfidentialNoteTags.deriveAssetTag(opening.asset),
-            field: "assetTag"
-        )
-        return ConfidentialNoteCrypto.poseidonPair(
-            amount,
-            ConfidentialNoteCrypto.poseidonPair(
-                rho,
-                ConfidentialNoteCrypto.poseidonPair(ownerTag, assetTag)
-            )
-        ).canonicalBytes()
     }
 }
 
 public enum ConfidentialNoteNullifier {
     public static func deriveFromOpening(_ opening: ConfidentialNoteOpening) throws -> Data {
-        let spendScalar = try ConfidentialNoteCrypto.hashToScalar(
-            label: "iroha.confidential.v2.spend_scalar",
-            parts: [opening.spendKey]
+        try ConfidentialNoteNativeDerivation.deriveNullifierV3(
+            networkID: opening.networkId.bytes,
+            asset: Data(opening.asset.utf8),
+            spendKey: opening.spendKey,
+            rho: opening.rho
         )
-        let rho = try ConfidentialNoteCrypto.hashToScalar(
-            label: "iroha.confidential.v2.note_rho",
-            parts: [opening.rho]
-        )
-        let assetTag = try ConfidentialNoteCrypto.scalar(
-            ConfidentialNoteTags.deriveAssetTag(opening.asset),
-            field: "assetTag"
-        )
-        let chainTag = try ConfidentialNoteCrypto.scalar(
-            ConfidentialNoteTags.deriveChainTag(opening.chainId),
-            field: "chainTag"
-        )
-        return ConfidentialNoteCrypto.poseidonPair(
-            spendScalar,
-            ConfidentialNoteCrypto.poseidonPair(
-                rho,
-                ConfidentialNoteCrypto.poseidonPair(assetTag, chainTag)
-            )
-        ).canonicalBytes()
     }
 }
 
 public enum ConfidentialNoteTags {
     public static func deriveAssetTag(_ asset: String) throws -> Data {
-        try ConfidentialNoteCrypto.hashToScalar(
-            label: "iroha.confidential.v2.asset_tag",
-            parts: [Data(ConfidentialNoteCrypto.canonicalText(asset, field: "asset").utf8)]
-        ).canonicalBytes()
+        let canonical = try ConfidentialNoteCrypto.canonicalText(asset, field: "asset")
+        return try ConfidentialNoteNativeDerivation.deriveAssetTagV3(asset: Data(canonical.utf8))
     }
 
-    public static func deriveChainTag(_ chainId: String) throws -> Data {
-        try ConfidentialNoteCrypto.hashToScalar(
-            label: "iroha.confidential.v2.chain_tag",
-            parts: [Data(ConfidentialNoteCrypto.canonicalText(chainId, field: "chainId").utf8)]
-        ).canonicalBytes()
+    public static func deriveNetworkTag(_ networkId: NetworkId) throws -> Data {
+        try ConfidentialNoteNativeDerivation.deriveNetworkTagV3(networkID: networkId.bytes)
     }
 }
 
@@ -260,27 +238,22 @@ public enum ConfidentialNoteEncryption {
 
     private static func encodePlaintext(_ opening: ConfidentialNoteOpening) throws -> Data {
         let assetBytes = Data(opening.asset.utf8)
-        let chainIdBytes = Data(opening.chainId.utf8)
         let amountBytes = Data(opening.amount.utf8)
         guard (1...textMaxBytes).contains(assetBytes.count) else {
             throw ConfidentialNoteError.invalidField("asset")
-        }
-        guard (1...textMaxBytes).contains(chainIdBytes.count) else {
-            throw ConfidentialNoteError.invalidField("chainId")
         }
         guard (1...textMaxBytes).contains(amountBytes.count) else {
             throw ConfidentialNoteError.invalidField("amount")
         }
 
         var out = Data()
-        out.reserveCapacity(1 + 64 + assetBytes.count + chainIdBytes.count + amountBytes.count + 12)
+        out.reserveCapacity(1 + 96 + assetBytes.count + amountBytes.count + 8)
         out.append(plaintextVersion)
         out.append(opening.rho)
         out.append(opening.ownerTag)
         appendVarint(UInt64(assetBytes.count), to: &out)
         out.append(assetBytes)
-        appendVarint(UInt64(chainIdBytes.count), to: &out)
-        out.append(chainIdBytes)
+        out.append(opening.networkId.bytes)
         appendVarint(UInt64(amountBytes.count), to: &out)
         out.append(amountBytes)
         return out
@@ -471,14 +444,14 @@ public enum ConfidentialNoteDecryption {
         encryptedPayload: ConfidentialEncryptedPayload,
         recipientPrivateKey: Data,
         spendKey: Data,
-        expectedChainId: String? = nil
+        expectedNetworkId: NetworkId
     ) throws -> ConfidentialNoteOpening {
         try decryptNoteWithOwnerTag(
             encryptedPayload: encryptedPayload,
             recipientPrivateKey: recipientPrivateKey,
             spendKey: spendKey,
             expectedOwnerTag: ConfidentialOwnerTag.deriveFromSpendKey(spendKey),
-            expectedChainId: expectedChainId
+            expectedNetworkId: expectedNetworkId
         )
     }
 
@@ -487,14 +460,18 @@ public enum ConfidentialNoteDecryption {
         recipientPrivateKey: Data,
         spendKey: Data,
         expectedOwnerTag: Data,
-        expectedChainId: String? = nil
+        expectedNetworkId: NetworkId
     ) throws -> ConfidentialNoteOpening {
         let recipientPrivate = try ConfidentialNoteCrypto.fixedNonZeroBytes(
             recipientPrivateKey,
             count: 32,
             field: "recipientPrivateKey"
         )
-        let spendKeyBytes = try ConfidentialNoteCrypto.nonEmptyBytes(spendKey, field: "spendKey")
+        let spendKeyBytes = try ConfidentialNoteCrypto.fixedNonZeroBytes(
+            spendKey,
+            count: 32,
+            field: "spendKey"
+        )
         let expectedOwnerTagBytes = try ConfidentialNoteCrypto.fixedScalar(
             expectedOwnerTag,
             field: "expectedOwnerTag"
@@ -516,14 +493,8 @@ public enum ConfidentialNoteDecryption {
             ciphertext: encryptedPayload.ciphertext
         )
         let decoded = try decodePlaintext(plaintext)
-        if let expectedChainId {
-            let chainId = try ConfidentialNoteCrypto.canonicalText(
-                expectedChainId,
-                field: "expectedChainId"
-            )
-            guard decoded.chainId == chainId else {
-                throw ConfidentialNoteError.invalidField("expectedChainId")
-            }
+        guard decoded.networkId == expectedNetworkId else {
+            throw ConfidentialNoteError.invalidField("expectedNetworkId")
         }
         guard decoded.ownerTag == expectedOwnerTagBytes else {
             throw ConfidentialNoteError.invalidField("expectedOwnerTag")
@@ -533,7 +504,7 @@ public enum ConfidentialNoteDecryption {
             spendKey: spendKeyBytes,
             ownerTag: decoded.ownerTag,
             asset: decoded.asset,
-            chainId: decoded.chainId,
+            networkId: decoded.networkId,
             amount: decoded.amount
         )
     }
@@ -542,7 +513,7 @@ public enum ConfidentialNoteDecryption {
         let rho: Data
         let ownerTag: Data
         let asset: String
-        let chainId: String
+        let networkId: NetworkId
         let amount: String
     }
 
@@ -552,7 +523,7 @@ public enum ConfidentialNoteDecryption {
             throw ConfidentialNoteError.invalidField("plaintext.version")
         }
         var offset = bytes.startIndex + 1
-        guard bytes.count >= 65 else {
+        guard bytes.count >= 97 else {
             throw ConfidentialNoteError.invalidField("plaintext")
         }
         let rho = Data(bytes[offset..<offset + 32])
@@ -563,7 +534,16 @@ public enum ConfidentialNoteDecryption {
         )
         offset += 32
         let asset = try readText(bytes, offset: &offset, field: "asset")
-        let chainId = try readText(bytes, offset: &offset, field: "chainId")
+        guard bytes.count - offset >= 32 else {
+            throw ConfidentialNoteError.invalidField("networkId")
+        }
+        let networkId: NetworkId
+        do {
+            networkId = try NetworkId(bytes: Data(bytes[offset..<offset + 32]))
+        } catch {
+            throw ConfidentialNoteError.invalidField("networkId")
+        }
+        offset += 32
         let amount = try ConfidentialNoteCrypto.canonicalU128(
             readText(bytes, offset: &offset, field: "amount"),
             field: "amount"
@@ -575,7 +555,7 @@ public enum ConfidentialNoteDecryption {
             rho: rho,
             ownerTag: ownerTag,
             asset: asset,
-            chainId: chainId,
+            networkId: networkId,
             amount: amount
         )
     }
@@ -645,16 +625,12 @@ enum ConfidentialNoteCrypto {
         return bytes
     }
 
-    static func nonEmptyBytes(_ value: Data, field: String) throws -> Data {
-        guard !value.isEmpty else {
-            throw ConfidentialNoteError.invalidField(field)
-        }
-        return Data(value)
-    }
-
     static func fixedScalar(_ value: Data, field: String) throws -> Data {
         let bytes = try fixedBytes(value, count: 32, field: field)
         _ = try scalar(bytes, field: field)
+        guard bytes.contains(where: { $0 != 0 }) else {
+            throw ConfidentialNoteError.invalidField(field)
+        }
         return bytes
     }
 
@@ -663,42 +639,6 @@ enum ConfidentialNoteCrypto {
             throw ConfidentialNoteError.invalidField(field)
         }
         return scalar
-    }
-
-    static func scalarFromU128(_ value: String) throws -> PastaFp {
-        var bytes = try u128LittleEndianBytes(canonicalU128(value, field: "amount"))
-        bytes.append(Data(repeating: 0, count: 16))
-        guard let scalar = PastaFp.fromCanonicalBytes(bytes) else {
-            throw ConfidentialNoteError.invalidField("amount")
-        }
-        return scalar
-    }
-
-    static func hashToScalar(label: String, parts: [Data]) throws -> PastaFp {
-        let labelBytes = Data(label.utf8)
-        var counter: UInt64 = 0
-        while true {
-            var buffer = Data()
-            buffer.append(labelBytes)
-            appendUInt64LE(counter, to: &buffer)
-            for part in parts {
-                appendUInt64LE(UInt64(part.count), to: &buffer)
-                buffer.append(part)
-            }
-            guard let digest = NoritoNativeBridge.shared.blake3Hash(data: buffer) else {
-                throw ConfidentialNoteError.bridgeUnavailable
-            }
-            if let scalar = PastaFp.fromCanonicalBytes(digest) {
-                return scalar
-            }
-            counter &+= 1
-        }
-    }
-
-    static func poseidonPair(_ lhs: PastaFp, _ rhs: PastaFp) -> PastaFp {
-        let left = pow5(lhs + PastaFp(7))
-        let right = pow5(rhs + PastaFp(13))
-        return PastaFp(2) * left + PastaFp(3) * right
     }
 
     static func canonicalText(_ value: String, field: String) throws -> String {
@@ -714,7 +654,7 @@ enum ConfidentialNoteCrypto {
         guard text.allSatisfy({ $0 >= "0" && $0 <= "9" }) else {
             throw ConfidentialNoteError.invalidField(field)
         }
-        guard text == "0" || !text.hasPrefix("0") else {
+        guard text != "0", !text.hasPrefix("0") else {
             throw ConfidentialNoteError.invalidField(field)
         }
         let max = "340282366920938463463374607431768211455"
@@ -750,15 +690,6 @@ enum ConfidentialNoteCrypto {
         return output
     }
 
-    private static func pow5(_ value: PastaFp) -> PastaFp {
-        let square = value.squared()
-        return square.squared() * value
-    }
-
-    private static func appendUInt64LE(_ value: UInt64, to data: inout Data) {
-        var littleEndian = value.littleEndian
-        data.append(contentsOf: withUnsafeBytes(of: &littleEndian, Array.init))
-    }
 }
 
 private extension UInt32 {

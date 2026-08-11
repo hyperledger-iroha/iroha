@@ -2,8 +2,11 @@
 
 use std::{convert::TryFrom, str::FromStr};
 
-use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
-use iroha_data_model::{da::prelude::*, nexus::LaneId, sorafs::pin_registry::StorageClass};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
+use iroha_data_model::{
+    NetworkId, account::AccountId, block::BlockHeader, da::prelude::*, nexus::LaneId,
+    sorafs::pin_registry::StorageClass,
+};
 use norito::{core::NoritoDeserialize, from_bytes};
 
 fn sample_digest(seed: u8) -> BlobDigest {
@@ -34,6 +37,12 @@ fn sample_ticket(seed: u8) -> StorageTicketId {
     StorageTicketId::new(*digest.as_bytes())
 }
 
+fn sample_network_id(seed: u8) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([seed; 32]),
+    ))
+}
+
 fn sample_pdp_commitment_bytes() -> Vec<u8> {
     (0..96)
         .map(|idx| {
@@ -46,6 +55,8 @@ fn sample_pdp_commitment_bytes() -> Vec<u8> {
 #[test]
 fn da_ingest_request_norito_roundtrip() {
     let request = DaIngestRequest {
+        network_id: sample_network_id(0xA5),
+        owner: AccountId::new(sample_public_key()),
         client_blob_id: sample_digest(0x11),
         lane_id: LaneId::new(2),
         epoch: 42,
@@ -68,6 +79,7 @@ fn da_ingest_request_norito_roundtrip() {
         },
         chunk_size: 1 << 20,
         total_size: 5_242_880,
+        payload_hash: sample_digest(0x12),
         compression: Compression::Identity,
         norito_manifest: Some(vec![0xAA, 0xBB, 0xCC]),
         payload: b"hello data availability".to_vec(),
@@ -85,8 +97,10 @@ fn da_ingest_request_norito_roundtrip() {
                 ),
             ],
         },
-        submitter: sample_public_key(),
-        signature: sample_signature(0x42),
+        signatures: vec![DaIngestSignatureV1 {
+            signer: sample_public_key(),
+            signature: sample_signature(0x42),
+        }],
     };
 
     let buf = norito::to_bytes(&request).expect("serialize ingest request");
@@ -99,7 +113,11 @@ fn da_ingest_request_norito_roundtrip() {
 fn da_ingest_signature_binds_complete_request_intent() {
     let key_pair = KeyPair::try_from_seed(vec![0x19; 32], Algorithm::Ed25519)
         .expect("derive deterministic DA submitter");
+    let owner = AccountId::new(key_pair.public_key().clone());
+    let payload = b"hello data availability".to_vec();
     let intent = DaIngestRequestIntentV1 {
+        network_id: sample_network_id(0xA5),
+        owner,
         client_blob_id: sample_digest(0x11),
         lane_id: LaneId::new(2),
         epoch: 42,
@@ -122,9 +140,10 @@ fn da_ingest_signature_binds_complete_request_intent() {
         },
         chunk_size: 1 << 20,
         total_size: 23,
+        payload_hash: BlobDigest::from_hash(blake3::hash(&payload)),
         compression: Compression::Identity,
         norito_manifest: Some(vec![0xAA, 0xBB, 0xCC]),
-        payload: b"hello data availability".to_vec(),
+        payload,
         metadata: ExtraMetadata {
             items: vec![MetadataEntry::new(
                 "content_type",
@@ -136,7 +155,7 @@ fn da_ingest_signature_binds_complete_request_intent() {
     let expected_digest = intent.signing_digest();
     assert_eq!(
         hex::encode_upper(expected_digest),
-        "F73B79FFD1DB5BF28EE57E42AA42F10BA4AF865BA1E466471167818BBBC896E8",
+        "B97871DB051776138277C9000393FDC259910663A8C751D37BD054A0DA369DDA",
         "DA intent digest is a cross-SDK protocol vector"
     );
     let request = intent
@@ -145,20 +164,35 @@ fn da_ingest_signature_binds_complete_request_intent() {
 
     assert_eq!(request.signing_digest(), expected_digest);
     request
-        .verify_signature()
+        .verify_signatures()
         .expect("unchanged request must verify");
 
     let mut changed_profile = request.clone();
     changed_profile.erasure_profile.parity_shards += 1;
-    assert!(changed_profile.verify_signature().is_err());
+    assert!(changed_profile.verify_signatures().is_err());
 
     let mut changed_lane = request.clone();
     changed_lane.lane_id = LaneId::new(3);
-    assert!(changed_lane.verify_signature().is_err());
+    assert!(changed_lane.verify_signatures().is_err());
+
+    let mut replayed_under_new_nonce = request.clone();
+    replayed_under_new_nonce.sequence += 1;
+    assert!(
+        replayed_under_new_nonce.verify_signatures().is_err(),
+        "one signed DA authorization cannot be replayed under another sequence"
+    );
+
+    let mut changed_network = request.clone();
+    changed_network.network_id = sample_network_id(0xB6);
+    assert!(changed_network.verify_signatures().is_err());
 
     let mut changed_payload = request.clone();
     changed_payload.payload[0] ^= 0xFF;
-    assert!(changed_payload.verify_signature().is_err());
+    assert!(changed_payload.verify_signatures().is_err());
+
+    let mut changed_payload_charge = request.clone();
+    changed_payload_charge.total_size += 1;
+    assert!(changed_payload_charge.verify_signatures().is_err());
 
     let mut changed_metadata = request.clone();
     changed_metadata.metadata.items.push(MetadataEntry::new(
@@ -166,13 +200,13 @@ fn da_ingest_signature_binds_complete_request_intent() {
         b"yes".to_vec(),
         MetadataVisibility::Public,
     ));
-    assert!(changed_metadata.verify_signature().is_err());
+    assert!(changed_metadata.verify_signatures().is_err());
 
     let other = KeyPair::try_from_seed(vec![0x20; 32], Algorithm::Ed25519)
         .expect("derive alternate DA submitter");
-    let mut changed_submitter = request;
-    changed_submitter.submitter = other.public_key().clone();
-    assert!(changed_submitter.verify_signature().is_err());
+    let mut changed_signer = request;
+    changed_signer.signatures[0].signer = other.public_key().clone();
+    assert!(changed_signer.verify_signatures().is_err());
 }
 
 #[test]

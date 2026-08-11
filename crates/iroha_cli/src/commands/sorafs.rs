@@ -37,9 +37,10 @@ use iroha::{
         SorafsModerationModelRegistryFilter, SorafsModerationQuarantineFilter,
         SorafsModerationQuarantineObjectStoreRequest, SorafsModerationQuarantineReleaseRequest,
         SorafsModerationQuarantineReviewRequest, SorafsModerationScreeningResultRequest,
-        SorafsModerationScreeningResultsFilter, SorafsPinAlias, SorafsPinListFilter,
-        SorafsPinRegisterArgs, SorafsRepairFinalizedAnchor, SorafsRepairTasksFilter,
-        SorafsReplicationListFilter, SorafsTokenOverrides, SorafsTransparencyReadbackFilter,
+        SorafsModerationScreeningResultsFilter, SorafsPinAlias, SorafsPinFinalizedAnchor,
+        SorafsPinListFilter, SorafsPinRegisterArgs, SorafsRepairFinalizedAnchor,
+        SorafsRepairTasksFilter, SorafsReplicationListFilter, SorafsTokenOverrides,
+        SorafsTransparencyReadbackFilter,
     },
     http::{Response, StatusCode},
 };
@@ -61,6 +62,7 @@ use iroha_crypto::{
         token::{AdmissionToken, MintError as AdmissionTokenMintError, compute_issuer_fingerprint},
     },
 };
+use iroha_data_model::sorafs::pin_registry::PinStatusKindV1;
 use iroha_torii_shared::sorafs_hedging_billing_api::BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1 as SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1;
 use norito::json::{Map, Number, Value};
 use rand::{
@@ -14298,15 +14300,44 @@ impl Run for PinCommand {
 
 #[derive(clap::Args, Debug)]
 pub struct PinListArgs {
-    /// Optional status filter (pending, approved, retired).
-    #[arg(long)]
-    pub status: Option<String>,
-    /// Maximum number of manifests to return.
+    /// Optional closed lifecycle filter.
+    #[arg(long, value_enum)]
+    pub status: Option<PinStatusSelector>,
+    /// Maximum number of bounded summaries to return (1 through 256).
     #[arg(long)]
     pub limit: Option<u32>,
-    /// Offset for pagination.
+    /// Maximum canonical encoded page bytes (1024 through 262144).
     #[arg(long)]
-    pub offset: Option<u32>,
+    pub max_bytes: Option<u32>,
+    /// Canonical lowercase exclusive manifest-digest cursor.
+    #[arg(long, value_name = "HEX")]
+    pub after_digest_hex: Option<String>,
+    /// Non-zero finalized block height anchoring this page.
+    #[arg(long, requires = "expected_finalized_block_hash_hex")]
+    pub expected_finalized_height: Option<u64>,
+    /// Canonical lowercase finalized block hash anchoring this page.
+    #[arg(long, value_name = "HEX", requires = "expected_finalized_height")]
+    pub expected_finalized_block_hash_hex: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum PinStatusSelector {
+    /// Manifests awaiting governance approval.
+    Pending,
+    /// Approved manifests charged for replication.
+    Approved,
+    /// Retired manifests retained as lifecycle evidence.
+    Retired,
+}
+
+impl From<PinStatusSelector> for PinStatusKindV1 {
+    fn from(value: PinStatusSelector) -> Self {
+        match value {
+            PinStatusSelector::Pending => Self::Pending,
+            PinStatusSelector::Approved => Self::Approved,
+            PinStatusSelector::Retired => Self::Retired,
+        }
+    }
 }
 
 impl Run for PinListArgs {
@@ -14325,9 +14356,16 @@ impl PinListArgs {
     {
         let client = context.client_from_config();
         let filter = SorafsPinListFilter {
-            status: self.status.as_deref(),
+            finalized: SorafsPinFinalizedAnchor {
+                expected_finalized_height: self.expected_finalized_height,
+                expected_finalized_block_hash_hex: self
+                    .expected_finalized_block_hash_hex
+                    .as_deref(),
+            },
+            status: self.status.map(Into::into),
             limit: self.limit,
-            offset: self.offset,
+            max_bytes: self.max_bytes,
+            after_digest_hex: self.after_digest_hex.as_deref(),
         };
         let response = fetch(&client, &filter)?;
         render_json_response(context, response)
@@ -14374,9 +14412,6 @@ pub struct PinRegisterArgs {
     /// Path to the Norito-encoded manifest (`.to`) file.
     #[arg(long, value_name = "PATH")]
     pub manifest: PathBuf,
-    /// Epoch recorded when submitting the manifest.
-    #[arg(long)]
-    pub submitted_epoch: u64,
     /// Optional alias namespace to bind alongside the manifest.
     #[arg(long)]
     pub alias_namespace: Option<String>,
@@ -14416,7 +14451,6 @@ impl Run for PinRegisterArgs {
         let response = client
             .post_sorafs_pin_register(SorafsPinRegisterArgs {
                 manifest_payload: &manifest_bytes,
-                submitted_epoch: self.submitted_epoch,
                 alias: alias_ref,
                 successor_of: successor,
             })
@@ -19639,6 +19673,10 @@ mod tests {
             let account = AccountId::new(kp.public_key().clone());
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
+                network_id:
+                    "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+                        .parse()
+                        .expect("network id"),
                 account,
                 account_chain_discriminant:
                     iroha_config::parameters::defaults::common::chain_discriminant(),
@@ -20588,17 +20626,28 @@ mod tests {
 
     #[test]
     fn pin_list_with_prints_payload() {
+        let block_hash = "11".repeat(32);
+        let after_digest = "22".repeat(32);
         let args = PinListArgs {
-            status: Some("approved".to_string()),
+            status: Some(PinStatusSelector::Approved),
             limit: Some(5),
-            offset: Some(10),
+            max_bytes: Some(4096),
+            after_digest_hex: Some(after_digest.clone()),
+            expected_finalized_height: Some(7),
+            expected_finalized_block_hash_hex: Some(block_hash.clone()),
         };
         let mut ctx = TestContext::new();
 
         args.run_with(&mut ctx, |_client, filter| {
-            assert_eq!(filter.status, Some("approved"));
+            assert_eq!(filter.status, Some(PinStatusKindV1::Approved));
             assert_eq!(filter.limit, Some(5));
-            assert_eq!(filter.offset, Some(10));
+            assert_eq!(filter.max_bytes, Some(4096));
+            assert_eq!(filter.after_digest_hex, Some(after_digest.as_str()));
+            assert_eq!(filter.finalized.expected_finalized_height, Some(7));
+            assert_eq!(
+                filter.finalized.expected_finalized_block_hash_hex,
+                Some(block_hash.as_str())
+            );
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
@@ -20618,7 +20667,10 @@ mod tests {
         let args = PinListArgs {
             status: None,
             limit: None,
-            offset: None,
+            max_bytes: None,
+            after_digest_hex: None,
+            expected_finalized_height: None,
+            expected_finalized_block_hash_hex: None,
         };
         let mut ctx = TestContext::new();
 

@@ -8,7 +8,7 @@ use iroha_core::bridge::{
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     block::{
         BlockHeader, BlockSignature, SignedBlock,
         consensus_v2::{
@@ -21,7 +21,7 @@ use iroha_data_model::{
 };
 
 struct Fixture {
-    chain_id: ChainId,
+    network_id: NetworkId,
     block: Arc<SignedBlock>,
     artifact: V2FinalityArtifact,
     pops: Vec<Vec<u8>>,
@@ -30,6 +30,12 @@ struct Fixture {
 fn checked_bls_validator_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
         .expect("generate checked bridge finality BLS validator fixture keypair")
+}
+
+fn fixture_network_id(seed: &[u8]) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        seed,
+    )))
 }
 
 #[test]
@@ -44,7 +50,7 @@ fn bridge_finality_validator_fixture_uses_checked_bls_key_generation() {
 }
 
 fn fixture() -> Fixture {
-    let chain_id: ChainId = "bridge-v2-core-test".parse().expect("chain id");
+    let network_id = fixture_network_id(b"bridge-v2-core-test genesis");
     let mut keys = (0..4)
         .map(|_| checked_bls_validator_fixture())
         .collect::<Vec<_>>();
@@ -81,7 +87,7 @@ fn fixture() -> Fixture {
         Vec::new(),
     ));
     let context = HeightContext {
-        chain_id: chain_id.clone(),
+        network_id,
         protocol_version: PROTOCOL_VERSION,
         height: 1,
         epoch: 0,
@@ -163,7 +169,7 @@ fn fixture() -> Fixture {
         .collect::<Vec<_>>();
     let artifact = V2FinalityArtifact::new(context, subject, commit_qc, pops.clone());
     Fixture {
-        chain_id,
+        network_id,
         block,
         artifact,
         pops,
@@ -171,14 +177,14 @@ fn fixture() -> Fixture {
 }
 
 struct TestState {
-    chain_id: ChainId,
+    network_id: NetworkId,
     retained_header: Option<BlockHeader>,
     artifact: Result<Option<V2FinalityArtifact>, String>,
 }
 
 impl BridgeStateReadOnly for TestState {
-    fn bridge_chain_id(&self) -> &ChainId {
-        &self.chain_id
+    fn bridge_network_id(&self) -> &NetworkId {
+        &self.network_id
     }
 
     fn bridge_verified_v2_finality_artifact(
@@ -213,7 +219,7 @@ impl BridgeStateReadOnly for TestState {
 
 fn state_from_fixture(fixture: &Fixture) -> TestState {
     TestState {
-        chain_id: fixture.chain_id.clone(),
+        network_id: fixture.network_id,
         retained_header: Some(fixture.block.header()),
         artifact: Ok(Some(fixture.artifact.clone())),
     }
@@ -253,7 +259,7 @@ fn builder_fails_closed_for_absent_or_unreadable_v2_artifact() {
 }
 
 #[test]
-fn builder_rejects_artifact_block_chain_and_durable_pop_attacks() {
+fn builder_rejects_artifact_block_network_and_durable_pop_attacks() {
     let fixture = fixture();
     let mut state = state_from_fixture(&fixture);
     let mut mismatched = fixture.artifact.clone();
@@ -265,7 +271,7 @@ fn builder_rejects_artifact_block_chain_and_durable_pop_attacks() {
     ));
 
     let mut state = state_from_fixture(&fixture);
-    state.chain_id = "wrong-chain".parse().expect("chain id");
+    state.network_id = fixture_network_id(b"wrong bridge network genesis");
     assert_eq!(
         build_finality_proof(&state, 1),
         Err(BridgeFinalityError::FinalityArtifactMismatch { height: 1 })
@@ -296,7 +302,7 @@ fn stateless_verifier_enforces_height_and_context_anchor() {
     let state = state_from_fixture(&fixture);
     let proof = build_finality_proof(&state, 1).expect("build exact proof");
     let config = FinalityProofVerificationConfig {
-        expected_chain_id: &fixture.chain_id,
+        expected_network_id: &fixture.network_id,
         expected_height: Some(1),
         trusted_context_id: fixture.artifact.context_id(),
     };

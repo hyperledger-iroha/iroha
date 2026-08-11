@@ -1,7 +1,9 @@
 # Executed lexically in write_sumeragi_v2_release_receipt.py; do not import directly.
 
 def _validate_multilane_apalache_evidence(
-    snapshot: EvidenceSnapshot, sealed_source_manifest: str
+    snapshot: EvidenceSnapshot,
+    workspace_source_manifest: str,
+    multilane_source_manifest: str,
 ) -> None:
     data = snapshot.data
     if (
@@ -20,12 +22,13 @@ def _validate_multilane_apalache_evidence(
             "formal multilane Apalache evidence is not UTF-8"
         ) from error
     expected_header = [
-        "schema_version\t1",
+        "schema_version\t2",
         "backend\tapalache",
         f"version\t{_APALACHE_VERSION}",
         f"launcher_sha256\t{_APALACHE_LAUNCHER_SHA256}",
         f"jar_sha256\t{_APALACHE_JAR_SHA256}",
-        f"source_manifest_sha256\t{sealed_source_manifest}",
+        f"workspace_source_manifest_sha256\t{workspace_source_manifest}",
+        f"multilane_source_manifest_sha256\t{multilane_source_manifest}",
         f"result_count\t{len(_APALACHE_RESULTS)}",
     ]
     if len(lines) != len(expected_header) + len(_APALACHE_RESULTS):
@@ -353,9 +356,34 @@ def _formal_artifacts(
     toolchain_snapshot = snapshots["toolchain"]
     tlaps_resource_jsonl = snapshots["tlaps_resource_jsonl"]
     tlaps_resource_summary = snapshots["tlaps_resource_summary"]
+    _validate_formal_snapshot_replays(
+        snapshots=snapshots,
+        checker=checker,
+        checker_environment=checker_environment,
+        repo_root=repo_root,
+    )
+    trace = _decode_canonical_json(
+        production_trace_extraction_evidence.data,
+        "production trace-extraction evidence",
+    )
+    if trace.get("workspace_source_manifest_sha256") != sealed[
+        "workspace_source_manifest_sha256"
+    ]:
+        raise ReceiptError(
+            "production trace extraction is not bound to the sealed workspace"
+        )
+    multilane_source_manifest = trace.get("multilane_source_manifest_sha256")
+    if (
+        not isinstance(multilane_source_manifest, str)
+        or _DIGEST_RE.fullmatch(multilane_source_manifest) is None
+    ):
+        raise ReceiptError(
+            "production trace extraction lacks its multilane source manifest"
+        )
     _validate_multilane_apalache_evidence(
         multilane_apalache_evidence,
         sealed["workspace_source_manifest_sha256"],
+        multilane_source_manifest,
     )
     _validate_tlaps_resource_evidence(
         tlaps_resource_jsonl, tlaps_resource_summary
@@ -410,12 +438,6 @@ def _formal_artifacts(
         or log_lines.count(_FORMAL_FINAL_MARKER) != 1
     ):
         raise ReceiptError("formal gate log lacks its one exact final success marker")
-    _validate_formal_snapshot_replays(
-        snapshots=snapshots,
-        checker=checker,
-        checker_environment=checker_environment,
-        repo_root=repo_root,
-    )
     return (
         _snapshot_contract(gate_log),
         _snapshot_contract(ledger),

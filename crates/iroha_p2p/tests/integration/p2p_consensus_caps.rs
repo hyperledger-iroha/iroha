@@ -18,7 +18,7 @@ use iroha_config::parameters::{
 use iroha_config_base::WithOrigin;
 use iroha_data_model::{
     block::consensus_v2::ConsensusMode,
-    prelude::{ChainId, PeerId},
+    prelude::PeerId,
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_p2p::{
@@ -240,7 +240,7 @@ async fn assert_peer_stays_offline(network: &NetworkHandle<Dummy>, forbidden: &P
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn zero_delay_initial_trusted_sources_precede_authenticated_handshake() {
-    let chain = ChainId::from("initial-source-authority-test");
+    let chain = super::test_network_id("initial-source-authority-test");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let id1 = PeerId::from(kp1.public_key().clone());
@@ -298,7 +298,7 @@ async fn zero_delay_initial_trusted_sources_precede_authenticated_handshake() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consensus_caps_match_connects() {
-    let chain = ChainId::from("caps-test");
+    let chain = super::test_network_id("caps-test");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
@@ -348,7 +348,7 @@ async fn consensus_caps_match_connects() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consensus_caps_mismatch_rejected() {
-    let chain = ChainId::from("caps-test");
+    let chain = super::test_network_id("caps-test");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
@@ -404,7 +404,7 @@ async fn consensus_caps_mismatch_rejected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consensus_config_caps_mismatch_rejected() {
-    let chain = ChainId::from("caps-config-test");
+    let chain = super::test_network_id("caps-config-test");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
@@ -463,7 +463,7 @@ async fn consensus_config_caps_mismatch_rejected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn confidential_caps_match_connects() {
-    let chain = ChainId::from("conf-caps-test");
+    let chain = super::test_network_id("conf-caps-test");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
@@ -520,7 +520,7 @@ async fn confidential_caps_match_connects() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn confidential_caps_mismatch_rejected() {
-    let chain = ChainId::from("conf-caps-test");
+    let chain = super::test_network_id("conf-caps-test");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
@@ -583,7 +583,7 @@ async fn confidential_caps_mismatch_rejected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn confidential_caps_backend_mismatch_rejected() {
-    let chain = ChainId::from("conf-caps-test");
+    let chain = super::test_network_id("conf-caps-test");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
@@ -646,7 +646,7 @@ async fn confidential_caps_backend_mismatch_rejected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn confidential_caps_features_mismatch_rejected() {
-    let chain = ChainId::from("conf-caps-test");
+    let chain = super::test_network_id("conf-caps-test");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
@@ -716,7 +716,7 @@ async fn confidential_caps_features_mismatch_rejected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn confidential_caps_stale_digest_recovers_after_alignment() {
-    let chain = ChainId::from("conf-caps-recover-test");
+    let chain = super::test_network_id("conf-caps-recover-test");
     let validator_kp = super::random_node_key_pair();
     let peer_kp = super::random_node_key_pair();
     let addr1 = super::next_addr();
@@ -863,7 +863,7 @@ async fn confidential_caps_stale_digest_recovers_after_alignment() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn crypto_caps_match_connects() {
-    let chain = ChainId::from("crypto-caps-test");
+    let chain = super::test_network_id("crypto-caps-test");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
@@ -914,7 +914,7 @@ async fn crypto_caps_match_connects() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn crypto_caps_mismatch_rejected() {
-    let chain = ChainId::from("crypto-caps-test");
+    let chain = super::test_network_id("crypto-caps-test");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();
@@ -971,7 +971,7 @@ async fn crypto_caps_mismatch_rejected() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn crypto_caps_mismatch_allowed_when_permissive() {
-    let chain = ChainId::from("crypto-caps-test");
+    let chain = super::test_network_id("crypto-caps-test");
     let kp1 = super::random_node_key_pair();
     let kp2 = super::random_node_key_pair();
     let addr1 = super::next_addr();

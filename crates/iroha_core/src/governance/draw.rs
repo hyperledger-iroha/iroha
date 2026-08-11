@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use iroha_config::parameters::actual::Governance;
 use iroha_crypto::blake2::{Blake2b512, Digest as _};
 use iroha_data_model::{
-    ChainId,
+    NetworkId,
     account::AccountId,
     governance::types::{ParliamentBodies, ParliamentBody, ParliamentRoster},
     isi::governance::CouncilDerivationKind,
@@ -54,7 +54,7 @@ fn scored_output(seed: &[u8; 64], input_domain: &[u8], account_id: &AccountId) -
 
 /// Deterministic draw over bonded citizens.
 pub fn run_citizen_draw<'a, I>(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     epoch: u64,
     beacon: &[u8; 32],
     candidates: I,
@@ -64,7 +64,7 @@ pub fn run_citizen_draw<'a, I>(
 where
     I: IntoIterator<Item = (&'a AccountId, u128)>,
 {
-    let seed = sortition::compute_seed(chain_id, epoch, beacon, CITIZEN_SEED_DOMAIN);
+    let seed = sortition::compute_seed(network_id, epoch, beacon, CITIZEN_SEED_DOMAIN);
     let dedup: BTreeMap<AccountId, u128> =
         candidates
             .into_iter()
@@ -113,7 +113,7 @@ where
 /// persisted per-epoch seat budget; that budget governs accepted, persisted service assignments.
 pub fn derive_parliament_bodies_from_bonded_citizens<'a, I, B>(
     gov_cfg: &Governance,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     epoch: u64,
     beacon: &[u8; 32],
     candidates: I,
@@ -151,7 +151,7 @@ where
     ] {
         let committee_size = body_committee_size(gov_cfg, body);
         let (members, alternates) = body_selection_from_bonded(
-            chain_id,
+            network_id,
             epoch,
             beacon,
             &candidates,
@@ -183,7 +183,7 @@ where
 /// committees so each stage has an independent roster while remaining reproducible across peers.
 pub fn derive_parliament_bodies(
     gov_cfg: &Governance,
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     epoch: u64,
     beacon: &[u8; 32],
     council: &super::state::ParliamentTerm,
@@ -210,7 +210,7 @@ pub fn derive_parliament_bodies(
     ] {
         let committee_size = body_committee_size(gov_cfg, body);
         let (members, alternates) = body_selection(
-            chain_id,
+            network_id,
             epoch,
             beacon,
             &candidates,
@@ -272,7 +272,7 @@ fn body_input_domain(body: ParliamentBody) -> &'static [u8] {
 }
 
 fn body_selection(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     epoch: u64,
     beacon: &[u8; 32],
     candidates: &[AccountId],
@@ -280,7 +280,7 @@ fn body_selection(
     alternate_size: usize,
     body: ParliamentBody,
 ) -> (Vec<AccountId>, Vec<AccountId>) {
-    let seed = sortition::compute_seed(chain_id, epoch, beacon, body_seed_domain(body));
+    let seed = sortition::compute_seed(network_id, epoch, beacon, body_seed_domain(body));
     let mut scored: Vec<([u8; 32], AccountId)> = Vec::new();
     for account_id in candidates {
         let input = sortition::build_input(body_input_domain(body), &seed, account_id);
@@ -314,7 +314,7 @@ fn body_selection(
 }
 
 fn body_selection_from_bonded(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     epoch: u64,
     beacon: &[u8; 32],
     candidates: &[(AccountId, Quantity)],
@@ -322,7 +322,7 @@ fn body_selection_from_bonded(
     alternate_size: usize,
     body: ParliamentBody,
 ) -> (Vec<AccountId>, Vec<AccountId>) {
-    let seed = sortition::compute_seed(chain_id, epoch, beacon, body_seed_domain(body));
+    let seed = sortition::compute_seed(network_id, epoch, beacon, body_seed_domain(body));
     let mut scored: Vec<([u8; 32], AccountId)> = Vec::new();
     for (account_id, _bond) in candidates {
         let output = scored_output(&seed, body_input_domain(body), account_id);
@@ -356,8 +356,10 @@ fn body_selection_from_bonded(
 mod tests {
     use std::collections::BTreeSet;
 
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{account::AccountId, governance::types::ParliamentBody};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{
+        NetworkId, account::AccountId, block::BlockHeader, governance::types::ParliamentBody,
+    };
 
     use super::*;
 
@@ -366,6 +368,12 @@ mod tests {
             .expect("derive governance draw fixture account key");
         let (public_key, _) = keypair.into_parts();
         AccountId::new(public_key)
+    }
+
+    fn network_id(label: &[u8]) -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            label,
+        )))
     }
 
     #[test]
@@ -383,7 +391,7 @@ mod tests {
 
     #[test]
     fn citizen_draw_orders_without_rerolls() {
-        let chain_id: ChainId = "citizen-demo".into();
+        let network_id = network_id(b"citizen-demo");
         let beacon = [5u8; 32];
         let epoch = 3u64;
         let accounts = [mk_account(1), mk_account(2), mk_account(3)];
@@ -392,7 +400,7 @@ mod tests {
             (&accounts[1], 250u128),
             (&accounts[2], 350u128),
         ];
-        let draw = run_citizen_draw(&chain_id, epoch, &beacon, bonds, 2, 1);
+        let draw = run_citizen_draw(&network_id, epoch, &beacon, bonds, 2, 1);
         assert_eq!(draw.members.len(), 2);
         assert_eq!(draw.alternates.len(), 1);
         let mut combined = Vec::new();
@@ -404,7 +412,7 @@ mod tests {
 
     #[test]
     fn citizen_draw_ignores_bond_amounts() {
-        let chain_id: ChainId = "citizen-demo".into();
+        let network_id = network_id(b"citizen-demo");
         let beacon = [7u8; 32];
         let epoch = 9u64;
         let accounts = [mk_account(1), mk_account(2), mk_account(3), mk_account(4)];
@@ -421,8 +429,8 @@ mod tests {
             (&accounts[3], 1_500_000u128),
         ];
 
-        let floor_draw = run_citizen_draw(&chain_id, epoch, &beacon, floor_bonds, 2, 2);
-        let high_draw = run_citizen_draw(&chain_id, epoch, &beacon, high_bonds, 2, 2);
+        let floor_draw = run_citizen_draw(&network_id, epoch, &beacon, floor_bonds, 2, 2);
+        let high_draw = run_citizen_draw(&network_id, epoch, &beacon, high_bonds, 2, 2);
 
         assert_eq!(floor_draw.members, high_draw.members);
         assert_eq!(floor_draw.alternates, high_draw.alternates);
@@ -430,7 +438,7 @@ mod tests {
 
     #[test]
     fn citizen_draw_deduplicates_duplicate_accounts_without_extra_chances() {
-        let chain_id: ChainId = "citizen-demo".into();
+        let network_id = network_id(b"citizen-demo");
         let beacon = [9u8; 32];
         let epoch = 12u64;
         let accounts = [mk_account(1), mk_account(2), mk_account(3), mk_account(4)];
@@ -449,8 +457,8 @@ mod tests {
             (&accounts[3], 100u128),
         ];
 
-        let baseline_draw = run_citizen_draw(&chain_id, epoch, &beacon, baseline, 2, 2);
-        let duplicated_draw = run_citizen_draw(&chain_id, epoch, &beacon, duplicated_whale, 2, 2);
+        let baseline_draw = run_citizen_draw(&network_id, epoch, &beacon, baseline, 2, 2);
+        let duplicated_draw = run_citizen_draw(&network_id, epoch, &beacon, duplicated_whale, 2, 2);
 
         assert_eq!(baseline_draw.members, duplicated_draw.members);
         assert_eq!(baseline_draw.alternates, duplicated_draw.alternates);
@@ -469,7 +477,7 @@ mod tests {
 
     #[test]
     fn bonded_body_draws_deduplicate_candidates_and_ignore_whale_bonds() {
-        let chain_id: ChainId = "body-demo".into();
+        let network_id = network_id(b"body-demo");
         let beacon = [0xA5; 32];
         let epoch = 14u64;
         let accounts = [
@@ -503,7 +511,7 @@ mod tests {
 
         let baseline_bodies = derive_parliament_bodies_from_bonded_citizens(
             &cfg,
-            &chain_id,
+            &network_id,
             epoch,
             &beacon,
             baseline,
@@ -511,7 +519,7 @@ mod tests {
         );
         let inflated_bodies = derive_parliament_bodies_from_bonded_citizens(
             &cfg,
-            &chain_id,
+            &network_id,
             epoch,
             &beacon,
             inflated,
@@ -551,7 +559,7 @@ mod tests {
 
     #[test]
     fn one_bonded_citizen_fills_each_actual_body_and_sets_one_person_quorum() {
-        let chain_id: ChainId = "body-one-citizen-demo".into();
+        let network_id = network_id(b"body-one-citizen-demo");
         let beacon = [0x1C; 32];
         let epoch = 17_u64;
         let citizen = mk_account(1);
@@ -570,7 +578,7 @@ mod tests {
 
         let bodies = derive_parliament_bodies_from_bonded_citizens(
             &cfg,
-            &chain_id,
+            &network_id,
             epoch,
             &beacon,
             [(&citizen, 10_000_u128)],
@@ -602,7 +610,7 @@ mod tests {
 
     #[test]
     fn body_rosters_are_independently_domain_separated() {
-        let chain_id: ChainId = "body-domain-demo".into();
+        let network_id = network_id(b"body-domain-demo");
         let beacon = [0xC3; 32];
         let epoch = 16u64;
         let accounts = [
@@ -630,7 +638,7 @@ mod tests {
         };
         let bodies = derive_parliament_bodies_from_bonded_citizens(
             &cfg,
-            &chain_id,
+            &network_id,
             epoch,
             &beacon,
             accounts.iter().map(|account| (account, 100u128)),
@@ -664,7 +672,7 @@ mod tests {
 
     #[test]
     fn forty_six_citizens_fill_all_default_body_members_independently() {
-        let chain_id: ChainId = "body-readiness-demo".into();
+        let network_id = network_id(b"body-readiness-demo");
         let beacon = [0x46; 32];
         let epoch = 46u64;
         let accounts: Vec<_> = (1..=46).map(mk_account).collect();
@@ -672,7 +680,7 @@ mod tests {
 
         let bodies = derive_parliament_bodies_from_bonded_citizens(
             &cfg,
-            &chain_id,
+            &network_id,
             epoch,
             &beacon,
             accounts.iter().map(|account| (account, 100u128)),
@@ -718,7 +726,7 @@ mod tests {
 
     #[test]
     fn bonded_body_draws_are_stable_under_candidate_order_permutation() {
-        let chain_id: ChainId = "body-order-demo".into();
+        let network_id = network_id(b"body-order-demo");
         let beacon = [0xB7; 32];
         let epoch = 17u64;
         let accounts = [
@@ -745,7 +753,7 @@ mod tests {
 
         let forward_bodies = derive_parliament_bodies_from_bonded_citizens(
             &cfg,
-            &chain_id,
+            &network_id,
             epoch,
             &beacon,
             forward,
@@ -753,7 +761,7 @@ mod tests {
         );
         let reverse_bodies = derive_parliament_bodies_from_bonded_citizens(
             &cfg,
-            &chain_id,
+            &network_id,
             epoch,
             &beacon,
             reverse,
@@ -767,7 +775,7 @@ mod tests {
 
     #[test]
     fn persisted_body_draws_deduplicate_member_and_alternate_overlap() {
-        let chain_id: ChainId = "body-demo".into();
+        let network_id = network_id(b"body-demo");
         let beacon = [0x5A; 32];
         let epoch = 15u64;
         let accounts = [
@@ -806,7 +814,7 @@ mod tests {
             derived_by: CouncilDerivationKind::Manual,
         };
 
-        let bodies = derive_parliament_bodies(&cfg, &chain_id, epoch, &beacon, &council);
+        let bodies = derive_parliament_bodies(&cfg, &network_id, epoch, &beacon, &council);
         for (body, roster) in bodies.rosters {
             let combined: Vec<_> = roster
                 .members

@@ -54,6 +54,7 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.VersionReq;
 import org.hyperledger.iroha.android.client.MusubiModelsV1.WireValue;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.model.NetworkId;
 import org.junit.Test;
 
 /** Cross-SDK checks for the Rust-owned Musubi first-release JSON fixture. */
@@ -832,14 +833,15 @@ public final class MusubiSdkV1FixtureTests {
             BigInteger.ONE,
             BigInteger.ONE,
             Collections.emptyMap());
-    final byte[] genesisHash = new byte[32];
-    Arrays.fill(genesisHash, (byte) 8);
+    final byte[] networkIdBytes = new byte[32];
+    Arrays.fill(networkIdBytes, (byte) 8);
+    networkIdBytes[31] = 9;
+    final NetworkId networkId = NetworkId.fromBytes(networkIdBytes);
     expectFailure(
         () ->
             new ResolverIndexPage(
                 resolverRequest,
-                "fixture-chain",
-                genesisHash,
+                networkId,
                 Arrays.asList(second, first),
                 null,
                 snapshot));
@@ -847,16 +849,14 @@ public final class MusubiSdkV1FixtureTests {
         () ->
             new ResolverIndexPage(
                 resolverRequest,
-                "fixture-chain",
-                genesisHash,
+                networkId,
                 Arrays.asList(first, first),
                 null,
                 snapshot));
     final ResolverIndexPage page =
         new ResolverIndexPage(
             resolverRequest,
-            "fixture-chain",
-            genesisHash,
+            networkId,
             Collections.singletonList(first),
             null,
             snapshot);

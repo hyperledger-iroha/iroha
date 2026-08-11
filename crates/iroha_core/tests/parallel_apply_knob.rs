@@ -17,7 +17,7 @@ use iroha_data_model::prelude::*;
 
 fn build_world() -> (
     iroha_core::state::State,
-    ChainId,
+    NetworkId,
     AccountId,
     iroha_crypto::KeyPair,
 ) {
@@ -42,15 +42,16 @@ fn build_world() -> (
     let query = iroha_core::query::store::LiveQueryStore::start_test();
     let state =
         iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let network_id = *state.network_id_ref();
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
-    (state, chain_id, alice_id, alice_kp)
+    (state, network_id, alice_id, alice_kp)
 }
 
 fn make_block(
-    chain_id: &ChainId,
+    network_id: &NetworkId,
     alice_id: &AccountId,
     kp: &iroha_crypto::KeyPair,
 ) -> iroha_data_model::block::SignedBlock {
@@ -72,7 +73,7 @@ fn make_block(
         .into(),
     ];
     let tx = TransactionBuilder::new(
-        chain_id.clone(),
+        *network_id,
         alice_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

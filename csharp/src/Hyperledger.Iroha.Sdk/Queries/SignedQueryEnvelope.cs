@@ -1,5 +1,5 @@
-using System.Buffers.Binary;
 using Hyperledger.Iroha.Crypto;
+using Hyperledger.Iroha.Norito;
 
 namespace Hyperledger.Iroha.Queries;
 
@@ -83,15 +83,13 @@ public sealed class SignedQueryEnvelope
         byte[] payloadBytes,
         byte[] signatureBytes)
     {
-        var offset = 0;
-        var signatureField = ReadField(signedQueryBytes, ref offset, nameof(signedQueryBytes));
-        var payloadField = ReadField(signedQueryBytes, ref offset, nameof(signedQueryBytes));
-        if (offset != signedQueryBytes.Length)
-        {
-            throw new ArgumentException(
-                "Signed query bytes must contain exactly signature and payload fields.",
-                nameof(signedQueryBytes));
-        }
+        var reader = new CanonicalNoritoReader(
+            signedQueryBytes,
+            "Signed query bytes",
+            nameof(signedQueryBytes));
+        var signatureField = reader.ReadField("signature");
+        var payloadField = reader.ReadField("payload");
+        reader.RequireEnd();
 
         var decodedSignature = DecodeConstVec(signatureField, nameof(signedQueryBytes));
         if (!decodedSignature.AsSpan().SequenceEqual(signatureBytes))
@@ -105,35 +103,13 @@ public sealed class SignedQueryEnvelope
         }
     }
 
-    private static ReadOnlySpan<byte> ReadField(ReadOnlySpan<byte> bytes, ref int offset, string paramName)
-    {
-        if (bytes.Length - offset < sizeof(ulong))
-        {
-            throw new ArgumentException("Signed query bytes contain a truncated field header.", paramName);
-        }
-
-        var length = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(offset, sizeof(ulong)));
-        offset += sizeof(ulong);
-        if (length > int.MaxValue || length > (ulong)(bytes.Length - offset))
-        {
-            throw new ArgumentException("Signed query bytes contain a truncated field payload.", paramName);
-        }
-
-        var payload = bytes.Slice(offset, (int)length);
-        offset += (int)length;
-        return payload;
-    }
-
     private static byte[] DecodeConstVec(ReadOnlySpan<byte> bytes, string paramName)
     {
-        var offset = 0;
-        if (bytes.Length < sizeof(ulong))
-        {
-            throw new ArgumentException("Signed query signature field is truncated.", paramName);
-        }
-
-        var count = BinaryPrimitives.ReadUInt64LittleEndian(bytes[..sizeof(ulong)]);
-        offset += sizeof(ulong);
+        var reader = new CanonicalNoritoReader(
+            bytes,
+            "Signed query signature field",
+            paramName);
+        var count = reader.ReadSequenceLength("count");
         if (count != Ed25519Signer.SignatureLength)
         {
             throw new ArgumentException(
@@ -144,26 +120,16 @@ public sealed class SignedQueryEnvelope
         var output = new byte[Ed25519Signer.SignatureLength];
         for (var index = 0; index < output.Length; index++)
         {
-            if (bytes.Length - offset < sizeof(ulong) + 1)
-            {
-                throw new ArgumentException("Signed query signature field is truncated.", paramName);
-            }
-
-            var fieldLength = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(offset, sizeof(ulong)));
-            offset += sizeof(ulong);
-            if (fieldLength != 1)
+            var item = reader.ReadField($"signature[{index}]");
+            if (item.Length != 1)
             {
                 throw new ArgumentException("Signed query signature bytes must be encoded as one-byte fields.", paramName);
             }
 
-            output[index] = bytes[offset];
-            offset++;
+            output[index] = item[0];
         }
 
-        if (offset != bytes.Length)
-        {
-            throw new ArgumentException("Signed query signature field has trailing bytes.", paramName);
-        }
+        reader.RequireEnd();
 
         return output;
     }

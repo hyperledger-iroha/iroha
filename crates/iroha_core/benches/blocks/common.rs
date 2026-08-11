@@ -17,7 +17,6 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
-    ChainId,
     account::{Account, AccountAddress},
     asset::{AssetDefinition, AssetDefinitionId},
     domain::Domain,
@@ -40,10 +39,10 @@ pub fn create_block<'a>(
     topology: &Topology,
     peer_private_key: &PrivateKey,
 ) -> (CommittedBlock, StateBlock<'a>) {
-    let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+    let network_id = *state.network_id_ref();
 
     let transaction = TransactionBuilder::new(
-        chain_id.clone(),
+        network_id,
         account_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -59,7 +58,7 @@ pub fn create_block<'a>(
     let unverified_block = BlockBuilder::new(vec![
         AcceptedTransaction::accept(
             transaction,
-            &chain_id,
+            &network_id,
             max_clock_drift,
             tx_limits,
             crypto_cfg.as_ref(),
@@ -286,9 +285,9 @@ pub fn build_state(
     ));
 
     {
-        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+        let network_id = *state.network_id_ref();
         let transaction = TransactionBuilder::new(
-            chain_id.clone(),
+            network_id,
             account_id.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -303,7 +302,7 @@ pub fn build_state(
         let unverified_block = BlockBuilder::new(vec![
             AcceptedTransaction::accept(
                 transaction,
-                &chain_id,
+                &network_id,
                 max_clock_drift,
                 tx_limits,
                 crypto_cfg.as_ref(),

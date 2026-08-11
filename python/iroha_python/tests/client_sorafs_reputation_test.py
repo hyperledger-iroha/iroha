@@ -14,13 +14,14 @@ from requests.structures import CaseInsensitiveDict
 from iroha_python import (
     ToriiCanonicalRequestAuth,
     ToriiClient,
-    canonical_request_signature_message,
+    canonical_network_request_signature_message,
 )
 from iroha_python.address import AccountAddress
 from iroha_python.client import (
     _SORAFS_REPUTATION_RESPONSE_MAX_BYTES,
     _SORAFS_REPUTATION_SSE_MAX_EVENT_BYTES,
 )
+from iroha_python.crypto import NetworkId
 
 from .helpers import StubResponse
 
@@ -30,6 +31,7 @@ MERKLE_ROOT = "cd" * 32
 RAW_METRICS_HASH = "ef" * 32
 PROVIDER_ID = "provider:alpha"
 GENERATED_AT = 1_800_000_000
+REPUTATION_NETWORK_ID = NetworkId.from_bytes(bytes([0xA5]) * 32)
 
 
 def weights_payload() -> dict[str, Any]:
@@ -159,6 +161,7 @@ def canonical_auth(
     nonce: str | None = None,
 ) -> ToriiCanonicalRequestAuth:
     return ToriiCanonicalRequestAuth(
+        network_id=REPUTATION_NETWORK_ID.literal,
         account_id="reputation-reader@sora",
         signer=signer or (lambda _message: b"\x7c" * 64),
         nonce=nonce,
@@ -312,7 +315,8 @@ def test_sorafs_reputation_rest_helpers_validate_and_return_closed_profiles() ->
     assert events == event_page_payload()
     assert session.calls[4]["params"] == {"since": "0", "limit": "2"}
     event_headers = session.calls[4]["headers"]
-    expected_message = canonical_request_signature_message(
+    expected_message = canonical_network_request_signature_message(
+        REPUTATION_NETWORK_ID.literal,
         "GET",
         "/v1/sorafs/reputation/events?since=0&limit=2",
         b"",
@@ -528,6 +532,7 @@ def test_sorafs_reputation_auth_honors_client_chain_discriminant() -> None:
 
     result = client.get_sorafs_reputation_latest(
         canonical_auth=ToriiCanonicalRequestAuth(
+            network_id=REPUTATION_NETWORK_ID.literal,
             account_id=testnet_account,
             signer=lambda _message: b"\x7c" * 64,
         )

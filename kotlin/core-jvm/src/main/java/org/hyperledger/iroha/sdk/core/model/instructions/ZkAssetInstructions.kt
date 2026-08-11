@@ -14,20 +14,6 @@ import org.hyperledger.iroha.sdk.numeric.NumericV1Codec
 private const val PROOF_BOX_MAX_ENCODED_BYTES: Long = 64L * 1024L * 1024L
 private val LOW_ORDER_X25519_CHECK_PRIVATE_KEY = ByteArray(32) { 1 }
 
-/** Shielded asset registration mode accepted by `zk::RegisterZkAsset`. */
-enum class ZkAssetMode(@JvmField val bridgeCode: Int, @JvmField val wireName: String) {
-    HYBRID(0, "Hybrid");
-
-    companion object {
-        @JvmStatic
-        fun fromWireName(value: String?): ZkAssetMode {
-            val normalized = requireText(value, "mode")
-            return entries.firstOrNull { it.wireName == normalized }
-                ?: throw IllegalArgumentException("mode must be Hybrid")
-        }
-    }
-}
-
 /**
  * X25519/XChaCha20-Poly1305 encrypted confidential-note payload.
  *
@@ -392,9 +378,6 @@ class ProofAttachment(
 /** Typed representation of `zk::RegisterZkAsset`. */
 class RegisterZkAssetInstruction private constructor(
     @JvmField val asset: String,
-    @JvmField val mode: ZkAssetMode,
-    @JvmField val allowShield: Boolean,
-    @JvmField val allowUnshield: Boolean,
     @JvmField val unshieldVerifyingKey: String?,
     @JvmField val shieldVerifyingKey: String?,
     override val arguments: Map<String, String>,
@@ -403,26 +386,11 @@ class RegisterZkAssetInstruction private constructor(
 
     class Builder internal constructor() {
         private var asset: String? = null
-        private var mode: ZkAssetMode = ZkAssetMode.HYBRID
-        private var allowShield: Boolean = true
-        private var allowUnshield: Boolean = true
         private var unshieldVerifyingKey: String? = null
         private var shieldVerifyingKey: String? = null
 
         fun setAsset(asset: String?) = apply {
             this.asset = requireText(asset, "asset")
-        }
-
-        fun setMode(mode: ZkAssetMode?) = apply {
-            this.mode = requireNotNull(mode) { "mode must be provided" }
-        }
-
-        fun setAllowShield(allowShield: Boolean) = apply {
-            this.allowShield = allowShield
-        }
-
-        fun setAllowUnshield(allowUnshield: Boolean) = apply {
-            this.allowUnshield = allowUnshield
         }
 
         fun setUnshieldVerifyingKey(verifyingKey: String?) = apply {
@@ -435,19 +403,16 @@ class RegisterZkAssetInstruction private constructor(
 
         fun build(): RegisterZkAssetInstruction {
             val selectedAsset = checkNotNull(asset) { "asset must be provided" }
+            require(shieldVerifyingKey == null || unshieldVerifyingKey != null) {
+                "shieldVerifyingKey requires unshieldVerifyingKey so shielded funds remain redeemable"
+            }
             return RegisterZkAssetInstruction(
                 selectedAsset,
-                mode,
-                allowShield,
-                allowUnshield,
                 unshieldVerifyingKey,
                 shieldVerifyingKey,
                 linkedMapOf(
                     "action" to "RegisterZkAsset",
                     "asset" to selectedAsset,
-                    "mode" to mode.wireName,
-                    "allow_shield" to allowShield.toString(),
-                    "allow_unshield" to allowUnshield.toString(),
                     "vk_unshield" to (unshieldVerifyingKey ?: ""),
                     "vk_shield" to (shieldVerifyingKey ?: ""),
                 ),
@@ -461,14 +426,18 @@ class RegisterZkAssetInstruction private constructor(
 
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): RegisterZkAssetInstruction {
-            require("vk_transfer" !in arguments) {
-                "Instruction argument 'vk_transfer' is no longer supported"
+            val allowedArguments = setOf(
+                "action",
+                "asset",
+                "vk_unshield",
+                "vk_shield",
+            )
+            val unknownArguments = arguments.keys - allowedArguments
+            require(unknownArguments.isEmpty()) {
+                "Unknown instruction argument(s): ${unknownArguments.sorted().joinToString()}"
             }
             val builder = builder()
                 .setAsset(requireArgument(arguments, "asset"))
-                .setMode(ZkAssetMode.fromWireName(requireArgument(arguments, "mode")))
-                .setAllowShield(parseBoolean(requireArgument(arguments, "allow_shield"), "allow_shield"))
-                .setAllowUnshield(parseBoolean(requireArgument(arguments, "allow_unshield"), "allow_unshield"))
             optionalArgument(arguments, "vk_unshield")?.let { builder.setUnshieldVerifyingKey(it) }
             optionalArgument(arguments, "vk_shield")?.let { builder.setShieldVerifyingKey(it) }
             return builder.build()
@@ -483,12 +452,6 @@ class RegisterZkAssetInstruction private constructor(
         private fun optionalArgument(arguments: Map<String, String>, key: String): String? =
             arguments[key]?.takeIf { it.isNotBlank() }
 
-        private fun parseBoolean(value: String, name: String): Boolean =
-            when (value) {
-                "true" -> true
-                "false" -> false
-                else -> throw IllegalArgumentException("$name must be 'true' or 'false'")
-            }
     }
 }
 

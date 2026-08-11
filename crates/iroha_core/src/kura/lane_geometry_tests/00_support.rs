@@ -21,7 +21,7 @@ use iroha_config::{
 };
 use iroha_crypto::{Algorithm, KeyPair, MerkleTree, Signature, bls_normal_pop_prove};
 use iroha_data_model::{
-    ChainId, Level,
+    Level,
     block::{
         BlockExecutionContextBundle, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{

@@ -1,12 +1,37 @@
 # Copy to a runtime evidence directory and replace every angle-bracket value.
-# The signature input is exactly 64 raw Ed25519 bytes exported by the HSM.
+# The signature input is exactly 64 raw Ed25519 bytes returned by the isolated software signer.
 finalize
 --topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json
+--topology-qualification-envelope artifacts/sorafs/production-readiness/l1-topology-qualification.envelope.json
+--topology-qualification-verification-public-key-hex <TRUSTED-TOPOLOGY-ED25519-PUBLIC-KEY-HEX>
+--topology-qualification-signer-service-id <TOPOLOGY-SOFTWARE-SIGNER-SERVICE-ID>
+--topology-qualification-signer-administrator-id <TOPOLOGY-SIGNER-ADMINISTRATOR-ID>
+--topology-qualification-signer-key-revision <POSITIVE-TOPOLOGY-KEY-REVISION>
+--topology-qualification-signer-policy-revision <POSITIVE-TOPOLOGY-POLICY-REVISION>
+--topology-qualification-signer-policy-digest-hex <NONZERO-TOPOLOGY-POLICY-SHA256>
+--max-topology-qualification-review-age-secs 1209600
 --resilience-qualification-summary artifacts/sorafs/production-readiness/l1-resilience-qualification.json
 --resilience-qualification-signer-public-key-hex <TRUSTED-RESILIENCE-ED25519-PUBLIC-KEY-HEX>
+--l1-lane-evidence-inventory artifacts/sorafs/production-readiness/l1-lane-evidence.inventory
+--l1-lane-evidence-inventory-verification-public-key-hex <TRUSTED-L1-INVENTORY-ED25519-PUBLIC-KEY-HEX>
+--l1-lane-evidence-inventory-signer-service-id <L1-INVENTORY-SOFTWARE-SIGNER-SERVICE-ID>
+--l1-lane-evidence-inventory-signer-administrator-id <L1-INVENTORY-SIGNER-ADMINISTRATOR-ID>
+--l1-lane-evidence-inventory-signer-key-revision <POSITIVE-L1-INVENTORY-KEY-REVISION>
+--l1-lane-evidence-inventory-signer-policy-revision <POSITIVE-L1-INVENTORY-POLICY-REVISION>
+--l1-lane-evidence-inventory-signer-policy-digest-sha256 <NONZERO-L1-INVENTORY-POLICY-SHA256>
 --signing-payload artifacts/sorafs/production-readiness/foundational-signing-payload.bin
 --signature-file artifacts/sorafs/production-readiness/foundational-signature.bin
+--signer-binding artifacts/sorafs/production-readiness/promotion-signer.binding.norito
+--signer-receipt artifacts/sorafs/production-readiness/promotion-signature-receipt.json
+--signer-verifier <ABSOLUTE-PATH-TO-PINNED-SORAFS-EXTERNAL-SOFTWARE-SIGNER-BINARY>
+--expected-signer-verifier-sha256 <REVIEWED-VERIFIER-BINARY-SHA256>
+--expected-signer-operation-id <NONZERO-LOWERCASE-32-BYTE-OPERATION-ID>
 --trusted-public-key-hex <TRUSTED-ED25519-PUBLIC-KEY-HEX>
+--expected-signer-service-id <EXTERNAL-SOFTWARE-SIGNER-SERVICE-ID>
+--expected-signer-administrator-id <INDEPENDENT-SIGNER-ADMINISTRATOR-ID>
+--expected-signer-key-revision <POSITIVE-SIGNER-KEY-REVISION>
+--expected-signer-policy-revision <POSITIVE-SIGNER-POLICY-REVISION>
+--expected-signer-policy-digest-sha256 <NONZERO-SIGNER-POLICY-SHA256>
 --expected-deployment-id <REVIEWED-PRODUCTION-DEPLOYMENT-ID>
 --expected-environment production
 --expected-release-sequence <MONOTONIC-RELEASE-SEQUENCE>
@@ -15,4 +40,21 @@ finalize
 # --previous-envelope <EXACT-PREVIOUS-FINALIZED-ENVELOPE>
 --now-unix <REVIEWED-VALIDATOR-UNIX>
 --max-evidence-age-secs 1209600
+--lane-summary ai_prescreen=<AI-PRESCREEN-READY-SUMMARY-JSON>
+--lane-summary appeal_finance=<APPEAL-FINANCE-READY-SUMMARY-JSON>
+--lane-summary gateway_compliance=<GATEWAY-COMPLIANCE-READY-SUMMARY-JSON>
+--lane-summary gateway_load=<GATEWAY-LOAD-READY-SUMMARY-JSON>
+--lane-summary governance_dag=<GOVERNANCE-DAG-READY-SUMMARY-JSON>
+--lane-summary hedging_billing=<HEDGING-BILLING-READY-SUMMARY-JSON>
+--lane-summary moderation_panel=<MODERATION-PANEL-READY-SUMMARY-JSON>
+--lane-summary orderbook=<ORDERBOOK-READY-SUMMARY-JSON>
+--lane-summary pdp=<PDP-READY-SUMMARY-JSON>
+--lane-summary pop_credentials=<POP-CREDENTIALS-READY-SUMMARY-JSON>
+--lane-summary por=<POR-READY-SUMMARY-JSON>
+--lane-summary potr=<POTR-READY-SUMMARY-JSON>
+--lane-summary reference_sdk_release=<REFERENCE-SDK-RELEASE-READY-SUMMARY-JSON>
+--lane-summary repair=<REPAIR-READY-SUMMARY-JSON>
+--lane-summary reputation=<REPUTATION-READY-SUMMARY-JSON>
+--lane-summary reserve_rent=<RESERVE-RENT-READY-SUMMARY-JSON>
+--lane-summary transparency=<TRANSPARENCY-READY-SUMMARY-JSON>
 --envelope-out artifacts/sorafs/production-readiness/foundational-prerequisites.json

@@ -1,3 +1,5 @@
+//! Shared fixtures and helpers for IVM integration tests.
+
 #![allow(dead_code)]
 use std::vec::Vec;
 
@@ -16,6 +18,13 @@ use ivm_abi::state_value::{
 
 const HALT_WORD: u32 = encoding::wide::encode_halt();
 pub const HALT: [u8; 4] = HALT_WORD.to_le_bytes();
+
+/// Build a deterministic exact network identity for VM fixtures.
+pub fn test_network_id(marker: u8) -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([marker; Hash::LENGTH]),
+    ))
+}
 
 /// Select a named Kotodama V1 entrypoint after loading its artifact.
 ///

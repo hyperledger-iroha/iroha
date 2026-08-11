@@ -6,19 +6,19 @@ import org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachment
 
 private const val MAX_U32 = 0xffff_ffffL
 private const val DEFAULT_TRANSACTION_TTL_MS = 100_000L
-private const val MAX_CHAIN_ID_BYTES = 128
 
 /**
  * Representation of a transaction payload prior to Norito encoding.
  *
  * The structure mirrors the Rust data model sufficiently for encoding and signing, including
  * instruction lists, by-reference contract calls, IVM bytecode, and flat mixed batches. `authority`
- * must use the canonical I105 account literal. `nonce` uses a [Long] carrier for the full nonzero
- * unsigned 32-bit wire range. Proof attachments are part of the signed payload and therefore
- * affect both authorization signatures and the canonical transaction identifier.
+ * must use the canonical I105 account literal. `networkId` is the exact canonical hash identity of
+ * the genesis header. `nonce` uses a [Long] carrier for the full nonzero unsigned 32-bit wire range.
+ * Proof attachments are part of the signed payload and therefore affect both authorization
+ * signatures and the canonical transaction identifier.
  */
 class TransactionPayload(
-    val chainId: String,
+    val networkId: NetworkId,
     val authority: String,
     val creationTimeMs: Long = System.currentTimeMillis(),
     val executable: Executable = Executable.ivm(byteArrayOf()),
@@ -42,7 +42,6 @@ class TransactionPayload(
     val attachments: List<ProofAttachment>? get() = _attachments
 
     init {
-        requireCanonicalChainId(chainId)
         requireCanonicalI105Address(authority, "authority")
         require(creationTimeMs >= 0) { "creationTimeMs must be non-negative" }
         require(timeToLiveMs != null && timeToLiveMs > 0) {
@@ -56,26 +55,8 @@ class TransactionPayload(
         }
     }
 
-    private fun requireCanonicalChainId(value: String) {
-        require(value.isNotEmpty() && value.length <= MAX_CHAIN_ID_BYTES) {
-            "chainId must contain 1..$MAX_CHAIN_ID_BYTES ASCII bytes"
-        }
-        require(value.first().isAsciiLetterOrDigit() && value.last().isAsciiLetterOrDigit()) {
-            "chainId must begin and end with an ASCII alphanumeric character"
-        }
-        require(value.all { character ->
-            character.isAsciiLetterOrDigit() || character == '.' || character == '_' ||
-                character == ':' || character == '-'
-        }) {
-            "chainId contains a non-canonical character"
-        }
-    }
-
-    private fun Char.isAsciiLetterOrDigit(): Boolean =
-        this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9'
-
     fun copy(
-        chainId: String = this.chainId,
+        networkId: NetworkId = this.networkId,
         authority: String = this.authority,
         creationTimeMs: Long = this.creationTimeMs,
         executable: Executable = this.executable,
@@ -85,7 +66,7 @@ class TransactionPayload(
         metadata: Map<String, JsonValue> = this.metadata,
         attachments: List<ProofAttachment>? = this.attachments,
     ): TransactionPayload = TransactionPayload(
-        chainId = chainId,
+        networkId = networkId,
         authority = authority,
         creationTimeMs = creationTimeMs,
         executable = executable,
@@ -99,7 +80,7 @@ class TransactionPayload(
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is TransactionPayload) return false
-        return chainId == other.chainId
+        return networkId == other.networkId
             && authority == other.authority
             && creationTimeMs == other.creationTimeMs
             && executable == other.executable
@@ -111,7 +92,7 @@ class TransactionPayload(
     }
 
     override fun hashCode(): Int {
-        var result = chainId.hashCode()
+        var result = networkId.hashCode()
         result = 31 * result + authority.hashCode()
         result = 31 * result + creationTimeMs.hashCode()
         result = 31 * result + executable.hashCode()

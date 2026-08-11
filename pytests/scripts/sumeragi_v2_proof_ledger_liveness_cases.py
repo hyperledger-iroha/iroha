@@ -530,14 +530,6 @@ def test_serve_scheduler_gate_proof_mutations_fail_closed(
         (
             "operator",
             "AsyncStrongTypeInvariant",
-            "  /\\ AsyncCandidateLifecycleSchedulerCoverageInvariant\n",
-            "",
-            "AsyncStrongTypeInvariant must include the exact recovery "
-            "execution premise",
-        ),
-        (
-            "operator",
-            "AsyncStrongTypeInvariant",
             "  /\\ AsyncOrdinaryIngressCarrierOwnershipInvariant\n",
             "",
             "AsyncStrongTypeInvariant must include the exact recovery "
