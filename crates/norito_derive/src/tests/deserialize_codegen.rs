@@ -165,3 +165,74 @@ fn archived_field_paths_delegate_copy_and_context_setup_to_core() {
         );
     }
 }
+
+#[test]
+fn ordinary_struct_fields_use_verified_exact_length_streaming() {
+    let input: DeriveInput = syn::parse_quote! {
+        struct Envelope {
+            named: Vec<u8>,
+            other: String,
+        }
+    };
+    let Data::Struct(data) = &input.data else {
+        unreachable!();
+    };
+    let expansion = compact(derive_struct_serialize(
+        &input.ident,
+        &input.generics,
+        &data.fields,
+        &input.attrs,
+        None,
+    ));
+
+    assert_eq!(expansion.matches("write_len_prefixed_exact(").count(), 2);
+    assert!(!expansion.contains("write_len_prefixed("));
+}
+
+#[test]
+fn packed_struct_codegen_counts_then_streams_without_field_payload_buffers() {
+    let input: DeriveInput = syn::parse_quote! {
+        struct Envelope {
+            named: Vec<u8>,
+            other: String,
+        }
+    };
+    let Data::Struct(data) = &input.data else {
+        unreachable!();
+    };
+    let expansion = compact(derive_struct_serialize(
+        &input.ident,
+        &input.generics,
+        &data.fields,
+        &input.attrs,
+        None,
+    ));
+
+    assert!(expansion.contains("encoded_payload_len("));
+    assert!(expansion.contains("serialize_to_writer_exact("));
+    assert!(!expansion.contains("serialize_to_buffer("));
+    assert!(!expansion.contains("__field_bufs"));
+}
+
+#[test]
+fn ordinary_enum_fields_use_verified_exact_length_streaming() {
+    let input: DeriveInput = syn::parse_quote! {
+        enum Envelope {
+            Tuple(Vec<u8>),
+            Named { payload: Vec<u8> },
+        }
+    };
+    let Data::Enum(data) = &input.data else {
+        unreachable!();
+    };
+    let expansion = compact(derive_enum_serialize(
+        &input.ident,
+        &input.generics,
+        data,
+        &input.attrs,
+        None,
+    ));
+
+    assert!(expansion.matches("write_len_prefixed_exact(").count() >= 2);
+    assert!(!expansion.contains("write_len_prefixed("));
+}

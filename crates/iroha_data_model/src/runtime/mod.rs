@@ -324,6 +324,23 @@ impl JsonSerialize for RuntimeUpgradeId {
     fn json_serialize(&self, out: &mut String) {
         crate::json_helpers::fixed_bytes::serialize(&self.0, out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('[')?;
+        for (index, byte) in self.0.iter().enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            byte.json_serialize_to(out)?;
+        }
+        out.push(']')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -353,6 +370,24 @@ impl JsonSerialize for RuntimeUpgradeStatus {
             }
         }
         out.push('}');
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        match self {
+            Self::Proposed => out.push_str("{\"Proposed\":null")?,
+            Self::ActivatedAt(height) => {
+                out.push_str("{\"ActivatedAt\":")?;
+                height.json_serialize_to(out)?;
+            }
+            Self::Canceled => out.push_str("{\"Canceled\":null")?,
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 

@@ -6,7 +6,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
-    fs::File,
+    fs::{self, File, Metadata},
     io::Read,
     path::{Path, PathBuf},
 };
@@ -20,6 +20,13 @@ type Result<T, E> = core::result::Result<T, Report<E>>;
 
 use crate::ParameterId;
 
+/// Maximum encoded size of one TOML configuration source.
+///
+/// This first-release ceiling bounds allocation before TOML parsing. Files are
+/// read through a `limit + 1` reader so growth after the metadata check also
+/// fails closed.
+pub const MAX_TOML_SOURCE_BYTES: u64 = 1024 * 1024;
+
 /// A source of configuration in TOML format
 #[derive(Debug, Clone)]
 pub struct TomlSource {
@@ -28,14 +35,107 @@ pub struct TomlSource {
 }
 
 /// Error of [`TomlSource::from_file`]
-#[derive(Error, Debug, Copy, Clone)]
+#[derive(Error, Debug, Copy, Clone, Eq, PartialEq)]
 pub enum FromFileError {
     /// File system error while opening or reading the file.
     #[error("File system error")]
     Read,
+    /// The source path is not a regular file or is itself a symbolic link.
+    #[error("Configuration source is not a regular file")]
+    NotRegularFile,
+    /// The source exceeds the caller's encoded byte ceiling.
+    #[error("Configuration source is {actual} bytes, exceeding the {limit}-byte limit")]
+    TooLarge {
+        /// Observed encoded source size.
+        actual: u64,
+        /// Maximum permitted encoded source size.
+        limit: u64,
+    },
+    /// The source path or file contents changed while it was being read.
+    #[error("Configuration source changed while being read")]
+    ChangedWhileReading,
     /// Error while deserializing file contents as TOML.
     #[error("Error while deserializing file contents as TOML")]
     Parse,
+}
+
+#[cfg(unix)]
+fn metadata_same_file(left: &Metadata, right: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn metadata_same_file(left: &Metadata, right: &Metadata) -> bool {
+    left.len() == right.len()
+        && left.modified().ok() == right.modified().ok()
+        && left.created().ok() == right.created().ok()
+}
+
+#[cfg(unix)]
+fn metadata_same_snapshot(left: &Metadata, right: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    metadata_same_file(left, right)
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(not(unix))]
+fn metadata_same_snapshot(left: &Metadata, right: &Metadata) -> bool {
+    metadata_same_file(left, right)
+}
+
+fn regular_file_metadata(path: &Path) -> Result<Metadata, FromFileError> {
+    let metadata = fs::symlink_metadata(path).change_context(FromFileError::Read)?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(Report::new(FromFileError::NotRegularFile));
+    }
+    Ok(metadata)
+}
+
+/// Stable identity of a regular TOML source on Unix.
+#[cfg(unix)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct RegularFileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+/// Stable canonical identity of a regular TOML source.
+#[cfg(not(unix))]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct RegularFileIdentity {
+    canonical_path: PathBuf,
+}
+
+#[cfg(unix)]
+fn regular_file_identity(metadata: &Metadata, _canonical_path: PathBuf) -> RegularFileIdentity {
+    use std::os::unix::fs::MetadataExt as _;
+
+    RegularFileIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    }
+}
+
+#[cfg(not(unix))]
+fn regular_file_identity(_metadata: &Metadata, canonical_path: PathBuf) -> RegularFileIdentity {
+    RegularFileIdentity { canonical_path }
+}
+
+/// Inspect a source without following a final symlink and return its stable identity.
+pub(crate) fn canonical_regular_file_identity(
+    path: &Path,
+) -> Result<(RegularFileIdentity, PathBuf), FromFileError> {
+    let metadata = regular_file_metadata(path)?;
+    let canonical_path = fs::canonicalize(path).change_context(FromFileError::Read)?;
+    let identity = regular_file_identity(&metadata, canonical_path.clone());
+    Ok((identity, canonical_path))
 }
 
 impl TomlSource {
@@ -46,24 +146,74 @@ impl TomlSource {
 
     /// Read from a file
     ///
+    /// The path must name a stable regular file (symbolic links are rejected),
+    /// and its encoded size must not exceed [`MAX_TOML_SOURCE_BYTES`].
+    ///
     /// # Errors
-    /// If a file system or a TOML parsing error occurs.
+    /// If the path is not a stable regular file, the source is oversized, or a
+    /// file-system or TOML parsing error occurs.
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, FromFileError> {
+        Self::from_file_with_limit(path, MAX_TOML_SOURCE_BYTES).map(|(source, _, _)| source)
+    }
+
+    /// Read a stable regular source under an explicit byte limit.
+    pub(crate) fn from_file_with_limit<P: AsRef<Path>>(
+        path: P,
+        max_bytes: u64,
+    ) -> Result<(Self, u64, RegularFileIdentity), FromFileError> {
         let path = path.as_ref().to_path_buf();
 
         log::trace!("reading TOML source: `{}`", path.display());
 
-        let mut raw_string = String::new();
-        File::open(&path)
-            .change_context(FromFileError::Read)?
+        let initial_path_metadata = regular_file_metadata(&path)?;
+        if initial_path_metadata.len() > max_bytes {
+            return Err(Report::new(FromFileError::TooLarge {
+                actual: initial_path_metadata.len(),
+                limit: max_bytes,
+            }));
+        }
+        let canonical_path = fs::canonicalize(&path).change_context(FromFileError::Read)?;
+        let identity = regular_file_identity(&initial_path_metadata, canonical_path);
+
+        let mut file = File::open(&path).change_context(FromFileError::Read)?;
+        let initial_open_metadata = file.metadata().change_context(FromFileError::Read)?;
+        if !initial_open_metadata.file_type().is_file()
+            || !metadata_same_snapshot(&initial_path_metadata, &initial_open_metadata)
+        {
+            return Err(Report::new(FromFileError::ChangedWhileReading));
+        }
+
+        let initial_len = initial_open_metadata.len();
+        let capacity = usize::try_from(initial_len).unwrap_or(0);
+        let mut raw_string = String::with_capacity(capacity);
+        file.by_ref()
+            .take(max_bytes.saturating_add(1))
             .read_to_string(&mut raw_string)
             .change_context(FromFileError::Read)?;
+        let bytes_read = u64::try_from(raw_string.len()).unwrap_or(u64::MAX);
+        if bytes_read > max_bytes {
+            return Err(Report::new(FromFileError::TooLarge {
+                actual: bytes_read,
+                limit: max_bytes,
+            }));
+        }
+
+        let final_open_metadata = file.metadata().change_context(FromFileError::Read)?;
+        let final_path_metadata = regular_file_metadata(&path)?;
+        if !metadata_same_snapshot(&initial_open_metadata, &final_open_metadata)
+            || !metadata_same_snapshot(&final_open_metadata, &final_path_metadata)
+            || initial_len != bytes_read
+            || final_open_metadata.len() != bytes_read
+            || final_path_metadata.len() != bytes_read
+        {
+            return Err(Report::new(FromFileError::ChangedWhileReading));
+        }
 
         let table = raw_string
             .parse::<Table>()
             .change_context(FromFileError::Parse)?;
 
-        Ok(TomlSource::new(path, table))
+        Ok((TomlSource::new(path, table), bytes_read, identity))
     }
 
     /// Primarily for testing purposes: creates a source which will contain debug information
@@ -357,10 +507,65 @@ fn table_to_json(table: &toml::Table) -> Result<JsonMap, json::Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
     use expect_test::expect;
     use toml::toml;
 
     use super::*;
+
+    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_config_dir(label: &str) -> PathBuf {
+        let nonce = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "iroha_config_base_toml_{label}_{}_{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("create temporary configuration directory");
+        path
+    }
+
+    #[test]
+    fn from_file_rejects_oversized_source_before_parsing() {
+        let dir = temp_config_dir("oversized");
+        let path = dir.join("oversized.toml");
+        let file = File::create(&path).expect("create oversized source");
+        file.set_len(MAX_TOML_SOURCE_BYTES + 1)
+            .expect("extend oversized source");
+        drop(file);
+
+        let report = TomlSource::from_file(&path).expect_err("oversized source must fail");
+        assert_eq!(
+            *report.current_context(),
+            FromFileError::TooLarge {
+                actual: MAX_TOML_SOURCE_BYTES + 1,
+                limit: MAX_TOML_SOURCE_BYTES,
+            }
+        );
+
+        fs::remove_dir_all(dir).expect("remove temporary configuration directory");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_file_rejects_symbolic_link() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_config_dir("symlink");
+        let target = dir.join("target.toml");
+        let link = dir.join("link.toml");
+        fs::write(&target, "value = 1\n").expect("write link target");
+        symlink(&target, &link).expect("create source symlink");
+
+        let report = TomlSource::from_file(&link).expect_err("source symlink must fail");
+        assert_eq!(*report.current_context(), FromFileError::NotRegularFile);
+
+        fs::remove_dir_all(dir).expect("remove temporary configuration directory");
+    }
 
     #[test]
     fn toml_integer_to_json() {

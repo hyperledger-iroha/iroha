@@ -493,7 +493,7 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
             assert!(
                 kura.persist_autonomous_lifecycle_release_terminal_outcome_pending(
                     &retirement,
-                    Hash::new(b"wrong terminal-outcome chain"),
+                    test_network_id(b"wrong terminal-outcome genesis"),
                     epoch,
                 )
                 .is_err()
@@ -602,9 +602,7 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
     for case in 0_u8..6 {
         let mut tampered = first_pending.clone();
         match case {
-            0 => {
-                tampered.body.binding.network_id = test_network_id(b"tampered-terminal-genesis")
-            }
+            0 => tampered.body.binding.network_id = test_network_id(b"tampered-terminal-genesis"),
             1 => tampered.body.binding.epoch = epoch.saturating_add(1),
             2 => tampered.body.binding.dataspace_id = DataSpaceId::new(999),
             3 => {
@@ -1016,10 +1014,7 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
         .expect("complete Pending carrier exposes exact expected groups");
     assert_eq!(expected_groups.len(), 2);
     let initial_stages = kura
-        .verify_expected_autonomous_lifecycle_terminal_outcome_stages(
-            network_id,
-            &expected_groups,
-        )
+        .verify_expected_autonomous_lifecycle_terminal_outcome_stages(network_id, &expected_groups)
         .expect("directly prove both Pending carrier members");
     assert!(initial_stages.iter().all(|stage| {
         stage.source_kind() == AutonomousLifecycleTerminalOutcomeSourceKind::CanonicalCarrier
@@ -1079,10 +1074,7 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
         payloads[1].reservation_keys.as_slice(),
     );
     let mixed_stages = kura
-        .verify_expected_autonomous_lifecycle_terminal_outcome_stages(
-            network_id,
-            &expected_groups,
-        )
+        .verify_expected_autonomous_lifecycle_terminal_outcome_stages(network_id, &expected_groups)
         .expect("directly prove mixed Complete/Pending carrier stages");
     assert_eq!(
         mixed_stages
@@ -1128,10 +1120,7 @@ fn canonical_carrier_terminal_recovery_materializes_and_partitions_the_full_lane
     )
     .expect("complete second canonical carrier member");
     let complete_stages = kura
-        .verify_expected_autonomous_lifecycle_terminal_outcome_stages(
-            network_id,
-            &expected_groups,
-        )
+        .verify_expected_autonomous_lifecycle_terminal_outcome_stages(network_id, &expected_groups)
         .expect("directly prove both completed carrier members");
     assert!(complete_stages.iter().all(|stage| {
         stage.source_kind() == AutonomousLifecycleTerminalOutcomeSourceKind::CanonicalCarrier

@@ -102,6 +102,9 @@ use super::{deserialize::default_zk, *};
 use crate::smartcontracts::ValidQuery;
 use crate::telemetry::StateTelemetry;
 
+#[path = "committed_hash_journal_tests.rs"]
+mod committed_hash_journal_tests;
+
 fn test_da_pin_intent(
     network_id: NetworkId,
     lane_id: LaneId,
@@ -5706,30 +5709,6 @@ fn prev_block_hash_fast_reads_block_hash_journal() {
 }
 
 #[test]
-fn committed_block_hashes_snapshot_reads_block_hash_journal() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), kura, query_handle);
-
-    let first =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x41; Hash::LENGTH]));
-    let second =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x42; Hash::LENGTH]));
-    {
-        let mut block_hashes = state.block_hashes.block();
-        block_hashes.push_for_tests(first);
-        block_hashes.push_for_tests(second);
-        block_hashes.commit_for_tests();
-    }
-
-    assert_eq!(state.committed_block_hashes_snapshot(), vec![first, second]);
-    assert_eq!(state.committed_block_hash_at_height(0), None);
-    assert_eq!(state.committed_block_hash_at_height(1), Some(first));
-    assert_eq!(state.committed_block_hash_at_height(2), Some(second));
-    assert_eq!(state.committed_block_hash_at_height(3), None);
-}
-
-#[test]
 fn pipeline_snapshot_reflects_latest_pipeline_config() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -11116,7 +11095,7 @@ fn autoscale_drain_state_for_test(
         version: 1,
         intent: LaneDrainIntentV1 {
             version: 1,
-            network_id: DEFAULT_TEST_NETWORK_ID,
+            network_id: *DEFAULT_TEST_NETWORK_ID,
             lane_id,
             dataspace_id,
             lane_incarnation,

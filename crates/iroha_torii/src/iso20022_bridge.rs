@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::Write as FmtWrite,
     fs,
+    io::Read as _,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -743,7 +744,9 @@ impl IsoMessageRecord {
             rejection_reason_code: None,
             status_history: Vec::new(),
         };
-        record.push_history();
+        record
+            .try_push_history()
+            .expect("the fixed pending history entry fits the V1 bounds");
         record
     }
 
@@ -763,11 +766,17 @@ impl IsoMessageRecord {
             rejection_reason_code: None,
             status_history: Vec::new(),
         };
-        record.push_history();
+        record
+            .try_push_history()
+            .expect("the fixed accepted history entry fits the V1 bounds");
         record
     }
 
-    fn rejected(now: Instant, detail: Option<String>) -> Self {
+    fn rejected(
+        now: Instant,
+        detail: Option<String>,
+        reason_code: Option<String>,
+    ) -> Result<Self, IsoStatusHistoryLimitError> {
         let mut record = Self {
             last_seen: now,
             updated_at: SystemTime::now(),
@@ -780,11 +789,11 @@ impl IsoMessageRecord {
             settled_at: None,
             hold_reason_code: None,
             change_reason_codes: Vec::new(),
-            rejection_reason_code: None,
+            rejection_reason_code: reason_code,
             status_history: Vec::new(),
         };
-        record.push_history();
-        record
+        record.try_push_history()?;
+        Ok(record)
     }
 
     fn derived_status(&self) -> Pacs002Status {
@@ -842,17 +851,71 @@ impl IsoMessageRecord {
         self.settled_at = Some(when);
     }
 
-    fn push_history(&mut self) {
-        let entry = IsoStatusHistoryEntry::new(self);
+    fn try_transition(
+        &mut self,
+        update: impl FnOnce(&mut Self),
+    ) -> Result<bool, IsoStatusHistoryLimitError> {
+        // Apply to a bounded candidate so an exhausted history never leaves the
+        // authoritative record partially advanced without its audit entry.
+        let mut candidate = self.clone();
+        update(&mut candidate);
+        candidate.validate_change_reason_codes()?;
+        let appended = candidate.try_push_history()?;
+        *self = candidate;
+        Ok(appended)
+    }
+
+    fn try_push_history(&mut self) -> Result<bool, IsoStatusHistoryLimitError> {
+        let derived_status = self.derived_status();
         let should_push = self.status_history.last().is_none_or(|last| {
-            last.status != entry.status
-                || last.pacs002_code != entry.pacs002_code
-                || last.detail != entry.detail
-                || last.reason_code != entry.reason_code
+            last.status != self.state
+                || last.pacs002_code != derived_status
+                || last.detail != self.detail
+                || last.reason_code != self.rejection_reason_code
         });
-        if should_push {
-            self.status_history.push(entry);
+        if !should_push {
+            return Ok(false);
         }
+        if self.status_history.len() >= ISO_STATUS_HISTORY_MAX_ENTRIES_V1 {
+            return Err(IsoStatusHistoryLimitError::EntryCount);
+        }
+
+        let current_encoded_bytes = status_history_encoded_len(&self.status_history)
+            .ok_or(IsoStatusHistoryLimitError::EncodedBytes)?;
+        let entry_encoded_bytes = status_history_entry_encoded_len(
+            self.state,
+            derived_status,
+            self.updated_at,
+            self.detail.as_deref(),
+            self.rejection_reason_code.as_deref(),
+        )
+        .ok_or(IsoStatusHistoryLimitError::EncodedBytes)?;
+        let separator_bytes = usize::from(!self.status_history.is_empty());
+        let prospective_encoded_bytes = current_encoded_bytes
+            .checked_add(separator_bytes)
+            .and_then(|bytes| bytes.checked_add(entry_encoded_bytes))
+            .ok_or(IsoStatusHistoryLimitError::EncodedBytes)?;
+        if prospective_encoded_bytes > ISO_STATUS_HISTORY_MAX_ENCODED_BYTES_V1 {
+            return Err(IsoStatusHistoryLimitError::EncodedBytes);
+        }
+        self.status_history
+            .try_reserve(1)
+            .map_err(|_| IsoStatusHistoryLimitError::Allocation)?;
+        let entry = IsoStatusHistoryEntry::new(self);
+        self.status_history.push(entry);
+        Ok(true)
+    }
+
+    fn validate_change_reason_codes(&self) -> Result<(), IsoStatusHistoryLimitError> {
+        if self.change_reason_codes.len() > ISO_CHANGE_REASON_MAX_ENTRIES_V1 {
+            return Err(IsoStatusHistoryLimitError::ChangeReasonCount);
+        }
+        let encoded_bytes = change_reason_codes_encoded_len(&self.change_reason_codes)
+            .ok_or(IsoStatusHistoryLimitError::ChangeReasonEncodedBytes)?;
+        if encoded_bytes > ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1 {
+            return Err(IsoStatusHistoryLimitError::ChangeReasonEncodedBytes);
+        }
+        Ok(())
     }
 }
 
@@ -861,6 +924,13 @@ const ISO_PACS009_CONTEXT: &str = "/v1/iso20022/pacs009";
 const ISO_PERSISTED_RECORD_VERSION: u64 = 1;
 const ISO_PERSISTED_RECORD_DIGEST_FIELD: &str = "record_sha256";
 const ISO_PERSISTED_RECORD_MAX_BYTES: u64 = 1024 * 1024;
+// The independent runtime ceiling keeps hand-built `actual` configs fail-closed too.
+const ISO_PERSISTED_RECORD_MAX_COUNT_V1: u64 = 1_024;
+// V1 retains exact lifecycle evidence; it never rolls this append-only history forward.
+const ISO_STATUS_HISTORY_MAX_ENTRIES_V1: usize = 256;
+const ISO_STATUS_HISTORY_MAX_ENCODED_BYTES_V1: usize = 256 * 1024;
+const ISO_CHANGE_REASON_MAX_ENTRIES_V1: usize = 64;
+const ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1: usize = 16 * 1024;
 const ISO_PERSISTED_AUDIT_INDEX_VERSION: u64 = 1;
 const ISO_PERSISTED_AUDIT_DIR: &str = "audit";
 const ISO_PERSISTED_AUDIT_INDEX_FILE: &str = "messages.index.json";
@@ -870,6 +940,15 @@ const ISO_AUDIT_EXPORT_ANCHOR_DIR: &str = "anchors";
 const ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE: &str = "latest.notary.json";
 const ISO_AUDIT_EXPORT_ANCHOR_DIGEST_FIELD: &str = "anchor_sha256";
 const ISO4217_MAX_MINOR_UNITS: u8 = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IsoStatusHistoryLimitError {
+    EntryCount,
+    EncodedBytes,
+    ChangeReasonCount,
+    ChangeReasonEncodedBytes,
+    Allocation,
+}
 
 fn parse_config_account_id(literal: &str, field: &str) -> eyre::Result<AccountId> {
     AccountId::parse_encoded(literal)
@@ -1407,6 +1486,16 @@ impl Iso20022BridgeRuntime {
         if config.max_body_bytes.get() == 0 {
             eyre::bail!("iso_bridge max_body_bytes must be greater than zero");
         }
+        if config.store_max_records == 0 {
+            eyre::bail!("iso_bridge store_max_records must be greater than zero");
+        }
+        if config.store_max_records > ISO_PERSISTED_RECORD_MAX_COUNT_V1 {
+            eyre::bail!(
+                "iso_bridge store_max_records must not exceed the first-release hard maximum of {ISO_PERSISTED_RECORD_MAX_COUNT_V1}"
+            );
+        }
+        let store_max_records = usize::try_from(config.store_max_records)
+            .wrap_err("iso_bridge store_max_records must fit the platform address space")?;
 
         let signer = config
             .signer
@@ -1482,7 +1571,7 @@ impl Iso20022BridgeRuntime {
             profiles: Arc::new(profiles),
             store_dir: config.store_dir.clone(),
             store_retention: Duration::from_secs(config.store_retention_secs),
-            store_max_records: usize::try_from(config.store_max_records).unwrap_or(usize::MAX),
+            store_max_records,
             audit_export_dir: config.audit_export_dir.clone(),
             dedupe_ttl: Duration::from_secs(config.dedupe_ttl_secs),
             records: DashMap::new(),
@@ -1608,14 +1697,13 @@ impl Iso20022BridgeRuntime {
 
     /// Return the deterministic audit manifest for durable ISO message records.
     pub fn audit_index(&self) -> JsonValue {
-        let mut records = self
-            .records
-            .iter()
-            .filter(|entry| persisted_record_fits_max_bytes(entry.key(), entry.value()))
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect::<Vec<_>>();
-        records.sort_by(|left, right| left.0.cmp(&right.0));
-        persisted_audit_index_value(&records)
+        let mut records = BTreeMap::new();
+        for entry in &self.records {
+            if let Some(value) = persisted_audit_index_entry_value(entry.key(), entry.value()) {
+                records.insert(entry.key().clone(), value);
+            }
+        }
+        persisted_audit_index_value(records.into_values().collect())
     }
 
     /// Return the configured default rail profile.
@@ -1750,7 +1838,6 @@ impl Iso20022BridgeRuntime {
                 self.remove_record_indexes(message_id, &existing);
                 *existing = IsoMessageRecord::pending(now);
                 existing.metadata = metadata.clone();
-                existing.push_history();
                 drop(existing);
                 self.insert_metadata_indexes(message_id, &metadata);
                 self.persist_message(message_id);
@@ -1763,7 +1850,6 @@ impl Iso20022BridgeRuntime {
         } else {
             let mut record = IsoMessageRecord::pending(now);
             record.metadata = metadata.clone();
-            record.push_history();
             self.records.insert(message_id.to_owned(), record);
             self.insert_metadata_indexes(message_id, &metadata);
             self.persist_message(message_id);
@@ -1786,7 +1872,6 @@ impl Iso20022BridgeRuntime {
             existing.last_seen = now;
             existing.updated_at = SystemTime::now();
             existing.context = context;
-            existing.push_history();
         } else {
             let mut record = IsoMessageRecord::pending(now);
             record.context = context;
@@ -1796,131 +1881,208 @@ impl Iso20022BridgeRuntime {
     }
 
     /// Mark the provided message as queued for ledger execution.
-    pub fn mark_queued(&self, message_id: &str) {
+    ///
+    /// Returns `false` when the exact history is exhausted; the record and its
+    /// persisted form then remain unchanged.
+    pub fn mark_queued(&self, message_id: &str) -> bool {
         let now = Instant::now();
-        if let Some(mut existing) = self.records.get_mut(message_id) {
-            existing.last_seen = now;
-            existing.updated_at = SystemTime::now();
-            existing.set_queued();
-            existing.push_history();
+        let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
+            let result = existing.try_transition(|record| {
+                record.last_seen = now;
+                record.updated_at = SystemTime::now();
+                record.set_queued();
+            });
+            drop(existing);
+            result
         } else {
             let mut record = IsoMessageRecord::pending(now);
-            record.set_queued();
-            record.push_history();
-            self.records.insert(message_id.to_owned(), record);
-        }
-        self.persist_message(message_id);
+            record
+                .try_transition(|candidate| candidate.set_queued())
+                .map(|_| {
+                    self.records.insert(message_id.to_owned(), record);
+                    true
+                })
+        };
+        self.finish_status_transition(message_id, transition)
     }
 
     /// Flag a message as pending due to screening/manual hold with an optional ISO reason code.
-    pub fn mark_hold(&self, message_id: &str, reason_code: Option<&str>) {
+    ///
+    /// Returns `false` without changing or persisting the record when the exact
+    /// append-only status history has reached a V1 capacity bound.
+    pub fn mark_hold(&self, message_id: &str, reason_code: Option<&str>) -> bool {
         let now = Instant::now();
-        if let Some(mut existing) = self.records.get_mut(message_id) {
-            existing.last_seen = now;
-            existing.updated_at = SystemTime::now();
-            existing.state = IsoMessageState::Pending;
-            existing.settled_at = None;
-            existing.rejection_reason_code = None;
-            existing.set_hold_reason(reason_code.map(std::borrow::ToOwned::to_owned));
-            existing.push_history();
+        let reason_code = reason_code.map(std::borrow::ToOwned::to_owned);
+        let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
+            let result = existing.try_transition(|record| {
+                record.last_seen = now;
+                record.updated_at = SystemTime::now();
+                record.state = IsoMessageState::Pending;
+                record.settled_at = None;
+                record.rejection_reason_code = None;
+                record.set_hold_reason(reason_code);
+            });
+            drop(existing);
+            result
         } else {
             let mut record = IsoMessageRecord::pending(now);
-            record.set_hold_reason(reason_code.map(std::borrow::ToOwned::to_owned));
-            record.push_history();
-            self.records.insert(message_id.to_owned(), record);
-        }
-        self.persist_message(message_id);
+            record
+                .try_transition(|candidate| candidate.set_hold_reason(reason_code))
+                .map(|_| {
+                    self.records.insert(message_id.to_owned(), record);
+                    true
+                })
+        };
+        self.finish_status_transition(message_id, transition)
     }
 
     /// Clear any previously-set hold indicator for the message.
-    pub fn clear_hold(&self, message_id: &str) {
+    ///
+    /// Returns `false` when the message is unknown or its exact history is exhausted.
+    pub fn clear_hold(&self, message_id: &str) -> bool {
         if let Some(mut existing) = self.records.get_mut(message_id) {
-            existing.last_seen = Instant::now();
-            existing.updated_at = SystemTime::now();
-            existing.clear_hold();
-            existing.push_history();
+            let result = existing.try_transition(|record| {
+                record.last_seen = Instant::now();
+                record.updated_at = SystemTime::now();
+                record.clear_hold();
+            });
+            drop(existing);
+            return self.finish_status_transition(message_id, result);
         }
-        self.persist_message(message_id);
+        false
     }
 
     /// Replace the change-reason codes recorded for the message.
-    pub fn replace_change_reason_codes<I, S>(&self, message_id: &str, codes: I)
+    ///
+    /// Returns `false` when the exact history is exhausted.
+    pub fn replace_change_reason_codes<I, S>(&self, message_id: &str, codes: I) -> bool
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
         let now = Instant::now();
-        let codes_vec = codes.into_iter().map(Into::into).collect::<Vec<_>>();
-        if let Some(mut existing) = self.records.get_mut(message_id) {
-            existing.last_seen = now;
-            existing.updated_at = SystemTime::now();
-            existing.replace_change_reason_codes(codes_vec);
-            existing.push_history();
+        let codes_vec = match collect_change_reason_codes_bounded(codes) {
+            Ok(codes) => codes,
+            Err(error) => {
+                self.report_status_history_limit(message_id, error);
+                return false;
+            }
+        };
+        let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
+            let result = existing.try_transition(|record| {
+                record.last_seen = now;
+                record.updated_at = SystemTime::now();
+                record.replace_change_reason_codes(codes_vec);
+            });
+            drop(existing);
+            result
         } else {
             let mut record = IsoMessageRecord::pending(now);
-            record.replace_change_reason_codes(codes_vec);
-            record.push_history();
-            self.records.insert(message_id.to_owned(), record);
-        }
-        self.persist_message(message_id);
+            record
+                .try_transition(|candidate| candidate.replace_change_reason_codes(codes_vec))
+                .map(|_| {
+                    self.records.insert(message_id.to_owned(), record);
+                    true
+                })
+        };
+        self.finish_status_transition(message_id, transition)
     }
 
     /// Append a change-reason code for the message (deduplicated).
-    pub fn add_change_reason_code(&self, message_id: &str, code: &str) {
+    ///
+    /// Returns `false` when the exact history is exhausted.
+    pub fn add_change_reason_code(&self, message_id: &str, code: &str) -> bool {
         let now = Instant::now();
-        if let Some(mut existing) = self.records.get_mut(message_id) {
-            existing.last_seen = now;
-            existing.updated_at = SystemTime::now();
-            existing.add_change_reason_code(code.to_owned());
-            existing.push_history();
+        let code_encoded_bytes = json_string_encoded_len(code).unwrap_or(usize::MAX);
+        if code_encoded_bytes
+            .checked_add(2)
+            .is_none_or(|bytes| bytes > ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1)
+        {
+            self.report_status_history_limit(
+                message_id,
+                IsoStatusHistoryLimitError::ChangeReasonEncodedBytes,
+            );
+            return false;
+        }
+        let code = code.to_owned();
+        let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
+            let result = existing.try_transition(|record| {
+                record.last_seen = now;
+                record.updated_at = SystemTime::now();
+                record.add_change_reason_code(code);
+            });
+            drop(existing);
+            result
         } else {
             let mut record = IsoMessageRecord::pending(now);
-            record.add_change_reason_code(code.to_owned());
-            record.push_history();
-            self.records.insert(message_id.to_owned(), record);
-        }
-        self.persist_message(message_id);
+            record
+                .try_transition(|candidate| candidate.add_change_reason_code(code))
+                .map(|_| {
+                    self.records.insert(message_id.to_owned(), record);
+                    true
+                })
+        };
+        self.finish_status_transition(message_id, transition)
     }
 
     /// Mark the message as fully settled on-ledger.
-    pub fn mark_settled(&self, message_id: &str, settled_at: SystemTime) {
+    ///
+    /// Returns `false` when the exact history is exhausted.
+    pub fn mark_settled(&self, message_id: &str, settled_at: SystemTime) -> bool {
         let now = Instant::now();
-        if let Some(mut existing) = self.records.get_mut(message_id) {
-            existing.last_seen = now;
-            existing.updated_at = SystemTime::now();
-            existing.state = IsoMessageState::Accepted;
-            existing.set_queued();
-            existing.mark_settled(settled_at);
-            existing.clear_hold();
-            existing.rejection_reason_code = None;
-            existing.push_history();
+        let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
+            let result = existing.try_transition(|record| {
+                record.last_seen = now;
+                record.updated_at = SystemTime::now();
+                record.state = IsoMessageState::Accepted;
+                record.set_queued();
+                record.mark_settled(settled_at);
+                record.clear_hold();
+                record.rejection_reason_code = None;
+            });
+            drop(existing);
+            result
         } else {
             let mut record = IsoMessageRecord::pending(now);
-            record.state = IsoMessageState::Accepted;
-            record.set_queued();
-            record.mark_settled(settled_at);
-            record.clear_hold();
-            record.rejection_reason_code = None;
-            record.push_history();
-            self.records.insert(message_id.to_owned(), record);
-        }
-        self.persist_message(message_id);
+            record
+                .try_transition(|candidate| {
+                    candidate.state = IsoMessageState::Accepted;
+                    candidate.set_queued();
+                    candidate.mark_settled(settled_at);
+                    candidate.clear_hold();
+                    candidate.rejection_reason_code = None;
+                })
+                .map(|_| {
+                    self.records.insert(message_id.to_owned(), record);
+                    true
+                })
+        };
+        self.finish_status_transition(message_id, transition)
     }
 
     /// Mark the transaction identified by `tx_hash` as applied and fully settled.
-    pub fn mark_transaction_applied(&self, tx_hash: &str, settled_at: SystemTime) {
-        if let Some((_, message_id)) = self.tx_hash_index.remove(tx_hash) {
-            self.mark_settled(&message_id, settled_at);
+    ///
+    /// Returns `false` when no message is indexed or its exact history is exhausted.
+    pub fn mark_transaction_applied(&self, tx_hash: &str, settled_at: SystemTime) -> bool {
+        if let Some(message_id) = self.tx_hash_index.get(tx_hash).map(|entry| entry.clone()) {
+            let applied = self.mark_settled(&message_id, settled_at);
+            if applied {
+                self.tx_hash_index.remove(tx_hash);
+            }
+            return applied;
         }
+        false
     }
 
     /// Mark the transaction identified by `tx_hash` as rejected.
+    ///
+    /// Returns `false` when no message is indexed or its exact history is exhausted.
     pub fn mark_transaction_rejected(
         &self,
         tx_hash: &str,
         reason: Option<&TransactionRejectionReason>,
-    ) {
-        if let Some((_, message_id)) = self.tx_hash_index.remove(tx_hash) {
+    ) -> bool {
+        if let Some(message_id) = self.tx_hash_index.get(tx_hash).map(|entry| entry.clone()) {
             let (detail, reason_code) = reason
                 .map(Self::rejection_reason_metadata)
                 .map(|(code, detail)| (Some(detail), Some(code)))
@@ -1930,19 +2092,31 @@ impl Iso20022BridgeRuntime {
                         Some("PRTRY:TX_REJECTED".to_owned()),
                     )
                 });
-            self.mark_rejected(&message_id, detail, reason_code.as_deref());
+            let rejected = self.mark_rejected(&message_id, detail, reason_code.as_deref());
+            if rejected {
+                self.tx_hash_index.remove(tx_hash);
+            }
+            return rejected;
         }
+        false
     }
 
     /// Mark the transaction identified by `tx_hash` as expired in the queue.
-    pub fn mark_transaction_expired(&self, tx_hash: &str) {
-        if let Some((_, message_id)) = self.tx_hash_index.remove(tx_hash) {
-            self.mark_rejected(
+    ///
+    /// Returns `false` when no message is indexed or its exact history is exhausted.
+    pub fn mark_transaction_expired(&self, tx_hash: &str) -> bool {
+        if let Some(message_id) = self.tx_hash_index.get(tx_hash).map(|entry| entry.clone()) {
+            let expired = self.mark_rejected(
                 &message_id,
                 Some("transaction expired before admission".to_owned()),
                 Some("ED07"),
             );
+            if expired {
+                self.tx_hash_index.remove(tx_hash);
+            }
+            return expired;
         }
+        false
     }
 
     fn rejection_reason_metadata(reason: &TransactionRejectionReason) -> (String, String) {
@@ -2008,26 +2182,47 @@ impl Iso20022BridgeRuntime {
 
     /// Mark the provided message as successfully submitted on-chain and return
     /// the exact status snapshot produced by that atomic update.
+    ///
+    /// Capacity exhaustion is logged and returns the unchanged exact snapshot;
+    /// the record, transaction index, and persisted form are not advanced.
     pub fn mark_accepted(&self, message_id: &str, transaction_hash: &str) -> IsoMessageStatus {
+        match self.try_mark_accepted(message_id, transaction_hash) {
+            Ok(status) => status,
+            Err(error) => {
+                self.report_status_history_limit(message_id, error);
+                self.message_status(message_id)
+                    .expect("history exhaustion can only occur for an existing ISO record")
+            }
+        }
+    }
+
+    fn try_mark_accepted(
+        &self,
+        message_id: &str,
+        transaction_hash: &str,
+    ) -> Result<IsoMessageStatus, IsoStatusHistoryLimitError> {
         let now = Instant::now();
         let tx_hash = transaction_hash.to_owned();
         let status = if let Some(mut existing) = self.records.get_mut(message_id) {
-            if let Some(old_hash) = existing.transaction_hash.replace(tx_hash.clone()) {
-                if old_hash != tx_hash {
-                    self.tx_hash_index.remove(&old_hash);
-                }
+            let old_hash = existing.transaction_hash.clone();
+            existing.try_transition(|record| {
+                record.transaction_hash = Some(tx_hash.clone());
+                record.last_seen = now;
+                record.updated_at = SystemTime::now();
+                record.state = IsoMessageState::Accepted;
+                record.detail = None;
+                record.set_queued();
+                record.settled_at = None;
+                record.hold_reason_code = None;
+                record.change_reason_codes.clear();
+                record.rejection_reason_code = None;
+            })?;
+            let status = Self::status_snapshot(message_id, &existing);
+            drop(existing);
+            if let Some(old_hash) = old_hash.filter(|old_hash| old_hash != &tx_hash) {
+                self.tx_hash_index.remove(&old_hash);
             }
-            existing.last_seen = now;
-            existing.updated_at = SystemTime::now();
-            existing.state = IsoMessageState::Accepted;
-            existing.detail = None;
-            existing.set_queued();
-            existing.settled_at = None;
-            existing.hold_reason_code = None;
-            existing.change_reason_codes.clear();
-            existing.rejection_reason_code = None;
-            existing.push_history();
-            Self::status_snapshot(message_id, &existing)
+            status
         } else {
             let record = IsoMessageRecord::accepted(now, tx_hash.clone());
             let status = Self::status_snapshot(message_id, &record);
@@ -2036,67 +2231,87 @@ impl Iso20022BridgeRuntime {
         };
         self.tx_hash_index.insert(tx_hash, message_id.to_owned());
         self.persist_message(message_id);
-        status
+        Ok(status)
     }
 
     /// Mark an inbound lifecycle message as durably accepted without creating a ledger transfer.
-    pub(crate) fn mark_lifecycle_accepted(&self, message_id: &str, detail: Option<String>) {
+    fn mark_lifecycle_accepted(
+        &self,
+        message_id: &str,
+        detail: Option<String>,
+    ) -> Result<(), IsoStatusHistoryLimitError> {
         let now = Instant::now();
         if let Some(mut existing) = self.records.get_mut(message_id) {
-            if let Some(old_hash) = existing.transaction_hash.take() {
+            let old_hash = existing.transaction_hash.clone();
+            existing.try_transition(|record| {
+                record.transaction_hash = None;
+                record.last_seen = now;
+                record.updated_at = SystemTime::now();
+                record.state = IsoMessageState::Accepted;
+                record.detail = detail;
+                record.ledger_tx_queued = false;
+                record.settled_at = None;
+                record.hold_reason_code = None;
+                record.change_reason_codes.clear();
+                record.rejection_reason_code = None;
+            })?;
+            drop(existing);
+            if let Some(old_hash) = old_hash {
                 self.tx_hash_index.remove(&old_hash);
             }
-            existing.last_seen = now;
-            existing.updated_at = SystemTime::now();
-            existing.state = IsoMessageState::Accepted;
-            existing.detail = detail;
-            existing.ledger_tx_queued = false;
-            existing.settled_at = None;
-            existing.hold_reason_code = None;
-            existing.change_reason_codes.clear();
-            existing.rejection_reason_code = None;
-            existing.push_history();
         } else {
             let mut record = IsoMessageRecord::pending(now);
-            record.state = IsoMessageState::Accepted;
-            record.detail = detail;
-            record.status_history.clear();
-            record.push_history();
+            record.try_transition(|candidate| {
+                candidate.state = IsoMessageState::Accepted;
+                candidate.detail = detail;
+                candidate.status_history.clear();
+            })?;
             self.records.insert(message_id.to_owned(), record);
         }
         self.persist_message(message_id);
+        Ok(())
     }
 
     /// Mark the provided message as rejected and record the reason.
+    ///
+    /// Returns `false` when the exact history is exhausted; no part of the
+    /// rejection is then applied or persisted.
     pub fn mark_rejected(
         &self,
         message_id: &str,
         reason: Option<String>,
         reason_code: Option<&str>,
-    ) {
+    ) -> bool {
         let now = Instant::now();
-        if let Some(mut existing) = self.records.get_mut(message_id) {
-            if let Some(old_hash) = existing.transaction_hash.take() {
+        let reason_code = reason_code.map(std::borrow::ToOwned::to_owned);
+        let transition = if let Some(mut existing) = self.records.get_mut(message_id) {
+            let old_hash = existing.transaction_hash.clone();
+            let result = existing.try_transition(|record| {
+                record.transaction_hash = None;
+                record.last_seen = now;
+                record.updated_at = SystemTime::now();
+                record.state = IsoMessageState::Rejected;
+                record.detail = reason;
+                record.ledger_tx_queued = false;
+                record.settled_at = None;
+                record.hold_reason_code = None;
+                record.change_reason_codes.clear();
+                record.rejection_reason_code = reason_code;
+            });
+            drop(existing);
+            if result.is_ok()
+                && let Some(old_hash) = old_hash
+            {
                 self.tx_hash_index.remove(&old_hash);
             }
-            existing.last_seen = now;
-            existing.updated_at = SystemTime::now();
-            existing.state = IsoMessageState::Rejected;
-            existing.detail = reason;
-            existing.ledger_tx_queued = false;
-            existing.settled_at = None;
-            existing.hold_reason_code = None;
-            existing.change_reason_codes.clear();
-            existing.rejection_reason_code = reason_code.map(std::borrow::ToOwned::to_owned);
-            existing.push_history();
+            result
         } else {
-            let mut record = IsoMessageRecord::rejected(now, reason);
-            record.rejection_reason_code = reason_code.map(std::borrow::ToOwned::to_owned);
-            record.status_history.clear();
-            record.push_history();
-            self.records.insert(message_id.to_owned(), record);
-        }
-        self.persist_message(message_id);
+            IsoMessageRecord::rejected(now, reason, reason_code).map(|record| {
+                self.records.insert(message_id.to_owned(), record);
+                true
+            })
+        };
+        self.finish_status_transition(message_id, transition)
     }
 
     /// Retrieve the current status of a processed ISO 20022 message.
@@ -2104,6 +2319,35 @@ impl Iso20022BridgeRuntime {
         self.records
             .get(message_id)
             .map(|record| Self::status_snapshot(message_id, &record))
+    }
+
+    fn finish_status_transition(
+        &self,
+        message_id: &str,
+        transition: Result<bool, IsoStatusHistoryLimitError>,
+    ) -> bool {
+        match transition {
+            Ok(_) => {
+                self.persist_message(message_id);
+                true
+            }
+            Err(error) => {
+                self.report_status_history_limit(message_id, error);
+                false
+            }
+        }
+    }
+
+    fn report_status_history_limit(&self, message_id: &str, error: IsoStatusHistoryLimitError) {
+        iroha_logger::error!(
+            ?error,
+            message_id_sha256 = %sha256_hex(message_id.as_bytes()),
+            max_entries = ISO_STATUS_HISTORY_MAX_ENTRIES_V1,
+            max_encoded_bytes = ISO_STATUS_HISTORY_MAX_ENCODED_BYTES_V1,
+            max_change_reason_entries = ISO_CHANGE_REASON_MAX_ENTRIES_V1,
+            max_change_reason_encoded_bytes = ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1,
+            "ISO status transition rejected before record or persistence mutation"
+        );
     }
 
     fn status_snapshot(message_id: &str, record: &IsoMessageRecord) -> IsoMessageStatus {
@@ -2192,13 +2436,18 @@ impl Iso20022BridgeRuntime {
         if let Some(original_id) = referenced_message_id.as_deref()
             && referenced_message_known
         {
-            action = self.apply_lifecycle_update(
-                original_id,
-                message_type,
-                status_code.as_deref(),
-                reason_code.as_deref(),
-                detail.as_deref(),
-            );
+            action = self
+                .apply_lifecycle_update(
+                    original_id,
+                    message_type,
+                    status_code.as_deref(),
+                    reason_code.as_deref(),
+                    detail,
+                )
+                .map_err(|error| {
+                    self.report_status_history_limit(original_id, error);
+                    MsgError::ValidationFailed
+                })?;
         }
 
         if let Some(context) = lifecycle_context(message_type, parsed) {
@@ -2210,7 +2459,11 @@ impl Iso20022BridgeRuntime {
             Some(format!(
                 "recorded inbound ISO 20022 {message_type} lifecycle message"
             )),
-        );
+        )
+        .map_err(|error| {
+            self.report_status_history_limit(message_id, error);
+            MsgError::ValidationFailed
+        })?;
 
         Ok(IsoLifecycleOutcome {
             referenced_message_id,
@@ -2588,32 +2841,56 @@ impl Iso20022BridgeRuntime {
         message_type: &str,
         status_code: Option<&str>,
         reason_code: Option<&str>,
-        detail: Option<&str>,
-    ) -> &'static str {
+        detail: Option<String>,
+    ) -> Result<&'static str, IsoStatusHistoryLimitError> {
         let original_message_type = self
             .records
             .get(original_id)
             .and_then(|record| record.metadata.message_type().map(ToOwned::to_owned));
         if !lifecycle_update_matches_original(message_type, original_message_type.as_deref()) {
-            return "ignored_profile_mismatch";
+            return Ok("ignored_profile_mismatch");
         }
 
         if message_type == "pacs.004" {
-            self.mark_rejected(
-                original_id,
-                Some(
-                    detail
-                        .unwrap_or("payment returned by inbound pacs.004")
-                        .to_owned(),
-                ),
-                reason_code.or(Some("PRTRY:PAYMENT_RETURN")),
-            );
-            return "marked_returned";
+            let detail =
+                Some(detail.unwrap_or_else(|| "payment returned by inbound pacs.004".to_owned()));
+            let reason_code = reason_code
+                .or(Some("PRTRY:PAYMENT_RETURN"))
+                .map(ToOwned::to_owned);
+            self.try_transition_existing(original_id, |record| {
+                record.transaction_hash = None;
+                record.last_seen = Instant::now();
+                record.updated_at = SystemTime::now();
+                record.state = IsoMessageState::Rejected;
+                record.detail = detail;
+                record.ledger_tx_queued = false;
+                record.settled_at = None;
+                record.hold_reason_code = None;
+                record.change_reason_codes.clear();
+                record.rejection_reason_code = reason_code;
+            })?;
+            return Ok("marked_returned");
         }
         if message_type == "camt.056" {
-            self.mark_hold(original_id, reason_code.or(Some("CANC")));
-            self.add_change_reason_code(original_id, "CANCELLATION_REQUESTED");
-            return "marked_cancellation_requested";
+            let reason_code = reason_code.or(Some("CANC")).map(ToOwned::to_owned);
+            self.try_transition_existing(original_id, |record| {
+                record.last_seen = Instant::now();
+                record.updated_at = SystemTime::now();
+                record.state = IsoMessageState::Pending;
+                record.settled_at = None;
+                record.rejection_reason_code = None;
+                record.set_hold_reason(reason_code);
+                record.add_change_reason_code("CANCELLATION_REQUESTED".to_owned());
+            })?;
+            return Ok("marked_cancellation_requested");
+        }
+
+        if status_code.is_some_and(|code| {
+            json_string_encoded_len(code)
+                .and_then(|bytes| bytes.checked_add(2))
+                .is_none_or(|bytes| bytes > ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1)
+        }) {
+            return Err(IsoStatusHistoryLimitError::ChangeReasonEncodedBytes);
         }
 
         match status_code
@@ -2623,42 +2900,104 @@ impl Iso20022BridgeRuntime {
             .as_deref()
         {
             Some("ACSC" | "ACCP" | "SETT" | "SETTLED") => {
-                self.mark_settled(original_id, SystemTime::now());
-                "marked_settled"
+                self.try_transition_existing(original_id, |record| {
+                    let now = SystemTime::now();
+                    record.last_seen = Instant::now();
+                    record.updated_at = now;
+                    record.state = IsoMessageState::Accepted;
+                    record.set_queued();
+                    record.mark_settled(now);
+                    record.clear_hold();
+                    record.rejection_reason_code = None;
+                })?;
+                Ok("marked_settled")
             }
             Some("RJCT" | "REJT" | "CANC" | "CAND") => {
-                self.mark_rejected(
-                    original_id,
-                    Some(
-                        detail
-                            .map(ToOwned::to_owned)
-                            .unwrap_or_else(|| "ISO 20022 lifecycle rejection".to_owned()),
-                    ),
-                    reason_code.or(Some("RJCT")),
-                );
-                "marked_rejected"
+                let detail =
+                    Some(detail.unwrap_or_else(|| "ISO 20022 lifecycle rejection".to_owned()));
+                let reason_code = reason_code.or(Some("RJCT")).map(ToOwned::to_owned);
+                self.try_transition_existing(original_id, |record| {
+                    record.transaction_hash = None;
+                    record.last_seen = Instant::now();
+                    record.updated_at = SystemTime::now();
+                    record.state = IsoMessageState::Rejected;
+                    record.detail = detail;
+                    record.ledger_tx_queued = false;
+                    record.settled_at = None;
+                    record.hold_reason_code = None;
+                    record.change_reason_codes.clear();
+                    record.rejection_reason_code = reason_code;
+                })?;
+                Ok("marked_rejected")
             }
             Some("PDNG" | "PEND" | "PENF") => {
-                self.mark_hold(original_id, reason_code.or(status_code));
-                "marked_pending"
+                let reason_code = reason_code.or(status_code).map(ToOwned::to_owned);
+                self.try_transition_existing(original_id, |record| {
+                    record.last_seen = Instant::now();
+                    record.updated_at = SystemTime::now();
+                    record.state = IsoMessageState::Pending;
+                    record.settled_at = None;
+                    record.rejection_reason_code = None;
+                    record.set_hold_reason(reason_code);
+                })?;
+                Ok("marked_pending")
             }
             Some("PART") => {
-                self.add_change_reason_code(original_id, "PARTIAL_SETTLEMENT");
-                "marked_partial"
+                self.try_transition_existing(original_id, |record| {
+                    record.last_seen = Instant::now();
+                    record.updated_at = SystemTime::now();
+                    record.add_change_reason_code("PARTIAL_SETTLEMENT".to_owned());
+                })?;
+                Ok("marked_partial")
             }
             Some("ACSP" | "ACTC") => {
-                self.mark_queued(original_id);
-                "marked_processing"
+                self.try_transition_existing(original_id, |record| {
+                    record.last_seen = Instant::now();
+                    record.updated_at = SystemTime::now();
+                    record.set_queued();
+                })?;
+                Ok("marked_processing")
             }
             Some(other) => {
-                self.add_change_reason_code(original_id, other);
-                "recorded_status_code"
+                let other = other.to_owned();
+                self.try_transition_existing(original_id, |record| {
+                    record.last_seen = Instant::now();
+                    record.updated_at = SystemTime::now();
+                    record.add_change_reason_code(other);
+                })?;
+                Ok("recorded_status_code")
             }
             None => {
-                self.add_change_reason_code(original_id, message_type);
-                "recorded_lifecycle_reference"
+                let message_type = message_type.to_owned();
+                self.try_transition_existing(original_id, |record| {
+                    record.last_seen = Instant::now();
+                    record.updated_at = SystemTime::now();
+                    record.add_change_reason_code(message_type);
+                })?;
+                Ok("recorded_lifecycle_reference")
             }
         }
+    }
+
+    fn try_transition_existing(
+        &self,
+        message_id: &str,
+        update: impl FnOnce(&mut IsoMessageRecord),
+    ) -> Result<bool, IsoStatusHistoryLimitError> {
+        let Some(mut record) = self.records.get_mut(message_id) else {
+            return Ok(false);
+        };
+        let old_hash = record.transaction_hash.clone();
+        record.try_transition(update)?;
+        let new_hash = record.transaction_hash.clone();
+        drop(record);
+        if old_hash != new_hash
+            && let Some(old_hash) = old_hash
+        {
+            self.tx_hash_index.remove(&old_hash);
+        }
+        self.persist_message(message_id);
+        Ok(true)
     }
 
     fn prune_expired(&self, now: Instant) {
@@ -2748,6 +3087,8 @@ impl Iso20022BridgeRuntime {
         };
         let messages_dir = store_dir.join("messages");
         let load_messages_dir = is_real_directory(&messages_dir);
+        let now = SystemTime::now();
+        let mut retained = BTreeMap::new();
         if load_messages_dir && let Ok(entries) = fs::read_dir(&messages_dir) {
             for entry in entries.flatten() {
                 let Ok(file_type) = entry.file_type() else {
@@ -2756,17 +3097,11 @@ impl Iso20022BridgeRuntime {
                 if !file_type.is_file() {
                     continue;
                 }
-                let Ok(metadata) = entry.metadata() else {
-                    continue;
-                };
-                if metadata.len() > ISO_PERSISTED_RECORD_MAX_BYTES {
-                    continue;
-                }
                 let path = entry.path();
                 if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                     continue;
                 }
-                let Ok(text) = fs::read_to_string(&path) else {
+                let Some(text) = read_persisted_record_bounded(&path) else {
                     continue;
                 };
                 let Ok(value) = norito::json::from_json::<JsonValue>(&text) else {
@@ -2779,16 +3114,48 @@ impl Iso20022BridgeRuntime {
                     {
                         continue;
                     }
-                    self.insert_metadata_indexes(&message_id, &record.metadata);
-                    if let Some(tx_hash) = record.transaction_hash.as_deref() {
-                        self.tx_hash_index
-                            .insert(tx_hash.to_owned(), message_id.clone());
+                    if !self.store_retention.is_zero()
+                        && now
+                            .duration_since(record.updated_at)
+                            .is_ok_and(|age| age > self.store_retention)
+                    {
+                        let _ = fs::remove_file(path);
+                        continue;
                     }
-                    self.records.insert(message_id, record);
+
+                    // This is the same stable order used by live compaction: retain the
+                    // greatest N `(updated_at_ms, message_id)` keys without ever holding N + 1.
+                    let retention_key = (system_time_to_ms(record.updated_at), message_id);
+                    if retained.contains_key(&retention_key) {
+                        retained.insert(retention_key, (path, record));
+                    } else if retained.len() < self.store_max_records {
+                        retained.insert(retention_key, (path, record));
+                    } else if retained
+                        .first_key_value()
+                        .is_some_and(|(oldest, _)| &retention_key > oldest)
+                    {
+                        if let Some((_, (evicted_path, _))) = retained.pop_first() {
+                            let _ = fs::remove_file(evicted_path);
+                        }
+                        retained.insert(retention_key, (path, record));
+                    } else {
+                        let _ = fs::remove_file(path);
+                    }
                 }
             }
         }
-        self.compact_persisted_records();
+
+        // Secondary indexes are populated only after retention selection, so none can
+        // grow with the number of files present on disk.
+        for ((_, message_id), (_, record)) in retained {
+            self.insert_metadata_indexes(&message_id, &record.metadata);
+            if let Some(tx_hash) = record.transaction_hash.as_deref() {
+                self.tx_hash_index
+                    .insert(tx_hash.to_owned(), message_id.clone());
+            }
+            self.records.insert(message_id, record);
+        }
+        self.persist_audit_index();
     }
 
     fn persist_message(&self, message_id: &str) {
@@ -2879,51 +3246,45 @@ impl Iso20022BridgeRuntime {
         let Some(store_dir) = self.store_dir.as_deref() else {
             return;
         };
-        let message_ids = self.retention_prune_message_ids(SystemTime::now());
-        if message_ids.is_empty() {
-            self.persist_audit_index();
-            return;
+        let now = SystemTime::now();
+        if !self.store_retention.is_zero() {
+            while let Some(message_id) = self.oldest_expired_record_message_id(now) {
+                self.remove_record_for_retention(&message_id, store_dir);
+            }
         }
-        for message_id in message_ids {
+        while self.records.len() > self.store_max_records {
+            let Some(message_id) = self.oldest_record_message_id() else {
+                break;
+            };
             self.remove_record_for_retention(&message_id, store_dir);
         }
         self.persist_audit_index();
     }
 
-    fn retention_prune_message_ids(&self, now: SystemTime) -> Vec<String> {
-        let mut prune = HashSet::new();
-        let mut records = self
-            .records
+    fn oldest_expired_record_message_id(&self, now: SystemTime) -> Option<String> {
+        self.records
             .iter()
-            .map(|entry| (entry.key().clone(), entry.value().updated_at))
-            .collect::<Vec<_>>();
-
-        if !self.store_retention.is_zero() {
-            for (message_id, updated_at) in &records {
-                if now
-                    .duration_since(*updated_at)
+            .filter(|entry| {
+                now.duration_since(entry.value().updated_at)
                     .is_ok_and(|age| age > self.store_retention)
-                {
-                    prune.insert(message_id.clone());
-                }
-            }
-        }
+            })
+            .min_by(|left, right| {
+                system_time_to_ms(left.value().updated_at)
+                    .cmp(&system_time_to_ms(right.value().updated_at))
+                    .then_with(|| left.key().cmp(right.key()))
+            })
+            .map(|entry| entry.key().clone())
+    }
 
-        if self.store_max_records > 0 && records.len() > self.store_max_records {
-            records.sort_by(|left, right| {
-                system_time_to_ms(left.1)
-                    .cmp(&system_time_to_ms(right.1))
-                    .then_with(|| left.0.cmp(&right.0))
-            });
-            let overflow = records.len() - self.store_max_records;
-            for (message_id, _) in records.into_iter().take(overflow) {
-                prune.insert(message_id);
-            }
-        }
-
-        let mut prune = prune.into_iter().collect::<Vec<_>>();
-        prune.sort();
-        prune
+    fn oldest_record_message_id(&self) -> Option<String> {
+        self.records
+            .iter()
+            .min_by(|left, right| {
+                system_time_to_ms(left.value().updated_at)
+                    .cmp(&system_time_to_ms(right.value().updated_at))
+                    .then_with(|| left.key().cmp(right.key()))
+            })
+            .map(|entry| entry.key().clone())
     }
 
     fn remove_record_for_retention(&self, message_id: &str, store_dir: &Path) {
@@ -3230,12 +3591,6 @@ fn persisted_json_fits_record_cap(json: &str) -> bool {
     u64::try_from(json.len()).is_ok_and(|len| len <= ISO_PERSISTED_RECORD_MAX_BYTES)
 }
 
-fn persisted_record_fits_max_bytes(message_id: &str, record: &IsoMessageRecord) -> bool {
-    persisted_record_json(message_id, record)
-        .as_deref()
-        .is_some_and(persisted_json_fits_record_cap)
-}
-
 fn persisted_record_body_value(message_id: &str, record: &IsoMessageRecord) -> norito::json::Map {
     let mut root = norito::json::Map::new();
     root.insert(
@@ -3443,22 +3798,33 @@ fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageR
     let ledger_tx_queued = obj.get("ledger_tx_queued")?.as_bool()?;
     let settled_at = required_nullable_time_ms(obj, "settled_at_ms")?;
     let hold_reason_code = required_nullable_string(obj, "hold_reason_code")?;
-    let change_reason_codes = obj
-        .get("change_reason_codes")?
-        .as_array()?
+    let change_reason_values = obj.get("change_reason_codes")?.as_array()?;
+    if change_reason_values.len() > ISO_CHANGE_REASON_MAX_ENTRIES_V1 {
+        return None;
+    }
+    let change_reason_codes = change_reason_values
         .iter()
         .map(|item| item.as_str().and_then(clean_persisted_string))
         .collect::<Option<Vec<_>>>()?;
+    if change_reason_codes_encoded_len(&change_reason_codes)?
+        > ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1
+    {
+        return None;
+    }
     let rejection_reason_code = required_nullable_string(obj, "rejection_reason_code")?;
     let context = context_from_value(obj.get("context")?)?;
     let metadata = metadata_from_value(obj.get("metadata")?)?;
-    let status_history = obj
-        .get("status_history")?
-        .as_array()?
+    let status_history_values = obj.get("status_history")?.as_array()?;
+    if status_history_values.is_empty()
+        || status_history_values.len() > ISO_STATUS_HISTORY_MAX_ENTRIES_V1
+    {
+        return None;
+    }
+    let status_history = status_history_values
         .iter()
         .map(history_from_value)
         .collect::<Option<Vec<_>>>()?;
-    if status_history.is_empty() {
+    if status_history_encoded_len(&status_history)? > ISO_STATUS_HISTORY_MAX_ENCODED_BYTES_V1 {
         return None;
     }
     let record = IsoMessageRecord {
@@ -3479,7 +3845,7 @@ fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageR
     Some((message_id, record))
 }
 
-fn persisted_audit_index_value(records: &[(String, IsoMessageRecord)]) -> JsonValue {
+fn persisted_audit_index_value(records: Vec<JsonValue>) -> JsonValue {
     let mut root = norito::json::Map::new();
     root.insert(
         "version".to_owned(),
@@ -3489,15 +3855,7 @@ fn persisted_audit_index_value(records: &[(String, IsoMessageRecord)]) -> JsonVa
         "record_count".to_owned(),
         JsonValue::from(u64::try_from(records.len()).unwrap_or(u64::MAX)),
     );
-    root.insert(
-        "records".to_owned(),
-        JsonValue::Array(
-            records
-                .iter()
-                .map(|(message_id, record)| persisted_audit_index_entry_value(message_id, record))
-                .collect(),
-        ),
-    );
+    root.insert("records".to_owned(), JsonValue::Array(records));
     let digest = persisted_record_digest(&JsonValue::Object(root.clone()));
     root.insert(
         ISO_PERSISTED_AUDIT_INDEX_DIGEST_FIELD.to_owned(),
@@ -3506,8 +3864,15 @@ fn persisted_audit_index_value(records: &[(String, IsoMessageRecord)]) -> JsonVa
     JsonValue::Object(root)
 }
 
-fn persisted_audit_index_entry_value(message_id: &str, record: &IsoMessageRecord) -> JsonValue {
+fn persisted_audit_index_entry_value(
+    message_id: &str,
+    record: &IsoMessageRecord,
+) -> Option<JsonValue> {
     let persisted_record = persisted_record_value(message_id, record);
+    let persisted_json = norito::json::to_string_pretty(&persisted_record).ok()?;
+    if !persisted_json_fits_record_cap(&persisted_json) {
+        return None;
+    }
     let record_sha256 = persisted_record
         .as_object()
         .and_then(|obj| obj.get(ISO_PERSISTED_RECORD_DIGEST_FIELD))
@@ -3564,7 +3929,7 @@ fn persisted_audit_index_entry_value(message_id: &str, record: &IsoMessageRecord
         "reference_snapshot_id".to_owned(),
         string_or_null(record.metadata.reference_snapshot_id()),
     );
-    JsonValue::Object(entry)
+    Some(JsonValue::Object(entry))
 }
 
 fn persisted_audit_index_digest_matches(obj: &norito::json::Map) -> bool {
@@ -3613,6 +3978,33 @@ fn audit_export_anchor_value(index: &JsonValue, store_dir: Option<&Path>) -> Jso
 
 fn audit_export_anchor_digest_matches(obj: &norito::json::Map) -> bool {
     persisted_json_digest_matches(obj, ISO_AUDIT_EXPORT_ANCHOR_DIGEST_FIELD)
+}
+
+fn read_persisted_record_bounded(path: &Path) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > ISO_PERSISTED_RECORD_MAX_BYTES {
+        return None;
+    }
+
+    let initial_capacity = usize::try_from(metadata.len()).ok()?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(initial_capacity).ok()?;
+    let mut reader = file.take(ISO_PERSISTED_RECORD_MAX_BYTES.saturating_add(1));
+    let mut chunk = [0_u8; 16 * 1024];
+    loop {
+        let read = reader.read(&mut chunk).ok()?;
+        if read == 0 {
+            break;
+        }
+        let next_len = bytes.len().checked_add(read)?;
+        if u64::try_from(next_len).ok()? > ISO_PERSISTED_RECORD_MAX_BYTES {
+            return None;
+        }
+        bytes.try_reserve_exact(read).ok()?;
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+    String::from_utf8(bytes).ok()
 }
 
 fn is_real_directory(path: &Path) -> bool {
@@ -3860,6 +4252,132 @@ fn history_value(entry: &IsoStatusHistoryEntry) -> JsonValue {
         string_or_null(entry.reason_code()),
     );
     JsonValue::Object(map)
+}
+
+fn status_history_encoded_len(entries: &[IsoStatusHistoryEntry]) -> Option<usize> {
+    entries
+        .iter()
+        .enumerate()
+        .try_fold(2usize, |encoded_bytes, (index, entry)| {
+            let separator_bytes = usize::from(index != 0);
+            encoded_bytes
+                .checked_add(separator_bytes)
+                .and_then(|bytes| {
+                    status_history_entry_encoded_len(
+                        entry.status,
+                        entry.pacs002_code,
+                        entry.updated_at,
+                        entry.detail.as_deref(),
+                        entry.reason_code.as_deref(),
+                    )
+                    .and_then(|entry_bytes| bytes.checked_add(entry_bytes))
+                })
+        })
+}
+
+fn change_reason_codes_encoded_len(codes: &[String]) -> Option<usize> {
+    codes
+        .iter()
+        .enumerate()
+        .try_fold(2usize, |encoded_bytes, (index, code)| {
+            encoded_bytes
+                .checked_add(usize::from(index != 0))
+                .and_then(|bytes| {
+                    json_string_encoded_len(code)
+                        .and_then(|code_bytes| bytes.checked_add(code_bytes))
+                })
+        })
+}
+
+fn collect_change_reason_codes_bounded<I, S>(
+    codes: I,
+) -> Result<Vec<String>, IsoStatusHistoryLimitError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut retained = Vec::new();
+    for code in codes {
+        let code = code.into();
+        if retained.iter().any(|existing| existing == &code) {
+            continue;
+        }
+        if retained.len() >= ISO_CHANGE_REASON_MAX_ENTRIES_V1 {
+            return Err(IsoStatusHistoryLimitError::ChangeReasonCount);
+        }
+        let current_encoded_bytes = change_reason_codes_encoded_len(&retained)
+            .ok_or(IsoStatusHistoryLimitError::ChangeReasonEncodedBytes)?;
+        let code_encoded_bytes = json_string_encoded_len(&code)
+            .ok_or(IsoStatusHistoryLimitError::ChangeReasonEncodedBytes)?;
+        let prospective_encoded_bytes = current_encoded_bytes
+            .checked_add(usize::from(!retained.is_empty()))
+            .and_then(|bytes| bytes.checked_add(code_encoded_bytes))
+            .ok_or(IsoStatusHistoryLimitError::ChangeReasonEncodedBytes)?;
+        if prospective_encoded_bytes > ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1 {
+            return Err(IsoStatusHistoryLimitError::ChangeReasonEncodedBytes);
+        }
+        retained
+            .try_reserve(1)
+            .map_err(|_| IsoStatusHistoryLimitError::Allocation)?;
+        retained.push(code);
+    }
+    Ok(retained)
+}
+
+fn status_history_entry_encoded_len(
+    status: IsoMessageState,
+    pacs002_code: Pacs002Status,
+    updated_at: SystemTime,
+    detail: Option<&str>,
+    reason_code: Option<&str>,
+) -> Option<usize> {
+    let fields = [
+        ("status", Some(json_string_encoded_len(status.label())?)),
+        (
+            "pacs002_code",
+            Some(json_string_encoded_len(pacs002_code.code())?),
+        ),
+        (
+            "updated_at_ms",
+            Some(unsigned_decimal_encoded_len(system_time_to_ms(updated_at))),
+        ),
+        ("detail", nullable_json_string_encoded_len(detail)),
+        ("reason_code", nullable_json_string_encoded_len(reason_code)),
+    ];
+    fields
+        .into_iter()
+        .enumerate()
+        .try_fold(2usize, |encoded_bytes, (index, (key, value_len))| {
+            encoded_bytes
+                .checked_add(usize::from(index != 0))
+                .and_then(|bytes| bytes.checked_add(json_string_encoded_len(key)?))
+                .and_then(|bytes| bytes.checked_add(1))
+                .and_then(|bytes| bytes.checked_add(value_len?))
+        })
+}
+
+fn nullable_json_string_encoded_len(value: Option<&str>) -> Option<usize> {
+    value.map_or(Some(4), json_string_encoded_len)
+}
+
+fn json_string_encoded_len(value: &str) -> Option<usize> {
+    value.chars().try_fold(2usize, |encoded_bytes, ch| {
+        let char_bytes = match ch {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{08}' | '\u{0C}' => 2,
+            ch if (ch as u32) < 0x20 => 6,
+            ch => ch.len_utf8(),
+        };
+        encoded_bytes.checked_add(char_bytes)
+    })
+}
+
+fn unsigned_decimal_encoded_len(mut value: u64) -> usize {
+    let mut digits = 1;
+    while value >= 10 {
+        value /= 10;
+        digits += 1;
+    }
+    digits
 }
 
 fn history_from_value(value: &JsonValue) -> Option<IsoStatusHistoryEntry> {
@@ -20540,6 +21058,116 @@ mod tests {
         .expect("write mutated JSON");
     }
 
+    #[test]
+    fn persisted_record_reader_enforces_the_open_file_byte_limit() {
+        let cap = usize::try_from(ISO_PERSISTED_RECORD_MAX_BYTES).expect("record cap fits usize");
+        let mut exact = NamedTempFile::new().expect("exact-size record");
+        exact
+            .write_all(&vec![b'a'; cap])
+            .expect("write exact-size record");
+        assert_eq!(
+            read_persisted_record_bounded(exact.path())
+                .expect("exact-size UTF-8 record")
+                .len(),
+            cap
+        );
+
+        let mut excessive = NamedTempFile::new().expect("oversized record");
+        excessive
+            .write_all(&vec![b'a'; cap + 1])
+            .expect("write oversized record");
+        assert!(read_persisted_record_bounded(excessive.path()).is_none());
+    }
+
+    #[test]
+    fn runtime_rejects_unbounded_or_excessive_store_counts() {
+        assert_eq!(
+            ISO_PERSISTED_RECORD_MAX_COUNT_V1,
+            iroha_config::parameters::defaults::torii::ISO_BRIDGE_STORE_MAX_RECORDS_HARD_LIMIT_V1
+        );
+        for (value, expected) in [
+            (0, "must be greater than zero"),
+            (
+                ISO_PERSISTED_RECORD_MAX_COUNT_V1 + 1,
+                "must not exceed the first-release hard maximum",
+            ),
+        ] {
+            let mut config = sample_config();
+            config.store_max_records = value;
+            let error = match Iso20022BridgeRuntime::from_config(&config) {
+                Err(error) => error,
+                Ok(_) => panic!("invalid store count must fail closed"),
+            };
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+
+    #[test]
+    fn durable_store_reload_streams_only_deterministic_newest_records() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        config.store_max_records = 4;
+        {
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            for message_id in ["old", "middle", "tie-a", "tie-z"] {
+                assert!(runtime.check_and_record_inbound(
+                    message_id,
+                    IsoMessageMetadata::inbound(
+                        "generic-iso20022",
+                        "pacs.008",
+                        None,
+                        Some(format!("{message_id}-biz")),
+                        None,
+                        format!("{message_id}-hash"),
+                        "snapshot".to_owned(),
+                        false,
+                    ),
+                ));
+                runtime.mark_accepted(message_id, &format!("tx-{message_id}"));
+            }
+        }
+
+        for (message_id, updated_at_ms) in [
+            ("old", 1_000_u64),
+            ("middle", 2_000),
+            ("tie-a", 3_000),
+            ("tie-z", 3_000),
+        ] {
+            let path = store
+                .path()
+                .join("messages")
+                .join(message_filename(message_id));
+            rewrite_persisted_record(&path, |obj| {
+                obj.insert("updated_at_ms".to_owned(), JsonValue::from(updated_at_ms));
+            });
+        }
+
+        config.store_max_records = 2;
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert_eq!(reloaded.records.len(), 2);
+        assert_eq!(reloaded.tx_hash_index.len(), 2);
+        assert_eq!(reloaded.payload_hash_index.len(), 2);
+        assert_eq!(reloaded.business_message_id_index.len(), 2);
+        assert!(reloaded.message_status("old").is_none());
+        assert!(reloaded.message_status("middle").is_none());
+        assert!(reloaded.message_status("tie-a").is_some());
+        assert!(reloaded.message_status("tie-z").is_some());
+        for evicted in ["old", "middle"] {
+            assert!(
+                !store
+                    .path()
+                    .join("messages")
+                    .join(message_filename(evicted))
+                    .exists()
+            );
+        }
+    }
+
     fn assert_digest_correct_record_mutation_is_rejected(
         message_id: &str,
         mutate: impl FnOnce(&mut norito::json::Map),
@@ -21267,10 +21895,49 @@ mod tests {
         assert_digest_correct_record_mutation_is_rejected("empty-status-history", |obj| {
             obj.insert("status_history".to_owned(), JsonValue::Array(Vec::new()));
         });
+        assert_digest_correct_record_mutation_is_rejected("status-history-entry-overflow", |obj| {
+            let history = obj
+                .get_mut("status_history")
+                .and_then(JsonValue::as_array_mut)
+                .expect("status history array");
+            let entry = history.first().expect("initial history entry").clone();
+            history.resize(ISO_STATUS_HISTORY_MAX_ENTRIES_V1 + 1, entry);
+        });
+        assert_digest_correct_record_mutation_is_rejected("status-history-byte-overflow", |obj| {
+            let history = obj
+                .get_mut("status_history")
+                .and_then(JsonValue::as_array_mut)
+                .expect("status history array");
+            history[0]
+                .as_object_mut()
+                .expect("status history entry")
+                .insert(
+                    "detail".to_owned(),
+                    JsonValue::from("x".repeat(ISO_STATUS_HISTORY_MAX_ENCODED_BYTES_V1)),
+                );
+        });
         assert_digest_correct_record_mutation_is_rejected("non-string-change-reason", |obj| {
             obj.insert(
                 "change_reason_codes".to_owned(),
                 JsonValue::Array(vec![JsonValue::from("RJCT"), JsonValue::from(7_u64)]),
+            );
+        });
+        assert_digest_correct_record_mutation_is_rejected("change-reason-entry-overflow", |obj| {
+            obj.insert(
+                "change_reason_codes".to_owned(),
+                JsonValue::Array(
+                    (0..=ISO_CHANGE_REASON_MAX_ENTRIES_V1)
+                        .map(|index| JsonValue::from(format!("U{index:03}")))
+                        .collect(),
+                ),
+            );
+        });
+        assert_digest_correct_record_mutation_is_rejected("change-reason-byte-overflow", |obj| {
+            obj.insert(
+                "change_reason_codes".to_owned(),
+                JsonValue::Array(vec![JsonValue::from(
+                    "x".repeat(ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1),
+                )]),
             );
         });
         assert_digest_correct_record_mutation_is_rejected("control-detail", |obj| {
@@ -21667,7 +22334,13 @@ mod tests {
 
         let oversized_detail =
             "x".repeat(usize::try_from(ISO_PERSISTED_RECORD_MAX_BYTES).expect("cap fits") + 1);
-        runtime.mark_lifecycle_accepted("oversized-persist", Some(oversized_detail));
+        runtime.update_message_context(
+            "oversized-persist",
+            IsoMessageContext {
+                ledger_id: Some(oversized_detail),
+                ..IsoMessageContext::default()
+            },
+        );
 
         assert!(
             !path.exists(),
@@ -22471,6 +23144,237 @@ mod tests {
         runtime.mark_transaction_applied("hash-1", SystemTime::now());
         let settled = runtime.message_status("m2").expect("status");
         assert_eq!(settled.pacs002_code(), "ACSC");
+    }
+
+    #[test]
+    fn status_history_encoded_byte_cap_accepts_exact_boundary() {
+        let mut exact = IsoMessageRecord::pending(Instant::now());
+        exact.status_history.clear();
+        exact.state = IsoMessageState::Rejected;
+        exact.updated_at = std::time::UNIX_EPOCH;
+        exact.detail = Some(String::new());
+        let empty_entry_bytes = status_history_entry_encoded_len(
+            exact.state,
+            exact.derived_status(),
+            exact.updated_at,
+            exact.detail.as_deref(),
+            None,
+        )
+        .expect("fixed entry length");
+        let detail_bytes = ISO_STATUS_HISTORY_MAX_ENCODED_BYTES_V1
+            .checked_sub(2 + empty_entry_bytes)
+            .expect("V1 byte cap exceeds fixed history syntax");
+        exact.detail = Some("x".repeat(detail_bytes));
+        assert!(exact.try_push_history().expect("exact byte cap must fit"));
+        assert_eq!(
+            status_history_encoded_len(&exact.status_history),
+            Some(ISO_STATUS_HISTORY_MAX_ENCODED_BYTES_V1)
+        );
+        let canonical = norito::json::to_string(&JsonValue::Array(
+            exact.status_history.iter().map(history_value).collect(),
+        ))
+        .expect("encode exact-bound history");
+        assert_eq!(canonical.len(), ISO_STATUS_HISTORY_MAX_ENCODED_BYTES_V1);
+
+        let mut overflow = IsoMessageRecord::pending(Instant::now());
+        overflow.status_history.clear();
+        overflow.state = IsoMessageState::Rejected;
+        overflow.updated_at = std::time::UNIX_EPOCH;
+        overflow.detail = Some("x".repeat(detail_bytes + 1));
+        assert_eq!(
+            overflow.try_push_history(),
+            Err(IsoStatusHistoryLimitError::EncodedBytes)
+        );
+        assert!(overflow.status_history.is_empty());
+    }
+
+    #[test]
+    fn alternating_status_history_refuses_entry_overflow_before_memory_or_disk_mutation() {
+        let mut record = IsoMessageRecord::pending(Instant::now());
+        for index in 1..ISO_STATUS_HISTORY_MAX_ENTRIES_V1 {
+            let accepted = index % 2 == 1;
+            record
+                .try_transition(|candidate| {
+                    candidate.updated_at = std::time::UNIX_EPOCH
+                        + Duration::from_millis(u64::try_from(index).expect("index fits u64"));
+                    candidate.state = if accepted {
+                        IsoMessageState::Accepted
+                    } else {
+                        IsoMessageState::Rejected
+                    };
+                    candidate.ledger_tx_queued = accepted;
+                    candidate.detail = (!accepted).then(|| "alternating rejection".to_owned());
+                    candidate.rejection_reason_code = (!accepted).then(|| "RJCT".to_owned());
+                })
+                .expect("history below the entry cap must advance");
+        }
+        assert_eq!(
+            record.status_history.len(),
+            ISO_STATUS_HISTORY_MAX_ENTRIES_V1
+        );
+        let tx_hash = "bounded-alternating-tx";
+        record.transaction_hash = Some(tx_hash.to_owned());
+
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let message_id = "bounded-alternating-history";
+        runtime.records.insert(message_id.to_owned(), record);
+        runtime
+            .tx_hash_index
+            .insert(tx_hash.to_owned(), message_id.to_owned());
+        runtime.persist_message(message_id);
+        let path = store
+            .path()
+            .join("messages")
+            .join(message_filename(message_id));
+        let before = fs::read(&path).expect("read exact-bound persisted record");
+
+        assert!(!runtime.mark_rejected(
+            message_id,
+            Some("capacity overflow rejection".to_owned()),
+            Some("RJCT"),
+        ));
+        let after = fs::read(&path).expect("capacity refusal must retain persisted record");
+        assert_eq!(after, before);
+        let status = runtime
+            .message_status(message_id)
+            .expect("status remains present");
+        assert_eq!(status.status_label(), "Accepted");
+        assert_eq!(status.transaction_hash(), Some(tx_hash));
+        assert_eq!(
+            runtime
+                .tx_hash_index
+                .get(tx_hash)
+                .as_deref()
+                .map(String::as_str),
+            Some(message_id),
+            "capacity refusal must retain the transaction index"
+        );
+        assert_eq!(
+            status.status_history().len(),
+            ISO_STATUS_HISTORY_MAX_ENTRIES_V1
+        );
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("reload cfg")
+            .expect("reload enabled");
+        assert_eq!(
+            reloaded
+                .message_status(message_id)
+                .expect("exact-bound persisted history reloads")
+                .status_history()
+                .len(),
+            ISO_STATUS_HISTORY_MAX_ENTRIES_V1
+        );
+    }
+
+    #[test]
+    fn change_reason_encoded_byte_cap_accepts_exact_boundary() {
+        let code_bytes = ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1
+            .checked_sub(4)
+            .expect("V1 byte cap exceeds array and string syntax");
+        let mut exact = IsoMessageRecord::pending(Instant::now());
+        exact
+            .try_transition(|candidate| {
+                candidate.change_reason_codes = vec!["x".repeat(code_bytes)];
+            })
+            .expect("exact change-reason byte cap must fit");
+        assert_eq!(
+            change_reason_codes_encoded_len(&exact.change_reason_codes),
+            Some(ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1)
+        );
+        let canonical = norito::json::to_string(&JsonValue::Array(
+            exact
+                .change_reason_codes
+                .iter()
+                .map(|code| JsonValue::from(code.as_str()))
+                .collect(),
+        ))
+        .expect("encode exact-bound change reasons");
+        assert_eq!(canonical.len(), ISO_CHANGE_REASON_MAX_ENCODED_BYTES_V1);
+
+        let mut overflow = IsoMessageRecord::pending(Instant::now());
+        let before = persisted_record_json("change-reason-overflow", &overflow)
+            .expect("encode pre-transition record");
+        assert_eq!(
+            overflow.try_transition(|candidate| {
+                candidate.change_reason_codes = vec!["x".repeat(code_bytes + 1)];
+            }),
+            Err(IsoStatusHistoryLimitError::ChangeReasonEncodedBytes)
+        );
+        assert_eq!(
+            persisted_record_json("change-reason-overflow", &overflow)
+                .expect("encode refused record"),
+            before
+        );
+    }
+
+    #[test]
+    fn unknown_lifecycle_codes_refuse_unique_growth_before_memory_or_disk_mutation() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let message_id = "bounded-unknown-lifecycle-codes";
+        record_original(&runtime, message_id, "pacs.008");
+
+        for index in 0..ISO_CHANGE_REASON_MAX_ENTRIES_V1 {
+            let code = format!("U{index:03}");
+            assert_eq!(
+                runtime
+                    .apply_lifecycle_update(message_id, "pacs.002", Some(&code), None, None)
+                    .expect("unique code below cap must apply"),
+                "recorded_status_code"
+            );
+        }
+        let status = runtime.message_status(message_id).expect("bounded status");
+        assert_eq!(
+            status.change_reason_codes().len(),
+            ISO_CHANGE_REASON_MAX_ENTRIES_V1
+        );
+        assert_eq!(
+            status.status_history().len(),
+            2,
+            "unique unknown codes must not evade their own cap when status history deduplicates"
+        );
+        let path = store
+            .path()
+            .join("messages")
+            .join(message_filename(message_id));
+        let before = fs::read(&path).expect("read exact-bound persisted record");
+
+        assert_eq!(
+            runtime.apply_lifecycle_update(message_id, "pacs.002", Some("U_OVERFLOW"), None, None,),
+            Err(IsoStatusHistoryLimitError::ChangeReasonCount)
+        );
+        assert_eq!(
+            fs::read(&path).expect("read record after capacity refusal"),
+            before
+        );
+        assert_eq!(
+            runtime
+                .message_status(message_id)
+                .expect("status survives refusal")
+                .change_reason_codes()
+                .len(),
+            ISO_CHANGE_REASON_MAX_ENTRIES_V1
+        );
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("reload cfg")
+            .expect("reload enabled");
+        assert_eq!(
+            reloaded
+                .message_status(message_id)
+                .expect("exact-bound change reasons reload")
+                .change_reason_codes()
+                .len(),
+            ISO_CHANGE_REASON_MAX_ENTRIES_V1
+        );
     }
 
     #[test]

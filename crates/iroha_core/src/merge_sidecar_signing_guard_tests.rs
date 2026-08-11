@@ -165,6 +165,34 @@
         ));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn signing_guard_reads_final_records_through_single_identity_bounded_handles() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let context = MergeSigningContextV1 {
+            epoch_id: 2,
+            view: 0,
+            carrier_height: 3,
+            parent_hash: HashOf::from_untyped_unchecked(Hash::new(b"bounded-record-parent")),
+            validator_set_hash: HashOf::new(&vec![peer(b"validator")]),
+        };
+        let candidate = signing_candidate(&context, b"bounded-record");
+        let guard = MergeSigningGuard::open(temp.path()).expect("open guard");
+        guard
+            .authorize(context.clone(), Hash::new(b"bounded-record"), &candidate)
+            .expect("authorize durable record");
+        let record_path = guard.record_path(&context);
+        let alias_path = temp.path().join("record-hard-link");
+        fs::hard_link(&record_path, &alias_path).expect("create second record link");
+        drop(guard);
+
+        assert!(matches!(
+            MergeSigningGuard::open(temp.path()),
+            Err(MergeSidecarError::SigningGuard(message))
+                if message.contains("unsafe lifecycle signing-guard record artifact")
+        ));
+    }
+
     #[test]
     fn signing_guard_prune_boundary_never_reopens_committed_context() {
         let temp = tempfile::tempdir().expect("temp dir");

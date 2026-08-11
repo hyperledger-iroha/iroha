@@ -7998,11 +7998,25 @@ impl Kura {
             ));
         }
         let mut bytes = Vec::new();
-        bytes.try_reserve_exact(usize::try_from(metadata.file.len())?)?;
-        Read::by_ref(&mut file)
-            .take(u64::try_from(byte_limit.saturating_add(1))?)
-            .read_to_end(&mut bytes)
+        let expected_len = usize::try_from(metadata.file.len())?;
+        bytes.try_reserve_exact(expected_len)?;
+        bytes.resize(expected_len, 0);
+        file.read_exact(&mut bytes)
             .map_err(|err| Error::IO(err, path.to_path_buf()))?;
+        let mut growth_probe = [0_u8; 1];
+        if file
+            .read(&mut growth_probe)
+            .map_err(|err| Error::IO(err, path.to_path_buf()))?
+            != 0
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar grew beyond its admitted length while reading",
+                ),
+                path.to_path_buf(),
+            ));
+        }
         let opened_after = file
             .metadata()
             .map_err(|err| Error::IO(err, path.to_path_buf()))?;
@@ -15654,7 +15668,6 @@ impl Kura {
     /// # Errors
     ///
     /// Returns an error if finality, its association, or retained record is invalid.
-    #[cfg(test)]
     pub(crate) fn v2_finality_artifact_with_merge_reference(
         &self,
         height: u64,
@@ -16805,6 +16818,12 @@ impl Kura {
         }
         let tmp_path = path.with_extension("norito.tmp");
         let bytes = checkpoint.encode();
+        Self::ensure_sidecar_encoding_within_limit(
+            &path,
+            "WSV checkpoint",
+            &bytes,
+            MAX_WSV_CHECKPOINT_BYTES,
+        )?;
         let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
             opts.write(true).create(true).truncate(true);
         })?;
@@ -16838,6 +16857,12 @@ impl Kura {
         let dir = self.wsv_checkpoint_dir();
         let tmp_path = path.with_extension("norito.tmp");
         let bytes = checkpoint.encode();
+        Self::ensure_sidecar_encoding_within_limit(
+            &path,
+            "WSV checkpoint",
+            &bytes,
+            MAX_WSV_CHECKPOINT_BYTES,
+        )?;
         let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
             opts.write(true).create(true).truncate(true);
         })?;
@@ -16888,6 +16913,12 @@ impl Kura {
         let path = self.commit_manifest_path(manifest.height);
         let tmp_path = path.with_extension("norito.tmp");
         let bytes = manifest.encode();
+        Self::ensure_sidecar_encoding_within_limit(
+            &path,
+            "commit manifest",
+            &bytes,
+            MAX_COMMIT_MANIFEST_BYTES,
+        )?;
         let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
             opts.write(true).create(true).truncate(true);
         })?;
@@ -16906,10 +16937,9 @@ impl Kura {
     }
 
     fn decode_commit_manifest_at(path: &Path) -> Result<Option<CommitManifest>> {
-        let bytes = match std::fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(Error::IO(err, path.to_path_buf())),
+        let Some(bytes) = Self::read_bounded_replay_sidecar_at(path, MAX_COMMIT_MANIFEST_BYTES)?
+        else {
+            return Ok(None);
         };
         let mut cursor = bytes.as_slice();
         CommitManifest::decode_all(&mut cursor)
@@ -17317,60 +17347,11 @@ impl Kura {
         let _guard = self.sidecar_lock.lock();
         self.wsv_checkpoint_under_sidecar_guard(height)
     }
+}
 
-    /// Read a WSV checkpoint while the caller holds `sidecar_lock`.
-    fn wsv_checkpoint_under_sidecar_guard(&self, height: u64) -> Result<Option<WsvCheckpoint>> {
-        self.ensure_prune_recovery_not_required()?;
-        self.record_startup_replay_historical_payload_read();
-        let path = self.wsv_checkpoint_path(height);
-        let checkpoint = Self::decode_wsv_checkpoint_at(&path)?;
-        let Some(checkpoint) = checkpoint else {
-            self.ensure_prune_recovery_not_required()?;
-            return Ok(None);
-        };
-        if checkpoint.height != height {
-            return Err(Error::NoritoFrame(norito::core::Error::Message(format!(
-                "WSV checkpoint height mismatch: expected {height}, got {}",
-                checkpoint.height
-            ))));
-        }
-        let Some(block_height) = NonZeroUsize::new(usize::try_from(height)?) else {
-            return Err(Error::NoritoFrame(norito::core::Error::Message(
-                "WSV checkpoint height must be non-zero".into(),
-            )));
-        };
-        let durable_hash = self.get_durable_block_hash(block_height);
-        self.ensure_prune_recovery_not_required()?;
-        let Some(durable_hash) = durable_hash else {
-            return Err(Error::BlockHeightGap {
-                expected_next_height: u64::try_from(self.exact_durable_blocks_count()?)?
-                    .saturating_add(1),
-                actual_height: height,
-            });
-        };
-        if checkpoint.block_hash != durable_hash {
-            return Err(Error::BlockHeightConflict {
-                height,
-                expected: durable_hash,
-                actual: checkpoint.block_hash,
-            });
-        }
-        self.ensure_prune_recovery_not_required()?;
-        Ok(Some(checkpoint))
-    }
+include!("kura/wsv_checkpoint_read_helpers.rs");
 
-    fn decode_wsv_checkpoint_at(path: &Path) -> Result<Option<WsvCheckpoint>> {
-        let bytes = match std::fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(Error::IO(err, path.to_path_buf())),
-        };
-        let mut cursor = bytes.as_slice();
-        WsvCheckpoint::decode_all(&mut cursor)
-            .map(Some)
-            .map_err(Error::NoritoFrame)
-    }
-
+impl Kura {
     /// Return the latest canonical WSV checkpoint height at or below `height`.
     pub fn latest_wsv_checkpoint_height_at_or_before(&self, height: u64) -> Result<Option<u64>> {
         self.ensure_prune_recovery_not_required()?;

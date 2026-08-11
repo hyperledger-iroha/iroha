@@ -193,6 +193,13 @@ impl FastJsonWrite for PeerId {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.public_key.to_string(), out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(&self.public_key.to_string(), out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -213,6 +220,13 @@ impl JsonDeserialize for PeerId {
 impl FastJsonWrite for Peer {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(&self.to_string(), out)
     }
 }
 

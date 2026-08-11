@@ -3728,18 +3728,7 @@ impl StorageBackend {
             .cloned()
     }
 
-    /// Returns a clone of the stored manifest metadata, looked up by digest.
-    #[must_use]
-    pub fn manifest_by_digest(&self, digest: &[u8; 32]) -> Option<StoredManifest> {
-        let manifest_id = hex::encode(digest);
-        self.state
-            .read()
-            .expect("storage state poisoned")
-            .manifests
-            .get(&manifest_id)
-            .filter(|manifest| manifest.manifest_digest == *digest)
-            .cloned()
-    }
+    include!("store_manifest_lookup.rs");
 
     /// Run work while holding the manifest lifecycle read lease.
     ///

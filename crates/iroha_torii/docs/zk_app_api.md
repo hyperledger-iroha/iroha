@@ -56,7 +56,11 @@ Notes
   per report under `./storage/torii/zk_prover/report_index/{id}.json`; saving a
   report never rewrites a global summary file. A shard is capped at 64 KiB;
   its projected error and content-type fields are capped at 4 KiB and 256
-  bytes respectively.
+  bytes respectively. Listing, counting, deletion, and garbage collection scan
+  one shard at a time. Ordered listing retains only compact keys for the
+  requested page window; list responses default to 100 entries, cap at 1000,
+  reject offsets above 10000, and cap full-report JSON responses at 16 MiB.
+  Bulk deletion removes at most 1000 deterministically ordered reports per call.
 - Base directory is configured with `torii.data_dir`; tests/dev harnesses can override with `data_dir::OverrideGuard`.
 - IVM derive/prove require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and a required typed `fee_payment` intent whose `gas_limit` is set. Obtain the exact intent from `POST /v1/fees/quote`; legacy `fee_sponsor`, `gas_limit`, and `gas_asset_id` metadata keys are rejected.
 - `/v1/zk/ivm/derive` accepts verifying keys with backend `halo2/ipa` or `stark/fri` (including `stark/fri/...` variants) (must be compatible with `ivm-execution-v1`).
@@ -106,8 +110,12 @@ All runtime behavior is configured via `iroha_config` (Torii section). The follo
   - Default: 30 seconds.
 - `torii.zk_prover_reports_ttl_secs` (u64)
   - Retention window for prover reports.
+- `torii.zk_prover_reports_max_count` / `torii.zk_prover_reports_max_bytes`
+  - Global on-disk retention geometry for report bodies plus their bounded summary shards.
+  - Defaults: 4096 reports and 256 MiB. Before committing a report, the worker deterministically evicts the oldest reports until both limits are satisfied; zero count and byte budgets too small for one maximum-size report are rejected during configuration parsing.
 - `torii.zk_prover_max_inflight` / `torii.zk_prover_max_scan_bytes` / `torii.zk_prover_max_scan_millis`
   - Concurrency and per-scan budgets for the prover worker.
+  - Attachment discovery is inside the same wall-clock deadline, uses at most the first half of that deadline so scheduled work can make progress, and never materializes the complete multi-tenant namespace. One in-memory location slot is admitted per started 512 bytes of the byte budget (hard maximum 4096); directory work is limited to eight iterator steps per slot (hard maximum 32768). The cursor resumes on the next cycle and each bounded window is ordered canonically by tenant key and attachment id before scheduling. Discovery work exhaustion is reported as `reason="work"` alongside `bytes` and `time`.
 - `torii.zk_prover_keys_dir` (path)
   - Directory holding verifying key bytes for registry entries without stored key bytes.
 - `torii.zk_prover_allowed_backends` / `torii.zk_prover_allowed_circuits` (string list)

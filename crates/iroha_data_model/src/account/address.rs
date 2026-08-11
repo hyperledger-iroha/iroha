@@ -439,6 +439,16 @@ impl JsonSerialize for AccountAddress {
             .expect("AccountAddress must produce canonical hex");
         json::write_json_string(&canonical, out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        let canonical = self
+            .canonical_hex()
+            .expect("AccountAddress must produce canonical hex");
+        json::write_json_string_to(&canonical, out)
+    }
 }
 
 #[cfg(feature = "json")]

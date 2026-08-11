@@ -348,6 +348,18 @@ impl norito::json::JsonSerialize for ConfidentialStatus {
         };
         norito::json::write_json_string(label, out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        let label = match self {
+            ConfidentialStatus::Proposed => "Proposed",
+            ConfidentialStatus::Active => "Active",
+            ConfidentialStatus::Withdrawn => "Withdrawn",
+        };
+        norito::json::write_json_string_to(label, out)
+    }
 }
 
 #[cfg(feature = "json")]

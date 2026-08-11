@@ -610,6 +610,12 @@ impl ErrorEnvelope {
     }
 }
 
+/// Maximum distinct proof backends that one retention-status response may summarize.
+///
+/// This first-release protocol ceiling bounds node-local aggregation and response memory. Torii
+/// fails the request with HTTP 422 when the proof registry contains more distinct backends.
+pub const PROOF_RETENTION_STATUS_MAX_BACKENDS: usize = 256;
+
 /// Per-backend proof retention snapshot.
 #[derive(JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone)]
 pub struct ProofRetentionBackendStatus {

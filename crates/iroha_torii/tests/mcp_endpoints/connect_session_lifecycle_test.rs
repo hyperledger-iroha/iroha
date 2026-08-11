@@ -167,7 +167,11 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
             "id": 111,
             "method": "tools/call",
             "params": {
-                "name": "connect.status"
+                "name": "connect.session.status",
+                "arguments": {
+                    "sid": sid,
+                    "token_management": token_management
+                }
             }
         }),
     )
@@ -175,7 +179,7 @@ async fn mcp_jsonrpc_connect_session_lifecycle_dispatches_routes() {
     assert_eq!(status, StatusCode::OK);
     assert!(
         !tool_is_error(&status_call),
-        "connect status should not be an MCP tool error"
+        "connect session status should not be an MCP tool error"
     );
     let status_structured = structured_content(&status_call);
     assert_eq!(

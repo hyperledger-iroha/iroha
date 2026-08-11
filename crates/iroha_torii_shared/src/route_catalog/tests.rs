@@ -224,6 +224,11 @@ mod tests {
             assert_eq!(route.method(), HttpMethod::Post);
             assert_eq!(route.surface(), ApiSurface::Public);
             assert_eq!(route.listener(), Listener::Torii);
+            assert_eq!(route.effect(), RouteEffect::Mutation);
+            assert_eq!(
+                route.admission(),
+                AdmissionPolicy::AuthenticatedProtocolPrincipal
+            );
             assert_eq!(
                 route.authentication(),
                 AuthenticationPolicy::ProtocolHandshake
@@ -500,31 +505,23 @@ mod tests {
     }
 
     #[test]
-    fn required_api_token_authentication_is_exactly_scoped() {
-        let required_routes = [
-            sorafs::STORAGE_TOKEN,
+    fn formerly_bearer_only_routes_require_exact_signatures() {
+        assert_eq!(
+            sorafs::STORAGE_TOKEN.authentication(),
+            AuthenticationPolicy::OperatorSignature
+        );
+        for route in [
             application_api::WEBHOOKS_GET,
             application_api::WEBHOOKS_POST,
             application_api::WEBHOOKS_BY_ID_DELETE,
-        ];
-        for route in &required_routes {
+        ] {
             assert_eq!(
                 route.authentication(),
-                AuthenticationPolicy::RequiredApiToken,
-                "{} must advertise its unconditional API credential",
+                AuthenticationPolicy::OperatorSignature,
+                "{} authentication",
                 route.stable_route_id()
             );
         }
-        assert_eq!(
-            CATALOGED_ROUTES
-                .iter()
-                .filter(|route| {
-                    route.authentication() == AuthenticationPolicy::RequiredApiToken
-                })
-                .count(),
-            required_routes.len(),
-            "no unrelated route may inherit the unconditional API-token policy"
-        );
     }
 
     #[test]
@@ -791,6 +788,34 @@ mod tests {
     }
 
     #[test]
+    fn provider_advert_is_an_authenticated_protocol_mutation() {
+        let route = sorafs::PROVIDER_ADVERT;
+        assert_eq!(route.effect(), RouteEffect::Mutation);
+        assert_eq!(
+            route.admission(),
+            AdmissionPolicy::AuthenticatedProtocolPrincipal
+        );
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::ProtocolHandshake
+        );
+    }
+
+    #[test]
+    fn account_faucet_claim_is_an_authenticated_protocol_mutation() {
+        let route = application_api::ACCOUNTS_FAUCET_POST;
+        assert_eq!(route.effect(), RouteEffect::Mutation);
+        assert_eq!(
+            route.admission(),
+            AdmissionPolicy::AuthenticatedProtocolPrincipal
+        );
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::ProtocolHandshake
+        );
+    }
+
+    #[test]
     fn converted_route_families_are_valid_and_exclude_retired_spellings() {
         let routes = aliases::ROUTES
             .iter()
@@ -977,11 +1002,9 @@ mod tests {
                 assert!(
                     !matches!(
                         route.authentication(),
-                        AuthenticationPolicy::ToriiDefault
-                            | AuthenticationPolicy::RequiredApiToken
-                            | AuthenticationPolicy::Unauthenticated
+                        AuthenticationPolicy::ToriiDefault | AuthenticationPolicy::Unauthenticated
                     ),
-                    "{} relies on an open or API-token-only authentication policy",
+                    "{} relies on an open authentication policy",
                     route.stable_route_id()
                 );
             }
@@ -1149,6 +1172,44 @@ mod tests {
                 .filter(|route| route.surface() == ApiSurface::Operator)
                 .all(|route| route.authentication() == AuthenticationPolicy::OperatorSignature)
         );
+        for route in [
+            sumeragi::STATUS,
+            sumeragi::DIAGNOSTICS,
+            sumeragi::LEADER,
+            sumeragi::BLS_KEYS,
+            sumeragi::QC,
+            sumeragi::CHECKPOINTS,
+            sumeragi::COMMIT_CERTIFICATES,
+            sumeragi::VALIDATOR_SETS,
+            sumeragi::VALIDATOR_SET_BY_HEIGHT,
+            sumeragi::CONSENSUS_KEYS,
+            sumeragi::KEY_LIFECYCLE,
+            sumeragi::TELEMETRY,
+            sumeragi::PARAMETERS,
+            sumeragi::COMMIT_QC,
+            sumeragi::EVIDENCE_COUNT,
+            sumeragi::EVIDENCE_LIST,
+            sumeragi::VRF_PENALTIES,
+            sumeragi::VRF_EPOCH,
+        ] {
+            assert_eq!(route.surface(), ApiSurface::Operator, "{}", route.path());
+            assert_eq!(
+                route.admission(),
+                AdmissionPolicy::Operator,
+                "{}",
+                route.path()
+            );
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::OperatorSignature,
+                "{}",
+                route.path()
+            );
+            assert_eq!(route.effect(), RouteEffect::ReadOnly, "{}", route.path());
+            assert!(route.projections().openapi(), "{}", route.path());
+            assert!(route.projections().sdk(), "{}", route.path());
+            assert!(!route.projections().mcp(), "{}", route.path());
+        }
         assert!(
             [sumeragi::STATUS_SSE]
                 .into_iter()
@@ -1158,7 +1219,6 @@ mod tests {
                     && !route.projections().sdk()
                     && !route.projections().mcp())
         );
-        assert!(sumeragi::STATUS.projections().mcp());
         assert!(!sumeragi::SCCP_CAPABILITIES.projections().mcp());
         assert!(!telemetry::DEBUG_WITNESS.projections().openapi());
         for route in [
@@ -1169,7 +1229,7 @@ mod tests {
             assert_eq!(route.admission(), AdmissionPolicy::Operator);
             assert_eq!(
                 route.authentication(),
-                AuthenticationPolicy::SoranetCollectorCredential
+                AuthenticationPolicy::OperatorSignature
             );
         }
 
@@ -1850,6 +1910,30 @@ mod tests {
                 && (route.path().starts_with("/v1/musubi/queries/")
                     || route.path().starts_with("/v1/musubi/instructions/"))
         }));
+        for route in musubi::ROUTES {
+            assert_eq!(
+                route.admission(),
+                AdmissionPolicy::AuthenticatedAccount,
+                "{} admission",
+                route.stable_route_id()
+            );
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{} authentication",
+                route.stable_route_id()
+            );
+            assert_eq!(
+                route.effect(),
+                if route.path().starts_with("/v1/musubi/queries/") {
+                    RouteEffect::ReadOnly
+                } else {
+                    RouteEffect::ExpensiveCompute
+                },
+                "{} effect",
+                route.stable_route_id()
+            );
+        }
         assert!(musubi::ARCHIVE_RETENTION.projections().openapi());
         assert!(musubi::ARCHIVE_RETENTION.projections().sdk());
         assert!(musubi::ARCHIVE_RETENTION.projections().mcp());

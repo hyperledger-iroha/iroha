@@ -12,7 +12,7 @@ use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
-    block::{consensus_v2::is_valid_committee_size, decode_framed_signed_block},
+    block::consensus_v2::is_valid_committee_size,
     isi::SetParameter,
     parameter::{
         Parameter,
@@ -21,7 +21,7 @@ use iroha_data_model::{
     peer::PeerId,
     transaction::{Executable, TransactionDomain},
 };
-use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
+use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction, decode_signed_genesis};
 use iroha_primitives::addr::{SocketAddr, SocketAddrV4};
 use norito::json;
 use sha2::Sha256;
@@ -454,7 +454,7 @@ fn bind_staged_context(
     }
 
     let signed_wire = output.stdout;
-    let block = decode_framed_signed_block(&signed_wire)
+    let block = decode_signed_genesis(&signed_wire)
         .map_err(|err| format!("failed to decode staged {} genesis: {err}", spec.slug))?;
     let canonical_wire = block
         .encode_wire()
@@ -466,6 +466,7 @@ fn bind_staged_context(
         )
         .into());
     }
+    drop(canonical_wire);
     {
         let mut signatures = block.signatures();
         let signature = signatures
@@ -545,9 +546,7 @@ fn bind_staged_context(
         .into());
     }
 
-    let bound_manifest_bytes = fs::read(genesis_path)
-        .map_err(|err| format!("failed to read bound {} genesis: {err}", spec.slug))?;
-    let bound_manifest: RawGenesisTransaction = json::from_slice(&bound_manifest_bytes)
+    let bound_manifest = RawGenesisTransaction::from_path(genesis_path)
         .map_err(|err| format!("failed to parse bound {} genesis: {err}", spec.slug))?;
     if bound_manifest.consensus_fingerprint() != Some(metadata.consensus_fingerprint) {
         return Err(format!(
@@ -560,8 +559,8 @@ fn bind_staged_context(
         .clone()
         .parse()
         .map_err(|err| format!("failed to expand bound {} genesis: {err}", spec.slug))?;
-    let actual_transactions = block.external_transactions().collect::<Vec<_>>();
-    if expected_batches.len() != actual_transactions.len() {
+    let actual_len = block.external_transactions().len();
+    if expected_batches.len() != actual_len {
         return Err(format!(
             "staged {} signed transaction count differs from its bound manifest",
             spec.slug
@@ -571,7 +570,7 @@ fn bind_staged_context(
     let genesis_account = AccountId::new(genesis_key.public_key().clone());
     for (index, (expected_batch, transaction)) in expected_batches
         .iter()
-        .zip(&actual_transactions)
+        .zip(block.external_transactions())
         .enumerate()
     {
         if transaction.domain() != &TransactionDomain::Genesis
@@ -590,20 +589,22 @@ fn bind_staged_context(
             )
             .into());
         };
-        let expected = expected_batch
-            .iter()
-            .map(iroha_data_model::Encode::encode)
-            .collect::<Vec<_>>();
-        let actual = actual_batch
-            .iter()
-            .map(iroha_data_model::Encode::encode)
-            .collect::<Vec<_>>();
-        if expected != actual {
-            return Err(format!(
-                "staged {} transaction {index} differs from its bound manifest",
-                spec.slug
-            )
-            .into());
+        let mut expected = expected_batch.iter();
+        let mut actual = actual_batch.iter();
+        loop {
+            match (expected.next(), actual.next()) {
+                (Some(expected), Some(actual))
+                    if iroha_data_model::Encode::encode(expected)
+                        == iroha_data_model::Encode::encode(actual) => {}
+                (None, None) => break,
+                _ => {
+                    return Err(format!(
+                        "staged {} transaction {index} differs from its bound manifest",
+                        spec.slug
+                    )
+                    .into());
+                }
+            }
         }
     }
     iroha_core::validate_genesis_block(&block, &genesis_account)

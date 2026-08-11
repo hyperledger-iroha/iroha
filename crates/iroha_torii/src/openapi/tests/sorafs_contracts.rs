@@ -607,12 +607,12 @@ fn sorafs_pin_register_openapi_is_caller_signed_transaction_transport() {
 }
 
 #[test]
-fn sorafs_storage_token_openapi_requires_the_credential_and_diagnostic_headers() {
+fn sorafs_storage_token_openapi_requires_operator_and_diagnostic_headers() {
     use iroha_torii_shared::route_catalog::AuthenticationPolicy;
 
     assert_eq!(
         iroha_torii_shared::route_catalog::sorafs::STORAGE_TOKEN.authentication(),
-        AuthenticationPolicy::RequiredApiToken
+        AuthenticationPolicy::OperatorSignature
     );
     let document = generate_spec();
     let operation = openapi_operation(&document, "/v1/sorafs/storage/token", "post");
@@ -621,7 +621,10 @@ fn sorafs_storage_token_openapi_requires_the_credential_and_diagnostic_headers()
             .into_iter()
             .collect::<BTreeSet<_>>(),
         BTreeSet::from([
-            ("X-API-Token".to_owned(), true),
+            ("X-Iroha-Operator-Nonce".to_owned(), true),
+            ("X-Iroha-Operator-Public-Key".to_owned(), true),
+            ("X-Iroha-Operator-Signature".to_owned(), true),
+            ("X-Iroha-Operator-Timestamp-Ms".to_owned(), true),
             ("X-SoraFS-Client".to_owned(), true),
             ("X-SoraFS-Nonce".to_owned(), true),
         ])
@@ -635,6 +638,66 @@ fn sorafs_storage_token_openapi_requires_the_credential_and_diagnostic_headers()
                     && description.contains("client label is diagnostic")
             })
     );
+}
+
+#[test]
+fn sorafs_storage_and_inventory_openapi_matches_authenticated_catalog() {
+    let document = generate_spec();
+    let paths = document
+        .get("paths")
+        .and_then(Value::as_object)
+        .expect("OpenAPI paths");
+    assert!(!paths.contains_key("/v1/sorafs/storage/state"));
+    assert!(!paths.contains_key("/v1/sorafs/storage/fetch"));
+
+    let canonical_headers = BTreeSet::from([
+        "X-Iroha-Account",
+        "X-Iroha-Nonce",
+        "X-Iroha-Signature",
+        "X-Iroha-Timestamp-Ms",
+        "X-Iroha-Witness",
+    ]);
+    for path in ["/v1/sorafs/aliases", "/v1/sorafs/replication"] {
+        let operation = openapi_operation(&document, path, "get");
+        let headers = operation_header_requirements(operation)
+            .into_iter()
+            .map(|(name, _required)| name)
+            .collect::<BTreeSet<_>>();
+        for expected in &canonical_headers {
+            assert!(
+                headers.contains(*expected),
+                "{path} must document canonical auth header {expected}"
+            );
+        }
+    }
+
+    for (path, expected_headers) in [
+        (
+            "/v1/sorafs/storage/car/{manifest_id}",
+            &[
+                "Range",
+                "Sora-Dag-Scope",
+                "X-SoraFS-Chunker",
+                "X-SoraFS-Nonce",
+                "X-SoraFS-Stream-Token",
+            ][..],
+        ),
+        (
+            "/v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}",
+            &["X-SoraFS-Nonce", "X-SoraFS-Stream-Token"][..],
+        ),
+    ] {
+        let operation = openapi_operation(&document, path, "get");
+        let headers = operation_header_requirements(operation)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        for expected in expected_headers {
+            assert!(
+                headers.contains(&(expected.to_string(), true)),
+                "{path} must require {expected}"
+            );
+        }
+    }
 }
 
 #[test]

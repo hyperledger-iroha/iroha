@@ -1102,6 +1102,8 @@ try {
 // Submit while re-signing with a fresh private key (mutating buffer supported)
 await submitSignedTransaction(torii, encoded, { networkId, privateKey });
 
+// `torii` must carry an immutable exact-network OperatorSigningContext here.
+// The node-local read is signed fresh and sent once without redirects/retries.
 // Inspect the deterministic pipeline recovery sidecar for a given block height.
 const recovery = await torii.getPipelineRecoveryTyped(42);
 if (recovery) {
@@ -2085,14 +2087,19 @@ console.log(
   `admitted transaction=${admission.tx_hash_hex} manifest=${admission.manifest_digest_hex}`,
 );
 
-const range = await torii.fetchSorafsPayloadRange({
+// Local storage diagnostics use a separately provisioned, exact-network
+// OperatorSigningContext; do not reuse the transaction key implicitly.
+const operatorTorii = new ToriiClient(toriiUrl, {
+  operatorSigningContext: runtimeOperatorSigningContext,
+});
+const range = await operatorTorii.fetchSorafsPayloadRange({
   manifestIdHex: admission.manifest_digest_hex,
   offset: 0,
   length: 4096,
 });
 const firstChunk = Buffer.from(range.data_b64, "base64");
 
-const storageState = await torii.getSorafsStorageState();
+const storageState = await operatorTorii.getSorafsStorageState();
 console.log(`pin queue depth=${storageState.pin_queue_depth}`);
 
 const storedManifest = await torii.getSorafsManifest(admission.manifest_digest_hex);
@@ -2225,6 +2232,14 @@ console.log("scoreboard saved:", proveResult.scoreboardPath);
 console.log("proof summary saved:", proveResult.proofSummaryPath);
 ```
 
+`fetchSorafsPayloadRange` is a legacy local diagnostic, not a public content
+transport. It and `getSorafsStorageState` fail before dispatch unless the
+client has an immutable exact-network `OperatorSigningContext`. Remote
+cache-miss hydration no longer falls back to this unsigned JSON fetch; it
+requires a request-bound CAR/chunk stream capability. Without one, the cache
+miss returns a capability-required error while already-local content remains
+available.
+
 `fetchDaPayloadViaGateway` automatically derives the chunker handle from the manifest bundle when you omit `chunkerHandle`, and the exported `deriveDaChunkerHandle` helper surfaces the same logic for bespoke tooling. `generateDaProofSummary` reuses the Norito + PoR logic from the CLI via the native binding so proofs remain identical across SDKs.
 
 > **Multi-source enforcement:** the JS SDK requires at least two gateway providers for every orchestrated fetch. This matches the SF-6c roadmap requirement and keeps `cargo xtask sorafs-adoption-check` green by default.
@@ -2253,6 +2268,10 @@ before calling it—and the gateway/proof helpers—in development environments.
 runs) to mirror the CLI ingest artefacts without leaving Node.
 
 ```js
+const canonicalAuth = {
+  accountId: operatorId,
+  privateKey: Buffer.from(operatorKeyHex, "hex"),
+};
 const pinListing = await torii.listSorafsPinManifests({
   status: "approved",
   limit: 25,
@@ -2274,10 +2293,13 @@ if (pinListing.has_more) {
   console.log(`next finalized page size=${nextPinPage.manifests.length}`);
 }
 
-const aliases = await torii.listSorafsAliases({ namespace: "docs" });
+const aliases = await torii.listSorafsAliases({ namespace: "docs", canonicalAuth });
 console.log(`doc namespace aliases=${aliases.returned_count}`);
 
-const replication = await torii.listSorafsReplicationOrders({ status: "pending" });
+const replication = await torii.listSorafsReplicationOrders({
+  status: "pending",
+  canonicalAuth,
+});
 console.log(`pending replication orders=${replication.total_count}`);
 
 const orderbook = await torii.getSorafsOrderbook({ limit: 25 });
@@ -2320,10 +2342,17 @@ await torii.submitSorafsOrderbookReceipt(signedRecordReceiptTransaction);
 for await (const manifest of torii.iterateSorafsPinManifests({ pageSize: 25 })) {
   console.log("manifest digest", Buffer.from(manifest.digest).toString("hex"));
 }
-for await (const alias of torii.iterateSorafsAliases({ namespace: "docs", pageSize: 50 })) {
+for await (const alias of torii.iterateSorafsAliases({
+  namespace: "docs",
+  pageSize: 50,
+  canonicalAuth,
+})) {
   console.log("alias entry", alias.alias);
 }
-for await (const order of torii.iterateSorafsReplicationOrders({ pageSize: 25 })) {
+for await (const order of torii.iterateSorafsReplicationOrders({
+  pageSize: 25,
+  canonicalAuth,
+})) {
   console.log("replication order", order.order_id_hex);
 }
 ```
@@ -2423,13 +2452,20 @@ JSON (or a structure parsed from the fixtures under
 `fixtures/space_directory/capability/`) with the transaction authority, while
 `revokeSpaceDirectoryManifest()` prepares an immediate revocation
 for a UAID/dataspace pair. Both requests are secret-free and return canonical
-transaction drafts for local signing. The helpers accept an optional `options.signal`
-so callers can abort long-running submissions with `AbortController`. Passing
-anything other than an object (or an `AbortSignal` instance on the `signal`
-field) throws synchronously, keeping JS-04’s validation parity intact:
+transaction drafts for local signing. Both helpers require per-request
+`canonicalAuth`; its exact canonical I105 account must equal the body authority.
+The client must also have an immutable exact-network `LocalSigningContext`.
+An optional `options.signal` lets callers abort the one-shot dispatch:
 
 ```js
 import { promises as fs } from "node:fs";
+import { LocalSigningContext, NetworkId, ToriiClient } from "@iroha/iroha-js";
+
+const authority = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB";
+const canonicalAuth = { accountId: authority, privateKey: runtimePrivateKey };
+const torii = new ToriiClient(toriiUrl, {
+  localSigningContext: new LocalSigningContext(NetworkId.parse(exactNetworkId)),
+});
 
 const manifest = JSON.parse(
   await fs.readFile("fixtures/space_directory/capability/cbdc.manifest.json", "utf8"),
@@ -2439,28 +2475,34 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
+    authority,
     manifest,
     reason: "Rotation to attester set v2",
   },
-  { signal: controller.signal },
+  { canonicalAuth, signal: controller.signal },
 );
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
+    authority,
     uaid: "uaid:c2b61dd6bb73e91ee6d0949508d491bbc1b2a347a3f41b5cd35d733c1e751111",
     dataspaceId: 11,
     revokedEpoch: 9216,
     reason: "Emergency deny-wins trigger",
   },
-  { signal: controller.signal },
+  { canonicalAuth, signal: controller.signal },
 );
 ```
 
 The returned `transaction_payload_b64` and `signing_message_b64` must be
 validated and signed locally. Submit the finalized signed transaction through
 the normal transaction endpoint; preparation itself does not enqueue work.
+`executeRamLfeProgram`, `verifyRamLfeReceipt`, `resolveIdentifier`, and
+`issueIdentifierClaimReceipt` enforce the same exact-network canonical-account
+contract (the claim account must also match the signed path). Canonical headers
+are generated locally over the exact method, path, query, and body; callers
+cannot supply precomputed headers or inline body secrets, and signed requests
+are never redirected or retried.
 
 ## SoraNet Puzzle & Token Service Client
 
@@ -2520,6 +2562,14 @@ summaries, inspect a single relay, grab the aggregated health snapshot, or
 stream the live registration/health SSE feed with domain/relay/kind filters:
 
 ```js
+import { NetworkId, OperatorSigningContext, ToriiClient } from "@iroha/iroha-js";
+
+const operatorSigningContext = new OperatorSigningContext(
+  NetworkId.parse(exactNetworkId),
+  runtimeOperatorSigner,
+);
+const torii = new ToriiClient(toriiUrl, { operatorSigningContext });
+
 const relays = await torii.listKaigiRelays();
 console.log(`registered relays: ${relays.total}`);
 relays.items.forEach((relay) => {
@@ -2547,8 +2597,17 @@ for await (const event of torii.streamKaigiRelayEvents({
 }
 ```
 
+The three snapshot calls require that immutable exact-network context. Each call
+generates fresh operator headers for the final encoded target and empty body,
+then dispatches once with redirects and retries disabled; tokens and
+precomputed operator headers are rejected. List and health also fail closed at
+Torii's hard relay diagnostic cap instead of materializing an unbounded
+registry. Keep signer material runtime-only.
+
 `streamKaigiRelayEvents` yields strongly-typed SSE payloads so you can feed
-operators dashboards without reimplementing filtering/normalisation logic.
+operators dashboards without reimplementing filtering/normalisation logic. Its
+SSE handshake remains a separate streaming protocol from the signed snapshot
+reads.
 
 ## ISO 20022 Bridge
 
@@ -2556,12 +2615,23 @@ Submit ISO 20022 pacs.008 or pacs.009 payloads and poll their deterministic stat
 through the Torii bridge:
 
 ```js
+import { NetworkId, OperatorSigningContext, ToriiClient } from "@iroha/iroha-js";
+
+const operatorSigningContext = new OperatorSigningContext(
+  NetworkId.parse(exactNetworkId),
+  {
+    publicKey: operatorPublicKey,
+    sign: (message) => operatorSigner.sign(message),
+  },
+);
+const torii = new ToriiClient(toriiUrl, { operatorSigningContext });
 const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
   <!-- ... -->
 </Document>`;
 
 const status = await torii.submitIsoPacs008AndWait(xml, {
+  profile: "swift-cbpr-plus",
   wait: {
     maxAttempts: 20,
     pollIntervalMs: 3_000,
@@ -2574,6 +2644,14 @@ const status = await torii.submitIsoPacs008AndWait(xml, {
 });
 console.log(status.message_id, status.status, status.transaction_hash);
 ```
+
+Every ISO submission and status poll requires this immutable exact-network
+operator context. The SDK generates a fresh timestamp and nonce, signs the
+exact method, path, sorted query, and body hash, and dispatches once with
+redirect following disabled. Profile selection is the signed `profile` query
+parameter. Bearer/API tokens, application-account auth headers, the retired
+`X-Iroha-Iso-Profile` header, and caller-supplied operator headers are rejected
+before dispatch.
 
 `submitIsoPacs008` and `submitIsoPacs009` accept strings or binary buffers and
 enforce `application/xml` content-type by default. `submitIsoPacs008AndWait` /
@@ -3276,8 +3354,7 @@ server-derived fallback.
 
 Connect overlays can now be bootstrapped directly from JS. The SDK exposes JSON
 helpers alongside the existing WebSocket utilities so dApps can mint session
-ids, preview deeplinks, request tokens, and read Connect status in the same code
-path:
+ids, preview deeplinks, and request role/management tokens in one path:
 
 ```js
 import {
@@ -3289,21 +3366,6 @@ import {
 
 const torii = new ToriiClient("http://localhost:8080");
 const networkId = NetworkId.parse(process.env.IROHA_NETWORK_ID);
-const connectStatus = await torii.getConnectStatus();
-if (!connectStatus) {
-  throw new Error("Connect is disabled on this node");
-}
-console.log(
-  `connect sessions=${connectStatus.sessionsActive}/${connectStatus.sessionsTotal}`,
-);
-console.log(`relay status: ${connectStatus.policy?.relayEnabled ? "on" : "off"}`);
-console.log(
-  `relay strategy configured=${connectStatus.policy?.relayStrategy} effective=${connectStatus.policy?.relayEffectiveStrategy}`,
-);
-console.log(`relay p2p attached=${connectStatus.policy?.relayP2pAttached}`);
-console.log(
-  `p2p rebroadcasts=${connectStatus.p2pRebroadcastsTotal} skipped=${connectStatus.p2pRebroadcastSkippedTotal}`,
-);
 
 const preview = createConnectSessionPreview({
   networkId,
@@ -3335,6 +3397,14 @@ const { preview: bundledPreview, session: bundledSession, tokens: bundledTokens 
 console.log(bundledPreview.walletUri);
 console.log(`Connect session registered with tokens:`, bundledTokens?.wallet, bundledTokens?.relay);
 ```
+
+`getConnectStatus()` reads the separate
+`GET /v1/connect/status/aggregate` node diagnostic. It requires an immutable
+exact-network `OperatorSigningContext` in the `ToriiClient` constructor and
+dispatches once with a fresh operator signature. Load that context from
+runtime-only operator configuration; never give it to a dApp or wallet. Apps
+inspect only their own session through `GET /v1/connect/status?sid=...` with
+the returned management token.
 
 > **Note:** `sid` must encode exactly 32 bytes as either hexadecimal (with or without
 > the `0x` prefix) or base64url per the Connect configuration. `createConnectSessionPreview`
@@ -3644,11 +3714,15 @@ console.log(draft.tx_instructions);
 ### Network time helpers
 
 `getNetworkTimeNow()` mirrors `/v1/time/now` so you can validate the network timestamp, offset,
-and confidence window exposed by the node. `getNetworkTimeStatus()` wraps `/v1/time/status` and
-returns the peer sampling plus RTT histogram that the NRPC/AND7 runbooks consume.
+and confidence window exposed by the node. `getNetworkTimeStatus()` wraps the node-local
+`/v1/time/status` diagnostic and returns the peer sampling plus RTT histogram that the NRPC/AND7
+runbooks consume. The status helper, `listPeers()`, `getPipelinePreflight()`, and
+`getPipelineRecovery()` require an immutable `OperatorSigningContext` for the exact genesis
+`NetworkId`. Each call signs the exact `GET`, substituted path, query, and empty body, dispatches
+once, and rejects redirects, retries, tokens, and precomputed authentication headers.
 
 ```js
-const torii = new ToriiClient("http://localhost:8080");
+const torii = new ToriiClient("http://localhost:8080", { operatorSigningContext });
 const ntsNow = await torii.getNetworkTimeNow();
 console.log(`cluster time=${ntsNow.timestampMs} offset=${ntsNow.offsetMs}ms`);
 
@@ -3849,7 +3923,9 @@ With `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite now:
 3. Optionally submits a `pacs.008` message (when `IROHA_TORII_INTEGRATION_ISO_ENABLED=1`)
    to verify the bridge pipeline end-to-end.
 4. Optionally inspects the SoraFS pin registry (when `IROHA_TORII_INTEGRATION_SORAFS_ENABLED=1`),
-   ensuring the alias/replication lists and storage state endpoints respond with typed payloads.
+   using canonical account signatures for the legacy alias/replication
+   inventory projections. Operator-only storage-state and legacy payload-fetch
+   diagnostics are intentionally excluded from the public integration client.
 5. Optionally submits a DA ingest payload and polls the manifest endpoint (when
    `IROHA_TORII_INTEGRATION_DA_ENABLED=1`), and can stream multi-source fetch
    evidence when `IROHA_TORII_INTEGRATION_DA_GATEWAYS`/`IROHA_TORII_INTEGRATION_DA_TICKET`
@@ -3879,23 +3955,38 @@ across Torii's JSON endpoints (including query projections via
 `iterateAccountTransactionsQuery`, `iterateAssetHoldersQuery`, and
 `iterateTriggersQuery`).
 
+The eleven ledger-wide `/query` helpers require a fresh canonical account
+signature and an immutable `LocalSigningContext` derived from the deployment's
+exact genesis `NetworkId`. They sign the final method, substituted path, query,
+and JSON body, dispatch once with redirects and retries disabled, and reject
+aliases, precomputed signing headers, and inline secret option shapes. This
+applies to account transaction/assets, domains, accounts, global/visible
+transactions, repo agreements, asset holders/definitions, NFTs, and RWAs;
+ordinary `list*` reads and trigger queries keep their existing contracts.
+
 For FI wallet-style transaction explorers, prefer the viewer-scoped query helper.
 It posts to `/v1/transactions/visible/query`, lets Torii enforce the authenticated
 viewer scope, and accepts convenience filters without hand-writing a QueryEnvelope:
 
 ```js
-import { ToriiClient } from "@iroha/iroha-js/torii";
+import { LocalSigningContext, NetworkId, ToriiClient } from "@iroha/iroha-js/torii";
+
+const canonicalAuth = {
+  accountId: canonicalI105AccountId,
+  privateKey: runtimeOnlyEd25519PrivateKey,
+};
 
 const torii = new ToriiClient("https://torii.example", {
+  localSigningContext: new LocalSigningContext(NetworkId.parse(exactNetworkId)),
   config: {
     toriiClient: {
-      defaultHeaders: { Authorization: `Bearer ${jwt}` },
       timeoutMs: 10_000,
     },
   },
 });
 
 const { items } = await torii.queryVisibleTransactions({
+  canonicalAuth,
   assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
   sort: "newest",
   limit: 25,

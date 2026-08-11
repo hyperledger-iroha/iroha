@@ -1157,6 +1157,7 @@ impl CertifiedServeIngressGate {
     }
 
     /// Return whether this request belongs to the gate's active height.
+    #[cfg(debug_assertions)]
     pub(crate) fn requires_reservation(&self, request: &wire::CertifiedBodyRequest) -> bool {
         self.queue
             .serve_context
@@ -13045,9 +13046,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
         .iter()
         .map(|envelope| {
             crate::lane_consensus::decode_autonomous_lane_payload_envelope(
-                envelope,
-                network_id,
-                epoch,
+                envelope, network_id, epoch,
             )
             .and_then(|payload| {
                 payload.attach_global_hint_exact(
@@ -13170,10 +13169,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     })?;
                 if vote.signer != *local_peer
                     || !autonomous_new_view_body_matches_durable_payload(
-                        body,
-                        &payload,
-                        network_id,
-                        epoch,
+                        body, &payload, network_id, epoch,
                     )
                     || body.proposal_height != proposal_height
                     || payload != *canonical_payload
@@ -13221,10 +13217,7 @@ fn autonomous_lane_output_has_durable_reconstruction_source(
                     })?;
                 let payload = &durable.executable_payload;
                 if !autonomous_new_view_body_matches_durable_payload(
-                    body,
-                    payload,
-                    network_id,
-                    epoch,
+                    body, payload, network_id, epoch,
                 ) || body.proposal_height != proposal_height
                     || payload != canonical_payload
                     || certificate.validator_set != payload.origin_proposal.descriptor.validator_set

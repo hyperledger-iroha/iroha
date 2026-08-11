@@ -10,6 +10,12 @@ evidence, and wire the resulting telemetry dashboards/alerts. Pair it with
 `specs/sumeragi.md`, the soak matrix (`specs/sumeragi_soak_matrix.md`),
 and the A6 tracker in `specs/project_tracker/npos_sumeragi_phase_a.md`.
 
+Finite Sumeragi diagnostic reads require a fresh exact-`NetworkId` operator
+signature. For brevity, each `iroha_cli ... ops sumeragi ...` command below
+assumes the global
+`--operator-private-key-file /absolute/runtime/operator.key` option; account
+keys, tokens, redirects, and retries are not fallbacks.
+
 ## 1. Scope & Success Criteria
 
 - **Coverage.** Run the baseline throughput harness, targeted chaos tests, and

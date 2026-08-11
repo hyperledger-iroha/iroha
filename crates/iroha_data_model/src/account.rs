@@ -182,6 +182,16 @@ impl norito::json::FastJsonWrite for AccountId {
             .expect("AccountId JSON serialization requires canonical I105 encoding");
         norito::json::JsonSerialize::json_serialize(&literal, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        let literal = self
+            .canonical_i105()
+            .expect("AccountId JSON serialization requires canonical I105 encoding");
+        norito::json::write_json_string_to(&literal, out)
+    }
 }
 
 #[cfg(feature = "json")]

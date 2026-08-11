@@ -355,6 +355,13 @@ impl norito::json::FastJsonWrite for Name {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_ref(), out)
+    }
 }
 
 #[cfg(feature = "json")]

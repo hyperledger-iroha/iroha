@@ -15,8 +15,20 @@ pub(super) enum R1csError {
     Unsatisfied,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(super) struct SparseMatrix {
+    rows: usize,
+    columns: usize,
+    row_offsets: Vec<usize>,
+    column_indices: Vec<usize>,
+    coefficients: Vec<Scalar>,
+}
+
+/// Append-only CSR construction for a fixed number of canonical rows.
+///
+/// The builder retains only the final CSR buffers. Callers may supply one row
+/// at a time and [`Self::finish`] pads any trailing rows with empty offsets.
+pub(super) struct SparseMatrixRowBuilder {
     rows: usize,
     columns: usize,
     row_offsets: Vec<usize>,
@@ -103,6 +115,7 @@ impl SparseMatrix {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn multiply(&self, vector: &[Scalar]) -> Result<Vec<Scalar>, R1csError> {
         if vector.len() != self.columns {
             return Err(R1csError::InvalidDimension);
@@ -116,6 +129,7 @@ impl SparseMatrix {
         Ok(output)
     }
 
+    #[cfg(test)]
     pub(super) fn bind_rows(&self, row_weights: &[Scalar]) -> Result<Vec<Scalar>, R1csError> {
         if row_weights.len() != self.rows {
             return Err(R1csError::InvalidDimension);
@@ -149,7 +163,63 @@ impl SparseMatrix {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl SparseMatrixRowBuilder {
+    /// Start a fixed-row CSR matrix without staging all of its rows.
+    pub(super) fn new(rows: usize, columns: usize) -> Result<Self, R1csError> {
+        if rows == 0 || columns == 0 {
+            return Err(R1csError::InvalidDimension);
+        }
+        let mut row_offsets = Vec::with_capacity(rows + 1);
+        row_offsets.push(0);
+        Ok(Self {
+            rows,
+            columns,
+            row_offsets,
+            column_indices: Vec::new(),
+            coefficients: Vec::new(),
+        })
+    }
+
+    /// Consume one column-sorted, nonzero CSR row.
+    pub(super) fn append_canonical_row(
+        &mut self,
+        entries: impl IntoIterator<Item = (usize, Scalar)>,
+    ) -> Result<(), R1csError> {
+        if self.row_offsets.len() - 1 >= self.rows {
+            return Err(R1csError::InvalidDimension);
+        }
+        let mut previous = None;
+        for (column, coefficient) in entries {
+            if column >= self.columns
+                || coefficient.is_zero()
+                || previous.is_some_and(|prior| prior >= column)
+            {
+                return Err(R1csError::NonCanonicalMatrix);
+            }
+            previous = Some(column);
+            self.column_indices.push(column);
+            self.coefficients.push(coefficient);
+        }
+        self.row_offsets.push(self.column_indices.len());
+        Ok(())
+    }
+
+    /// Finish the matrix, appending empty offsets through the fixed row count.
+    pub(super) fn finish(mut self) -> SparseMatrix {
+        while self.row_offsets.len() - 1 < self.rows {
+            self.row_offsets.push(self.column_indices.len());
+        }
+        SparseMatrix {
+            rows: self.rows,
+            columns: self.columns,
+            row_offsets: self.row_offsets,
+            column_indices: self.column_indices,
+            coefficients: self.coefficients,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub(super) struct Shape {
     constraint_count: usize,
     variable_count: usize,
@@ -159,6 +229,7 @@ pub(super) struct Shape {
     pub(super) c: SparseMatrix,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct MatrixProducts {
     pub(super) a: Vec<Scalar>,
@@ -215,6 +286,7 @@ impl Shape {
         self.variable_count + 1 + self.public_input_count
     }
 
+    #[cfg(test)]
     pub(super) fn multiply(&self, assignment: &[Scalar]) -> Result<MatrixProducts, R1csError> {
         if assignment.len() != self.columns() {
             return Err(R1csError::InvalidDimension);
@@ -239,22 +311,203 @@ impl Shape {
         {
             return Err(R1csError::InvalidDimension);
         }
-        let mut assignment = Vec::with_capacity(self.columns());
-        assignment.extend_from_slice(witness);
-        assignment.push(relaxation);
-        assignment.extend_from_slice(public_inputs);
-        let products = self.multiply(&assignment)?;
-        if products
-            .a
-            .iter()
-            .copied()
-            .zip(products.b.iter().copied())
-            .zip(products.c.iter().copied().zip(error.iter().copied()))
-            .any(|((a, b), (c, error))| a * b != relaxation * c + error)
-        {
-            return Err(R1csError::Unsatisfied);
+        for (row, error) in error.iter().copied().enumerate() {
+            let a = self.evaluate_assignment_row(&self.a, row, witness, relaxation, public_inputs);
+            let b = self.evaluate_assignment_row(&self.b, row, witness, relaxation, public_inputs);
+            let c = self.evaluate_assignment_row(&self.c, row, witness, relaxation, public_inputs);
+            if a * b != relaxation * c + error {
+                return Err(R1csError::Unsatisfied);
+            }
         }
         Ok(())
+    }
+
+    /// Validate `A z * B z = C z` without allocating a zero error vector or
+    /// full matrix products.
+    pub(super) fn validate_strict_assignment(
+        &self,
+        witness: &[Scalar],
+        public_inputs: &[Scalar],
+    ) -> Result<(), R1csError> {
+        if witness.len() != self.variable_count || public_inputs.len() != self.public_input_count {
+            return Err(R1csError::InvalidDimension);
+        }
+        for row in 0..self.constraint_count {
+            let a =
+                self.evaluate_assignment_row(&self.a, row, witness, Scalar::one(), public_inputs);
+            let b =
+                self.evaluate_assignment_row(&self.b, row, witness, Scalar::one(), public_inputs);
+            let c =
+                self.evaluate_assignment_row(&self.c, row, witness, Scalar::one(), public_inputs);
+            if a * b != c {
+                return Err(R1csError::Unsatisfied);
+            }
+        }
+        Ok(())
+    }
+
+    /// Check whether one emitted circuit row exactly matches this immutable
+    /// shape's canonical A/B/C row, without allocating matrix products.
+    pub(super) fn matches_canonical_constraint_row(
+        &self,
+        row: usize,
+        a: &[(usize, Scalar)],
+        b: &[(usize, Scalar)],
+        c: &[(usize, Scalar)],
+    ) -> Result<bool, R1csError> {
+        if row >= self.constraint_count {
+            return Err(R1csError::InvalidDimension);
+        }
+        Ok(self.row_matches(&self.a, row, a)
+            && self.row_matches(&self.b, row, b)
+            && self.row_matches(&self.c, row, c))
+    }
+
+    /// Return whether every A/B/C row from `start` through the fixed padded
+    /// tail is empty.
+    pub(super) fn has_only_empty_rows_from(&self, start: usize) -> Result<bool, R1csError> {
+        if start > self.constraint_count {
+            return Err(R1csError::InvalidDimension);
+        }
+        Ok((start..self.constraint_count).all(|row| {
+            [&self.a, &self.b, &self.c].into_iter().all(|matrix| {
+                matrix
+                    .row_entries(row)
+                    .expect("bounded row")
+                    .next()
+                    .is_none()
+            })
+        }))
+    }
+
+    /// Derive the sole relaxed error vector while streaming rows directly.
+    pub(super) fn derive_relaxed_error(
+        &self,
+        witness: &[Scalar],
+        relaxation: Scalar,
+        public_inputs: &[Scalar],
+    ) -> Result<Vec<Scalar>, R1csError> {
+        if witness.len() != self.variable_count || public_inputs.len() != self.public_input_count {
+            return Err(R1csError::InvalidDimension);
+        }
+        let mut error = Vec::with_capacity(self.constraint_count);
+        for row in 0..self.constraint_count {
+            let a = self.evaluate_assignment_row(&self.a, row, witness, relaxation, public_inputs);
+            let b = self.evaluate_assignment_row(&self.b, row, witness, relaxation, public_inputs);
+            let c = self.evaluate_assignment_row(&self.c, row, witness, relaxation, public_inputs);
+            error.push(a * b - relaxation * c);
+        }
+        Ok(error)
+    }
+
+    /// Derive Nova's cross term without materializing a combined assignment
+    /// or all three matrix products.
+    pub(super) fn derive_fold_cross_term(
+        &self,
+        relaxed_witness: &[Scalar],
+        relaxed_relaxation: Scalar,
+        relaxed_public_inputs: &[Scalar],
+        relaxed_error: &[Scalar],
+        strict_witness: &[Scalar],
+        strict_public_inputs: &[Scalar],
+    ) -> Result<Vec<Scalar>, R1csError> {
+        if relaxed_witness.len() != self.variable_count
+            || strict_witness.len() != self.variable_count
+            || relaxed_public_inputs.len() != self.public_input_count
+            || strict_public_inputs.len() != self.public_input_count
+            || relaxed_error.len() != self.constraint_count
+        {
+            return Err(R1csError::InvalidDimension);
+        }
+        let effective_relaxation = relaxed_relaxation + Scalar::one();
+        let mut cross_term = Vec::with_capacity(self.constraint_count);
+        for (row, error) in relaxed_error.iter().copied().enumerate() {
+            let a = self.evaluate_fold_row(
+                &self.a,
+                row,
+                relaxed_witness,
+                strict_witness,
+                effective_relaxation,
+                relaxed_public_inputs,
+                strict_public_inputs,
+            );
+            let b = self.evaluate_fold_row(
+                &self.b,
+                row,
+                relaxed_witness,
+                strict_witness,
+                effective_relaxation,
+                relaxed_public_inputs,
+                strict_public_inputs,
+            );
+            let c = self.evaluate_fold_row(
+                &self.c,
+                row,
+                relaxed_witness,
+                strict_witness,
+                effective_relaxation,
+                relaxed_public_inputs,
+                strict_public_inputs,
+            );
+            cross_term.push(a * b - effective_relaxation * c - error);
+        }
+        Ok(cross_term)
+    }
+
+    fn row_matches(&self, matrix: &SparseMatrix, row: usize, expected: &[(usize, Scalar)]) -> bool {
+        matrix
+            .row_entries(row)
+            .expect("bounded row was checked")
+            .eq(expected.iter().copied())
+    }
+
+    fn evaluate_assignment_row(
+        &self,
+        matrix: &SparseMatrix,
+        row: usize,
+        witness: &[Scalar],
+        relaxation: Scalar,
+        public_inputs: &[Scalar],
+    ) -> Scalar {
+        matrix
+            .row_entries(row)
+            .expect("shape matrices have every in-range row")
+            .fold(Scalar::zero(), |sum, (column, coefficient)| {
+                let value = if column < self.variable_count {
+                    witness[column]
+                } else if column == self.variable_count {
+                    relaxation
+                } else {
+                    public_inputs[column - self.variable_count - 1]
+                };
+                sum + coefficient * value
+            })
+    }
+
+    fn evaluate_fold_row(
+        &self,
+        matrix: &SparseMatrix,
+        row: usize,
+        relaxed_witness: &[Scalar],
+        strict_witness: &[Scalar],
+        effective_relaxation: Scalar,
+        relaxed_public_inputs: &[Scalar],
+        strict_public_inputs: &[Scalar],
+    ) -> Scalar {
+        matrix
+            .row_entries(row)
+            .expect("shape matrices have every in-range row")
+            .fold(Scalar::zero(), |sum, (column, coefficient)| {
+                let value = if column < self.variable_count {
+                    relaxed_witness[column] + strict_witness[column]
+                } else if column == self.variable_count {
+                    effective_relaxation
+                } else {
+                    let public_index = column - self.variable_count - 1;
+                    relaxed_public_inputs[public_index] + strict_public_inputs[public_index]
+                };
+                sum + coefficient * value
+            })
     }
 }
 
@@ -307,7 +560,7 @@ mod tests {
     fn strict_and_relaxed_assignments_are_checked_exactly() {
         let shape = multiplication_shape();
         shape
-            .validate_relaxed_assignment(&[s(3)], s(1), &[s(9)], &[s(0)])
+            .validate_strict_assignment(&[s(3)], &[s(9)])
             .expect("strict satisfying assignment");
         shape
             .validate_relaxed_assignment(&[s(3)], s(2), &[s(4)], &[s(1)])
@@ -316,10 +569,78 @@ mod tests {
             shape.validate_relaxed_assignment(&[s(3)], s(2), &[s(4)], &[s(2)]),
             Err(R1csError::Unsatisfied)
         );
-        assert!(
+        assert!(shape.validate_strict_assignment(&[], &[s(9)]).is_err());
+    }
+
+    #[test]
+    fn assignment_validation_streams_rows_without_full_products() {
+        let source = include_str!("r1cs.rs");
+        let validation = source
+            .split("pub(super) fn validate_relaxed_assignment")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("#[derive(Clone, Debug, PartialEq, Eq)]")
+                    .next()
+            })
+            .expect("validation implementation");
+        assert!(validation.contains("evaluate_assignment_row"));
+        assert!(!validation.contains("self.multiply(&assignment)"));
+        assert!(!validation.contains("Vec::with_capacity(self.columns())"));
+    }
+
+    #[test]
+    fn row_streamed_error_and_cross_term_match_full_products() {
+        let shape = multiplication_shape();
+        let relaxed_witness = [s(3)];
+        let relaxation = s(2);
+        let relaxed_public = [s(4)];
+        let relaxed_error = [s(1)];
+        let mut relaxed_assignment = relaxed_witness.to_vec();
+        relaxed_assignment.push(relaxation);
+        relaxed_assignment.extend(relaxed_public);
+        let relaxed_products = shape.multiply(&relaxed_assignment).expect("dimensions");
+        let expected_error = relaxed_products
+            .a
+            .iter()
+            .copied()
+            .zip(relaxed_products.b.iter().copied())
+            .zip(relaxed_products.c.iter().copied())
+            .map(|((a, b), c)| a * b - relaxation * c)
+            .collect::<Vec<_>>();
+        assert_eq!(
             shape
-                .validate_relaxed_assignment(&[], s(1), &[s(9)], &[s(0)])
-                .is_err()
+                .derive_relaxed_error(&relaxed_witness, relaxation, &relaxed_public)
+                .expect("dimensions"),
+            expected_error
+        );
+
+        let strict_witness = [s(5)];
+        let strict_public = [s(25)];
+        let effective_relaxation = relaxation + Scalar::one();
+        let mut combined_assignment = vec![relaxed_witness[0] + strict_witness[0]];
+        combined_assignment.push(effective_relaxation);
+        combined_assignment.push(relaxed_public[0] + strict_public[0]);
+        let combined_products = shape.multiply(&combined_assignment).expect("dimensions");
+        let expected_cross_term = combined_products
+            .a
+            .into_iter()
+            .zip(combined_products.b)
+            .zip(combined_products.c.into_iter().zip(relaxed_error))
+            .map(|((a, b), (c, error))| a * b - effective_relaxation * c - error)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shape
+                .derive_fold_cross_term(
+                    &relaxed_witness,
+                    relaxation,
+                    &relaxed_public,
+                    &relaxed_error,
+                    &strict_witness,
+                    &strict_public,
+                )
+                .expect("dimensions"),
+            expected_cross_term
         );
     }
 
@@ -341,6 +662,27 @@ mod tests {
     }
 
     #[test]
+    fn row_builder_pads_trailing_empty_rows_and_preserves_algebra() {
+        let entries = [(0, 0, s(2)), (1, 2, s(3))];
+        let expected = SparseMatrix::new(4, 3, &entries).expect("canonical matrix");
+        let mut builder = SparseMatrixRowBuilder::new(4, 3).expect("bounded dimensions");
+        builder
+            .append_canonical_row([(0, s(2))])
+            .expect("first canonical row");
+        builder
+            .append_canonical_row([(2, s(3))])
+            .expect("second canonical row");
+        let actual = builder.finish();
+        assert_eq!(actual, expected);
+        assert_eq!(
+            actual.multiply(&[s(5), s(7), s(11)]).expect("dimensions"),
+            vec![s(10), s(33), s(0), s(0)]
+        );
+        assert_eq!(actual.row_entries(2).expect("trailing row").count(), 0);
+        assert_eq!(actual.row_entries(3).expect("trailing row").count(), 0);
+    }
+
+    #[test]
     fn matrix_binding_matches_full_bilinear_evaluation() {
         let shape = multiplication_shape();
         let rows = [s(7)];
@@ -350,5 +692,28 @@ mod tests {
             inner_product(&shape.a.bind_rows(&rows).expect("dimensions"), &columns)
                 .expect("aligned")
         );
+    }
+
+    #[test]
+    fn release_shape_and_sparse_matrix_are_not_deep_cloneable() {
+        let source = include_str!("r1cs.rs");
+        let production = source
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .expect("production R1CS source");
+        for owner in ["SparseMatrix", "Shape"] {
+            let declaration = production
+                .split(&format!("pub(super) struct {owner}"))
+                .next()
+                .expect("bounded owner declaration prefix");
+            let derive = declaration
+                .rsplit("#[derive(")
+                .next()
+                .expect("owner derive");
+            assert!(
+                !derive.contains("Clone"),
+                "{owner} must remain behind shared immutable ownership"
+            );
+        }
     }
 }

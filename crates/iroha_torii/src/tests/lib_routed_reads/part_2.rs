@@ -29,6 +29,7 @@
             1,
             Some(1),
             "proxy",
+            routed_read_test_budget(),
         )
         .expect("manifest merge should succeed");
 
@@ -79,6 +80,7 @@
             0,
             None,
             "proxy",
+            routed_read_test_budget(),
         )
         .expect("manifest merge should succeed");
 
@@ -117,6 +119,7 @@
             0,
             None,
             "proxy",
+            routed_read_test_budget(),
         )
         .expect("manifest merge should succeed");
 
@@ -149,6 +152,7 @@
             5,
             None,
             "proxy",
+            routed_read_test_budget(),
         )
         .expect("manifest merge should succeed");
 
@@ -178,6 +182,7 @@
             0,
             None,
             "proxy",
+            routed_read_test_budget(),
         )
         .expect_err("conflicting UAID roots should fail");
 
@@ -216,6 +221,7 @@
             0,
             None,
             "proxy",
+            routed_read_test_budget(),
         )
         .expect_err("conflicting manifest rows should fail");
 
@@ -237,6 +243,7 @@
             0,
             None,
             "proxy",
+            routed_read_test_budget(),
         )
         .expect_err("non-object manifest payloads should fail");
 
@@ -261,6 +268,7 @@
             0,
             None,
             "proxy",
+            routed_read_test_budget(),
         )
         .expect_err("manifest payloads without manifests array should fail");
 
@@ -288,6 +296,7 @@
             0,
             None,
             "proxy",
+            routed_read_test_budget(),
         )
         .expect_err("manifest rows without dataspace ids should fail");
 
@@ -315,6 +324,7 @@
             0,
             None,
             "proxy",
+            routed_read_test_budget(),
         )
         .expect_err("manifest rows without manifest hashes should fail");
 
@@ -353,6 +363,7 @@
                 }),
             ],
             "proxy",
+            routed_read_test_budget(),
         )
         .expect("portfolio merge should succeed");
 
@@ -411,6 +422,7 @@
                 }),
             ],
             "proxy",
+            routed_read_test_budget(),
         )
         .expect("dataspace summary merge should succeed");
 

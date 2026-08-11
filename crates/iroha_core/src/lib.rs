@@ -253,6 +253,8 @@ pub const MAX_LANE_DRAIN_VOTE_WIRE_BYTES: usize = lane_consensus::MAX_LANE_DRAIN
 /// signature allocation.
 pub const MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES: usize = 32 * 1024;
 const NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG: u32 = 4;
+const NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG: u32 = 17;
+const NETWORK_MESSAGE_TORII_PROXY_RESPONSE_TAG: u32 = 18;
 const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_PUBLICATION_TAG: u32 = 20;
 const MAX_LANE_DRAIN_VOTE_DECODE_ELEMENTS: usize = MAX_LANE_DRAIN_VOTE_WIRE_BYTES;
 // A canonical 128-member BLS committee needs just over 256 KiB under Norito's
@@ -571,7 +573,7 @@ pub enum NetworkMessage {
     SoracloudLocalReadProxyResponse(Box<soracloud_runtime::SoracloudLocalReadProxyResponseV1>),
     /// Torii proxy request routed across bounded Torii ingress proxy hops.
     #[codec(index = 17)]
-    ToriiProxyRequest(Box<torii_proxy::ToriiProxyRequestV5>),
+    ToriiProxyRequest(Arc<torii_proxy::ToriiProxyRequestV5>),
     /// Torii proxy response returned to the ingress node.
     #[codec(index = 18)]
     ToriiProxyResponse(Box<torii_proxy::ToriiProxyResponseV1>),
@@ -831,6 +833,48 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                     MAX_LANE_DRAIN_VOTE_DECODE_DEPTH,
                 )))
             }
+            NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG => {
+                use torii_proxy::{
+                    TORII_PROXY_REQUEST_MAX_DECODE_ALLOCATED_BYTES_V1,
+                    TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1,
+                };
+
+                if framed_len > TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1 {
+                    return Err(norito::core::Error::ArchiveLengthExceeded {
+                        length: u64::try_from(framed_len).unwrap_or(u64::MAX),
+                        limit: u64::try_from(TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1)
+                            .unwrap_or(u64::MAX),
+                    });
+                }
+                Ok(Some(norito::DecodeLimits::new(
+                    TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1,
+                    TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1,
+                    TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1,
+                    TORII_PROXY_REQUEST_MAX_DECODE_ALLOCATED_BYTES_V1,
+                    64,
+                )))
+            }
+            NETWORK_MESSAGE_TORII_PROXY_RESPONSE_TAG => {
+                use torii_proxy::{
+                    TORII_PROXY_RESPONSE_MAX_DECODE_ALLOCATED_BYTES_V1,
+                    TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1,
+                };
+
+                if framed_len > TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1 {
+                    return Err(norito::core::Error::ArchiveLengthExceeded {
+                        length: u64::try_from(framed_len).unwrap_or(u64::MAX),
+                        limit: u64::try_from(TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1)
+                            .unwrap_or(u64::MAX),
+                    });
+                }
+                Ok(Some(norito::DecodeLimits::new(
+                    TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1,
+                    TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1,
+                    TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1,
+                    TORII_PROXY_RESPONSE_MAX_DECODE_ALLOCATED_BYTES_V1,
+                    64,
+                )))
+            }
             NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_PUBLICATION_TAG => {
                 const WIRE_OVERHEAD_BYTES: usize = 64 * 1024;
                 const MAX_CERTIFICATE_BYTES: usize =
@@ -1031,7 +1075,10 @@ mod tests {
         },
         torii_proxy::{
             QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, QueuePlanAdmissionPublicationV1,
-            TORII_PROXY_REQUEST_VERSION_V5, TORII_PROXY_RESPONSE_VERSION_V1,
+            TORII_PROXY_NETWORK_MESSAGE_OVERHEAD_BYTES_V1,
+            TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1, TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1,
+            TORII_PROXY_REQUEST_VERSION_V5, TORII_PROXY_RESPONSE_MAX_ENCODED_BYTES_V1,
+            TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1, TORII_PROXY_RESPONSE_VERSION_V1,
             ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV5,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
@@ -1965,7 +2012,7 @@ mod tests {
                 ),
             },
         ));
-        let torii_request = NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV5 {
+        let torii_request = NetworkMessage::ToriiProxyRequest(Arc::new(ToriiProxyRequestV5 {
             schema_version: TORII_PROXY_REQUEST_VERSION_V5,
             request_id: Hash::prehashed([0x14; 32]),
             hop_count: 1,
@@ -2017,6 +2064,134 @@ mod tests {
             assert_eq!(raw_network_topic(message), NetworkTopic::Control);
             assert_eq!(message.subscriber_route(), SubscriberRoute::ToriiProxy);
         }
+    }
+
+    #[test]
+    fn torii_proxy_carriers_preserve_request_wire_and_have_explicit_decode_caps() {
+        #[derive(Encode)]
+        #[norito(schema_name = "iroha_core::NetworkMessage")]
+        enum BoxToriiProxyCarrier {
+            #[codec(index = 17)]
+            Request(Box<ToriiProxyRequestV5>),
+        }
+
+        let request = ToriiProxyRequestV5 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
+            request_id: Hash::prehashed([0x24; 32]),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV4::Read(ToriiReadProxyRequestV1 {
+                endpoint: ToriiReadEndpointV1::AccountsList,
+                expected_route: ToriiRouteHintV1 {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                },
+                path_args: Vec::new(),
+                query_string: None,
+                body: Vec::new(),
+                response_format: ToriiProxyResponseFormatV1::Json,
+            }),
+        };
+        let boxed = ncore::to_bytes(&BoxToriiProxyCarrier::Request(Box::new(request.clone())))
+            .expect("encode historical Box proxy carrier");
+        let shared = ncore::to_bytes(&NetworkMessage::ToriiProxyRequest(Arc::new(request)))
+            .expect("encode Arc proxy carrier");
+        assert_eq!(
+            shared, boxed,
+            "Box-to-Arc ownership must not change wire bytes"
+        );
+
+        let origin_key = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+            .expect("generate proxy relay origin key");
+        let origin = PeerId::new(origin_key.public_key().clone());
+        let live = ncore::decode_from_bytes::<NetworkMessage>(&shared)
+            .expect("decode live Arc proxy carrier");
+        let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(
+            &origin,
+            None,
+            1,
+            iroha_p2p::Priority::High,
+            &live,
+        );
+        let view = ncore::from_bytes_view(&shared).expect("inspect proxy carrier frame");
+        assert!(
+            <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+                view.as_bytes(),
+                p2p_wire_len,
+                view.flags(),
+            )
+            .expect("derive proxy decode limits")
+            .is_some()
+        );
+        assert!(matches!(
+            <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+                view.as_bytes(),
+                TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1 + 1,
+                view.flags(),
+            ),
+            Err(ncore::Error::ArchiveLengthExceeded { .. })
+        ));
+
+        let worst_request_wire =
+            iroha_p2p::network::data_frame_wire_len_from_payload_len_with_peer_key_bytes::<
+                NetworkMessage,
+            >(
+                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
+                None,
+                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
+                TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1
+                    + TORII_PROXY_NETWORK_MESSAGE_OVERHEAD_BYTES_V1,
+            );
+        assert!(worst_request_wire <= TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1);
+
+        let response = NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
+            schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+            request_id: Hash::prehashed([0x25; 32]),
+            response: ToriiProxyHttpResponseV1 {
+                status_code: 200,
+                headers: Vec::new(),
+                body: vec![0x5a; 32],
+            },
+        }));
+        let response_bytes = ncore::to_bytes(&response).expect("encode proxy response carrier");
+        let response_wire_len = iroha_p2p::network::data_frame_wire_len(
+            &origin,
+            None,
+            2,
+            iroha_p2p::Priority::High,
+            &response,
+        );
+        let response_view =
+            ncore::from_bytes_view(&response_bytes).expect("inspect proxy response frame");
+        assert!(
+            <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+                response_view.as_bytes(),
+                response_wire_len,
+                response_view.flags(),
+            )
+            .expect("derive proxy-response decode limits")
+            .is_some()
+        );
+        assert!(matches!(
+            <NetworkMessage as ClassifyTopic>::inbound_decode_limits(
+                response_view.as_bytes(),
+                TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1 + 1,
+                response_view.flags(),
+            ),
+            Err(ncore::Error::ArchiveLengthExceeded { .. })
+        ));
+        let worst_response_wire =
+            iroha_p2p::network::data_frame_wire_len_from_payload_len_with_peer_key_bytes::<
+                NetworkMessage,
+            >(
+                iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
+                None,
+                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
+                TORII_PROXY_RESPONSE_MAX_ENCODED_BYTES_V1
+                    + TORII_PROXY_NETWORK_MESSAGE_OVERHEAD_BYTES_V1,
+            );
+        assert!(worst_response_wire <= TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1);
     }
 
     #[test]

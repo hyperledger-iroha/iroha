@@ -66,11 +66,12 @@ starts enforcing a new schema.
 
 ## Monitor Connect capacity
 
-`ToriiClient.getConnectStatus()` returns the active policy snapshot, per-IP
-session counts, and enforcement knobs that Torii exposes over
-`/v1/connect/status`. It mirrors the telemetry gadgets mentioned in JS4 so
-SDK-hosted dashboards or runbooks can confirm Connect is enabled before opening
-sessions. Use `status.p2pRebroadcastsTotal` to confirm when frames are being
+`ToriiClient.getConnectStatus()` is an operator-only node diagnostic. It signs
+one exact-network request to `/v1/connect/status/aggregate` using the immutable
+`OperatorSigningContext` installed on the client; redirects, retries, bearer
+tokens, and precomputed headers are rejected. Never provide that context to a
+dApp or wallet. The aggregate keeps `perIpSessions` empty so diagnostics do not
+expose client addresses. Use `status.p2pRebroadcastsTotal` to confirm when frames are being
 rebroadcast over Iroha P2P; in `local_only` mode (or unknown-strategy fallback
 to `local_only`) this counter stays unchanged. Track
 `status.policy.relayEffectiveStrategy` with `status.policy.relayP2pAttached` to
@@ -82,6 +83,8 @@ even when the configured strategy is `broadcast` and `relayP2pAttached` is
 `true`.
 
 ```ts
+// Load operatorSigningContext from runtime-only operator configuration.
+const client = new ToriiClient(toriiURL, { operatorSigningContext });
 const status = await client.getConnectStatus();
 if (status === null) {
   throw new Error("Connect is disabled on this Torii endpoint");
@@ -91,9 +94,6 @@ console.log("relay enabled", status.policy.relayEnabled);
 console.log("relay strategy (configured)", status.policy.relayStrategy);
 console.log("relay strategy (effective)", status.policy.relayEffectiveStrategy);
 console.log("p2p attached", status.policy.relayP2pAttached);
-for (const sample of status.perIpSessions) {
-  console.log(sample.ip, sample.sessions);
-}
 console.log("p2p rebroadcasts", status.p2pRebroadcastsTotal);
 console.log("p2p rebroadcasts skipped", status.p2pRebroadcastSkippedTotal);
 ```

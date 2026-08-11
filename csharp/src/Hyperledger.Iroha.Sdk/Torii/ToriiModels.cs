@@ -229,7 +229,9 @@ public sealed record class ToriiAccountFaucetResponse
     public string AccountId
     {
         get => accountId;
-        init => accountId = ToriiOnboardingDirectMetadata.RequireCanonicalAccountId(value, nameof(AccountId));
+        init => accountId = ToriiAccountOnboardingReceiptVerifier.RequireCanonicalAccountId(
+            value,
+            nameof(AccountId));
     }
 
     [JsonPropertyName("asset_definition_id")]
@@ -442,115 +444,6 @@ public sealed class ToriiVerifyingKeyTransactionDraft
     /// </summary>
     [JsonIgnore]
     public byte[] SigningMessage => signingMessage.ToArray();
-}
-
-[JsonConverter(typeof(ToriiAccountFaucetPuzzleJsonConverter))]
-public sealed record class ToriiAccountFaucetPuzzle
-{
-    private string algorithm = string.Empty;
-    private ulong anchorHeight;
-    private string anchorBlockHashHex = string.Empty;
-    private string? challengeSaltHex;
-    private byte scryptLogN;
-    private uint scryptR;
-    private uint scryptP;
-    private bool scryptLogNSet;
-    private bool scryptRSet;
-    private bool scryptPSet;
-    private ulong maxAnchorAgeBlocks;
-
-    [JsonPropertyName("algorithm")]
-    public string Algorithm
-    {
-        get => algorithm;
-        init => algorithm = ToriiOnboardingDirectMetadata.RequireFaucetAlgorithm(value, nameof(Algorithm));
-    }
-
-    [JsonPropertyName("difficulty_bits")]
-    public byte DifficultyBits { get; init; }
-
-    [JsonPropertyName("anchor_height")]
-    public ulong AnchorHeight
-    {
-        get => anchorHeight;
-        init => anchorHeight = ToriiOnboardingDirectMetadata.RequirePositive(value, nameof(AnchorHeight));
-    }
-
-    [JsonPropertyName("anchor_block_hash_hex")]
-    public string AnchorBlockHashHex
-    {
-        get => anchorBlockHashHex;
-        init => anchorBlockHashHex = ToriiExplorerDirectMetadata.RequireExactSizedHex(
-            value,
-            nameof(AnchorBlockHashHex),
-            32);
-    }
-
-    [JsonPropertyName("challenge_salt_hex")]
-    public string? ChallengeSaltHex
-    {
-        get => challengeSaltHex;
-        init => challengeSaltHex = ToriiOnboardingDirectMetadata.RequireOptionalExactEvenLengthHex(
-            value,
-            nameof(ChallengeSaltHex));
-    }
-
-    [JsonPropertyName("scrypt_log_n")]
-    public byte ScryptLogN
-    {
-        get => scryptLogN;
-        init
-        {
-            scryptLogN = value;
-            scryptLogNSet = true;
-            ValidateCompleteScryptParameters();
-        }
-    }
-
-    [JsonPropertyName("scrypt_r")]
-    public uint ScryptR
-    {
-        get => scryptR;
-        init
-        {
-            scryptR = value;
-            scryptRSet = true;
-            ValidateCompleteScryptParameters();
-        }
-    }
-
-    [JsonPropertyName("scrypt_p")]
-    public uint ScryptP
-    {
-        get => scryptP;
-        init
-        {
-            scryptP = value;
-            scryptPSet = true;
-            ValidateCompleteScryptParameters();
-        }
-    }
-
-    [JsonPropertyName("max_anchor_age_blocks")]
-    public ulong MaxAnchorAgeBlocks
-    {
-        get => maxAnchorAgeBlocks;
-        init => maxAnchorAgeBlocks = ToriiOnboardingDirectMetadata.RequirePositive(
-            value,
-            nameof(MaxAnchorAgeBlocks));
-    }
-
-    private void ValidateCompleteScryptParameters()
-    {
-        if (scryptLogNSet && scryptRSet && scryptPSet)
-        {
-            ToriiOnboardingDirectMetadata.RequireCheckedScryptParameters(
-                scryptLogN,
-                scryptR,
-                scryptP,
-                nameof(ScryptLogN));
-        }
-    }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

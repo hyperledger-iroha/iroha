@@ -687,7 +687,7 @@ fn component_python_inspectors_reject_empty_and_malformed_signed_wire() {
                 inspect_signed_privacy_zk_x509_identity_presentation_action_v1_py(
                     py,
                     malformed,
-                    &[0xA5; 32],
+                    &python_test_network_id(),
                 )
                 .is_err()
             );

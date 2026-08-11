@@ -60,9 +60,9 @@ pub use torii::{
     EventCategory, EventDecodeStage, EventStream, EventStreamDecodeError, EventStreamEvent,
     EventSummary, LocalMcpProbeResult, ManagedBlockStream, ManagedEventStream,
     ManagedPeerGenesisFailure, ManagedPeerGenesisReadinessError, ManagedStatusStream,
-    ReadinessOptions, ReadinessSmokeBuildError, ReadinessSmokeOutcome, ReadinessSmokePlan,
-    SmokeCommitOptions, SmokeCommitSnapshot, StatusMetrics, StatusStreamEvent, ToriiClient,
-    ToriiError, ToriiErrorInfo, ToriiErrorKind, ToriiMetricsSnapshot, ToriiResult,
+    OperatorSigningContext, ReadinessOptions, ReadinessSmokeBuildError, ReadinessSmokeOutcome,
+    ReadinessSmokePlan, SmokeCommitOptions, SmokeCommitSnapshot, StatusMetrics, StatusStreamEvent,
+    ToriiClient, ToriiError, ToriiErrorInfo, ToriiErrorKind, ToriiMetricsSnapshot, ToriiResult,
     ToriiStatusSnapshot, TriggerListPage, TriggerListQuery, TriggerRecord, WsFrame, WsSubscription,
     decode_norito_with_alignment, wait_for_all_managed_peers_genesis,
 };

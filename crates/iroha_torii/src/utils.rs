@@ -713,7 +713,7 @@ pub(crate) fn norito_request_content_type(headers: &axum::http::HeaderMap) -> Re
     Err(typed_request_media_rejection(
         StatusCode::UNSUPPORTED_MEDIA_TYPE,
         "request_content_type_unsupported",
-        format!("unsupported Content-Type `{declared}`; use {NORITO_MIME_TYPE}"),
+        format!("unsupported Content-Type; use {NORITO_MIME_TYPE}"),
     ))
 }
 
@@ -1184,6 +1184,117 @@ where
     respond_with_status_and_format(StatusCode::OK, value, format)
 }
 
+/// Failure to encode a response inside a caller-owned body reservation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BoundedResponseEncodeError {
+    /// JSON's current `String`-only serializer cannot enforce a hard allocation
+    /// ceiling before writing attacker-controlled content.
+    JsonRequiresBoundedWriter,
+    /// The exact canonical Norito frame is larger than the reserved body.
+    BodyTooLarge {
+        /// Exact encoded body length.
+        encoded_bytes: usize,
+        /// Maximum admitted body length.
+        max_body_bytes: usize,
+    },
+    /// Canonical serialization failed before a body was constructed.
+    ///
+    /// Deliberately carries no serializer text: codec errors can embed
+    /// attacker-controlled values, and formatting them while the response is
+    /// still resident would escape the caller's body reservation.
+    Serialization,
+}
+
+impl core::fmt::Display for BoundedResponseEncodeError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::JsonRequiresBoundedWriter => formatter
+                .write_str("JSON signed-query fanout requires a bounded streaming JSON writer"),
+            Self::BodyTooLarge {
+                encoded_bytes,
+                max_body_bytes,
+            } => write!(
+                formatter,
+                "encoded response requires {encoded_bytes} bytes but the admitted body limit is {max_body_bytes} bytes"
+            ),
+            Self::Serialization => formatter.write_str("canonical response serialization failed"),
+        }
+    }
+}
+
+impl std::error::Error for BoundedResponseEncodeError {}
+
+/// Encode a response only after a non-allocating exact size preflight.
+///
+/// Canonical Norito exposes an exact counting pass, allowing the destination
+/// vector to be admitted and allocated once. Norito JSON currently serializes
+/// only into an owned `String`; accepting it here would allocate before a hard
+/// response ceiling could be enforced, so this memory-sensitive path rejects
+/// JSON explicitly.
+pub(crate) fn respond_with_format_bounded<T>(
+    value: T,
+    format: ResponseFormat,
+    max_body_bytes: usize,
+) -> Result<Response, BoundedResponseEncodeError>
+where
+    T: JsonSerialize + norito::core::NoritoSerialize + 'static,
+{
+    if matches!(format, ResponseFormat::Json) {
+        return Err(BoundedResponseEncodeError::JsonRequiresBoundedWriter);
+    }
+
+    let error_code = telemetry_error_code(&value);
+    let bytes = encode_norito_bounded(&value, max_body_bytes)?;
+
+    let mut response = Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, HeaderValue::from_static(NORITO_MIME_TYPE))
+        .body(axum::body::Body::from(bytes))
+        .expect("build bounded Norito response");
+    if let Some(error_code) = error_code {
+        response.extensions_mut().insert(error_code);
+    }
+    Ok(response)
+}
+
+/// Encode one canonical Norito frame into an exactly pre-sized bounded buffer.
+pub(crate) fn encode_norito_bounded<T>(
+    value: &T,
+    max_body_bytes: usize,
+) -> Result<Vec<u8>, BoundedResponseEncodeError>
+where
+    T: norito::core::NoritoSerialize,
+{
+    match norito::core::to_bytes_bounded(value, max_body_bytes) {
+        Ok(bytes) => Ok(bytes),
+        Err(norito::core::BoundedEncodeError::FrameTooLarge {
+            encoded_bytes,
+            max_bytes,
+        }) => Err(BoundedResponseEncodeError::BodyTooLarge {
+            encoded_bytes,
+            max_body_bytes: max_bytes,
+        }),
+        Err(
+            norito::core::BoundedEncodeError::AllocationFailed { .. }
+            | norito::core::BoundedEncodeError::Serialization(_),
+        ) => Err(BoundedResponseEncodeError::Serialization),
+    }
+}
+
+/// Encode canonical JSON with a count-first hard destination ceiling.
+///
+/// The returned string is allocated only after the checked sink has measured
+/// the complete representation and accepted it against `max_body_bytes`.
+pub(crate) fn encode_json_bounded<T>(
+    value: &T,
+    max_body_bytes: usize,
+) -> Result<String, norito::json::BoundedJsonError>
+where
+    T: JsonSerialize + ?Sized,
+{
+    norito::json::to_json_bounded(value, max_body_bytes)
+}
+
 /// Encode a response payload using the given HTTP status and negotiated format.
 pub fn respond_with_status_and_format<T>(
     status: StatusCode,
@@ -1304,6 +1415,15 @@ mod response_format_tests {
         value: u32,
     }
 
+    #[derive(norito::derive::NoritoSerialize)]
+    struct JsonMustNotRun;
+
+    impl norito::json::JsonSerialize for JsonMustNotRun {
+        fn json_serialize(&self, _out: &mut String) {
+            panic!("bounded fanout must reject JSON before invoking its String serializer");
+        }
+    }
+
     #[tokio::test]
     async fn respond_with_format_produces_norito_bytes() {
         let payload = DummyPayload { value: 42 };
@@ -1333,6 +1453,81 @@ mod response_format_tests {
         let bytes = body.collect().await.expect("collect JSON body").to_bytes();
         let decoded: DummyPayload = norito::json::from_slice(&bytes).expect("decode JSON body");
         assert_eq!(decoded, payload);
+    }
+
+    #[tokio::test]
+    async fn bounded_response_accepts_exact_norito_limit_and_rejects_next_byte() {
+        let payload = DummyPayload { value: 99 };
+        let exact = norito::core::encoded_frame_len(&payload).expect("count payload frame");
+        let (_, body) = respond_with_format_bounded(payload.clone(), ResponseFormat::Norito, exact)
+            .expect("the exact body reservation must fit")
+            .into_parts();
+        assert_eq!(
+            body.collect()
+                .await
+                .expect("collect exact bounded body")
+                .to_bytes()
+                .len(),
+            exact
+        );
+
+        let error = match respond_with_format_bounded(payload, ResponseFormat::Norito, exact - 1) {
+            Ok(_) => panic!("one byte below the exact frame must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            BoundedResponseEncodeError::BodyTooLarge {
+                encoded_bytes: exact,
+                max_body_bytes: exact - 1,
+            }
+        );
+    }
+
+    #[test]
+    fn bounded_response_rejects_json_before_string_serialization() {
+        let error =
+            match respond_with_format_bounded(JsonMustNotRun, ResponseFormat::Json, usize::MAX) {
+                Ok(_) => panic!("bounded JSON writer is not available"),
+                Err(error) => error,
+            };
+        assert_eq!(error, BoundedResponseEncodeError::JsonRequiresBoundedWriter);
+    }
+
+    #[test]
+    fn bounded_json_helper_accepts_exact_limit_and_rejects_one_byte_less() {
+        let payload = DummyPayload { value: 7 };
+        let ordinary = norito::json::to_string(&payload).expect("ordinary JSON");
+        assert_eq!(
+            encode_json_bounded(&payload, ordinary.len()).expect("exact JSON cap"),
+            ordinary
+        );
+        assert_eq!(
+            encode_json_bounded(&payload, ordinary.len() - 1)
+                .expect_err("one byte below exact JSON must fail"),
+            norito::json::BoundedJsonError::BodyTooLarge
+        );
+    }
+
+    #[test]
+    fn bounded_json_helper_supports_the_iterable_query_response_envelope() {
+        use iroha_data_model::query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
+        };
+
+        let response = QueryResponse::Iterable(QueryOutput {
+            batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::String(vec![
+                "bounded".to_owned(),
+            ])),
+            remaining_items: Some(0),
+            has_more: false,
+            continue_cursor: None,
+        });
+        let ordinary = norito::json::to_string(&response).expect("ordinary query JSON");
+        assert_eq!(
+            encode_json_bounded(&response, ordinary.len()).expect("bounded query JSON"),
+            ordinary
+        );
     }
 
     #[test]
@@ -1543,6 +1738,15 @@ pub mod extractors {
     #[derive(Clone, Copy, Debug)]
     pub struct Norito<T>(pub T);
 
+    /// Server-owned bounds installed before an ordinary Norito body is read.
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) struct NoritoIngressLimits {
+        /// Maximum raw request body retained by the extractor.
+        pub(crate) max_body_bytes: usize,
+        /// Aggregate allocation and structural limits for Norito decoding.
+        pub(crate) decode_limits: norito::DecodeLimits,
+    }
+
     impl<S, T> FromRequest<S> for Norito<T>
     where
         Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,
@@ -1552,6 +1756,7 @@ pub mod extractors {
         type Rejection = Response;
 
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+            let ingress_limits = req.extensions().get::<NoritoIngressLimits>().copied();
             let declared = req
                 .headers()
                 .get(CONTENT_TYPE)
@@ -1582,11 +1787,32 @@ pub mod extractors {
                     .into_response());
             }
 
-            let body = Bytes::from_request(req, state)
-                .await
-                .map_err(typed_body_rejection)?;
+            let body = match ingress_limits {
+                Some(limits) => axum::body::to_bytes(req.into_body(), limits.max_body_bytes)
+                    .await
+                    .map_err(|_| {
+                        typed_request_rejection(
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            "request_payload_too_large",
+                            format!(
+                                "The request body exceeds its admitted {}-byte memory limit.",
+                                limits.max_body_bytes
+                            ),
+                        )
+                    })?,
+                None => Bytes::from_request(req, state)
+                    .await
+                    .map_err(typed_body_rejection)?,
+            };
 
-            decode_as_norito::<T>(&body).map(Norito)
+            let decode = || T::decode_norito(body.as_ref());
+            let decoded = match ingress_limits {
+                Some(limits) => norito::with_decode_limits(limits.decode_limits, decode),
+                None => decode(),
+            };
+            decoded
+                .map(Norito)
+                .map_err(|error| norito_decode_rejection::<T>(&error))
         }
     }
 
@@ -1765,11 +1991,17 @@ pub mod extractors {
     /// Helper trait exposing versioned JSON decoding for selected Torii ingress payloads.
     pub trait SupportsVersionedJsonDecode: Sized {
         /// Decode a JSON request body carrying a versioned payload.
-        fn decode_versioned_json_body(body: &Bytes) -> Result<Self, Response>;
+        fn decode_versioned_json_body(
+            body: &Bytes,
+            ingress_limits: Option<(usize, norito::DecodeLimits)>,
+        ) -> Result<Self, Response>;
     }
 
     impl SupportsVersionedJsonDecode for SignedTransaction {
-        fn decode_versioned_json_body(body: &Bytes) -> Result<Self, Response> {
+        fn decode_versioned_json_body(
+            body: &Bytes,
+            _ingress_limits: Option<(usize, norito::DecodeLimits)>,
+        ) -> Result<Self, Response> {
             decode_versioned_json::<Self>(body, "SignedTransaction").map_err(|_| {
                 versioned_decode_rejection::<Self>(
                     "invalid canonical JSON SignedTransaction representation",
@@ -1779,27 +2011,20 @@ pub mod extractors {
     }
 
     impl SupportsVersionedJsonDecode for TransactionEntrypoint {
-        fn decode_versioned_json_body(body: &Bytes) -> Result<Self, Response> {
+        fn decode_versioned_json_body(
+            body: &Bytes,
+            _ingress_limits: Option<(usize, norito::DecodeLimits)>,
+        ) -> Result<Self, Response> {
             decode_versioned_json::<Self>(body, "TransactionEntrypoint")
         }
     }
 
     impl SupportsVersionedJsonDecode for SignedQuery {
-        fn decode_versioned_json_body(body: &Bytes) -> Result<Self, Response> {
-            let json = json::from_slice::<SignedQueryJson>(body.as_ref()).map_err(|e| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid JSON SignedQuery body: {e}"),
-                )
-                    .into_response()
-            })?;
-            json.try_into().map_err(|e| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    format!("invalid JSON SignedQuery content: {e}"),
-                )
-                    .into_response()
-            })
+        fn decode_versioned_json_body(
+            body: &Bytes,
+            ingress_limits: Option<(usize, norito::DecodeLimits)>,
+        ) -> Result<Self, Response> {
+            decode_signed_query_json_with_limits(body, ingress_limits)
         }
     }
 
@@ -1807,7 +2032,81 @@ pub mod extractors {
     #[derive(Clone, Copy, Debug)]
     pub struct JsonOrNoritoVersioned<T>(pub T);
 
-    fn versioned_decode_rejection<T: 'static>(versioned_err: impl std::fmt::Display) -> Response {
+    /// Server-owned bounds installed by a pre-body admission extractor.
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) struct VersionedIngressLimits {
+        /// Maximum raw request body retained by the extractor.
+        pub(crate) max_body_bytes: usize,
+        /// Aggregate allocation and structural limits for Norito decoding.
+        pub(crate) decode_limits: norito::DecodeLimits,
+        /// Two-unit allocation and structural limits for JSON decoding.
+        pub(crate) json_decode_limits: norito::DecodeLimits,
+    }
+
+    fn signed_query_json_fallback_limits(body_bytes: usize) -> norito::DecodeLimits {
+        let elements = body_bytes.saturating_mul(8);
+        norito::DecodeLimits::new(
+            elements,
+            body_bytes,
+            elements,
+            body_bytes.saturating_mul(2),
+            norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+        )
+    }
+
+    fn signed_query_json_rejection(resource_limit: bool) -> Response {
+        if resource_limit {
+            return typed_request_rejection(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request_payload_too_large",
+                "The signed-query JSON body exceeded its admitted decode resource limit.",
+            );
+        }
+        typed_request_rejection(
+            StatusCode::BAD_REQUEST,
+            "invalid_query_payload",
+            "The signed-query JSON body is not a valid canonical query representation.",
+        )
+    }
+
+    fn decode_signed_query_json_with_limits(
+        body: &Bytes,
+        ingress_limits: Option<(usize, norito::DecodeLimits)>,
+    ) -> Result<SignedQuery, Response> {
+        let (max_body_bytes, decode_limits) = ingress_limits.map_or_else(
+            || {
+                let body_bytes = body.len();
+                (body_bytes, signed_query_json_fallback_limits(body_bytes))
+            },
+            |limits| limits,
+        );
+        json::preflight_slice(
+            body.as_ref(),
+            json::JsonPreflightLimits::from_decode_limits(max_body_bytes, decode_limits),
+        )
+        .map_err(|error| signed_query_json_rejection(error.resource_kind().is_some()))?;
+
+        let decoded = norito::with_decode_limits_scope(decode_limits, || {
+            json::from_slice::<SignedQueryJson>(body.as_ref())
+        })
+        .map_err(|error| signed_query_json_rejection(error.is_decode_resource_limit()))?;
+        decoded.try_into().map_err(
+            |error: iroha_data_model::query::SignedQueryValidationError| {
+                signed_query_json_rejection(error.is_decode_resource_limit())
+            },
+        )
+    }
+
+    fn versioned_decode_rejection<T: 'static>(
+        versioned_err: iroha_version::error::Error,
+    ) -> Response {
+        if versioned_err.is_decode_resource_limit() {
+            return typed_request_rejection(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request_payload_too_large",
+                "The versioned Norito body exceeded its admitted decode resource limit.",
+            );
+        }
         let message = format!("Could not decode versioned request: {versioned_err}");
         if TypeId::of::<T>() == TypeId::of::<SignedTransaction>() {
             let mut response = super::respond_with_status_and_format(
@@ -1836,47 +2135,47 @@ pub mod extractors {
         type Rejection = Response;
 
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-            let declared = req
-                .headers()
-                .get(CONTENT_TYPE)
-                .and_then(|hv| hv.to_str().ok())
-                .map(str::trim)
-                .filter(|ct| !ct.is_empty())
-                .map(str::to_owned);
+            let ingress_limits = req.extensions().get::<VersionedIngressLimits>().copied();
+            let format = super::typed_request_content_format(req.headers())?;
 
-            let Some(raw) = declared.as_deref() else {
-                return Err((
-                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    format!(
-                        "versioned requests must set `Content-Type: {}` or `Content-Type: application/json`",
-                        super::NORITO_MIME_TYPE
-                    ),
-                )
-                    .into_response());
+            let body = match ingress_limits {
+                Some(limits) => axum::body::to_bytes(req.into_body(), limits.max_body_bytes)
+                    .await
+                    .map_err(|_| {
+                        typed_request_rejection(
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            "request_payload_too_large",
+                            format!(
+                                "The request body exceeds its admitted {}-byte memory limit.",
+                                limits.max_body_bytes
+                            ),
+                        )
+                    })?,
+                None => Bytes::from_request(req, state)
+                    .await
+                    .map_err(typed_body_rejection)?,
             };
 
-            let body = Bytes::from_request(req, state)
-                .await
-                .map_err(typed_body_rejection)?;
-
-            if super::is_norito_media_type(raw) {
-                return <T as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&body)
+            match format {
+                super::TypedRequestContentFormat::Norito => {
+                    let decode = || {
+                        <T as iroha_version::codec::DecodeVersioned>::decode_all_versioned(&body)
+                    };
+                    match ingress_limits {
+                        Some(limits) => {
+                            norito::with_decode_limits_scope(limits.decode_limits, decode)
+                        }
+                        None => decode(),
+                    }
                     .map(JsonOrNoritoVersioned)
-                    .map_err(versioned_decode_rejection::<T>);
+                    .map_err(versioned_decode_rejection::<T>)
+                }
+                super::TypedRequestContentFormat::Json => {
+                    let json_limits = ingress_limits
+                        .map(|limits| (limits.max_body_bytes, limits.json_decode_limits));
+                    T::decode_versioned_json_body(&body, json_limits).map(JsonOrNoritoVersioned)
+                }
             }
-
-            if super::is_json_media_type(raw) {
-                return T::decode_versioned_json_body(&body).map(JsonOrNoritoVersioned);
-            }
-
-            Err((
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                format!(
-                    "unsupported Content-Type `{raw}`; use application/json or {}",
-                    super::NORITO_MIME_TYPE
-                ),
-            )
-                .into_response())
         }
     }
 
@@ -1963,16 +2262,25 @@ pub mod extractors {
         record_norito_decode_failure(payload_kind_label::<T>(), error);
     }
 
+    fn norito_decode_rejection<T: 'static>(error: &norito::Error) -> Response {
+        record_payload_decode_failure::<T>(error);
+        if error.is_decode_resource_limit() {
+            return typed_request_rejection(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request_payload_too_large",
+                "The Norito body exceeded its admitted decode resource limit.",
+            );
+        }
+        typed_request_rejection(
+            StatusCode::BAD_REQUEST,
+            "request_norito_invalid",
+            format!("Invalid Norito body: {error}"),
+        )
+    }
+
     #[allow(clippy::result_large_err)] // extraction needs to return a fully-formed HTTP rejection response
     fn decode_as_norito<T: SupportsNoritoDecode + 'static>(body: &Bytes) -> Result<T, Response> {
-        T::decode_norito(body.as_ref()).map_err(|e| {
-            record_payload_decode_failure::<T>(&e);
-            typed_request_rejection(
-                StatusCode::BAD_REQUEST,
-                "request_norito_invalid",
-                format!("Invalid Norito body: {e}"),
-            )
-        })
+        T::decode_norito(body.as_ref()).map_err(|error| norito_decode_rejection::<T>(&error))
     }
 
     #[cfg(feature = "telemetry")]
@@ -2518,6 +2826,65 @@ pub mod extractors {
 
         #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
         struct Dummy(u32);
+
+        #[test]
+        fn bounded_decode_resource_failures_are_terminal_payload_limits() {
+            let norito_response =
+                norito_decode_rejection::<Dummy>(&norito::Error::TotalAllocationExceeded {
+                    attempted: 2,
+                    limit: 1,
+                });
+            assert_eq!(norito_response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+            let versioned_response = versioned_decode_rejection::<Dummy>(
+                iroha_version::error::Error::NoritoResourceLimit,
+            );
+            assert_eq!(versioned_response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        }
+
+        #[test]
+        fn signed_query_json_raw_limit_accepts_exact_and_rejects_one_extra_byte() {
+            let body = Bytes::from_static(b"null");
+            let decode_limits = norito::DecodeLimits::new(
+                body.len(),
+                body.len(),
+                body.len(),
+                body.len() * 2,
+                norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+            );
+            let exact = VersionedIngressLimits {
+                max_body_bytes: body.len(),
+                decode_limits,
+                json_decode_limits: decode_limits,
+            };
+            assert_eq!(
+                decode_signed_query_json_with_limits(
+                    &body,
+                    Some((exact.max_body_bytes, exact.json_decode_limits)),
+                )
+                .expect_err("null is not a signed query")
+                .status(),
+                StatusCode::BAD_REQUEST,
+                "the exact raw-body boundary must reach syntax/type validation"
+            );
+
+            let one_byte_too_small = VersionedIngressLimits {
+                max_body_bytes: body.len() - 1,
+                ..exact
+            };
+            assert_eq!(
+                decode_signed_query_json_with_limits(
+                    &body,
+                    Some((
+                        one_byte_too_small.max_body_bytes,
+                        one_byte_too_small.json_decode_limits,
+                    )),
+                )
+                .expect_err("one raw byte above the limit must fail")
+                .status(),
+                StatusCode::PAYLOAD_TOO_LARGE
+            );
+        }
 
         #[cfg(feature = "app_api")]
         impl OfflineCanonicalNoritoSchema for Vec<u64> {

@@ -25,7 +25,7 @@ use iroha_torii_shared::route_catalog::{
 };
 use tower::{Layer, Service};
 
-use crate::{SharedAppState, enforce_required_api_token, operator_signatures};
+use crate::{SharedAppState, operator_signatures};
 
 const COMPILED_ROUTE_FEATURES: &[&str] = &[
     #[cfg(feature = "app_api")]
@@ -594,28 +594,11 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
         }
     }
 
-    /// Apply the concrete route-specific Torii API-token middleware.
+    /// Apply exact operator authentication and the SoraNet collector guard before body decoding.
     ///
-    /// This guard is unconditional: it requires exactly one configured token
-    /// even when listener-wide API-token authentication is disabled.
-    #[must_use]
-    pub(crate) fn authenticated_required_api_token(
-        self,
-        app_state: SharedAppState,
-    ) -> CatalogMethodRouter<SharedAppState, SealedAuthentication> {
-        let layer = axum::middleware::from_fn_with_state(app_state, enforce_required_api_token);
-        CatalogMethodRouter {
-            method: self.method,
-            authentication: SealedAuthentication(AuthenticationPolicy::RequiredApiToken),
-            inner: self.inner.layer(layer),
-        }
-    }
-
-    /// Apply the configured SoraNet collector credential before body decoding.
-    ///
-    /// The guard fails closed unless the source belongs to an allowed network
-    /// namespace and, when configured, presents an exact dedicated token. It
-    /// also consumes the route-specific rate budget before the Norito
+    /// Exact NetworkId-bound operator authentication runs first. The secondary
+    /// guard then fails closed unless the source belongs to an allowed network
+    /// namespace and consumes a per-operator route budget before the Norito
     /// extractor can inspect attacker-controlled bytes.
     #[must_use]
     pub(crate) fn authenticated_soranet_privacy_collector(
@@ -624,17 +607,24 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
         endpoint: &'static str,
     ) -> CatalogMethodRouter<SharedAppState, SealedAuthentication> {
         let state = crate::soranet_privacy_ingress::SoranetPrivacyCollectorAuthState {
-            app: app_state,
+            app: app_state.clone(),
             endpoint,
         };
-        let layer = axum::middleware::from_fn_with_state(
+        let collector_layer = axum::middleware::from_fn_with_state(
             state,
             crate::soranet_privacy_ingress::enforce_soranet_privacy_collector_authentication,
         );
+        let operator_layer = axum::middleware::from_fn_with_state(
+            app_state,
+            operator_signatures::enforce_operator_access,
+        );
         CatalogMethodRouter {
             method: self.method,
-            authentication: SealedAuthentication(AuthenticationPolicy::SoranetCollectorCredential),
-            inner: self.inner.layer(layer),
+            authentication: SealedAuthentication(AuthenticationPolicy::OperatorSignature),
+            // Tower applies the most recently added layer first: authenticate
+            // and restore the exact body before the collector guard consumes
+            // the verified operator extension.
+            inner: self.inner.layer(collector_layer).layer(operator_layer),
         }
     }
 
@@ -676,7 +666,10 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
         }
     }
 
-    /// Apply Torii's concrete operator-authentication middleware.
+    /// Apply Torii's mandatory exact-network operator-signature middleware.
+    ///
+    /// Optional WebAuthn/mTLS operator authentication is enforced as an
+    /// additional factor and never replaces the signed method, target, and body.
     ///
     /// Unlike the general [`Self::layer`] method, this method also supplies the
     /// sealed authentication witness checked against the route descriptor.
@@ -1024,16 +1017,6 @@ mod tests {
         AdmissionPolicy::Public,
     )
     .with_authentication(AuthenticationPolicy::ManifestConditionalContent);
-    const API_TOKEN_REQUIRED: RouteDescriptor = RouteDescriptor::new(
-        "test.api_token_required",
-        HttpMethod::Post,
-        "/v1/tests/api-token-required",
-        ApiSurface::Public,
-        Listener::Torii,
-        RouteEffect::Mutation,
-        AdmissionPolicy::Operator,
-    )
-    .with_authentication(AuthenticationPolicy::RequiredApiToken);
     const ROUTES: &[RouteDescriptor] = &[READ, WRITE, FEATURED];
 
     #[cfg(feature = "app_api")]
@@ -1453,7 +1436,7 @@ mod tests {
             catalog_post(|| async {})
                 .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
-        builder
+        let _ = builder
             .finish()
             .expect("the reviewed canonical signed-body witness must mount");
     }
@@ -1479,60 +1462,6 @@ mod tests {
     }
 
     #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn required_api_token_type_state_installs_an_unconditional_guard() {
-        let mut app = crate::mk_app_state_for_tests();
-        let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
-        state.require_api_token = false;
-        state.api_tokens_set = Arc::new(std::collections::HashSet::from([
-            "route-specific-token".to_owned()
-        ]));
-        let mut builder = RouterBuilder::new(
-            app.clone(),
-            RouteCatalog::new(&[API_TOKEN_REQUIRED]),
-            EnabledFeatures::none(),
-        )
-        .expect("valid catalog");
-        builder.route(
-            &API_TOKEN_REQUIRED,
-            catalog_post(|| async { StatusCode::NO_CONTENT })
-                .authenticated_required_api_token(app.clone()),
-        );
-
-        let (router, manifest) = builder
-            .finish()
-            .expect("required API-token guard must mount");
-        assert_eq!(manifest.explicit_routes(), &[API_TOKEN_REQUIRED]);
-
-        let router = router.with_state(app);
-        let missing = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(API_TOKEN_REQUIRED.path())
-                    .body(Body::from("{malformed"))
-                    .expect("missing-token request"),
-            )
-            .await
-            .expect("missing-token response");
-        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
-
-        let accepted = router
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(API_TOKEN_REQUIRED.path())
-                    .header(crate::HEADER_API_TOKEN, "route-specific-token")
-                    .body(Body::empty())
-                    .expect("authenticated request"),
-            )
-            .await
-            .expect("authenticated response");
-        assert_eq!(accepted.status(), StatusCode::NO_CONTENT);
-    }
-
-    #[cfg(feature = "app_api")]
     #[test]
     fn proof_body_authentication_mounts_the_exact_catalog_witness() {
         let app = crate::mk_app_state_for_tests();
@@ -1547,7 +1476,7 @@ mod tests {
             catalog_post(|| async { StatusCode::NO_CONTENT })
                 .authenticated_canonical_account_proof_body(app, 1024),
         );
-        builder
+        let _ = builder
             .finish()
             .expect("proof-body authentication must satisfy the exact catalog policy");
     }

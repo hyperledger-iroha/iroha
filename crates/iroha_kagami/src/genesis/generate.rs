@@ -19,7 +19,9 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     account::CanRegisterAccount, parameter::CanSetParameters, query::CanReadAllLedgerData,
 };
-use iroha_genesis::{GenesisBuilder, ManifestCrypto, RawGenesisTransaction};
+use iroha_genesis::{
+    GenesisBuilder, ManifestCrypto, RawGenesisTransaction, validate_genesis_manifest_json,
+};
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, CARPENTER_ID, gen_account_in};
 use iroha_version::BuildLine;
@@ -619,8 +621,13 @@ impl<T: Write> RunArgs<T> for Args {
             .unwrap_or_else(iroha_data_model::account::address::chain_discriminant);
         let genesis = genesis.with_chain_discriminant(chain_discriminant);
         let _chain_discriminant = ChainDiscriminantGuard::enter(chain_discriminant);
-        let json = norito::json::to_json_pretty(&genesis)?;
-        writeln!(writer, "{json}").wrap_err("failed to write serialized genesis to the buffer")?;
+        let mut json = norito::json::to_json_pretty(&genesis)?;
+        json.push('\n');
+        validate_genesis_manifest_json(json.as_bytes())
+            .wrap_err("generated genesis exceeds fixed resource bounds")?;
+        writer
+            .write_all(json.as_bytes())
+            .wrap_err("failed to write serialized genesis to the buffer")?;
         if let Some(profile) = profile {
             let summary = format_profile_summary(
                 profile,

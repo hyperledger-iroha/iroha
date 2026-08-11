@@ -615,40 +615,37 @@ fn mcp_policy_keeps_operator_tools_operator_only() {
 }
 
 #[test]
-fn retained_sumeragi_snapshot_tools_are_read_only_and_mutation_tools_are_absent() {
+fn operator_sumeragi_snapshot_tools_are_absent_from_mcp() {
     let mut cfg = iroha_config::parameters::actual::ToriiMcp::default();
-    cfg.profile = ToriiMcpProfile::ReadOnly;
-
-    for tool in [
-        iroha_sumeragi_evidence_count_tool(),
-        iroha_sumeragi_evidence_list_tool(),
-        iroha_sumeragi_vrf_penalties_tool(),
-        iroha_sumeragi_vrf_epoch_tool(),
-    ] {
-        assert_eq!(tool.effect, ToolEffect::Read, "{}", tool.name);
-        assert!(is_tool_allowed_by_policy(&cfg, &tool), "{}", tool.name);
-    }
-
     cfg.profile = ToriiMcpProfile::Operator;
     cfg.expose_operator_routes = true;
     let tools = build_tool_specs(&cfg);
+
     for retired_name in [
+        "iroha.sumeragi.commit_certificates",
+        "iroha.sumeragi.validator_sets.list",
+        "iroha.sumeragi.validator_sets.get",
+        "iroha.sumeragi.params",
+        "iroha.sumeragi.status",
+        "iroha.sumeragi.leader",
+        "iroha.sumeragi.qc",
+        "iroha.sumeragi.checkpoints",
+        "iroha.sumeragi.consensus_keys",
+        "iroha.sumeragi.bls_keys",
+        "iroha.sumeragi.key_lifecycle",
+        "iroha.sumeragi.telemetry",
+        "iroha.sumeragi.commit_qc.get",
+        "iroha.sumeragi.evidence.count",
+        "iroha.sumeragi.evidence.list",
+        "iroha.sumeragi.vrf.penalties",
+        "iroha.sumeragi.vrf.epoch",
         "iroha.sumeragi.evidence.submit",
         "iroha.sumeragi.vrf.commit",
         "iroha.sumeragi.vrf.reveal",
     ] {
         assert!(
             tools.iter().all(|tool| tool.name != retired_name),
-            "retired Sumeragi mutation tool remains registered: {retired_name}"
-        );
-    }
-    assert!(tools.iter().all(|tool| {
-        tool.method != Method::POST || tool.path_template != "/v1/sumeragi/evidence"
-    }));
-    for retired_path in ["/v1/sumeragi/vrf/commit", "/v1/sumeragi/vrf/reveal"] {
-        assert!(
-            tools.iter().all(|tool| tool.path_template != retired_path),
-            "retired Sumeragi mutation path remains exposed through MCP: {retired_path}"
+            "operator-only Sumeragi route remains exposed through public MCP: {retired_name}"
         );
     }
 }
@@ -1651,6 +1648,15 @@ fn musubi_v1_mcp_bodies_are_self_contained_closed_schemas() {
                 .and_then(Value::as_array)
                 .is_some_and(|required| required.iter().any(|name| name.as_str() == Some("body"))),
             "{} must require its typed body",
+            definition.name
+        );
+        assert!(
+            root.get("required")
+                .and_then(Value::as_array)
+                .is_some_and(|required| required
+                    .iter()
+                    .any(|name| name.as_str() == Some("headers"))),
+            "{} must require target-route authentication headers",
             definition.name
         );
         let body = root

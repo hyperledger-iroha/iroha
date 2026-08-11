@@ -15,13 +15,23 @@
     clippy::items_after_statements,
     clippy::clone_on_copy
 )]
+mod bounded_manifest;
+
+pub use bounded_manifest::{
+    GENESIS_IVM_BYTECODE_MAX_BYTES_V1, GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1,
+    GENESIS_MANIFEST_JSON_MAX_BYTES_V1, GENESIS_MANIFEST_JSON_MAX_DEPTH_V1,
+    GENESIS_MANIFEST_JSON_MAX_STRING_BYTES_V1, GENESIS_MANIFEST_JSON_MAX_TOKENS_V1,
+    SIGNED_GENESIS_MAX_BYTES_V1, decode_signed_genesis, read_genesis_manifest_bytes,
+    read_signed_genesis, read_signed_genesis_bytes, signed_genesis_decode_limits_v1,
+    validate_genesis_manifest_json,
+};
+
 use core::num::NonZeroU64;
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
     fmt::Debug,
-    fs::{self, File},
-    io::BufReader,
+    fs,
     path::{Path, PathBuf},
     str::FromStr,
     sync::LazyLock,
@@ -45,7 +55,6 @@ use iroha_data_model::{
         consensus_v2::{
             MAX_VALIDATORS_PER_HEIGHT, SumeragiV2GenesisContextParameters, is_valid_committee_size,
         },
-        decode_framed_signed_block,
     },
     confidential::{
         ConfidentialFeatureDigest, ConfidentialStatus, DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH,
@@ -173,12 +182,7 @@ pub fn validate_prepared_genesis_bundle(
     public_key: &PublicKey,
     expected_hash: HashOf<BlockHeader>,
 ) -> Result<ValidatedGenesisBundle> {
-    if signed_wire.is_empty() {
-        return Err(eyre!("signed genesis body is empty"));
-    }
-    init_instruction_registry();
-    let block = decode_framed_signed_block(signed_wire)
-        .map_err(|error| eyre!("decode canonical signed genesis body: {error}"))?;
+    let block = decode_signed_genesis(signed_wire)?;
     let canonical_wire = block
         .encode_wire()
         .map_err(|error| eyre!("re-encode signed genesis body: {error}"))?;
@@ -240,17 +244,20 @@ pub fn validate_prepared_genesis_bundle(
                 continue;
             };
             let validator_key = register.peer.public_key().clone();
-            if validator_pops
-                .insert(validator_key.clone(), register.pop.clone())
-                .is_some()
-            {
+            if validator_pops.contains_key(&validator_key) {
                 return Err(eyre!(
                     "signed genesis registers validator {validator_key} more than once"
+                ));
+            }
+            if validator_pops.len() >= MAX_VALIDATORS_PER_HEIGHT {
+                return Err(eyre!(
+                    "signed genesis validator roster exceeds the supported maximum {MAX_VALIDATORS_PER_HEIGHT}"
                 ));
             }
             bls_normal_pop_verify(&validator_key, &register.pop).map_err(|error| {
                 eyre!("signed genesis validator {validator_key} has an invalid PoP: {error}")
             })?;
+            validator_pops.insert(validator_key, register.pop.clone());
         }
     }
     if !is_valid_committee_size(validator_pops.len()) {
@@ -339,8 +346,8 @@ fn validate_signed_manifest_binding(
         .with_consensus_meta()
         .parse()
         .wrap_err("expand genesis manifest instructions")?;
-    let actual = block.external_transactions().collect::<Vec<_>>();
-    if expected.len() != actual.len() {
+    let actual_len = block.external_transactions().len();
+    if expected.len() != actual_len {
         return Err(eyre!(
             "signed genesis transaction count differs from genesis manifest"
         ));
@@ -348,7 +355,11 @@ fn validate_signed_manifest_binding(
     let genesis_account = AccountId::new(public_key.clone());
     let canonical_fee_intent = FeePaymentIntent::authority(Vec::new(), None);
     let mut previous_creation_time: Option<u128> = None;
-    for (index, (expected_batch, transaction)) in expected.iter().zip(&actual).enumerate() {
+    for (index, (expected_batch, transaction)) in expected
+        .iter()
+        .zip(block.external_transactions())
+        .enumerate()
+    {
         if transaction.domain() != &iroha_data_model::transaction::TransactionDomain::Genesis
             || transaction.authority() != &genesis_account
         {
@@ -386,15 +397,19 @@ fn validate_signed_manifest_binding(
                 "signed genesis transaction {index} is not an instruction batch"
             ));
         };
-        let expected_semantic = expected_batch
-            .iter()
-            .map(Encode::encode)
-            .collect::<Vec<_>>();
-        let actual_semantic = actual_batch.iter().map(Encode::encode).collect::<Vec<_>>();
-        if expected_semantic != actual_semantic {
-            return Err(eyre!(
-                "signed genesis transaction {index} differs from genesis manifest"
-            ));
+        let mut expected_instructions = expected_batch.iter();
+        let mut actual_instructions = actual_batch.iter();
+        loop {
+            match (expected_instructions.next(), actual_instructions.next()) {
+                (Some(expected), Some(actual))
+                    if Encode::encode(expected) == Encode::encode(actual) => {}
+                (None, None) => break,
+                _ => {
+                    return Err(eyre!(
+                        "signed genesis transaction {index} differs from genesis manifest"
+                    ));
+                }
+            }
         }
     }
     let final_transaction_time = previous_creation_time
@@ -5079,8 +5094,6 @@ mod tests2 {
 }
 
 impl RawGenesisTransaction {
-    const WARN_ON_GENESIS_GTE: u64 = 1024 * 1024 * 1024; // 1Gb
-
     /// Iterate over all instructions contained in this manifest.
     #[must_use]
     pub fn instructions(&self) -> impl Iterator<Item = &InstructionBox> {
@@ -5114,53 +5127,27 @@ impl RawGenesisTransaction {
     ///
     /// - file not found
     /// - metadata access to the file failed
+    /// - the path is not a stable direct regular file or exceeds the first-release byte limit
     /// - deserialization failed
     pub fn from_path(json_path: impl AsRef<Path>) -> Result<Self> {
-        use std::io::Read as _;
-        init_instruction_registry();
         let here = json_path
             .as_ref()
             .parent()
             .expect("json file should be in some directory");
-        let file = File::open(&json_path).wrap_err_with(|| {
-            eyre!("failed to open genesis at {}", json_path.as_ref().display())
-        })?;
-        let size = file
-            .metadata()
-            .wrap_err("failed to access genesis file metadata")?
-            .len();
-        if size >= Self::WARN_ON_GENESIS_GTE {
-            eprintln!(
-                "Genesis is quite large, it will take some time to process it (size = {size}, threshold = {})",
-                Self::WARN_ON_GENESIS_GTE
-            );
-        }
-        let mut reader = BufReader::new(file);
-        let mut contents = String::new();
-        reader
-            .read_to_string(&mut contents)
-            .wrap_err("failed to read genesis file")?;
+        let contents = bounded_manifest::read_genesis_manifest_bytes(json_path.as_ref())
+            .wrap_err_with(|| {
+                eyre!(
+                    "failed to read bounded genesis at {}",
+                    json_path.as_ref().display()
+                )
+            })?;
 
-        let raw_value: norito::json::Value = norito::json::from_str(&contents).map_err(|err| {
+        let mut value = Self::from_json_slice(&contents).map_err(|err| {
             eyre!(
                 "failed to deserialize raw genesis transaction from {}: {err}",
                 json_path.as_ref().display()
             )
         })?;
-
-        let mut value = RawGenesisTransaction::from_json_value(raw_value).map_err(|err| {
-            eyre!(
-                "failed to deserialize raw genesis transaction from {}: {err}",
-                json_path.as_ref().display()
-            )
-        })?;
-
-        if value.transactions.is_empty() {
-            return Err(eyre!(
-                "genesis manifest at {} must include at least one transaction entry",
-                json_path.as_ref().display()
-            ));
-        }
 
         if let Some(executor) = &mut value.executor {
             executor.resolve(here);
@@ -5432,9 +5419,11 @@ impl RawGenesisTransaction {
 
         let mut instructions_list = Vec::new();
         let mut aggregated_parameters = Parameters::default();
+        let mut ivm_bytecode_total = 0_usize;
 
         if let Some(executor_path) = executor {
-            let upgrade_executor = Upgrade::new(Executor::new(executor_path.try_into()?)).into();
+            let executor = load_genesis_ivm_bytecode(executor_path, &mut ivm_bytecode_total)?;
+            let upgrade_executor = Upgrade::new(Executor::new(executor)).into();
             instructions_list.push(vec![upgrade_executor]);
         }
 
@@ -5465,16 +5454,9 @@ impl RawGenesisTransaction {
                 instructions.extend(tx.instructions);
             }
 
-            if !tx.ivm_triggers.is_empty() {
-                instructions.extend(
-                    tx.ivm_triggers
-                        .into_iter()
-                        .map(Trigger::try_from)
-                        .collect::<Result<Vec<_>>>()?
-                        .into_iter()
-                        .map(Register::trigger)
-                        .map(InstructionBox::from),
-                );
+            for trigger in tx.ivm_triggers {
+                let trigger = trigger.try_into_with_ivm_bytecode_budget(&mut ivm_bytecode_total)?;
+                instructions.push(Register::trigger(trigger).into());
             }
 
             if !tx.topology.is_empty() {
@@ -6076,11 +6058,37 @@ impl TryFrom<IvmPath> for IvmBytecode {
     type Error = eyre::Report;
 
     fn try_from(value: IvmPath) -> Result<Self, Self::Error> {
-        let blob = fs::read(&value.0)
-            .wrap_err_with(|| eyre!("failed to read bytecode from {}", value.0.display()))?;
-
-        Ok(IvmBytecode::from_compiled(blob))
+        let mut total = 0;
+        load_genesis_ivm_bytecode(value, &mut total)
     }
+}
+
+fn checked_genesis_ivm_bytecode_total(current: usize, next: usize) -> Result<usize> {
+    let total = current
+        .checked_add(next)
+        .ok_or_else(|| eyre!("aggregate genesis IVM bytecode size overflow"))?;
+    if total > GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1 {
+        return Err(eyre!(
+            "aggregate genesis IVM bytecode exceeds the {}-byte first-release limit",
+            GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1
+        ));
+    }
+    Ok(total)
+}
+
+fn load_genesis_ivm_bytecode(value: IvmPath, total: &mut usize) -> Result<IvmBytecode> {
+    let remaining = GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1
+        .checked_sub(*total)
+        .ok_or_else(|| {
+            eyre!(
+                "aggregate genesis IVM bytecode exceeds the {}-byte first-release limit",
+                GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1
+            )
+        })?;
+    let blob = bounded_manifest::read_genesis_ivm_bytecode(&value.0, remaining)
+        .wrap_err_with(|| eyre!("failed to read bytecode from {}", value.0.display()))?;
+    *total = checked_genesis_ivm_bytecode_total(*total, blob.len())?;
+    Ok(IvmBytecode::from_compiled(blob))
 }
 
 impl IvmPath {
@@ -6147,13 +6155,33 @@ impl GenesisIvmAction {
             filter: filter.into(),
         }
     }
+
+    fn try_into_with_ivm_bytecode_budget(self, total: &mut usize) -> Result<Action> {
+        Action::new(
+            load_genesis_ivm_bytecode(self.executable, total)?,
+            self.repeats,
+            self.authority,
+            self.filter,
+        )
+        .map_err(Into::into)
+    }
+}
+
+impl GenesisIvmTrigger {
+    fn try_into_with_ivm_bytecode_budget(self, total: &mut usize) -> Result<Trigger> {
+        Ok(Trigger::new(
+            self.id,
+            self.action.try_into_with_ivm_bytecode_budget(total)?,
+        ))
+    }
 }
 
 impl TryFrom<GenesisIvmTrigger> for Trigger {
     type Error = eyre::Report;
 
     fn try_from(value: GenesisIvmTrigger) -> Result<Self, Self::Error> {
-        Ok(Trigger::new(value.id, value.action.try_into()?))
+        let mut total = 0;
+        value.try_into_with_ivm_bytecode_budget(&mut total)
     }
 }
 
@@ -6196,13 +6224,8 @@ impl TryFrom<GenesisIvmAction> for Action {
     type Error = eyre::Report;
 
     fn try_from(value: GenesisIvmAction) -> Result<Self, Self::Error> {
-        Action::new(
-            IvmBytecode::try_from(value.executable)?,
-            value.repeats,
-            value.authority,
-            value.filter,
-        )
-        .map_err(Into::into)
+        let mut total = 0;
+        value.try_into_with_ivm_bytecode_budget(&mut total)
     }
 }
 
@@ -6224,6 +6247,18 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn aggregate_genesis_ivm_bytecode_budget_accepts_exact_limit() {
+        assert_eq!(
+            checked_genesis_ivm_bytecode_total(GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1 - 1, 1)
+                .expect("exact aggregate bytecode limit must be accepted"),
+            GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1
+        );
+        assert!(
+            checked_genesis_ivm_bytecode_total(GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1, 1).is_err()
+        );
+    }
 
     fn test_builder() -> (TempDir, GenesisBuilder) {
         let tmp_dir = TempDir::new().unwrap();

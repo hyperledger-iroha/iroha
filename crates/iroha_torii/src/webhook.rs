@@ -6,7 +6,10 @@
 //!   Base directory is configured via `torii.data_dir`; tests may use `data_dir::OverrideGuard`.
 //! - Exposes CRUD endpoints to create/list/delete webhooks.
 //! - Background worker scans a disk-backed queue and delivers payloads with
-//!   optional HMAC-SHA256 signature and exponential backoff retries.
+//!   optional HMAC-SHA256 signature and exponential backoff retries. Queue
+//!   admission, spool records, decoded bodies, and each scan batch have hard
+//!   bounds so a large or adversarial queue cannot grow worker memory without
+//!   limit.
 //! - HTTPS delivery is supported when the `app_api_https` feature is enabled,
 //!   using `reqwest` + `rustls` with native roots. Otherwise, only `http://` is allowed.
 //!
@@ -45,6 +48,23 @@ use tokio::fs as tokio_fs;
 use url::{Host, Url};
 
 use crate::filter::filter_expr_to_value;
+
+const WEBHOOK_REGISTRY_MAX_ENTRIES: usize = 1_024;
+const WEBHOOK_REGISTRY_MAX_BYTES: usize = 8 * 1024 * 1024;
+const WEBHOOK_ENTRY_MAX_BYTES: usize = 64 * 1024;
+const WEBHOOK_HTTP_RESPONSE_MAX_BYTES: u64 = 64 * 1024;
+// The configured capacity may be lowered, but never raises this process-level
+// safety ceiling. This intentionally matches the shipped default.
+const WEBHOOK_QUEUE_HARD_CAPACITY: usize = 10_000;
+const WEBHOOK_DELIVERY_MAX_BYTES: usize = 1024 * 1024;
+const WEBHOOK_DELIVERY_METADATA_MAX_BYTES: usize = 64 * 1024;
+const WEBHOOK_DELIVERY_MAX_BASE64_BYTES: usize = WEBHOOK_DELIVERY_MAX_BYTES.div_ceil(3) * 4;
+// A 1 MiB body expands to about 1.34 MiB in base64; leave bounded room for the
+// delivery metadata while rejecting unexpectedly large on-disk records.
+const WEBHOOK_QUEUE_FILE_MAX_BYTES: usize = 2 * 1024 * 1024;
+const WEBHOOK_QUEUE_SCAN_BATCH_SIZE: usize = 128;
+const WEBHOOK_QUEUE_SCAN_WORK_ITEMS: usize = 1024;
+const WEBHOOK_QUEUE_ADMISSION_SCAN_WORK_ITEMS: usize = WEBHOOK_QUEUE_HARD_CAPACITY * 2;
 
 #[derive(
     Debug,
@@ -117,18 +137,46 @@ fn queue_dir() -> PathBuf {
     data_dir().join("queue")
 }
 
+fn effective_queue_capacity(policy: WebhookPolicy) -> usize {
+    policy.queue_capacity.get().min(WEBHOOK_QUEUE_HARD_CAPACITY)
+}
+
+fn queue_depth_bounded(maximum: usize) -> std::io::Result<usize> {
+    queue_depth_bounded_at(
+        &queue_dir(),
+        maximum,
+        WEBHOOK_QUEUE_ADMISSION_SCAN_WORK_ITEMS,
+    )
+}
+
+fn queue_depth_bounded_at(
+    root: &Path,
+    maximum: usize,
+    work_limit: usize,
+) -> std::io::Result<usize> {
+    let mut count = 0_usize;
+    for (index, entry) in fs::read_dir(root)?.enumerate() {
+        if index >= work_limit {
+            return Err(std::io::Error::other(
+                "webhook queue admission scan work limit reached",
+            ));
+        }
+        let entry = entry?;
+        if entry.path().extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        count = count.saturating_add(1);
+        if count >= maximum {
+            return Ok(maximum);
+        }
+    }
+    Ok(count)
+}
+
+#[cfg(test)]
 fn queue_depth() -> usize {
-    match fs::read_dir(queue_dir()) {
-        Ok(entries) => entries
-            .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .path()
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext == "json")
-            })
-            .count(),
+    match queue_depth_bounded(usize::MAX) {
+        Ok(depth) => depth,
         Err(err) => {
             iroha_logger::warn!(%err, "failed to read webhook queue directory");
             0
@@ -136,13 +184,61 @@ fn queue_depth() -> usize {
     }
 }
 
-fn available_queue_slots(policy: WebhookPolicy) -> usize {
-    let used = queue_depth();
-    policy.queue_capacity.get().saturating_sub(used)
+fn queue_write_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn persist_pending_delivery(pd: &PendingDelivery) -> std::io::Result<()> {
-    let path = queue_dir().join(format!("{}.json", pd.id));
+struct QueueAdmission {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    remaining: usize,
+}
+
+impl QueueAdmission {
+    fn begin(policy: WebhookPolicy) -> std::io::Result<Self> {
+        ensure_dirs();
+        let guard = lock_unpoisoned(queue_write_lock());
+        let capacity = effective_queue_capacity(policy);
+        let used = queue_depth_bounded(capacity)?;
+        Ok(Self {
+            _guard: guard,
+            remaining: capacity.saturating_sub(used),
+        })
+    }
+
+    fn is_full(&self) -> bool {
+        self.remaining == 0
+    }
+
+    fn persist(&mut self, pd: &PendingDelivery) -> std::io::Result<()> {
+        if self.is_full() {
+            return Err(std::io::Error::other("webhook queue hard capacity reached"));
+        }
+        let encoded = encode_pending_delivery(pd)?;
+
+        let path = queue_dir().join(format!("{}.json", pd.id));
+        let mut tmp = tempfile::NamedTempFile::new_in(queue_dir())?;
+        tmp.write_all(encoded.as_bytes())?;
+        tmp.flush()?;
+        tmp.persist_noclobber(path)?;
+        self.remaining = self.remaining.saturating_sub(1);
+        Ok(())
+    }
+}
+
+fn encode_pending_delivery(pd: &PendingDelivery) -> std::io::Result<String> {
+    if pd.body.len() > WEBHOOK_DELIVERY_MAX_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "webhook delivery exceeds hard byte limit",
+        ));
+    }
+    if !delivery_metadata_is_bounded(&pd.id, &pd.url, &pd.content_type) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "webhook delivery metadata exceeds hard byte limit",
+        ));
+    }
     let mut payload = norito::json::Map::new();
     payload.insert("id".into(), norito::json::Value::from(pd.id.clone()));
     payload.insert(
@@ -166,12 +262,26 @@ fn persist_pending_delivery(pd: &PendingDelivery) -> std::io::Result<()> {
         "next_attempt_ms".into(),
         norito::json::Value::from(pd.next_attempt_ms),
     );
-    let s = norito::json::to_json_pretty(&payload).unwrap_or_else(|_| "{}".into());
-    let mut tmp = tempfile::NamedTempFile::new_in(queue_dir())?;
-    tmp.write_all(s.as_bytes())?;
-    tmp.flush()?;
-    tmp.persist(path)?;
-    Ok(())
+    let encoded = norito::json::to_json_pretty(&payload).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("failed to encode webhook delivery: {err}"),
+        )
+    })?;
+    if encoded.len() > WEBHOOK_QUEUE_FILE_MAX_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "webhook spool record exceeds hard byte limit",
+        ));
+    }
+    Ok(encoded)
+}
+
+fn delivery_metadata_is_bounded(id: &str, url: &str, content_type: &str) -> bool {
+    id.len()
+        .checked_add(url.len())
+        .and_then(|length| length.checked_add(content_type.len()))
+        .is_some_and(|length| length <= WEBHOOK_DELIVERY_METADATA_MAX_BYTES)
 }
 
 fn proof_id_from_json(value: &norito::json::Value) -> Option<iroha_data_model::proof::ProofId> {
@@ -249,6 +359,7 @@ pub fn set_http_timeout_config(config: HttpTimeoutConfig) {
 
 #[derive(Clone, Copy, Debug)]
 pub struct WebhookPolicy {
+    /// Configured queue capacity, capped by the source-level hard ceiling.
     pub queue_capacity: NonZeroUsize,
     pub max_attempts: NonZeroU32,
     pub backoff_initial: Duration,
@@ -410,26 +521,20 @@ fn persist_registry() {
     {
         {
             let guard = lock_registry();
-            let mut arr = Vec::new();
+            let mut arr = Vec::with_capacity(guard.items.len());
             for (_, e) in guard.items.iter() {
-                let mut m = norito::json::Map::new();
-                m.insert("id".into(), norito::json::Value::from(e.id));
-                m.insert("url".into(), norito::json::Value::from(e.url.clone()));
-                m.insert("active".into(), norito::json::Value::from(e.active));
-                if let Some(ref s) = e.secret {
-                    m.insert("secret".into(), norito::json::Value::from(s.clone()));
-                } else {
-                    m.insert("secret".into(), norito::json::Value::Null);
-                }
-                if let Some(ref expr) = e.filter {
-                    m.insert("filter".into(), filter_expr_to_value(expr));
-                } else {
-                    m.insert("filter".into(), norito::json::Value::Null);
-                }
-                arr.push(norito::json::Value::Object(m));
+                arr.push(webhook_entry_to_storage_json(e));
             }
             let body = norito::json::to_json_pretty(&norito::json::Value::Array(arr))
                 .unwrap_or_else(|_| "[]".into());
+            if body.len() > WEBHOOK_REGISTRY_MAX_BYTES {
+                iroha_logger::error!(
+                    actual = body.len(),
+                    maximum = WEBHOOK_REGISTRY_MAX_BYTES,
+                    "refusing to persist oversized webhook registry"
+                );
+                return;
+            }
             let _ = tmp.write_all(body.as_bytes());
             let _ = tmp.flush();
             if let Err(e) = tmp.persist(&path) {
@@ -441,49 +546,113 @@ fn persist_registry() {
 
 fn load_registry() {
     let path = registry_path();
-    if let Ok(mut f) = fs::File::open(&path) {
+    if let Ok(f) = fs::File::open(&path) {
+        let Ok(metadata) = f.metadata() else {
+            return;
+        };
+        if !metadata.is_file()
+            || usize::try_from(metadata.len()).map_or(true, |len| len > WEBHOOK_REGISTRY_MAX_BYTES)
+        {
+            iroha_logger::warn!(
+                path = %path.display(),
+                maximum = WEBHOOK_REGISTRY_MAX_BYTES,
+                "refusing to load oversized or non-regular webhook registry"
+            );
+            return;
+        }
         let mut buf = Vec::new();
-        if f.read_to_end(&mut buf).is_ok() {
-            if let Ok(s) = String::from_utf8(buf) {
-                if let Ok(norito::json::Value::Array(arr)) =
-                    norito::json::from_str::<norito::json::Value>(&s)
-                {
-                    let mut guard = lock_registry();
-                    guard.items.clear();
-                    let mut max_id = 0u64;
-                    for v in arr {
-                        if let norito::json::Value::Object(m) = v {
-                            if let (Some(idv), Some(urlv), Some(activev)) = (
-                                m.get("id").and_then(norito::json::Value::as_u64),
-                                m.get("url")
-                                    .and_then(norito::json::Value::as_str)
-                                    .map(ToString::to_string),
-                                m.get("active").and_then(|v| match v {
-                                    norito::json::Value::Bool(b) => Some(*b),
-                                    _ => None,
-                                }),
-                            ) {
-                                let secret = m
-                                    .get("secret")
-                                    .and_then(norito::json::Value::as_str)
-                                    .map(ToString::to_string);
-                                let entry = WebhookEntry {
-                                    id: idv,
-                                    url: urlv,
-                                    active: activev,
-                                    secret,
-                                    filter: m.get("filter").and_then(value_to_filter_expr),
-                                };
-                                max_id = max_id.max(idv);
-                                guard.items.insert(idv, entry);
-                            }
+        let mut limited = f.take(
+            u64::try_from(WEBHOOK_REGISTRY_MAX_BYTES)
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+        );
+        if limited.read_to_end(&mut buf).is_ok() && buf.len() <= WEBHOOK_REGISTRY_MAX_BYTES {
+            if let Ok(norito::json::Value::Array(arr)) =
+                norito::json::from_slice::<norito::json::Value>(&buf)
+            {
+                let mut guard = lock_registry();
+                guard.items.clear();
+                let mut max_id = 0u64;
+                for v in arr.into_iter().take(WEBHOOK_REGISTRY_MAX_ENTRIES) {
+                    if let norito::json::Value::Object(m) = v {
+                        if let (Some(idv), Some(urlv), Some(activev)) = (
+                            m.get("id").and_then(norito::json::Value::as_u64),
+                            m.get("url")
+                                .and_then(norito::json::Value::as_str)
+                                .map(ToString::to_string),
+                            m.get("active").and_then(|v| match v {
+                                norito::json::Value::Bool(b) => Some(*b),
+                                _ => None,
+                            }),
+                        ) {
+                            let secret = m
+                                .get("secret")
+                                .and_then(norito::json::Value::as_str)
+                                .map(ToString::to_string);
+                            let entry = WebhookEntry {
+                                id: idv,
+                                url: urlv,
+                                active: activev,
+                                secret,
+                                filter: m.get("filter").and_then(value_to_filter_expr),
+                            };
+                            max_id = max_id.max(idv);
+                            guard.items.insert(idv, entry);
                         }
                     }
-                    guard.next_id = max_id;
                 }
+                guard.next_id = max_id;
             }
         }
     }
+}
+
+fn webhook_entry_to_storage_json(entry: &WebhookEntry) -> norito::json::Value {
+    let mut map = norito::json::Map::new();
+    map.insert("id".into(), norito::json::Value::from(entry.id));
+    map.insert("url".into(), norito::json::Value::from(entry.url.clone()));
+    map.insert("active".into(), norito::json::Value::from(entry.active));
+    map.insert(
+        "secret".into(),
+        entry
+            .secret
+            .clone()
+            .map_or(norito::json::Value::Null, norito::json::Value::from),
+    );
+    map.insert(
+        "filter".into(),
+        entry
+            .filter
+            .as_ref()
+            .map_or(norito::json::Value::Null, filter_expr_to_value),
+    );
+    norito::json::Value::Object(map)
+}
+
+fn webhook_entry_encoded_len(entry: &WebhookEntry) -> Result<usize, norito::json::Error> {
+    norito::json::to_vec(&webhook_entry_to_storage_json(entry)).map(|bytes| bytes.len())
+}
+
+fn registry_can_retain(guard: &RegistryInner, candidate: &WebhookEntry) -> bool {
+    if guard.items.len() >= WEBHOOK_REGISTRY_MAX_ENTRIES {
+        return false;
+    }
+    let Ok(candidate_len) = webhook_entry_encoded_len(candidate) else {
+        return false;
+    };
+    if candidate_len > WEBHOOK_ENTRY_MAX_BYTES {
+        return false;
+    }
+    let retained = guard.items.values().try_fold(0_usize, |total, entry| {
+        webhook_entry_encoded_len(entry)
+            .ok()
+            .and_then(|len| total.checked_add(len.saturating_add(1)))
+    });
+    retained.is_some_and(|retained| {
+        retained
+            .checked_add(candidate_len.saturating_add(2))
+            .is_some_and(|total| total <= WEBHOOK_REGISTRY_MAX_BYTES)
+    })
 }
 
 /// Initialize persistence: create data dir and load registry from disk.
@@ -655,8 +824,13 @@ pub async fn handle_create_webhook(
         return (status, message).into_response();
     }
     let mut guard = lock_registry();
-    guard.next_id += 1;
-    let id = guard.next_id;
+    let Some(id) = guard.next_id.checked_add(1) else {
+        return (
+            StatusCode::INSUFFICIENT_STORAGE,
+            "webhook registry identifier space exhausted",
+        )
+            .into_response();
+    };
     let entry = WebhookEntry {
         id,
         url: req.url,
@@ -664,6 +838,14 @@ pub async fn handle_create_webhook(
         secret: req.secret,
         filter: req.filter,
     };
+    if !registry_can_retain(&guard, &entry) {
+        return (
+            StatusCode::INSUFFICIENT_STORAGE,
+            "webhook registry capacity exceeded",
+        )
+            .into_response();
+    }
+    guard.next_id = id;
     guard.items.insert(id, entry.clone());
     drop(guard);
     persist_registry();
@@ -751,8 +933,30 @@ struct PendingDelivery {
 #[allow(dead_code, unused)]
 pub fn enqueue_delivery_for_all(body: Vec<u8>, content_type: &str) {
     ensure_dirs();
+    if body.len() > WEBHOOK_DELIVERY_MAX_BYTES {
+        iroha_logger::warn!(
+            actual = body.len(),
+            maximum = WEBHOOK_DELIVERY_MAX_BYTES,
+            "dropping oversized webhook delivery"
+        );
+        return;
+    }
+    if content_type.len() > WEBHOOK_DELIVERY_METADATA_MAX_BYTES {
+        iroha_logger::warn!(
+            actual = content_type.len(),
+            maximum = WEBHOOK_DELIVERY_METADATA_MAX_BYTES,
+            "dropping webhook delivery with oversized content type"
+        );
+        return;
+    }
     let policy = webhook_policy();
-    let mut remaining = available_queue_slots(policy);
+    let mut admission = match QueueAdmission::begin(policy) {
+        Ok(admission) => admission,
+        Err(err) => {
+            iroha_logger::warn!(%err, "failed to inspect webhook queue capacity");
+            return;
+        }
+    };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -762,15 +966,24 @@ pub fn enqueue_delivery_for_all(body: Vec<u8>, content_type: &str) {
         if !w.active {
             continue;
         }
-        if remaining == 0 {
+        if admission.is_full() {
             iroha_logger::warn!(
-                capacity = policy.queue_capacity.get(),
+                capacity = effective_queue_capacity(policy),
                 "webhook queue at capacity; dropping new deliveries"
             );
             break;
         }
+        let delivery_id = format!("{}-{}", id, now);
+        if !delivery_metadata_is_bounded(&delivery_id, &w.url, content_type) {
+            iroha_logger::warn!(
+                webhook_id = *id,
+                maximum = WEBHOOK_DELIVERY_METADATA_MAX_BYTES,
+                "dropping webhook delivery with oversized metadata"
+            );
+            continue;
+        }
         let pd = PendingDelivery {
-            id: format!("{}-{}", id, now),
+            id: delivery_id,
             webhook_id: *id,
             url: w.url.clone(),
             content_type: content_type.to_string(),
@@ -778,11 +991,10 @@ pub fn enqueue_delivery_for_all(body: Vec<u8>, content_type: &str) {
             attempts: 0,
             next_attempt_ms: now,
         };
-        if let Err(err) = persist_pending_delivery(&pd) {
+        if let Err(err) = admission.persist(&pd) {
             iroha_logger::warn!(%err, "failed to persist webhook payload");
             continue;
         }
-        remaining = remaining.saturating_sub(1);
     }
 }
 
@@ -791,8 +1003,14 @@ pub fn enqueue_event_for_matching_webhooks(
     content_type: &str,
 ) {
     ensure_dirs();
-    let policy = webhook_policy();
-    let mut remaining = available_queue_slots(policy);
+    if content_type.len() > WEBHOOK_DELIVERY_METADATA_MAX_BYTES {
+        iroha_logger::warn!(
+            actual = content_type.len(),
+            maximum = WEBHOOK_DELIVERY_METADATA_MAX_BYTES,
+            "dropping webhook event with oversized content type"
+        );
+        return;
+    }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -813,14 +1031,30 @@ pub fn enqueue_event_for_matching_webhooks(
             return;
         }
     };
+    if body.len() > WEBHOOK_DELIVERY_MAX_BYTES {
+        iroha_logger::warn!(
+            actual = body.len(),
+            maximum = WEBHOOK_DELIVERY_MAX_BYTES,
+            "dropping oversized webhook event"
+        );
+        return;
+    }
+    let policy = webhook_policy();
+    let mut admission = match QueueAdmission::begin(policy) {
+        Ok(admission) => admission,
+        Err(err) => {
+            iroha_logger::warn!(%err, "failed to inspect webhook queue capacity");
+            return;
+        }
+    };
 
     for (id, w) in entries {
         if !w.active {
             continue;
         }
-        if remaining == 0 {
+        if admission.is_full() {
             iroha_logger::warn!(
-                capacity = policy.queue_capacity.get(),
+                capacity = effective_queue_capacity(policy),
                 "webhook queue at capacity; dropping new deliveries"
             );
             break;
@@ -848,8 +1082,17 @@ pub fn enqueue_event_for_matching_webhooks(
                 continue;
             }
         }
+        let delivery_id = format!("{}-{}", id, now);
+        if !delivery_metadata_is_bounded(&delivery_id, &w.url, content_type) {
+            iroha_logger::warn!(
+                webhook_id = id,
+                maximum = WEBHOOK_DELIVERY_METADATA_MAX_BYTES,
+                "dropping webhook event with oversized metadata"
+            );
+            continue;
+        }
         let pd = PendingDelivery {
-            id: format!("{}-{}", id, now),
+            id: delivery_id,
             webhook_id: id,
             url: w.url.clone(),
             content_type: content_type.to_string(),
@@ -857,11 +1100,10 @@ pub fn enqueue_event_for_matching_webhooks(
             attempts: 0,
             next_attempt_ms: now,
         };
-        if let Err(err) = persist_pending_delivery(&pd) {
+        if let Err(err) = admission.persist(&pd) {
             iroha_logger::warn!(%err, "failed to persist webhook payload");
             continue;
         }
-        remaining = remaining.saturating_sub(1);
     }
 }
 
@@ -1970,10 +2212,12 @@ async fn http_post_plain(
         .map_err(|_| io_timeout_error("tcp write", timeouts.write))?;
         write_result?;
         let mut buf = Vec::new();
-        let read_result = tokio::time::timeout(timeouts.read, stream.read_to_end(&mut buf))
+        let mut limited = stream.take(WEBHOOK_HTTP_RESPONSE_MAX_BYTES.saturating_add(1));
+        let read_result = tokio::time::timeout(timeouts.read, limited.read_to_end(&mut buf))
             .await
             .map_err(|_| io_timeout_error("tcp read", timeouts.read))?;
         read_result?;
+        ensure_webhook_http_response_is_bounded(&buf)?;
         // Parse status code
         if let Some(line) = buf.split(|&b| b == b'\n').next() {
             let line = String::from_utf8_lossy(line);
@@ -1985,6 +2229,15 @@ async fn http_post_plain(
         }
         Ok(0)
     }
+}
+
+fn ensure_webhook_http_response_is_bounded(bytes: &[u8]) -> std::io::Result<()> {
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > WEBHOOK_HTTP_RESPONSE_MAX_BYTES {
+        return Err(std::io::Error::other(format!(
+            "webhook response exceeded the {WEBHOOK_HTTP_RESPONSE_MAX_BYTES}-byte protocol limit"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "app_api_https")]
@@ -2198,97 +2451,253 @@ pub fn start_delivery_worker() {
     });
 }
 
+struct QueueScanState {
+    root: PathBuf,
+    capacity: usize,
+    entries: fs::ReadDir,
+    retained: usize,
+}
+
+#[derive(Default)]
+struct QueueScanCursor {
+    state: Option<QueueScanState>,
+}
+
+struct QueueScanBatch {
+    paths: Vec<PathBuf>,
+    overflow_paths: Vec<PathBuf>,
+    sweep_complete: bool,
+}
+
+fn queue_scan_cursor() -> &'static Mutex<QueueScanCursor> {
+    static CURSOR: OnceLock<Mutex<QueueScanCursor>> = OnceLock::new();
+    CURSOR.get_or_init(|| Mutex::new(QueueScanCursor::default()))
+}
+
+fn discover_queue_batch_at(
+    cursor: &mut QueueScanCursor,
+    root: &Path,
+    capacity: usize,
+    batch_limit: usize,
+    work_limit: usize,
+) -> std::io::Result<QueueScanBatch> {
+    if cursor
+        .state
+        .as_ref()
+        .is_none_or(|state| state.root != root || state.capacity != capacity)
+    {
+        cursor.state = Some(QueueScanState {
+            root: root.to_path_buf(),
+            capacity,
+            entries: fs::read_dir(root)?,
+            retained: 0,
+        });
+    }
+
+    let mut paths = Vec::with_capacity(batch_limit);
+    let mut overflow_paths = Vec::new();
+    let mut work = 0_usize;
+    let mut sweep_complete = false;
+    while paths.len().saturating_add(overflow_paths.len()) < batch_limit && work < work_limit {
+        let next = cursor
+            .state
+            .as_mut()
+            .expect("queue scan state initialized")
+            .entries
+            .next();
+        let Some(entry) = next else {
+            cursor.state = None;
+            sweep_complete = true;
+            break;
+        };
+        work = work.saturating_add(1);
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                cursor.state = None;
+                return Err(err);
+            }
+        };
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let state = cursor
+            .state
+            .as_mut()
+            .expect("queue scan state remains initialized");
+        if state.retained < capacity {
+            state.retained = state.retained.saturating_add(1);
+            paths.push(path);
+        } else {
+            // Overflow records are removed without reading or decoding them.
+            overflow_paths.push(path);
+        }
+    }
+    paths.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+    overflow_paths.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+    Ok(QueueScanBatch {
+        paths,
+        overflow_paths,
+        sweep_complete,
+    })
+}
+
+fn discover_queue_batch(policy: WebhookPolicy) -> std::io::Result<QueueScanBatch> {
+    let mut cursor = lock_unpoisoned(queue_scan_cursor());
+    discover_queue_batch_at(
+        &mut cursor,
+        &queue_dir(),
+        effective_queue_capacity(policy),
+        WEBHOOK_QUEUE_SCAN_BATCH_SIZE,
+        WEBHOOK_QUEUE_SCAN_WORK_ITEMS,
+    )
+}
+
+fn prune_verified_queue_overflow(
+    paths: Vec<PathBuf>,
+    policy: WebhookPolicy,
+) -> std::io::Result<usize> {
+    if paths.is_empty() {
+        return Ok(0);
+    }
+    // Hold admission while re-counting and pruning. Files may have been
+    // delivered since this streaming cursor classified the paths, so only the
+    // currently verified excess is removed.
+    let _guard = lock_unpoisoned(queue_write_lock());
+    let capacity = effective_queue_capacity(policy);
+    let observed = queue_depth_bounded_at(
+        &queue_dir(),
+        capacity.saturating_add(paths.len()),
+        WEBHOOK_QUEUE_ADMISSION_SCAN_WORK_ITEMS,
+    )?;
+    let mut remaining_excess = observed.saturating_sub(capacity).min(paths.len());
+    let mut removed = 0_usize;
+    for path in paths {
+        if remaining_excess == 0 {
+            break;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => {
+                remaining_excess = remaining_excess.saturating_sub(1);
+                removed = removed.saturating_add(1);
+                iroha_logger::warn!(
+                    ?path,
+                    capacity,
+                    "removed webhook queue record beyond hard capacity"
+                );
+            }
+            Err(err) => {
+                iroha_logger::warn!(%err, ?path, "failed to remove excess webhook payload");
+            }
+        }
+    }
+    Ok(removed)
+}
+
+async fn read_queue_file_bounded(path: &Path) -> std::io::Result<Vec<u8>> {
+    use tokio::io::AsyncReadExt as _;
+
+    let metadata = tokio_fs::symlink_metadata(path).await?;
+    let maximum = u64::try_from(WEBHOOK_QUEUE_FILE_MAX_BYTES).unwrap_or(u64::MAX);
+    if !metadata.file_type().is_file() || metadata.len() > maximum {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "webhook spool record is oversized or non-regular",
+        ));
+    }
+    let file = tokio_fs::File::open(path).await?;
+    let capacity = usize::try_from(metadata.len())
+        .unwrap_or(WEBHOOK_QUEUE_FILE_MAX_BYTES)
+        .min(WEBHOOK_QUEUE_FILE_MAX_BYTES);
+    let mut bytes = Vec::with_capacity(capacity);
+    let mut limited = file.take(maximum.saturating_add(1));
+    limited.read_to_end(&mut bytes).await?;
+    if bytes.len() > WEBHOOK_QUEUE_FILE_MAX_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "webhook spool record exceeds hard byte limit",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn decode_pending_delivery(bytes: &[u8]) -> Option<PendingDelivery> {
+    if bytes.len() > WEBHOOK_QUEUE_FILE_MAX_BYTES {
+        return None;
+    }
+    let norito::json::Value::Object(map) =
+        norito::json::from_slice::<norito::json::Value>(bytes).ok()?
+    else {
+        return None;
+    };
+    let id = map.get("id")?.as_str()?;
+    let webhook_id = map.get("webhook_id")?.as_u64()?;
+    let url = map.get("url")?.as_str()?;
+    let content_type = map.get("content_type")?.as_str()?;
+    if !delivery_metadata_is_bounded(id, url, content_type) {
+        return None;
+    }
+    let encoded_body = map.get("body")?.as_str()?;
+    if encoded_body.len() > WEBHOOK_DELIVERY_MAX_BASE64_BYTES {
+        return None;
+    }
+    let body = STANDARD.decode(encoded_body).ok()?;
+    if body.len() > WEBHOOK_DELIVERY_MAX_BYTES {
+        return None;
+    }
+    let attempts = match map.get("attempts") {
+        None => 0,
+        Some(value) => u32::try_from(value.as_u64()?).ok()?,
+    };
+    let next_attempt_ms = map
+        .get("next_attempt_ms")
+        .and_then(norito::json::Value::as_u64)
+        .unwrap_or(0);
+    Some(PendingDelivery {
+        id: id.to_string(),
+        webhook_id,
+        url: url.to_string(),
+        content_type: content_type.to_string(),
+        body,
+        attempts,
+        next_attempt_ms,
+    })
+}
+
 async fn process_queue_once() -> Duration {
-    // Scan queue directory
-    let mut read_dir = match tokio_fs::read_dir(queue_dir()).await {
-        Ok(rd) => rd,
-        Err(e) => {
-            iroha_logger::warn!(%e, "failed to read webhook queue directory");
+    let policy = webhook_policy();
+    let batch = match discover_queue_batch(policy) {
+        Ok(batch) => batch,
+        Err(err) => {
+            iroha_logger::warn!(%err, "failed to iterate webhook queue directory");
             return Duration::from_secs(5);
         }
     };
-    let mut entries = Vec::new();
-    let mut read_dir_failed = false;
-    loop {
-        match read_dir.next_entry().await {
-            Ok(Some(entry)) => entries.push(entry),
-            Ok(None) => break,
-            Err(e) => {
-                iroha_logger::warn!(%e, "failed to iterate webhook queue directory");
-                read_dir_failed = true;
-                break;
-            }
-        }
+    let batch_had_entries = !batch.paths.is_empty() || !batch.overflow_paths.is_empty();
+    if let Err(err) = prune_verified_queue_overflow(batch.overflow_paths, policy) {
+        iroha_logger::warn!(%err, "failed to verify webhook queue overflow");
     }
-    if read_dir_failed {
-        return Duration::from_secs(5);
-    }
-    if entries.is_empty() {
-        return Duration::from_secs(1);
-    }
-    entries.sort_by_key(tokio::fs::DirEntry::file_name);
-    let policy = webhook_policy();
-    for e in entries {
-        let path = e.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("json") {
-            continue;
-        }
-        let bytes = match tokio_fs::read(&path).await {
-            Ok(b) => b,
+
+    let mut next_due = None;
+    for path in batch.paths {
+        let bytes = match read_queue_file_bounded(&path).await {
+            Ok(bytes) => bytes,
             Err(e) => {
                 iroha_logger::warn!(%e, ?path, "failed to read pending webhook delivery");
+                if e.kind() == std::io::ErrorKind::InvalidData {
+                    if let Err(remove_err) = tokio_fs::remove_file(&path).await {
+                        iroha_logger::warn!(
+                            %remove_err,
+                            ?path,
+                            "failed to remove invalid webhook payload"
+                        );
+                    }
+                }
                 continue;
             }
         };
-        let mut pd: PendingDelivery = match String::from_utf8(bytes)
-            .ok()
-            .and_then(|s| norito::json::from_str::<norito::json::Value>(&s).ok())
-            .and_then(|v| match v {
-                norito::json::Value::Object(m) => {
-                    let id = m
-                        .get("id")
-                        .and_then(norito::json::Value::as_str)
-                        .map(ToString::to_string)
-                        .unwrap_or_default();
-                    let webhook_id = m
-                        .get("webhook_id")
-                        .and_then(norito::json::Value::as_u64)
-                        .unwrap_or(0);
-                    let url = m
-                        .get("url")
-                        .and_then(norito::json::Value::as_str)
-                        .map(ToString::to_string)
-                        .unwrap_or_default();
-                    let content_type = m
-                        .get("content_type")
-                        .and_then(norito::json::Value::as_str)
-                        .map(ToString::to_string)
-                        .unwrap_or_default();
-                    let body = m
-                        .get("body")
-                        .and_then(norito::json::Value::as_str)
-                        .and_then(|s| STANDARD.decode(s).ok())
-                        .unwrap_or_default();
-                    let attempts = match m.get("attempts") {
-                        None => 0,
-                        Some(value) => u32::try_from(value.as_u64()?).ok()?,
-                    };
-                    let next_attempt_ms = m
-                        .get("next_attempt_ms")
-                        .and_then(norito::json::Value::as_u64)
-                        .unwrap_or(0);
-                    Some(PendingDelivery {
-                        id,
-                        webhook_id,
-                        url,
-                        content_type,
-                        body,
-                        attempts,
-                        next_attempt_ms,
-                    })
-                }
-                _ => None,
-            }) {
+        let mut pd = match decode_pending_delivery(&bytes) {
             Some(p) => p,
             None => {
                 if let Err(e) = tokio_fs::remove_file(&path).await {
@@ -2303,6 +2712,8 @@ async fn process_queue_once() -> Duration {
             .unwrap_or_default()
             .as_millis() as u64;
         if now_ms < pd.next_attempt_ms {
+            let delay = Duration::from_millis(pd.next_attempt_ms.saturating_sub(now_ms));
+            next_due = Some(next_due.map_or(delay, |current: Duration| current.min(delay)));
             continue;
         }
         if pd.attempts >= policy.max_attempts.get() {
@@ -2347,36 +2758,44 @@ async fn process_queue_once() -> Duration {
                 .unwrap_or_default()
                 .as_millis() as u64;
             pd.next_attempt_ms = next;
-            let mut m = norito::json::Map::new();
-            m.insert("id".into(), norito::json::Value::from(pd.id.clone()));
-            m.insert(
-                "webhook_id".into(),
-                norito::json::Value::from(pd.webhook_id),
-            );
-            m.insert("url".into(), norito::json::Value::from(pd.url.clone()));
-            m.insert(
-                "content_type".into(),
-                norito::json::Value::from(pd.content_type.clone()),
-            );
-            m.insert(
-                "body".into(),
-                norito::json::Value::from(STANDARD.encode(&pd.body)),
-            );
-            m.insert(
-                "attempts".into(),
-                norito::json::Value::from(pd.attempts as u64),
-            );
-            m.insert(
-                "next_attempt_ms".into(),
-                norito::json::Value::from(pd.next_attempt_ms),
-            );
-            let s = norito::json::to_json_pretty(&m).unwrap_or_else(|_| "{}".into());
-            if let Err(e) = tokio_fs::write(&path, s.as_bytes()).await {
-                iroha_logger::warn!(%e, ?path, "failed to persist pending webhook delivery");
+            match encode_pending_delivery(&pd) {
+                Ok(encoded) => {
+                    if let Err(e) = tokio_fs::write(&path, encoded.as_bytes()).await {
+                        iroha_logger::warn!(
+                            %e,
+                            ?path,
+                            "failed to persist pending webhook delivery"
+                        );
+                    }
+                }
+                Err(err) => {
+                    iroha_logger::warn!(
+                        %err,
+                        ?path,
+                        "dropping webhook delivery that exceeded spool bounds"
+                    );
+                    if let Err(remove_err) = tokio_fs::remove_file(&path).await {
+                        iroha_logger::warn!(
+                            %remove_err,
+                            ?path,
+                            "failed to remove oversized webhook payload"
+                        );
+                    }
+                }
             }
         }
     }
-    Duration::from_millis(0)
+    if batch.sweep_complete {
+        next_due
+            .unwrap_or(Duration::from_secs(1))
+            .min(Duration::from_secs(1))
+    } else if batch_had_entries {
+        Duration::ZERO
+    } else {
+        // A work-bounded scan containing only unrelated files must yield
+        // before continuing the persistent directory cursor.
+        Duration::from_millis(1)
+    }
 }
 
 #[cfg(test)]
@@ -2384,7 +2803,7 @@ mod tests {
     use std::{
         convert::TryFrom,
         fs,
-        sync::{Arc, Mutex, MutexGuard},
+        sync::{Arc, Barrier, Mutex, MutexGuard},
     };
 
     use http_body_util::BodyExt as _;
@@ -2401,6 +2820,238 @@ mod tests {
 
     use super::*;
     use crate::test_utils::TestDataDirGuard;
+
+    fn registry_entry(id: u64, url: String) -> WebhookEntry {
+        WebhookEntry {
+            id,
+            url,
+            active: true,
+            secret: None,
+            filter: None,
+        }
+    }
+
+    #[test]
+    fn webhook_registry_rejects_entry_and_count_overflow() {
+        let mut registry = RegistryInner::default();
+        let oversized = registry_entry(1, "x".repeat(WEBHOOK_ENTRY_MAX_BYTES));
+        assert!(!registry_can_retain(&registry, &oversized));
+
+        let compact = registry_entry(1, "https://example.com/hook".to_string());
+        for id in 0..WEBHOOK_REGISTRY_MAX_ENTRIES {
+            registry
+                .items
+                .insert(u64::try_from(id).expect("id fits"), compact.clone());
+        }
+        assert!(!registry_can_retain(&registry, &compact));
+    }
+
+    #[test]
+    fn webhook_http_response_bound_rejects_limit_plus_one() {
+        let maximum = usize::try_from(WEBHOOK_HTTP_RESPONSE_MAX_BYTES).expect("limit fits");
+        assert!(ensure_webhook_http_response_is_bounded(&vec![0_u8; maximum]).is_ok());
+        let error = ensure_webhook_http_response_is_bounded(&vec![0_u8; maximum + 1])
+            .expect_err("limit plus one must fail");
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+    }
+
+    #[test]
+    fn webhook_delivery_body_bound_accepts_limit_and_rejects_limit_plus_one() {
+        let mut pending = PendingDelivery {
+            id: "body-boundary".to_string(),
+            webhook_id: 1,
+            url: "http://example.test/webhook".to_string(),
+            content_type: "application/octet-stream".to_string(),
+            body: vec![0xA5; WEBHOOK_DELIVERY_MAX_BYTES],
+            attempts: 0,
+            next_attempt_ms: 0,
+        };
+
+        let encoded = encode_pending_delivery(&pending).expect("boundary body must encode");
+        let decoded =
+            decode_pending_delivery(encoded.as_bytes()).expect("boundary body must decode");
+        assert_eq!(decoded.body.len(), WEBHOOK_DELIVERY_MAX_BYTES);
+
+        pending.body.push(0);
+        let error = encode_pending_delivery(&pending).expect_err("limit plus one must fail");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+
+        pending.body.clear();
+        pending.content_type = "x".repeat(WEBHOOK_DELIVERY_METADATA_MAX_BYTES + 1);
+        let error = encode_pending_delivery(&pending).expect_err("metadata overflow must fail");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn webhook_spool_decode_rejects_encoded_body_overflow() {
+        let mut payload = norito::json::Map::new();
+        payload.insert("id".into(), norito::json::Value::from("encoded-overflow"));
+        payload.insert("webhook_id".into(), norito::json::Value::from(1_u64));
+        payload.insert(
+            "url".into(),
+            norito::json::Value::from("http://example.test/webhook"),
+        );
+        payload.insert(
+            "content_type".into(),
+            norito::json::Value::from("application/octet-stream"),
+        );
+        payload.insert(
+            "body".into(),
+            norito::json::Value::from("A".repeat(WEBHOOK_DELIVERY_MAX_BASE64_BYTES + 4)),
+        );
+        payload.insert("attempts".into(), norito::json::Value::from(0_u64));
+        payload.insert("next_attempt_ms".into(), norito::json::Value::from(0_u64));
+        let record = norito::json::to_vec(&payload).expect("encode overflow record");
+        assert!(record.len() <= WEBHOOK_QUEUE_FILE_MAX_BYTES);
+        assert!(
+            decode_pending_delivery(&record).is_none(),
+            "encoded body overflow must be rejected before base64 decode"
+        );
+    }
+
+    #[test]
+    fn webhook_queue_capacity_has_a_hard_ceiling() {
+        let policy = WebhookPolicy {
+            queue_capacity: NonZeroUsize::new(WEBHOOK_QUEUE_HARD_CAPACITY + 1)
+                .expect("hard capacity plus one is non-zero"),
+            ..WebhookPolicy::default()
+        };
+        assert_eq!(
+            effective_queue_capacity(policy),
+            WEBHOOK_QUEUE_HARD_CAPACITY
+        );
+    }
+
+    #[test]
+    fn queue_admission_scan_fails_closed_at_work_limit() {
+        let _env = TestDataDirGuard::new();
+        let root = queue_dir();
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create queue directory");
+        for name in ["noise-1", "noise-2", "noise-3"] {
+            fs::write(root.join(name), b"").expect("write queue noise");
+        }
+
+        let error = queue_depth_bounded_at(&root, 1, 2)
+            .expect_err("work exhaustion must fail queue admission closed");
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+    }
+
+    #[test]
+    fn queue_discovery_sorts_each_bounded_batch() {
+        let _env = TestDataDirGuard::new();
+        let root = queue_dir();
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create queue directory");
+        for name in ["0003.json", "0001.json", "0002.json"] {
+            fs::write(root.join(name), b"{}").expect("write queue entry");
+        }
+
+        let mut cursor = QueueScanCursor::default();
+        let batch =
+            discover_queue_batch_at(&mut cursor, &root, 3, 4, 4).expect("discover queue batch");
+        let names: Vec<_> = batch
+            .paths
+            .iter()
+            .map(|path| {
+                path.file_name()
+                    .expect("file name")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(
+            names,
+            ["0001.json", "0002.json", "0003.json"].map(str::to_string)
+        );
+        assert!(batch.overflow_paths.is_empty());
+        assert!(batch.sweep_complete);
+    }
+
+    #[test]
+    fn queue_discovery_bounds_batches_and_marks_capacity_overflow() {
+        let _env = TestDataDirGuard::new();
+        let root = queue_dir();
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create queue directory");
+        for name in ["0001.json", "0002.json", "0003.json"] {
+            fs::write(root.join(name), b"{}").expect("write queue entry");
+        }
+
+        let mut cursor = QueueScanCursor::default();
+        let first = discover_queue_batch_at(&mut cursor, &root, 2, 2, 3)
+            .expect("discover first queue batch");
+        assert_eq!(
+            first.paths.len() + first.overflow_paths.len(),
+            2,
+            "a scan batch must not retain more paths than its bound"
+        );
+        assert!(!first.sweep_complete);
+
+        let second = discover_queue_batch_at(&mut cursor, &root, 2, 2, 3)
+            .expect("discover second queue batch");
+        assert_eq!(second.paths.len() + second.overflow_paths.len(), 1);
+        assert_eq!(
+            first.overflow_paths.len() + second.overflow_paths.len(),
+            1,
+            "records beyond capacity must be marked before replay"
+        );
+        assert!(second.sweep_complete);
+    }
+
+    #[test]
+    fn queue_overflow_pruning_rechecks_current_capacity() {
+        let _env = TestDataDirGuard::new();
+        let root = queue_dir();
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create queue directory");
+        let first = root.join("0001.json");
+        let second = root.join("0002.json");
+        fs::write(&first, b"{}").expect("write first queue entry");
+        fs::write(&second, b"{}").expect("write second queue entry");
+        let policy = WebhookPolicy {
+            queue_capacity: NonZeroUsize::new(2).expect("non-zero capacity"),
+            ..WebhookPolicy::default()
+        };
+
+        assert_eq!(
+            prune_verified_queue_overflow(vec![second.clone()], policy)
+                .expect("verify queue at capacity"),
+            0
+        );
+        assert!(second.exists(), "a current in-capacity record must remain");
+
+        let overflow = root.join("0003.json");
+        fs::write(&overflow, b"{}").expect("write overflow queue entry");
+        assert_eq!(
+            prune_verified_queue_overflow(vec![overflow.clone()], policy)
+                .expect("prune verified overflow"),
+            1
+        );
+        assert!(!overflow.exists(), "verified overflow must be removed");
+        assert_eq!(queue_depth_bounded_at(&root, 3, 3).unwrap(), 2);
+    }
+
+    #[test]
+    fn delivery_worker_removes_oversized_spool_file_before_decode() {
+        let _env = TestDataDirGuard::new();
+        let root = queue_dir();
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create queue directory");
+        let oversized = root.join("oversized.json");
+        let file = fs::File::create(&oversized).expect("create oversized queue file");
+        file.set_len(
+            u64::try_from(WEBHOOK_QUEUE_FILE_MAX_BYTES)
+                .expect("file bound fits u64")
+                .saturating_add(1),
+        )
+        .expect("extend oversized queue file");
+
+        let _ = Runtime::new()
+            .expect("tokio runtime")
+            .block_on(process_queue_once());
+        assert!(!oversized.exists(), "oversized spool file must be removed");
+    }
 
     struct TimeoutOverride(super::HttpTimeoutConfig);
 
@@ -2627,6 +3278,57 @@ mod tests {
         super::enqueue_delivery_for_all(b"second".to_vec(), "text/plain");
 
         assert_eq!(super::queue_depth(), 1);
+    }
+
+    #[test]
+    fn queue_capacity_check_and_persistence_are_atomic() {
+        const WRITERS: usize = 8;
+
+        let _env = TestDataDirGuard::new();
+        let _ = fs::remove_dir_all(super::queue_dir());
+        super::ensure_dirs();
+        let policy = super::WebhookPolicy {
+            queue_capacity: NonZeroUsize::new(1).unwrap(),
+            max_attempts: NonZeroU32::new(3).unwrap(),
+            backoff_initial: Duration::from_secs(1),
+            backoff_max: Duration::from_secs(1),
+            connect_timeout: Duration::from_secs(1),
+            write_timeout: Duration::from_secs(1),
+            read_timeout: Duration::from_secs(1),
+        };
+
+        let barrier = Arc::new(Barrier::new(WRITERS));
+        let handles: Vec<_> = (0..WRITERS)
+            .map(|writer| {
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let mut admission = QueueAdmission::begin(policy)?;
+                    admission.persist(&PendingDelivery {
+                        id: format!("writer-{writer}"),
+                        webhook_id: u64::try_from(writer).expect("writer id fits u64"),
+                        url: "http://example.test/webhook".to_string(),
+                        content_type: "text/plain".to_string(),
+                        body: format!("payload-{writer}").into_bytes(),
+                        attempts: 0,
+                        next_attempt_ms: 0,
+                    })
+                })
+            })
+            .collect();
+        let mut persisted = 0_usize;
+        for handle in handles {
+            if handle.join().expect("queue writer thread").is_ok() {
+                persisted = persisted.saturating_add(1);
+            }
+        }
+
+        assert_eq!(persisted, 1, "exactly one writer should reserve capacity");
+        assert_eq!(
+            super::queue_depth(),
+            1,
+            "concurrent writers must not overshoot queue capacity"
+        );
     }
 
     #[test]

@@ -287,6 +287,20 @@ fn scoped_limit_covers_streaming_and_bare_sequence_decoders() {
 }
 
 #[test]
+fn generic_scoped_limit_preserves_wrapped_error_type() {
+    #[derive(Debug)]
+    struct WrappedError(Error);
+
+    let value = vec![10_u32, 20, 30];
+    let framed = norito::to_bytes(&value).expect("encode framed vector");
+    let error = norito::with_decode_limits_scope(limits(2), || {
+        norito::stream_vec_collect_from_reader::<_, u32>(Cursor::new(&framed)).map_err(WrappedError)
+    })
+    .expect_err("generic scope must enforce limits through a wrapped error");
+    assert_sequence_limit(error.0, 3, 2);
+}
+
+#[test]
 fn scoped_limit_covers_adaptive_row_decoders() {
     let rows = [(1_u64, 10_u32, true), (2, 20, false), (3, 30, true)];
     let aos = norito::aos::encode_rows_u64_u32_bool(&rows);

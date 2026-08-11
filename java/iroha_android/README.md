@@ -428,10 +428,13 @@ Artifact installation requires the canonical candidate-bound promotion record th
 `ReleaseAuthentication`, in addition to the trusted policy, attestation, benchmark evidence, and
 cryptographic review. An authenticated-but-unpromoted release cannot become active.
 
-`newToriiClient(...)` exposes the query-free, asset-neutral `getOfflineCapability`,
-`getRecipientRegistrationLineage`, `submitTopUp`, `submitRedeem`, and `getOperation`. Commands send
-the typed Norito request directly with `application/x-norito` and the signed lowercase operation id
-as `Idempotency-Key`; responses must be typed Norito as well. Top-up
+`newToriiClient(...)` requires an exact genesis-derived `LocalSigningContext` and exposes the
+query-free, asset-neutral `getOfflineCapability`, `getRecipientRegistrationLineage`, `submitTopUp`,
+`submitRedeem`, and `getOperation`. Receiver-lineage proof construction additionally requires a
+per-call `ToriiCanonicalRequestAuth`; the client signs the exact NetworkId, POST path, and Norito
+selector body with fresh metadata and emits a one-shot request. Commands send the typed Norito
+request directly with `application/x-norito` and the signed lowercase operation id as
+`Idempotency-Key`; responses must be typed Norito as well. Top-up
 bodies are limited to 512 KiB and redemption bodies to 48 MiB, exposed as
 `MAX_TORII_TOP_UP_REQUEST_BYTES_V4` and `MAX_TORII_REDEEM_REQUEST_BYTES_V4`.
 `projectReadiness` returns the live asset scale, committed height/hash, all role-specific verifier
@@ -1219,7 +1222,7 @@ custom `underlying` context) when surfacing the events.
 
 ### Canonical request signing
 
-Torii app endpoints accept optional `X-Iroha-Account`, `X-Iroha-Signature`,
+Torii app endpoints use `X-Iroha-Account`, `X-Iroha-Signature`,
 `X-Iroha-Timestamp-Ms`, and `X-Iroha-Nonce` headers. Use
 `CanonicalRequestSigner` when calling account-scoped helpers or building ad-hoc
 HTTP requests:
@@ -1240,6 +1243,10 @@ method/path/query/body layout, and freshness metadata. Labels and legacy chain
 identifiers are never accepted as a signing domain.
 Raw `witness_base64` body authentication is not exposed; multisig writes must
 use a canonical signed transaction or a closed typed signed intent.
+Identifier resolve/claim-receipt and RAM-LFE execute/receipt-verify calls require
+`ToriiCanonicalRequestAuth` plus `ClientConfig.localSigningContext`. They sign the
+exact POST path and body once, reject precomputed canonical headers, and bind a
+claim-receipt path to the same exact canonical I105 signer account.
 
 ### Sora VPN native lease flow
 
@@ -1579,17 +1586,18 @@ or compatibility-only payload in the Java resource directory.
 
 `MusubiToriiClientV1` and `MusubiModelsV1` mirror the Kotlin-default first-release
 registry surface without reflection, Android framework dependencies, or legacy
-wire aliases. The signer-free client exposes all twelve typed
-`/v1/musubi/queries/*` POST routes and strictly preserves structured package IDs,
+wire aliases. The client exposes all twelve typed `/v1/musubi/queries/*` POST routes only with a
+mandatory `LocalSigningContext` and per-call `ToriiCanonicalRequestAuth`. It signs each exact raw
+body/path against the configured `NetworkId` and marks the request one-shot. The models strictly
+preserve structured package IDs,
 immutable namespace bindings, SemVer requirement ASTs, one exact genesis-derived
 `NetworkId`, finalized cursors, and authoritative archive commitments. Unknown
 fields, unsupported versions, and duplicate parent-local dependency aliases
 fail closed.
 
 Both Java and Kotlin validate the Rust-owned contract in
-[`fixtures/musubi/sdk_v1.json`](../../fixtures/musubi/sdk_v1.json). Credentials, if
-an operator configures them on the transport, are never represented by these DTOs
-or written into project files.
+[`fixtures/musubi/sdk_v1.json`](../../fixtures/musubi/sdk_v1.json). Caller-injected canonical or
+witness headers fail before dispatch; authentication comes only from the explicit per-call value.
 
 `search(SearchQuery)` posts to `/v1/musubi/queries/search` and returns a bounded,
 structurally ordered page with a search-specific finalized projection cursor;

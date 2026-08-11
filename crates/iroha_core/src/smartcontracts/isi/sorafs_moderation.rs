@@ -494,8 +494,20 @@ where
             "{label} state exceeds {STATE_MAX_BYTES} bytes"
         )));
     }
-    let value = decode_from_bytes_with_limits::<T>(bytes, STATE_LIMITS)
-        .map_err(|error| corrupt_state(format!("failed to decode {label}: {error}")))?;
+    let limits = crate::smartcontracts::isi::query::singular_query_decode_limits(
+        bytes.len(),
+        STATE_LIMITS,
+    )
+    .map_err(InstructionExecutionError::Query)?;
+    let value = decode_from_bytes_with_limits::<T>(bytes, limits).map_err(|error| {
+        if crate::smartcontracts::isi::query::singular_query_limits_active()
+            && error.is_decode_resource_limit()
+        {
+            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+        } else {
+            corrupt_state(format!("failed to decode {label}: {error}"))
+        }
+    })?;
     if encode_state(&value, label)? != bytes {
         return Err(corrupt_state(format!(
             "{label} state is not exact canonical Norito"
@@ -3163,9 +3175,12 @@ impl ModerationSnapshotReadBudget {
             .checked_add(key.to_string().len())
             .and_then(|total| total.checked_add(payload.len()))
             .ok_or_else(|| corrupt_state("moderation snapshot byte counter overflow"))?;
-        if self.encoded_bytes > MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1 {
+        let maximum = crate::smartcontracts::isi::query::singular_query_frame_limit(
+            MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1,
+        );
+        if self.encoded_bytes > maximum {
             return Err(corrupt_state(format!(
-                "moderation snapshot source state exceeds {MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1} bytes"
+                "moderation snapshot source state exceeds {maximum} bytes"
             )));
         }
         Ok(())
@@ -3201,7 +3216,11 @@ where
         }
         budget.charge(key, payload)?;
         let candidate = decode_state(payload, label)?;
-        records.push(validate(key, candidate)?);
+        crate::smartcontracts::isi::query::singular_query_vec_push(
+            &mut records,
+            validate(key, candidate)?,
+        )
+        .map_err(InstructionExecutionError::Query)?;
     }
     Ok(records)
 }
@@ -3263,13 +3282,22 @@ fn resolve_committed_event(
             record.sequence
         )));
     }
-    Ok(ModerationFinalizedEventV1 {
-        sequence: record.sequence,
-        block_height: record.target_block_height,
-        block_hash,
-        event_index: record.event_index,
-        event: record.event.clone(),
-    })
+    crate::smartcontracts::isi::query::own_singular_query_struct::<ModerationFinalizedEventV1, 5>(
+        [
+            &record.sequence,
+            &record.target_block_height,
+            &block_hash,
+            &record.event_index,
+            &record.event,
+        ],
+        || ModerationFinalizedEventV1 {
+            sequence: record.sequence,
+            block_height: record.target_block_height,
+            block_hash,
+            event_index: record.event_index,
+            event: record.event.clone(),
+        },
+    )
 }
 
 fn validate_event_successor(
@@ -3416,7 +3444,8 @@ fn latest_committed_events(
             "moderation snapshot event count does not fit into usize".to_owned(),
         )
     })?;
-    let mut events = Vec::with_capacity(capacity);
+    let mut events =
+        crate::smartcontracts::isi::query::singular_query_vec_with_capacity(capacity)?;
     for sequence in start..=head.last_sequence {
         charge_existing_snapshot_state(state_ro.world(), &event_key(sequence), budget)
             .map_err(query_failure)?;
@@ -3432,6 +3461,9 @@ fn query_moderation_event_page(
     state_ro: &impl crate::state::StateReadOnly,
 ) -> Result<ModerationFinalizedEventPageV1, QueryExecutionFail> {
     let limit = checked_event_page_limit(query.limit)?;
+    let page_bytes_limit = crate::smartcontracts::isi::query::singular_query_frame_limit(
+        MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+    );
     let finalized_cursor = resolve_finalized_cursor(state_ro)?;
     if query.expected_finalized_cursor != finalized_cursor {
         return Err(QueryExecutionFail::Expired);
@@ -3474,7 +3506,8 @@ fn query_moderation_event_page(
         .after
         .map_or(Some(1), |after| after.sequence.checked_add(1));
     let last_sequence = head.map_or(0, |head| head.last_sequence);
-    let mut events = Vec::with_capacity(limit);
+    let mut events =
+        crate::smartcontracts::isi::query::singular_query_vec_with_capacity(limit)?;
     let mut encoded_event_bytes = 0usize;
     let mut sequence = start;
     while let Some(current_sequence) = sequence {
@@ -3485,22 +3518,21 @@ fn query_moderation_event_page(
             read_event_sequence(state_ro, current_sequence, previous.as_ref())?;
         encoded_event_bytes = encoded_event_bytes
             .checked_add(
-                norito::encode_canonical(&resolved)
+                norito::core::encoded_frame_len(&resolved)
                     .map_err(|error| {
                         QueryExecutionFail::Conversion(format!(
-                            "failed to encode committed moderation event: {error}"
+                            "failed to size committed moderation event: {error}"
                         ))
-                    })?
-                    .len(),
+                    })?,
             )
             .ok_or_else(|| {
                 QueryExecutionFail::Conversion(
                     "committed moderation event page byte counter overflow".to_owned(),
                 )
             })?;
-        if encoded_event_bytes > MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+        if encoded_event_bytes > page_bytes_limit {
             return Err(QueryExecutionFail::Conversion(format!(
-                "committed moderation event page exceeds {MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1} bytes"
+                "committed moderation event page exceeds {page_bytes_limit} bytes"
             )));
         }
         previous = Some(record);
@@ -3522,16 +3554,14 @@ fn query_moderation_event_page(
         has_more,
         next_after,
     };
-    let encoded_len = norito::encode_canonical(&page)
-        .map_err(|error| {
-            QueryExecutionFail::Conversion(format!(
-                "failed to encode committed moderation event page: {error}"
-            ))
-        })?
-        .len();
-    if encoded_len > MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+    let encoded_len = norito::core::encoded_frame_len(&page).map_err(|error| {
+        QueryExecutionFail::Conversion(format!(
+            "failed to size committed moderation event page: {error}"
+        ))
+    })?;
+    if encoded_len > page_bytes_limit {
         return Err(QueryExecutionFail::Conversion(format!(
-            "committed moderation event page encodes to {encoded_len} bytes, above {MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1}"
+            "committed moderation event page encodes to {encoded_len} bytes, above {page_bytes_limit}"
         )));
     }
     Ok(page)
@@ -3878,6 +3908,9 @@ fn query_moderation_snapshot(
             ));
         }
     }
+    drop(deposit_bindings);
+    drop(proof_token_bindings);
+    drop(nullifier_bindings);
 
     appeals.sort_by(|left, right| {
         (left.intake.case_id.as_str(), left.intake.round_id.as_str()).cmp(&(
@@ -3912,40 +3945,39 @@ fn query_moderation_snapshot(
         ));
     }
 
-    let appeal_statuses = appeals
-        .iter()
-        .map(|appeal| {
-            (
-                (
-                    appeal.intake.case_id.clone(),
-                    appeal.intake.round_id.clone(),
-                ),
-                appeal.status,
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let case_keys = cases
-        .iter()
-        .map(|case| {
-            (
-                case.spec.context.case_id.clone(),
-                case.spec.round_id.clone(),
-            )
-        })
-        .collect::<BTreeSet<_>>();
     if cases.iter().any(|case| {
-        !appeal_statuses.contains_key(&(
-            case.spec.context.case_id.clone(),
-            case.spec.round_id.clone(),
-        ))
+        let target = (
+            case.spec.context.case_id.as_str(),
+            case.spec.round_id.as_str(),
+        );
+        appeals
+            .binary_search_by(|appeal| {
+                (
+                    appeal.intake.case_id.as_str(),
+                    appeal.intake.round_id.as_str(),
+                )
+                    .cmp(&target)
+            })
+            .is_err()
     }) || appeals.iter().any(|appeal| {
         matches!(
             appeal.status,
             ModerationAppealStatusV1::BallotOpen | ModerationAppealStatusV1::Finalized
-        ) && !case_keys.contains(&(
-            appeal.intake.case_id.clone(),
-            appeal.intake.round_id.clone(),
-        ))
+        ) && {
+            let target = (
+                appeal.intake.case_id.as_str(),
+                appeal.intake.round_id.as_str(),
+            );
+            cases
+                .binary_search_by(|case| {
+                    (
+                        case.spec.context.case_id.as_str(),
+                        case.spec.round_id.as_str(),
+                    )
+                        .cmp(&target)
+                })
+                .is_err()
+        }
     }) {
         return Err(QueryExecutionFail::Conversion(
             "moderation appeal and activated-case projections disagree".to_owned(),
@@ -3958,117 +3990,227 @@ fn query_moderation_snapshot(
     let challenge_count = challenges.len();
     let outcome_count = outcomes.len();
     let no_show_count = no_shows.len();
+    let appeal_count = appeals.len();
+    let panel_selection_count = appeals
+        .iter()
+        .filter(|appeal| appeal.selection.is_some())
+        .count();
+    let assignment_acceptance_count = sum_lengths_as_u64(
+        appeals.iter().map(|appeal| appeal.accepted_jurors.len()),
+        "assignment acceptance",
+    )?;
+    let failover_replacement_count = sum_lengths_as_u64(
+        appeals.iter().map(|appeal| appeal.replacements.len()),
+        "failover replacement",
+    )?;
+    let failed_panel_formation_count = appeals
+        .iter()
+        .filter(|appeal| {
+            matches!(
+                appeal.status,
+                ModerationAppealStatusV1::InsufficientEligiblePool
+                    | ModerationAppealStatusV1::FailoverExhausted
+            )
+        })
+        .count();
+    let open_case_count = cases
+        .iter()
+        .filter(|case| {
+            matches!(
+                case.status,
+                ModerationCaseStatusV1::Open | ModerationCaseStatusV1::Challenged
+            )
+        })
+        .count();
+    let finalized_case_count = cases
+        .iter()
+        .filter(|case| case.status == ModerationCaseStatusV1::Finalized)
+        .count();
 
     eligibilities.sort_by(|left, right| {
         (
             left.case_id.as_str(),
             left.round_id.as_str(),
-            left.juror.to_string(),
+            &left.juror,
         )
             .cmp(&(
                 right.case_id.as_str(),
                 right.round_id.as_str(),
-                right.juror.to_string(),
+                &right.juror,
             ))
     });
-    let mut eligibility_by_appeal: BTreeMap<
-        (String, String),
-        Vec<ModerationJurorEligibilityRecordV1>,
-    > = BTreeMap::new();
-    for record in eligibilities {
-        eligibility_by_appeal
-            .entry((record.case_id.clone(), record.round_id.clone()))
-            .or_default()
-            .push(record);
-    }
-    let mut appeal_views = Vec::with_capacity(appeals.len());
-    for appeal in appeals.iter().cloned() {
-        let key = (
-            appeal.intake.case_id.clone(),
-            appeal.intake.round_id.clone(),
+    let mut eligibility_records = eligibilities.into_iter();
+    let mut appeal_views = crate::smartcontracts::isi::query::singular_query_vec_with_capacity(
+        appeals.len(),
+    )?;
+    for appeal in appeals {
+        let target = (
+            appeal.intake.case_id.as_str(),
+            appeal.intake.round_id.as_str(),
         );
+        if eligibility_records.as_slice().first().is_some_and(|record| {
+            (record.case_id.as_str(), record.round_id.as_str()) < target
+        }) {
+            return Err(QueryExecutionFail::Conversion(
+                "moderation snapshot contains orphan eligibility records".to_owned(),
+            ));
+        }
+        let eligibility_count = eligibility_records
+            .as_slice()
+            .iter()
+            .take_while(|record| {
+                (record.case_id.as_str(), record.round_id.as_str()) == target
+            })
+            .count();
+        let mut eligibility =
+            crate::smartcontracts::isi::query::singular_query_vec_with_capacity(
+                eligibility_count,
+            )?;
+        for _ in 0..eligibility_count {
+            eligibility.push(
+                eligibility_records
+                    .next()
+                    .expect("counted moderation eligibility remains available"),
+            );
+        }
         appeal_views.push(ModerationFinalizedAppealViewV1 {
             appeal,
-            eligibility: eligibility_by_appeal.remove(&key).unwrap_or_default(),
+            eligibility,
         });
     }
-    if !eligibility_by_appeal.is_empty() {
+    if !eligibility_records.as_slice().is_empty() {
         return Err(QueryExecutionFail::Conversion(
             "moderation snapshot contains orphan eligibility records".to_owned(),
         ));
     }
 
-    let mut commits_by_case: BTreeMap<(String, String), Vec<ModerationCommitRecordV1>> =
-        BTreeMap::new();
-    for record in commits {
-        commits_by_case
-            .entry((record.case_id.clone(), record.round_id.clone()))
-            .or_default()
-            .push(record);
+    let mut commits = commits;
+    commits.sort_by(|left, right| {
+        (left.case_id.as_str(), left.round_id.as_str(), &left.juror).cmp(&(
+            right.case_id.as_str(),
+            right.round_id.as_str(),
+            &right.juror,
+        ))
+    });
+    let mut reveals = reveals;
+    reveals.sort_by(|left, right| {
+        (left.case_id.as_str(), left.round_id.as_str(), &left.juror).cmp(&(
+            right.case_id.as_str(),
+            right.round_id.as_str(),
+            &right.juror,
+        ))
+    });
+    let mut challenges = challenges;
+    challenges.sort_by(|left, right| {
+        (
+            left.case_id.as_str(),
+            left.round_id.as_str(),
+            &left.challenge_id,
+        )
+            .cmp(&(
+                right.case_id.as_str(),
+                right.round_id.as_str(),
+                &right.challenge_id,
+            ))
+    });
+    let mut outcomes = outcomes;
+    outcomes.sort_by(|left, right| {
+        (left.case_id.as_str(), left.round_id.as_str())
+            .cmp(&(right.case_id.as_str(), right.round_id.as_str()))
+    });
+    if outcomes.windows(2).any(|window| {
+        window[0].case_id == window[1].case_id && window[0].round_id == window[1].round_id
+    }) {
+        return Err(QueryExecutionFail::Conversion(
+            "moderation snapshot contains duplicate terminal outcomes".to_owned(),
+        ));
     }
-    let mut reveals_by_case: BTreeMap<(String, String), Vec<ModerationRevealRecordV1>> =
-        BTreeMap::new();
-    for record in reveals {
-        reveals_by_case
-            .entry((record.case_id.clone(), record.round_id.clone()))
-            .or_default()
-            .push(record);
-    }
-    let mut challenges_by_case: BTreeMap<(String, String), Vec<ModerationChallengeRecordV1>> =
-        BTreeMap::new();
-    for record in challenges {
-        challenges_by_case
-            .entry((record.case_id.clone(), record.round_id.clone()))
-            .or_default()
-            .push(record);
-    }
-    let mut outcomes_by_case: BTreeMap<(String, String), ModerationOutcomeRecordV1> =
-        BTreeMap::new();
-    for record in outcomes {
-        let key = (record.case_id.clone(), record.round_id.clone());
-        if outcomes_by_case.insert(key, record).is_some() {
-            return Err(QueryExecutionFail::Conversion(
-                "moderation snapshot contains duplicate terminal outcomes".to_owned(),
-            ));
-        }
-    }
-    let mut no_shows_by_case: BTreeMap<(String, String), Vec<ModerationNoShowRecordV1>> =
-        BTreeMap::new();
-    for record in no_shows {
-        no_shows_by_case
-            .entry((record.case_id.clone(), record.round_id.clone()))
-            .or_default()
-            .push(record);
+    let mut no_shows = no_shows;
+    no_shows.sort_by(|left, right| {
+        (left.case_id.as_str(), left.round_id.as_str(), &left.juror).cmp(&(
+            right.case_id.as_str(),
+            right.round_id.as_str(),
+            &right.juror,
+        ))
+    });
+
+    let mut commits = commits.into_iter();
+    let mut reveals = reveals.into_iter();
+    let mut challenges = challenges.into_iter();
+    let mut outcomes = outcomes.into_iter();
+    let mut no_shows = no_shows.into_iter();
+
+    macro_rules! take_case_records {
+        ($records:ident, $target:expr) => {{
+            let target = $target;
+            if $records.as_slice().first().is_some_and(|record| {
+                (record.case_id.as_str(), record.round_id.as_str()) < target
+            }) {
+                return Err(QueryExecutionFail::Conversion(
+                    "moderation snapshot contains orphan case subrecords".to_owned(),
+                ));
+            }
+            let count = $records
+                .as_slice()
+                .iter()
+                .take_while(|record| {
+                    (record.case_id.as_str(), record.round_id.as_str()) == target
+                })
+                .count();
+            let mut group =
+                crate::smartcontracts::isi::query::singular_query_vec_with_capacity(count)?;
+            for _ in 0..count {
+                group.push(
+                    $records
+                        .next()
+                        .expect("counted moderation case record remains available"),
+                );
+            }
+            group
+        }};
     }
 
-    let mut case_views = Vec::with_capacity(cases.len());
-    for case in cases.iter().cloned() {
-        let key = (
-            case.spec.context.case_id.clone(),
-            case.spec.round_id.clone(),
+    let mut case_views = crate::smartcontracts::isi::query::singular_query_vec_with_capacity(
+        cases.len(),
+    )?;
+    for case in cases {
+        let target = (
+            case.spec.context.case_id.as_str(),
+            case.spec.round_id.as_str(),
         );
-        let mut case_commits = commits_by_case.remove(&key).unwrap_or_default();
-        case_commits.sort_by(|left, right| left.juror.to_string().cmp(&right.juror.to_string()));
-        let mut case_reveals = reveals_by_case.remove(&key).unwrap_or_default();
-        case_reveals.sort_by(|left, right| left.juror.to_string().cmp(&right.juror.to_string()));
-        let mut case_challenges = challenges_by_case.remove(&key).unwrap_or_default();
-        case_challenges.sort_by(|left, right| left.challenge_id.cmp(&right.challenge_id));
-        let mut case_no_shows = no_shows_by_case.remove(&key).unwrap_or_default();
-        case_no_shows.sort_by(|left, right| left.juror.to_string().cmp(&right.juror.to_string()));
+        let case_commits = take_case_records!(commits, target);
+        let case_reveals = take_case_records!(reveals, target);
+        let case_challenges = take_case_records!(challenges, target);
+        let case_no_shows = take_case_records!(no_shows, target);
+        let outcome = match outcomes.as_slice().first() {
+            Some(record)
+                if (record.case_id.as_str(), record.round_id.as_str()) < target =>
+            {
+                return Err(QueryExecutionFail::Conversion(
+                    "moderation snapshot contains orphan case subrecords".to_owned(),
+                ));
+            }
+            Some(record)
+                if (record.case_id.as_str(), record.round_id.as_str()) == target =>
+            {
+                outcomes.next()
+            }
+            Some(_) | None => None,
+        };
         case_views.push(ModerationFinalizedCaseViewV1 {
             case,
             commits: case_commits,
             reveals: case_reveals,
             challenges: case_challenges,
-            outcome: outcomes_by_case.remove(&key),
+            outcome,
             no_shows: case_no_shows,
         });
     }
-    if !commits_by_case.is_empty()
-        || !reveals_by_case.is_empty()
-        || !challenges_by_case.is_empty()
-        || !outcomes_by_case.is_empty()
-        || !no_shows_by_case.is_empty()
+    if !commits.as_slice().is_empty()
+        || !reveals.as_slice().is_empty()
+        || !challenges.as_slice().is_empty()
+        || !outcomes.as_slice().is_empty()
+        || !no_shows.as_slice().is_empty()
     {
         return Err(QueryExecutionFail::Conversion(
             "moderation snapshot contains orphan case subrecords".to_owned(),
@@ -4077,55 +4219,17 @@ fn query_moderation_snapshot(
 
     if let Some(status) = status {
         let expected = ModerationLedgerStatusV1 {
-            appeal_intakes: count_as_u64(appeals.len(), "appeal")?,
+            appeal_intakes: count_as_u64(appeal_count, "appeal")?,
             eligibility_proofs: count_as_u64(eligibility_count, "eligibility")?,
-            panel_selections: count_as_u64(
-                appeals
-                    .iter()
-                    .filter(|appeal| appeal.selection.is_some())
-                    .count(),
-                "panel selection",
-            )?,
-            assignment_acceptances: sum_lengths_as_u64(
-                appeals.iter().map(|appeal| appeal.accepted_jurors.len()),
-                "assignment acceptance",
-            )?,
-            failover_replacements: sum_lengths_as_u64(
-                appeals.iter().map(|appeal| appeal.replacements.len()),
-                "failover replacement",
-            )?,
+            panel_selections: count_as_u64(panel_selection_count, "panel selection")?,
+            assignment_acceptances: assignment_acceptance_count,
+            failover_replacements: failover_replacement_count,
             failed_panel_formations: count_as_u64(
-                appeals
-                    .iter()
-                    .filter(|appeal| {
-                        matches!(
-                            appeal.status,
-                            ModerationAppealStatusV1::InsufficientEligiblePool
-                                | ModerationAppealStatusV1::FailoverExhausted
-                        )
-                    })
-                    .count(),
+                failed_panel_formation_count,
                 "failed panel formation",
             )?,
-            open_cases: count_as_u64(
-                cases
-                    .iter()
-                    .filter(|case| {
-                        matches!(
-                            case.status,
-                            ModerationCaseStatusV1::Open | ModerationCaseStatusV1::Challenged
-                        )
-                    })
-                    .count(),
-                "open case",
-            )?,
-            finalized_cases: count_as_u64(
-                cases
-                    .iter()
-                    .filter(|case| case.status == ModerationCaseStatusV1::Finalized)
-                    .count(),
-                "finalized case",
-            )?,
+            open_cases: count_as_u64(open_case_count, "open case")?,
+            finalized_cases: count_as_u64(finalized_case_count, "finalized case")?,
             commitments: count_as_u64(commit_count, "commitment")?,
             reveals: count_as_u64(reveal_count, "reveal")?,
             challenges: count_as_u64(challenge_count, "challenge")?,
@@ -4162,23 +4266,27 @@ fn query_moderation_snapshot(
         cases: case_views,
         events,
     };
-    let encoded_len = norito::encode_canonical(&snapshot)
-        .map_err(|error| {
-            QueryExecutionFail::Conversion(format!(
-                "failed to encode finalized moderation snapshot: {error}"
-            ))
-        })?
-        .len();
-    if encoded_len > MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1 {
+    let maximum = crate::smartcontracts::isi::query::singular_query_frame_limit(
+        MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1,
+    );
+    let encoded_len = norito::core::encoded_frame_len(&snapshot).map_err(|error| {
+        QueryExecutionFail::Conversion(format!(
+            "failed to size finalized moderation snapshot: {error}"
+        ))
+    })?;
+    if encoded_len > maximum {
         return Err(QueryExecutionFail::Conversion(format!(
-            "finalized moderation snapshot encodes to {encoded_len} bytes, above {MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1}"
+            "finalized moderation snapshot encodes to {encoded_len} bytes, above {maximum}"
         )));
     }
     Ok(snapshot)
 }
 
 fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
-    QueryExecutionFail::Conversion(error.to_string())
+    match error {
+        InstructionExecutionError::Query(error) => error,
+        error => QueryExecutionFail::Conversion(error.to_string()),
+    }
 }
 
 impl ValidSingularQuery for FindSorafsModerationPolicy {

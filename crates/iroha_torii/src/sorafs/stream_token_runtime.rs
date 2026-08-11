@@ -70,10 +70,14 @@ pub(crate) fn preflight_admission_capture(
 /// Construct the optional issuer after signer qualification.
 pub(crate) fn build_issuer(
     config: &SorafsTokenConfig,
-    api_tokens: &[String],
+    operator_signatures_enabled: bool,
     signer: Option<Arc<dyn StreamTokenRuntimeSigner>>,
 ) -> Option<Arc<StreamTokenIssuer>> {
-    match StreamTokenIssuer::from_config(config, api_tokens, signer) {
+    assert!(
+        !config.enabled || operator_signatures_enabled,
+        "enabled stream-token issuance requires torii.operator_signatures.enabled"
+    );
+    match StreamTokenIssuer::from_config(config, signer) {
         Ok(issuer) => issuer.map(Arc::new),
         Err(error) => panic!("invalid SoraFS stream token configuration: {error}"),
     }
@@ -122,5 +126,20 @@ impl crate::AppState {
     #[cfg(test)]
     pub(crate) fn stream_token_quota(&self) -> &super::StreamTokenQuotaTracker {
         &self.stream_token_quota
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(
+        expected = "enabled stream-token issuance requires torii.operator_signatures.enabled"
+    )]
+    fn enabled_issuer_requires_operator_signatures() {
+        let mut config = SorafsTokenConfig::default();
+        config.enabled = true;
+        let _ = build_issuer(&config, false, None);
     }
 }

@@ -25,6 +25,18 @@ use crate::{
 
 const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
 
+/// Maximum number of `extends` edges plus the root source in one traversal.
+///
+/// Repeated diamond edges count toward this ceiling even though their already
+/// visited target is loaded only once. This also bounds the explicit DFS stack.
+pub const MAX_TOML_EXTENDS_SOURCES: usize = 64;
+
+/// Maximum nesting depth of a TOML `extends` graph, with the root at depth zero.
+pub const MAX_TOML_EXTENDS_DEPTH: u8 = 32;
+
+/// Maximum aggregate encoded bytes across unique TOML sources in one traversal.
+pub const MAX_TOML_EXTENDS_TOTAL_BYTES: u64 = 8 * toml::MAX_TOML_SOURCE_BYTES;
+
 fn escape_json_string_plain(s: &str, out: &mut String) {
     out.push('"');
     for ch in s.chars() {
@@ -153,6 +165,100 @@ pub enum Error {
         /// Explanatory message for the error variant.
         msg: String,
     },
+}
+
+#[derive(Debug, Error, Eq, PartialEq)]
+enum ExtendsTraversalError {
+    #[error("configuration `extends` cycle detected at `{path}`")]
+    Cycle { path: PathBuf },
+    #[error("configuration `extends` depth {observed} exceeds the maximum {maximum}")]
+    DepthLimit { observed: u8, maximum: u8 },
+    #[error("configuration `extends` source references {observed} exceed the maximum {maximum}")]
+    SourceLimit { observed: usize, maximum: usize },
+    #[error("configuration `extends` encoded bytes {observed} exceed the maximum {maximum}")]
+    ByteLimit { observed: u64, maximum: u64 },
+}
+
+#[derive(Debug)]
+struct ExtendsTraversalBudget {
+    source_references: usize,
+    bytes_read: u64,
+}
+
+impl ExtendsTraversalBudget {
+    fn new() -> Self {
+        Self {
+            source_references: 1,
+            bytes_read: 0,
+        }
+    }
+
+    fn check_depth(depth: u8) -> core::result::Result<(), ExtendsTraversalError> {
+        if depth > MAX_TOML_EXTENDS_DEPTH {
+            return Err(ExtendsTraversalError::DepthLimit {
+                observed: depth,
+                maximum: MAX_TOML_EXTENDS_DEPTH,
+            });
+        }
+        Ok(())
+    }
+
+    fn schedule_sources(
+        &mut self,
+        additional: usize,
+    ) -> core::result::Result<(), ExtendsTraversalError> {
+        let observed = self
+            .source_references
+            .checked_add(additional)
+            .unwrap_or(usize::MAX);
+        if observed > MAX_TOML_EXTENDS_SOURCES {
+            return Err(ExtendsTraversalError::SourceLimit {
+                observed,
+                maximum: MAX_TOML_EXTENDS_SOURCES,
+            });
+        }
+        self.source_references = observed;
+        Ok(())
+    }
+
+    fn record_bytes(&mut self, additional: u64) -> core::result::Result<(), ExtendsTraversalError> {
+        let observed = self.bytes_read.checked_add(additional).unwrap_or(u64::MAX);
+        if observed > MAX_TOML_EXTENDS_TOTAL_BYTES {
+            return Err(ExtendsTraversalError::ByteLimit {
+                observed,
+                maximum: MAX_TOML_EXTENDS_TOTAL_BYTES,
+            });
+        }
+        self.bytes_read = observed;
+        Ok(())
+    }
+
+    fn remaining_bytes(&self) -> u64 {
+        MAX_TOML_EXTENDS_TOTAL_BYTES.saturating_sub(self.bytes_read)
+    }
+}
+
+fn extends_traversal_report(error: ExtendsTraversalError) -> Report<Error> {
+    Report::new(error).change_context(Error::CannotExtend)
+}
+
+fn extends_read_report(
+    report: Report<toml::FromFileError>,
+    path: &Path,
+    parent: Option<&PathBuf>,
+    depth: u8,
+) -> Report<Error> {
+    let report = report
+        .attach(attach::FilePath::new(path.to_path_buf()))
+        .change_context(Error::ReadFile);
+    match parent {
+        Some(parent_path) => report.attach(attach::ExtendsChain::new(
+            parent_path.clone(),
+            path.to_path_buf(),
+            depth,
+        )),
+        None => report,
+    }
 }
 
 #[derive(Error, Debug)]
@@ -288,84 +394,136 @@ impl ConfigReader {
 
     /// Reads a TOML file and handles its `extends` field, implementing mixins mechanism.
     ///
+    /// The traversal is depth-first in declared order. Canonically identical
+    /// files reached through a diamond are applied once, while an edge back to
+    /// an active source is rejected as a cycle. The traversal is bounded by
+    /// [`MAX_TOML_EXTENDS_DEPTH`], [`MAX_TOML_EXTENDS_SOURCES`],
+    /// [`MAX_TOML_EXTENDS_TOTAL_BYTES`], and
+    /// [`toml::MAX_TOML_SOURCE_BYTES`]. Source paths must name stable regular
+    /// files; symbolic links are rejected.
+    ///
     /// # Errors
     ///
-    /// If files reading error occurs
+    /// If a source cannot be read or parsed, a cycle is found, or a traversal
+    /// or encoded-byte ceiling is exceeded.
     pub fn read_toml_with_extends<P: AsRef<Path>>(mut self, path: P) -> Result<Self, Error> {
         #[derive(Debug)]
-        struct StackEntry {
-            path: PathBuf,
-            depth: u8,
-            parent: Option<PathBuf>,
-            source: Option<TomlSource>,
+        enum StackEntry {
+            Visit {
+                path: PathBuf,
+                depth: u8,
+                parent: Option<PathBuf>,
+            },
+            Emit {
+                identity: toml::RegularFileIdentity,
+                source: TomlSource,
+            },
         }
 
         let result = (|| -> Result<(), Error> {
-            let mut stack = vec![StackEntry {
+            let mut stack = vec![StackEntry::Visit {
                 path: path.as_ref().to_path_buf(),
                 depth: 0,
                 parent: None,
-                source: None,
             }];
+            let mut active = BTreeSet::new();
+            let mut visited = BTreeSet::new();
+            let mut budget = ExtendsTraversalBudget::new();
 
-            while let Some(StackEntry {
-                path,
-                depth,
-                parent,
-                mut source,
-            }) = stack.pop()
-            {
-                let mut src = match source.take() {
-                    Some(src) => src,
-                    None => TomlSource::from_file(&path)
-                        .attach_with(|| attach::FilePath::new(path.clone()))
-                        .change_context(Error::ReadFile)
-                        .map_err(|err| match &parent {
-                            Some(parent_path) => err.attach(attach::ExtendsChain::new(
-                                parent_path.clone(),
-                                path.clone(),
-                                depth,
-                            )),
-                            None => err,
-                        })?,
+            while let Some(entry) = stack.pop() {
+                let (path, depth, parent) = match entry {
+                    StackEntry::Visit {
+                        path,
+                        depth,
+                        parent,
+                    } => (path, depth, parent),
+                    StackEntry::Emit { identity, source } => {
+                        let removed = active.remove(&identity);
+                        debug_assert!(removed, "emitted TOML source must be active");
+                        visited.insert(identity);
+                        self.sources.push(source);
+                        continue;
+                    }
                 };
 
-                let table = src.table_mut();
+                ExtendsTraversalBudget::check_depth(depth).map_err(extends_traversal_report)?;
+                let (identity, canonical_path) = toml::canonical_regular_file_identity(&path)
+                    .map_err(|error| extends_read_report(error, &path, parent.as_ref(), depth))?;
+                if active.contains(&identity) {
+                    return Err(extends_traversal_report(ExtendsTraversalError::Cycle {
+                        path: canonical_path,
+                    })
+                    .into());
+                }
+                if visited.contains(&identity) {
+                    continue;
+                }
 
-                if let Some(extends) = table.remove("extends") {
+                let source_limit = toml::MAX_TOML_SOURCE_BYTES.min(budget.remaining_bytes());
+                let (mut source, bytes_read, loaded_identity) =
+                    match TomlSource::from_file_with_limit(&path, source_limit) {
+                        Ok(loaded) => loaded,
+                        Err(error) => {
+                            if let toml::FromFileError::TooLarge { actual, .. } =
+                                *error.current_context()
+                                && source_limit < toml::MAX_TOML_SOURCE_BYTES
+                            {
+                                return Err(extends_traversal_report(
+                                    ExtendsTraversalError::ByteLimit {
+                                        observed: budget.bytes_read.saturating_add(actual),
+                                        maximum: MAX_TOML_EXTENDS_TOTAL_BYTES,
+                                    },
+                                )
+                                .into());
+                            }
+                            return Err(
+                                extends_read_report(error, &path, parent.as_ref(), depth).into()
+                            );
+                        }
+                    };
+                if loaded_identity != identity {
+                    return Err(extends_read_report(
+                        Report::new(toml::FromFileError::ChangedWhileReading),
+                        &path,
+                        parent.as_ref(),
+                        depth,
+                    )
+                    .into());
+                }
+                budget
+                    .record_bytes(bytes_read)
+                    .map_err(extends_traversal_report)?;
+
+                let extends_paths = if let Some(extends) = source.table_mut().remove("extends") {
                     let parsed = ExtendsPaths::try_from(extends.clone())
                         .map_err(Report::new)
                         .attach_with(|| attach::Expected::new(r#"a single path ("./file.toml") or an array of paths (["a.toml", "b.toml", "c.toml"])"#))
                         .attach_with(|| attach::ActualValue::new(extends))
                         .change_context(Error::InvalidExtends)?;
                     log::trace!("found `extends`: {parsed:?}");
-
-                    stack.push(StackEntry {
-                        path: path.clone(),
-                        depth,
-                        parent: parent.clone(),
-                        source: Some(src),
-                    });
-
-                    let mut paths = parsed.iter().collect::<Vec<_>>();
-                    paths.reverse();
-                    for extends_path in paths {
-                        let full_path = path
-                            .parent()
-                            .expect("it cannot be root or empty")
-                            .join(extends_path);
-                        stack.push(StackEntry {
-                            path: full_path,
-                            depth: depth + 1,
-                            parent: Some(path.clone()),
-                            source: None,
-                        });
+                    match parsed {
+                        ExtendsPaths::Single(path) => vec![path],
+                        ExtendsPaths::Chain(paths) => paths,
                     }
+                } else {
+                    Vec::new()
+                };
 
-                    continue;
+                budget
+                    .schedule_sources(extends_paths.len())
+                    .map_err(extends_traversal_report)?;
+                active.insert(identity.clone());
+                stack.push(StackEntry::Emit { identity, source });
+
+                let child_depth = depth.saturating_add(1);
+                let parent_dir = path.parent().unwrap_or_else(|| Path::new(""));
+                for extends_path in extends_paths.into_iter().rev() {
+                    stack.push(StackEntry::Visit {
+                        path: parent_dir.join(extends_path),
+                        depth: child_depth,
+                        parent: Some(path.clone()),
+                    });
                 }
-
-                self.sources.push(src);
             }
 
             Ok(())
@@ -815,7 +973,190 @@ impl<T> FinalWrap<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
     use super::*;
+
+    static NEXT_TEMP_DIR: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_config_dir(label: &str) -> PathBuf {
+        let nonce = NEXT_TEMP_DIR.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "iroha_config_base_{label}_{}_{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path).expect("create temporary configuration directory");
+        path
+    }
+
+    fn report_debug(report: &Report<[Error]>) -> String {
+        format!("{report:#?}")
+    }
+
+    #[test]
+    fn extends_cycle_is_rejected_before_reloading_active_source() {
+        let dir = temp_config_dir("cycle");
+        let config = dir.join("config.toml");
+        fs::write(&config, "extends = \"./config.toml\"\n").expect("write cyclic configuration");
+
+        let report = ConfigReader::new()
+            .read_toml_with_extends(&config)
+            .expect_err("self-cycle must be rejected");
+        let rendered = report_debug(&report);
+        assert!(
+            rendered.contains("configuration `extends` cycle detected"),
+            "unexpected report: {rendered}"
+        );
+
+        fs::remove_dir_all(dir).expect("remove temporary configuration directory");
+    }
+
+    #[test]
+    fn extends_diamond_loads_canonical_source_once_in_declared_order() {
+        let dir = temp_config_dir("diamond");
+        fs::write(dir.join("base.toml"), "value = \"base\"\n").expect("write base configuration");
+        fs::write(
+            dir.join("left.toml"),
+            "extends = \"base.toml\"\nvalue = \"left\"\n",
+        )
+        .expect("write left configuration");
+        fs::write(
+            dir.join("right.toml"),
+            "extends = \"./base.toml\"\nvalue = \"right\"\n",
+        )
+        .expect("write right configuration");
+        fs::write(
+            dir.join("top.toml"),
+            "extends = [\"left.toml\", \"right.toml\"]\n",
+        )
+        .expect("write top configuration");
+
+        let mut reader = ConfigReader::new()
+            .read_toml_with_extends(dir.join("top.toml"))
+            .expect("diamond must load");
+        let source_names: Vec<_> = reader
+            .sources
+            .iter()
+            .map(|source| {
+                source
+                    .path()
+                    .file_name()
+                    .expect("source has a file name")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(
+            source_names,
+            ["base.toml", "left.toml", "right.toml", "top.toml"]
+        );
+
+        let value = reader
+            .read_parameter::<String>(["value"])
+            .value_required()
+            .finish();
+        reader.into_result().expect("diamond config is valid");
+        assert_eq!(value.unwrap(), "right");
+
+        fs::remove_dir_all(dir).expect("remove temporary configuration directory");
+    }
+
+    #[test]
+    fn extends_source_reference_ceiling_is_checked_before_children_are_opened() {
+        let dir = temp_config_dir("source_limit");
+        let children = (0..MAX_TOML_EXTENDS_SOURCES)
+            .map(|index| format!("\"missing-{index}.toml\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        fs::write(dir.join("root.toml"), format!("extends = [{children}]\n"))
+            .expect("write excessive source fanout");
+
+        let report = ConfigReader::new()
+            .read_toml_with_extends(dir.join("root.toml"))
+            .expect_err("excessive source fanout must fail");
+        let rendered = report_debug(&report);
+        let expected = format!(
+            "source references {} exceed the maximum {}",
+            MAX_TOML_EXTENDS_SOURCES + 1,
+            MAX_TOML_EXTENDS_SOURCES
+        );
+        assert!(
+            rendered.contains(&expected),
+            "unexpected report: {rendered}"
+        );
+
+        fs::remove_dir_all(dir).expect("remove temporary configuration directory");
+    }
+
+    #[test]
+    fn extends_depth_ceiling_is_enforced_on_the_first_excess_edge() {
+        let dir = temp_config_dir("depth_limit");
+        for depth in 0..=u16::from(MAX_TOML_EXTENDS_DEPTH) + 1 {
+            let body = if depth <= u16::from(MAX_TOML_EXTENDS_DEPTH) {
+                format!("extends = \"{}.toml\"\n", depth + 1)
+            } else {
+                String::new()
+            };
+            fs::write(dir.join(format!("{depth}.toml")), body)
+                .expect("write deep configuration chain");
+        }
+
+        let report = ConfigReader::new()
+            .read_toml_with_extends(dir.join("0.toml"))
+            .expect_err("excessive depth must fail");
+        let rendered = report_debug(&report);
+        let expected = format!(
+            "depth {} exceeds the maximum {}",
+            MAX_TOML_EXTENDS_DEPTH + 1,
+            MAX_TOML_EXTENDS_DEPTH
+        );
+        assert!(
+            rendered.contains(&expected),
+            "unexpected report: {rendered}"
+        );
+
+        fs::remove_dir_all(dir).expect("remove temporary configuration directory");
+    }
+
+    #[test]
+    fn extends_traversal_budget_enforces_exact_boundaries() {
+        ExtendsTraversalBudget::check_depth(MAX_TOML_EXTENDS_DEPTH)
+            .expect("maximum depth is admitted");
+        assert_eq!(
+            ExtendsTraversalBudget::check_depth(MAX_TOML_EXTENDS_DEPTH + 1),
+            Err(ExtendsTraversalError::DepthLimit {
+                observed: MAX_TOML_EXTENDS_DEPTH + 1,
+                maximum: MAX_TOML_EXTENDS_DEPTH,
+            })
+        );
+
+        let mut sources = ExtendsTraversalBudget::new();
+        sources
+            .schedule_sources(MAX_TOML_EXTENDS_SOURCES - 1)
+            .expect("exact source-reference ceiling is admitted");
+        assert_eq!(
+            sources.schedule_sources(1),
+            Err(ExtendsTraversalError::SourceLimit {
+                observed: MAX_TOML_EXTENDS_SOURCES + 1,
+                maximum: MAX_TOML_EXTENDS_SOURCES,
+            })
+        );
+
+        let mut bytes = ExtendsTraversalBudget::new();
+        bytes
+            .record_bytes(MAX_TOML_EXTENDS_TOTAL_BYTES)
+            .expect("exact aggregate byte ceiling is admitted");
+        assert_eq!(
+            bytes.record_bytes(1),
+            Err(ExtendsTraversalError::ByteLimit {
+                observed: MAX_TOML_EXTENDS_TOTAL_BYTES + 1,
+                maximum: MAX_TOML_EXTENDS_TOTAL_BYTES,
+            })
+        );
+    }
 
     #[test]
     fn detects_explicit_toml_parameter_before_defaults_are_read() {

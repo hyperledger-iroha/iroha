@@ -24,6 +24,9 @@ use syn::{
     Variant, parse_macro_input, parse_quote,
 };
 
+mod json_write_bounded;
+use json_write_bounded::{EnumAttr, VariantAttr};
+
 fn consume_unknown_meta(meta: syn::meta::ParseNestedMeta) -> SynResult<()> {
     if meta.input.peek(syn::token::Paren) {
         meta.parse_nested_meta(consume_unknown_meta)?
@@ -585,6 +588,7 @@ struct FieldAttr {
     skip_serializing_if: Option<syn::Path>,
     /// Optional helper module providing `serialize`/`deserialize` functions for the field.
     with: Option<syn::Path>,
+    bounded_with: Option<syn::Path>,
     /// Whether the field should be flattened into the surrounding struct payload.
     flatten: bool,
     /// Force packed-struct layout to emit an explicit size header for this field.
@@ -1047,6 +1051,14 @@ impl FieldAttr {
                         if out.with.replace(path).is_some() {
                             return Err(meta.error("duplicate `with` attribute"));
                         }
+                    } else if meta.path.is_ident("bounded_with") {
+                        let lit: syn::LitStr = meta.value()?.parse()?;
+                        let path = syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
+                            meta.error(format!("invalid path `{}`: {err}", lit.value()))
+                        })?;
+                        if out.bounded_with.replace(path).is_some() {
+                            return Err(meta.error("duplicate `bounded_with` attribute"));
+                        }
                     } else if meta.path.is_ident("flatten") {
                         if meta.input.peek(Token![=]) || meta.input.peek(syn::token::Paren) {
                             return Err(meta.error("`flatten` does not take a value"));
@@ -1079,45 +1091,6 @@ impl FieldAttr {
     }
 }
 
-impl FieldAttr {
-    fn require_json_serialize_bound(&self, generics: &mut Generics, ty: &syn::Type) {
-        if self.with.is_none() {
-            add_bound(generics, ty, quote!(norito::json::JsonSerialize));
-        }
-    }
-
-    fn require_json_deserialize_bound(&self, generics: &mut Generics, ty: &syn::Type) {
-        if self.with.is_none() {
-            add_bound(generics, ty, quote!(norito::json::JsonDeserialize));
-        }
-    }
-
-    fn serializer_call(&self, value: TokenStream2, out: TokenStream2) -> TokenStream2 {
-        if let Some(path) = &self.with {
-            quote! { #path::serialize(#value, #out); }
-        } else {
-            quote! { norito::json::JsonSerialize::json_serialize(#value, #out); }
-        }
-    }
-
-    fn deserializer_call(&self, ty: &syn::Type, parser: TokenStream2) -> TokenStream2 {
-        if let Some(path) = &self.with {
-            quote! { #path::deserialize(#parser)? }
-        } else {
-            quote! { <#ty as norito::json::JsonDeserialize>::json_deserialize(#parser)? }
-        }
-    }
-
-    fn deserialize_from_value(&self, ty: &syn::Type, value: TokenStream2) -> TokenStream2 {
-        let call = self.deserializer_call(ty, quote!(&mut __parser));
-        quote! {{
-            let __json = norito::json::to_json(&#value)?;
-            let mut __parser = norito::json::Parser::new(&__json);
-            #call
-        }}
-    }
-}
-
 #[cfg(test)]
 #[path = "tests/field_attrs.rs"]
 mod field_attr_tests;
@@ -1125,50 +1098,6 @@ mod field_attr_tests;
 #[cfg(test)]
 #[path = "tests/type_classification.rs"]
 mod self_delimiting_tests;
-
-#[derive(Default)]
-struct EnumAttr {
-    tag: Option<String>,
-    content: Option<String>,
-}
-
-impl EnumAttr {
-    fn parse(attrs: &[Attribute]) -> syn::Result<Self> {
-        let container = ContainerAttr::parse(attrs)?;
-        Ok(Self {
-            tag: container.tag,
-            content: container.content,
-        })
-    }
-}
-
-#[derive(Debug, Default)]
-struct VariantAttr {
-    rename: Option<String>,
-}
-
-impl VariantAttr {
-    fn parse(attrs: &[Attribute]) -> syn::Result<Self> {
-        let mut out = VariantAttr::default();
-        for attr in attrs {
-            if !attr.path().is_ident("norito") {
-                continue;
-            }
-            attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("rename") {
-                    let lit: syn::LitStr = meta.value()?.parse()?;
-                    if out.rename.replace(lit.value()).is_some() {
-                        return Err(meta.error("duplicate `rename` attribute"));
-                    }
-                } else {
-                    return Err(meta.error("unknown `norito` variant attribute"));
-                }
-                Ok(())
-            })?;
-        }
-        Ok(out)
-    }
-}
 
 #[cfg(test)]
 #[path = "tests/variant_attrs.rs"]
@@ -1220,7 +1149,7 @@ fn derive_struct_serialize(
                     })
                 } else {
                     Some(quote! {
-                        norito::core::write_len_prefixed(
+                        norito::core::write_len_prefixed_exact(
                             writer,
                             &self.#name,
                             &mut __norito_tmp,
@@ -1250,7 +1179,7 @@ fn derive_struct_serialize(
                     })
                 } else {
                     Some(quote! {
-                        norito::core::write_len_prefixed(
+                        norito::core::write_len_prefixed_exact(
                             writer,
                             &self.#idx,
                             &mut __norito_tmp,
@@ -1265,7 +1194,8 @@ fn derive_struct_serialize(
     // Field expressions for packed-struct path and specialized serializers
     let mut packed_field_exprs: Vec<TokenStream2> = Vec::new();
     let mut packed_field_ser_calls: Vec<TokenStream2> = Vec::new();
-    let mut packed_field_stage_stmts: Vec<TokenStream2> = Vec::new();
+    let mut packed_field_checked_ser_calls: Vec<TokenStream2> = Vec::new();
+    let mut packed_field_len_stmts: Vec<TokenStream2> = Vec::new();
     match fields {
         Fields::Named(named) => {
             for f in &named.named {
@@ -1274,15 +1204,21 @@ fn derive_struct_serialize(
                     continue;
                 }
                 let name = f.ident.as_ref().unwrap();
-                let ty = &f.ty;
                 let is_u8_array = matches!(&f.ty,
                     syn::Type::Array(arr) if matches!(&*arr.elem, syn::Type::Path(tp) if tp.path.is_ident("u8"))
                 );
                 packed_field_exprs.push(quote! { &self.#name });
+                let packed_index = packed_field_checked_ser_calls.len();
                 if is_u8_array {
                     packed_field_ser_calls.push(quote! { writer.write_all(&self.#name)?; });
-                    packed_field_stage_stmts
-                        .push(quote! { __field_bufs.push((&self.#name).to_vec()); });
+                    packed_field_checked_ser_calls.push(quote! {
+                        if __field_lens[#packed_index] != core::mem::size_of_val(&self.#name) {
+                            return Err(norito::core::Error::LengthMismatch);
+                        }
+                        writer.write_all(&self.#name)?;
+                    });
+                    packed_field_len_stmts
+                        .push(quote! { __field_lens.push(core::mem::size_of_val(&self.#name)); });
                 } else if is_self_delimiting(&f.ty) {
                     // Self-delimiting fields already carry their own length header inside
                     // their serialized payload. In the hybrid packed-struct layout we must
@@ -1291,41 +1227,29 @@ fn derive_struct_serialize(
                     packed_field_ser_calls.push(quote! {
                         norito::core::NoritoSerialize::serialize(&self.#name, writer)?;
                     });
-                    packed_field_stage_stmts.push(quote! {
-                        let mut __b: ::std::vec::Vec<u8> = ::std::vec::Vec::new();
-                        norito::core::serialize_to_buffer(&self.#name, &mut __b)?;
-                        #[cfg(debug_assertions)]
-                        if norito::debug_trace_enabled() {
-                            eprintln!(
-                                "stage {}::{} packed bytes len={} ty={}",
-                                stringify!(#ident),
-                                stringify!(#name),
-                                __b.len(),
-                                core::any::type_name::<#ty>(),
-                            );
-                        }
-                        __field_bufs.push(__b);
+                    packed_field_checked_ser_calls.push(quote! {
+                        norito::core::serialize_to_writer_exact(
+                            &self.#name,
+                            writer,
+                            __field_lens[#packed_index],
+                        )?;
+                    });
+                    packed_field_len_stmts.push(quote! {
+                        __field_lens.push(norito::core::encoded_payload_len(&self.#name)?);
                     });
                 } else {
-                    // Signature-like proofs and other variable-length fields share the staging path to
-                    // compute accurate offsets before writing the packed payload.
                     packed_field_ser_calls.push(
                         quote! { norito::core::NoritoSerialize::serialize(&self.#name, writer)?; },
                     );
-                    packed_field_stage_stmts.push(quote! {
-                        let mut __b: ::std::vec::Vec<u8> = ::std::vec::Vec::new();
-                        norito::core::serialize_to_buffer(&self.#name, &mut __b)?;
-                        #[cfg(debug_assertions)]
-                        if norito::debug_trace_enabled() {
-                            eprintln!(
-                                "stage {}::{} packed bytes len={} ty={}",
-                                stringify!(#ident),
-                                stringify!(#name),
-                                __b.len(),
-                                core::any::type_name::<#ty>(),
-                            );
-                        }
-                        __field_bufs.push(__b);
+                    packed_field_checked_ser_calls.push(quote! {
+                        norito::core::serialize_to_writer_exact(
+                            &self.#name,
+                            writer,
+                            __field_lens[#packed_index],
+                        )?;
+                    });
+                    packed_field_len_stmts.push(quote! {
+                        __field_lens.push(norito::core::encoded_payload_len(&self.#name)?);
                     });
                 }
             }
@@ -1337,54 +1261,50 @@ fn derive_struct_serialize(
                     continue;
                 }
                 let idx = Index::from(i);
-                let ty = &f.ty;
                 let is_u8_array = matches!(&f.ty,
                     syn::Type::Array(arr) if matches!(&*arr.elem, syn::Type::Path(tp) if tp.path.is_ident("u8"))
                 );
                 packed_field_exprs.push(quote! { &self.#idx });
+                let packed_index = packed_field_checked_ser_calls.len();
                 if is_u8_array {
                     packed_field_ser_calls.push(quote! { writer.write_all(&self.#idx)?; });
-                    packed_field_stage_stmts
-                        .push(quote! { __field_bufs.push((&self.#idx).to_vec()); });
+                    packed_field_checked_ser_calls.push(quote! {
+                        if __field_lens[#packed_index] != core::mem::size_of_val(&self.#idx) {
+                            return Err(norito::core::Error::LengthMismatch);
+                        }
+                        writer.write_all(&self.#idx)?;
+                    });
+                    packed_field_len_stmts
+                        .push(quote! { __field_lens.push(core::mem::size_of_val(&self.#idx)); });
                 } else if is_self_delimiting(&f.ty) {
                     // Do not add an extra prefix for self-delimiting fields; write only the
                     // field's serialized bytes.
                     packed_field_ser_calls.push(quote! {
                         norito::core::NoritoSerialize::serialize(&self.#idx, writer)?;
                     });
-                    packed_field_stage_stmts.push(quote! {
-                        let mut __b: ::std::vec::Vec<u8> = ::std::vec::Vec::new();
-                        norito::core::serialize_to_buffer(&self.#idx, &mut __b)?;
-                        #[cfg(debug_assertions)]
-                        if norito::debug_trace_enabled() {
-                            eprintln!(
-                                "stage {}::{} packed bytes len={} ty={}",
-                                stringify!(#ident),
-                                stringify!(#idx),
-                                __b.len(),
-                                core::any::type_name::<#ty>(),
-                            );
-                        }
-                        __field_bufs.push(__b);
+                    packed_field_checked_ser_calls.push(quote! {
+                        norito::core::serialize_to_writer_exact(
+                            &self.#idx,
+                            writer,
+                            __field_lens[#packed_index],
+                        )?;
+                    });
+                    packed_field_len_stmts.push(quote! {
+                        __field_lens.push(norito::core::encoded_payload_len(&self.#idx)?);
                     });
                 } else {
                     packed_field_ser_calls.push(
                         quote! { norito::core::NoritoSerialize::serialize(&self.#idx, writer)?; },
                     );
-                    packed_field_stage_stmts.push(quote! {
-                        let mut __b: ::std::vec::Vec<u8> = ::std::vec::Vec::new();
-                        norito::core::serialize_to_buffer(&self.#idx, &mut __b)?;
-                        #[cfg(debug_assertions)]
-                        if norito::debug_trace_enabled() {
-                            eprintln!(
-                                "stage {}::{} packed bytes len={} ty={}",
-                                stringify!(#ident),
-                                stringify!(#idx),
-                                __b.len(),
-                                core::any::type_name::<#ty>(),
-                            );
-                        }
-                        __field_bufs.push(__b);
+                    packed_field_checked_ser_calls.push(quote! {
+                        norito::core::serialize_to_writer_exact(
+                            &self.#idx,
+                            writer,
+                            __field_lens[#packed_index],
+                        )?;
+                    });
+                    packed_field_len_stmts.push(quote! {
+                        __field_lens.push(norito::core::encoded_payload_len(&self.#idx)?);
                     });
                 }
             }
@@ -1758,21 +1678,20 @@ fn derive_struct_serialize(
         }
         let bytes = packed_field_bitset(fields);
         let bitset_lit = quote! { [ #( #bytes ),* ] };
-        // write sizes code: coalesce varint sizes into a single buffer
+        // Write dynamic field sizes directly from the count pass. This avoids
+        // retaining one payload buffer per field merely to emit their headers.
         let mut stmts: ::std::vec::Vec<TokenStream2> = ::std::vec::Vec::new();
-        // Build: let mut __sizes_hdr = Vec::with_capacity(needs_count * 2);
-        let needs_count = needs.iter().filter(|&&n| n).count();
-        stmts.push(quote! { let mut __sizes_hdr: ::std::vec::Vec<u8> = ::std::vec::Vec::with_capacity(#needs_count * 2); });
         for (i, need) in needs.into_iter().enumerate() {
             if need {
                 stmts.push(quote! {
-                    let __field_len = __field_bufs[#i].len();
-                    norito::core::write_len_header_to_vec(&mut __sizes_hdr, __field_len as u64);
+                    norito::core::write_len_header(
+                        writer,
+                        u64::try_from(__field_lens[#i])
+                            .map_err(|_| norito::core::Error::LengthMismatch)?,
+                    )?;
                 });
             }
         }
-        // Write once
-        stmts.push(quote! { writer.write_all(&__sizes_hdr)?; });
         let sizes_code = quote! { #(#stmts)* };
         let all_needs_false = bytes.is_empty() || bytes.iter().all(|b| *b == 0);
         (bitset_lit, sizes_code, all_needs_false)
@@ -1819,31 +1738,41 @@ fn derive_struct_serialize(
                             #( #packed_field_ser_calls )*
                             Ok(())
                         } else {
-                            // Stage field payloads to compute sizes, then flush.
-                            let mut __field_bufs: ::std::vec::Vec<::std::vec::Vec<u8>> = ::std::vec::Vec::with_capacity(#packed_field_count);
+                            // Count every field, emit the dynamic sizes, then
+                            // serialize payloads directly without field-sized copies.
+                            let mut __field_lens: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
+                            __field_lens.try_reserve_exact(#packed_field_count)
+                                .map_err(|_| norito::core::Error::LengthMismatch)?;
                             #(
-                                { #packed_field_stage_stmts }
+                                { #packed_field_len_stmts }
                             )*
                             writer.write_all(&#bitset_bytes)?;
                             {
                                 #write_sizes_code
                             }
-                            for __b in __field_bufs { writer.write_all(&__b)?; }
+                            #( #packed_field_checked_ser_calls )*
                             Ok(())
                         }
                     } else {
                         // Compat packed-struct: emit per-field lengths (or offsets) followed by payload data.
-                        let mut __field_bufs: ::std::vec::Vec<::std::vec::Vec<u8>> = ::std::vec::Vec::with_capacity(#packed_field_count);
+                        let mut __field_lens: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
+                        __field_lens.try_reserve_exact(#packed_field_count)
+                            .map_err(|_| norito::core::Error::LengthMismatch)?;
                         #(
-                            { #packed_field_stage_stmts }
+                            { #packed_field_len_stmts }
                         )*
                         let mut __acc: usize = 0;
                         writer.write_u64::<norito::core::LittleEndian>(0)?;
-                        for __buf in &__field_bufs {
-                            __acc = __acc.saturating_add(__buf.len());
-                            writer.write_u64::<norito::core::LittleEndian>(__acc as u64)?;
+                        for &__field_len in &__field_lens {
+                            __acc = __acc
+                                .checked_add(__field_len)
+                                .ok_or(norito::core::Error::LengthMismatch)?;
+                            writer.write_u64::<norito::core::LittleEndian>(
+                                u64::try_from(__acc)
+                                    .map_err(|_| norito::core::Error::LengthMismatch)?,
+                            )?;
                         }
-                        for __buf in __field_bufs { writer.write_all(&__buf)?; }
+                        #( #packed_field_checked_ser_calls )*
                         Ok(())
                     }
                 } else {
@@ -3051,7 +2980,7 @@ fn derive_enum_serialize(
                                     if __norito_packed {
                                         norito::core::NoritoSerialize::serialize(#b, writer)?;
                                     } else {
-                                        norito::core::write_len_prefixed(
+                                        norito::core::write_len_prefixed_exact(
                                             writer,
                                             #b,
                                             &mut __norito_tmp,
@@ -3062,7 +2991,7 @@ fn derive_enum_serialize(
                         } else {
                             quote! {
                                 // Non self-delimiting, non-fixed types keep outer length framing even in packed builds
-                                norito::core::write_len_prefixed(
+                                norito::core::write_len_prefixed_exact(
                                     writer,
                                     #b,
                                     &mut __norito_tmp,
@@ -3090,7 +3019,7 @@ fn derive_enum_serialize(
                                     if __norito_packed {
                                         norito::core::NoritoSerialize::serialize(#b, writer)?;
                                     } else {
-                                        norito::core::write_len_prefixed(
+                                        norito::core::write_len_prefixed_exact(
                                             writer,
                                             #b,
                                             &mut __norito_tmp,
@@ -3099,7 +3028,7 @@ fn derive_enum_serialize(
                                 }
                             } else {
                                 quote! {
-                                    norito::core::write_len_prefixed(
+                                    norito::core::write_len_prefixed_exact(
                                         writer,
                                         #b,
                                         &mut __norito_tmp,
@@ -3189,7 +3118,7 @@ fn derive_enum_serialize(
                                 if __norito_packed {
                                     norito::core::NoritoSerialize::serialize(#name, writer)?;
                                 } else {
-                                    norito::core::write_len_prefixed(
+                                    norito::core::write_len_prefixed_exact(
                                         writer,
                                         #name,
                                         &mut __norito_tmp,
@@ -3201,7 +3130,7 @@ fn derive_enum_serialize(
                         // Non self-delimiting, non-fixed: always write an outer length header
                         // for named enum fields (both in packed and non-packed modes).
                         quote! {
-                            norito::core::write_len_prefixed(
+                            norito::core::write_len_prefixed_exact(
                                 writer,
                                 #name,
                                 &mut __norito_tmp,
@@ -4968,53 +4897,69 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                         let key = container_attrs.rename_field(fname, &attrs);
                         let key_lit = syn::LitStr::new(&key, proc_macro2::Span::call_site());
                         let serialize_call =
-                            attrs.serializer_call(quote!(&self.#fname), quote!(out));
-                        let flatten_tokens = quote! {
-                            let __value = norito::json::to_value(&self.#fname)
-                                .expect("flatten field must serialize to JSON value");
-                            if let norito::json::Value::Object(__map) = __value {
-                                for (__key, __val) in __map.into_iter() {
-                                    if !__norito_first {
-                                        out.push(',');
-                                    } else {
-                                        __norito_first = false;
-                                    }
-                                    out.push('"');
-                                    out.push_str(&__key);
-                                    out.push_str("\":");
-                                    norito::json::JsonSerialize::json_serialize(&__val, out);
-                                }
-                            } else {
-                                panic!("#[norito(flatten)] field must serialize to an object");
+                            attrs.bounded_serializer_call(quote!(&self.#fname), quote!(out));
+                        let bounded_flatten = if let Some(path) = &attrs.bounded_with {
+                            quote! { #path(&self.#fname, out, &mut __norito_first) }
+                        } else {
+                            quote! {
+                                ::core::result::Result::Err(
+                                    norito::json::BoundedJsonError::Unsupported,
+                                )
                             }
                         };
+                        let flatten_tokens = quote! {{
+                            if let ::core::option::Option::Some(out) =
+                                norito::json::JsonWriteSink::unbounded_output(out)
+                            {
+                                let __value = norito::json::to_value(&self.#fname)
+                                    .expect("flatten field must serialize to JSON value");
+                                if let norito::json::Value::Object(__map) = __value {
+                                    for (__key, __val) in __map.into_iter() {
+                                        if !__norito_first {
+                                            out.push(',');
+                                        } else {
+                                            __norito_first = false;
+                                        }
+                                        out.push('"');
+                                        out.push_str(&__key);
+                                        out.push_str("\":");
+                                        norito::json::JsonSerialize::json_serialize(&__val, out);
+                                    }
+                                    ::core::result::Result::Ok(())
+                                } else {
+                                    panic!("#[norito(flatten)] field must serialize to an object");
+                                }
+                            } else {
+                                #bounded_flatten
+                            }
+                        }};
                         let render = if attrs.flatten {
-                            flatten_tokens
+                            quote! { #flatten_tokens?; }
                         } else if let Some(predicate) = &attrs.skip_serializing_if {
                             quote! {
                                 if !(#predicate)(&self.#fname) {
                                     if !__norito_first {
-                                        out.push(',');
+                                        out.push(',')?;
                                     } else {
                                         __norito_first = false;
                                     }
-                                    out.push('"');
-                                    out.push_str(#key_lit);
-                                    out.push_str("\":");
-                                    #serialize_call
+                                    out.push('"')?;
+                                    out.push_str(#key_lit)?;
+                                    out.push_str("\":")?;
+                                    #serialize_call?;
                                 }
                             }
                         } else {
                             quote! {
                                 if !__norito_first {
-                                    out.push(',');
+                                    out.push(',')?;
                                 } else {
                                     __norito_first = false;
                                 }
-                                out.push('"');
-                                out.push_str(#key_lit);
-                                out.push_str("\":");
-                                #serialize_call
+                                out.push('"')?;
+                                out.push_str(#key_lit)?;
+                                out.push_str("\":")?;
+                                #serialize_call?;
                             }
                         };
                         writers.push(render);
@@ -5022,11 +4967,21 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                     let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
                     quote! {
                         impl #impl_generics norito::json::FastJsonWrite for #ident #ty_generics #where_clause {
-                            fn write_json(&self, out: &mut String) {
-                                out.push('{');
+                            fn write_json(&self, out: &mut ::std::string::String) {
+                                norito::json::write_json_unbounded(self, out);
+                            }
+
+                            fn write_json_to(
+                                &self,
+                                out: &mut dyn norito::json::JsonWriteSink,
+                            ) -> ::core::result::Result<(), norito::json::BoundedJsonError> {
+                                out.begin_container()?;
+                                out.push('{')?;
                                 let mut __norito_first = true;
                                 #(#writers)*
-                                out.push('}');
+                                out.push('}')?;
+                                out.end_container();
+                                ::core::result::Result::Ok(())
                             }
                         }
                     }
@@ -5043,37 +4998,47 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                         attrs.require_json_serialize_bound(&mut r#gen, &f.ty);
                         let index = Index::from(idx);
                         let serialize_call =
-                            attrs.serializer_call(quote!(&self.#index), quote!(out));
+                            attrs.bounded_serializer_call(quote!(&self.#index), quote!(out));
                         if let Some(predicate) = &attrs.skip_serializing_if {
                             writers.push(quote! {
                                 if !(#predicate)(&self.#index) {
                                     if !__norito_first {
-                                        out.push(',');
+                                        out.push(',')?;
                                     } else {
                                         __norito_first = false;
                                     }
-                                    #serialize_call
+                                    #serialize_call?;
                                 }
                             });
                         } else {
                             writers.push(quote! {
                                 if !__norito_first {
-                                    out.push(',');
+                                    out.push(',')?;
                                 } else {
                                     __norito_first = false;
                                 }
-                                #serialize_call
+                                #serialize_call?;
                             });
                         }
                     }
                     let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
                     quote! {
                         impl #impl_generics norito::json::FastJsonWrite for #ident #ty_generics #where_clause {
-                            fn write_json(&self, out: &mut String) {
-                                out.push('[');
+                            fn write_json(&self, out: &mut ::std::string::String) {
+                                norito::json::write_json_unbounded(self, out);
+                            }
+
+                            fn write_json_to(
+                                &self,
+                                out: &mut dyn norito::json::JsonWriteSink,
+                            ) -> ::core::result::Result<(), norito::json::BoundedJsonError> {
+                                out.begin_container()?;
+                                out.push('[')?;
                                 let mut __norito_first = true;
                                 #(#writers)*
-                                out.push(']');
+                                out.push(']')?;
+                                out.end_container();
+                                ::core::result::Result::Ok(())
                             }
                         }
                     }
@@ -5084,8 +5049,15 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                     let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
                     quote! {
                         impl #impl_generics norito::json::FastJsonWrite for #ident #ty_generics #where_clause {
-                            fn write_json(&self, out: &mut String) {
-                                out.push_str("null");
+                            fn write_json(&self, out: &mut ::std::string::String) {
+                                norito::json::write_json_unbounded(self, out);
+                            }
+
+                            fn write_json_to(
+                                &self,
+                                out: &mut dyn norito::json::JsonWriteSink,
+                            ) -> ::core::result::Result<(), norito::json::BoundedJsonError> {
+                                out.push_str("null")
                             }
                         }
                     }
@@ -5136,16 +5108,19 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                     Fields::Unit => {
                         arms.push(quote! {
                             Self::#v_ident => {
-                                out.push('{');
-                                out.push('"');
-                                out.push_str(#tag_lit);
-                                out.push_str("\":");
-                                norito::json::write_json_string(#variant_lit, out);
-                                out.push(',');
-                                out.push('"');
-                                out.push_str(#content_lit);
-                                out.push_str("\":null");
-                                out.push('}');
+                                out.begin_container()?;
+                                out.push('{')?;
+                                out.push('"')?;
+                                out.push_str(#tag_lit)?;
+                                out.push_str("\":")?;
+                                norito::json::write_json_string_to(#variant_lit, out)?;
+                                out.push(',')?;
+                                out.push('"')?;
+                                out.push_str(#content_lit)?;
+                                out.push_str("\":null")?;
+                                out.push('}')?;
+                                out.end_container();
+                                ::core::result::Result::Ok(())
                             }
                         });
                     }
@@ -5153,16 +5128,19 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                         if fields.unnamed.is_empty() {
                             arms.push(quote! {
                                 Self::#v_ident => {
-                                    out.push('{');
-                                    out.push('"');
-                                    out.push_str(#tag_lit);
-                                    out.push_str("\":");
-                                    norito::json::write_json_string(#variant_lit, out);
-                                    out.push(',');
-                                    out.push('"');
-                                    out.push_str(#content_lit);
-                                    out.push_str("\":null");
-                                    out.push('}');
+                                    out.begin_container()?;
+                                    out.push('{')?;
+                                    out.push('"')?;
+                                    out.push_str(#tag_lit)?;
+                                    out.push_str("\":")?;
+                                    norito::json::write_json_string_to(#variant_lit, out)?;
+                                    out.push(',')?;
+                                    out.push('"')?;
+                                    out.push_str(#content_lit)?;
+                                    out.push_str("\":null")?;
+                                    out.push('}')?;
+                                    out.end_container();
+                                    ::core::result::Result::Ok(())
                                 }
                             });
                             continue;
@@ -5181,20 +5159,23 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                             attrs.require_json_serialize_bound(&mut r#gen, ty);
                             let binding = format_ident!("__norito_field");
                             let serialize_call =
-                                attrs.serializer_call(quote!(#binding), quote!(out));
+                                attrs.bounded_serializer_call(quote!(#binding), quote!(out));
                             arms.push(quote! {
                                 Self::#v_ident(#binding) => {
-                                    out.push('{');
-                                    out.push('"');
-                                    out.push_str(#tag_lit);
-                                    out.push_str("\":");
-                                    norito::json::write_json_string(#variant_lit, out);
-                                    out.push(',');
-                                    out.push('"');
-                                    out.push_str(#content_lit);
-                                    out.push_str("\":");
-                                    #serialize_call
-                                    out.push('}');
+                                    out.begin_container()?;
+                                    out.push('{')?;
+                                    out.push('"')?;
+                                    out.push_str(#tag_lit)?;
+                                    out.push_str("\":")?;
+                                    norito::json::write_json_string_to(#variant_lit, out)?;
+                                    out.push(',')?;
+                                    out.push('"')?;
+                                    out.push_str(#content_lit)?;
+                                    out.push_str("\":")?;
+                                    #serialize_call?;
+                                    out.push('}')?;
+                                    out.end_container();
+                                    ::core::result::Result::Ok(())
                                 }
                             });
                         } else {
@@ -5213,33 +5194,39 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                                 attrs.require_json_serialize_bound(&mut r#gen, &field.ty);
                                 let binding = format_ident!("__norito_v{idx}");
                                 let serialize_call =
-                                    attrs.serializer_call(quote!(#binding), quote!(out));
+                                    attrs.bounded_serializer_call(quote!(#binding), quote!(out));
                                 serializers.push(quote! {
                                     if !__norito_first {
-                                        out.push(',');
+                                        out.push(',')?;
                                     } else {
                                         __norito_first = false;
                                     }
-                                    #serialize_call
+                                    #serialize_call?;
                                 });
                                 bindings.push(binding);
                             }
                             let ref_bindings: Vec<_> = bindings.iter().collect();
                             arms.push(quote! {
                                 Self::#v_ident( #( #ref_bindings ),* ) => {
-                                    out.push('{');
-                                    out.push('"');
-                                    out.push_str(#tag_lit);
-                                    out.push_str("\":");
-                                    norito::json::write_json_string(#variant_lit, out);
-                                    out.push(',');
-                                    out.push('"');
-                                    out.push_str(#content_lit);
-                                    out.push_str("\":[");
+                                    out.begin_container()?;
+                                    out.push('{')?;
+                                    out.push('"')?;
+                                    out.push_str(#tag_lit)?;
+                                    out.push_str("\":")?;
+                                    norito::json::write_json_string_to(#variant_lit, out)?;
+                                    out.push(',')?;
+                                    out.push('"')?;
+                                    out.push_str(#content_lit)?;
+                                    out.push_str("\":")?;
+                                    out.begin_container()?;
+                                    out.push('[')?;
                                     let mut __norito_first = true;
                                     #(#serializers)*
-                                    out.push(']');
-                                    out.push('}');
+                                    out.push(']')?;
+                                    out.end_container();
+                                    out.push('}')?;
+                                    out.end_container();
+                                    ::core::result::Result::Ok(())
                                 }
                             });
                         }
@@ -5262,34 +5249,41 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
                             ref_idents.push(fname.clone());
                             let key = attrs.rename.clone().unwrap_or_else(|| fname.to_string());
                             let key_lit = syn::LitStr::new(&key, proc_macro2::Span::call_site());
-                            let serialize_call = attrs.serializer_call(quote!(#fname), quote!(out));
+                            let serialize_call =
+                                attrs.bounded_serializer_call(quote!(#fname), quote!(out));
                             field_writers.push(quote! {
                                 if !__norito_first_inner {
-                                    out.push(',');
+                                    out.push(',')?;
                                 } else {
                                     __norito_first_inner = false;
                                 }
-                                out.push('"');
-                                out.push_str(#key_lit);
-                                out.push_str("\":");
-                                #serialize_call
+                                out.push('"')?;
+                                out.push_str(#key_lit)?;
+                                out.push_str("\":")?;
+                                #serialize_call?;
                             });
                         }
                         arms.push(quote! {
                             Self::#v_ident { #( #ref_idents ),* } => {
-                                out.push('{');
-                                out.push('"');
-                                out.push_str(#tag_lit);
-                                out.push_str("\":");
-                                norito::json::write_json_string(#variant_lit, out);
-                                out.push(',');
-                                out.push('"');
-                                out.push_str(#content_lit);
-                                out.push_str("\":{");
+                                out.begin_container()?;
+                                out.push('{')?;
+                                out.push('"')?;
+                                out.push_str(#tag_lit)?;
+                                out.push_str("\":")?;
+                                norito::json::write_json_string_to(#variant_lit, out)?;
+                                out.push(',')?;
+                                out.push('"')?;
+                                out.push_str(#content_lit)?;
+                                out.push_str("\":")?;
+                                out.begin_container()?;
+                                out.push('{')?;
                                 let mut __norito_first_inner = true;
                                 #(#field_writers)*
-                                out.push('}');
-                                out.push('}');
+                                out.push('}')?;
+                                out.end_container();
+                                out.push('}')?;
+                                out.end_container();
+                                ::core::result::Result::Ok(())
                             }
                         });
                     }
@@ -5298,7 +5292,14 @@ pub fn derive_fast_json_write(input: TokenStream) -> TokenStream {
             let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
             quote! {
                 impl #impl_generics norito::json::FastJsonWrite for #ident #ty_generics #where_clause {
-                    fn write_json(&self, out: &mut String) {
+                    fn write_json(&self, out: &mut ::std::string::String) {
+                        norito::json::write_json_unbounded(self, out);
+                    }
+
+                    fn write_json_to(
+                        &self,
+                        out: &mut dyn norito::json::JsonWriteSink,
+                    ) -> ::core::result::Result<(), norito::json::BoundedJsonError> {
                         match self {
                             #( #arms ),*
                         }
@@ -5349,13 +5350,15 @@ fn derive_struct_json_deserialize(
             let unknown_field_arm = if container_attrs.deny_unknown_fields {
                 quote! {
                     _ => {
-                        return Err(norito::json::Error::unknown_field(key));
+                        return Err(norito::json::Error::Message(
+                            "unknown JSON field".into()
+                        ));
                     }
                 }
             } else {
                 quote! {
                     _ => {
-                        parser.skip_value()?;
+                        parser.skip_value_lexical()?;
                     }
                 }
             };
@@ -5425,14 +5428,14 @@ fn derive_struct_json_deserialize(
                     #[allow(clippy::useless_let_if_seq)]
                     fn json_deserialize(parser: &mut norito::json::Parser<'_>) -> ::core::result::Result<Self, norito::json::Error> {
                         parser.skip_ws();
+                        parser.preflight_object_entries()?;
                         parser.expect(b'{')?;
                         parser.skip_ws();
                         #(#inits)*
                         if !parser.try_consume_char(b'}')? {
                             loop {
                                 parser.skip_ws();
-                                let key = parser.parse_string()?;
-                                parser.expect(b':')?;
+                                let key = parser.parse_key()?;
                                 match key.as_str() {
                                     #( #arms ),*,
                                     #unknown_field_arm
@@ -5464,7 +5467,7 @@ fn derive_struct_json_deserialize(
                     finals.push(quote! { ::core::default::Default::default() });
                     match_arms.push(quote! {
                         #idx => {
-                            parser.skip_value()?;
+                            parser.skip_value_lexical()?;
                         }
                     });
                     continue;
@@ -5526,7 +5529,7 @@ fn derive_struct_json_deserialize(
                                 match __norito_index {
                                     #( #match_arms ),*,
                                     _ => {
-                                        parser.skip_value()?;
+                                        parser.skip_value_lexical()?;
                                         return Err(norito::json::Error::Message(format!("too many elements for tuple struct `{}`", stringify!(#ident)).into()));
                                     }
                                 }
@@ -5710,13 +5713,15 @@ fn derive_enum_json_deserialize(
     let unknown_variant_field = if container_attrs.deny_unknown_fields {
         quote! {
             _ => {
-                return Err(norito::json::Error::unknown_field(key));
+                return Err(norito::json::Error::Message(
+                    "unknown JSON variant field".into()
+                ));
             }
         }
     } else {
         quote! {
             _ => {
-                __parser.skip_value()?;
+                __parser.skip_value_lexical()?;
             }
         }
     };
@@ -5825,7 +5830,7 @@ fn derive_enum_json_deserialize(
                                     match __idx {
                                         #( #match_tokens ),*,
                                         _ => {
-                                            __parser.skip_value()?;
+                                            __parser.skip_value_lexical()?;
                                             return Err(norito::json::Error::Message(format!(
                                                 "too many elements for variant `{}`", #variant_lit
                                             ).into()));
@@ -5898,6 +5903,7 @@ fn derive_enum_json_deserialize(
                     #variant_lit => {
                         let mut __parser = norito::json::Parser::new(__norito_content_str);
                         __parser.skip_ws();
+                        __parser.preflight_object_entries()?;
                         if !__parser.try_consume_char(b'{')? {
                             return Err(norito::json::Error::Message(format!(
                                 "expected object for variant `{}`", #variant_lit
@@ -5908,8 +5914,7 @@ fn derive_enum_json_deserialize(
                         if !__parser.try_consume_char(b'}')? {
                             loop {
                                 __parser.skip_ws();
-                                let key = __parser.parse_string()?;
-                                __parser.expect(b':')?;
+                                let key = __parser.parse_key()?;
                                 match key.as_str() {
                                     #( #match_tokens ),*,
                                     #unknown_variant_field
@@ -5939,11 +5944,13 @@ fn derive_enum_json_deserialize(
     let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
     let unknown_envelope_field = if container_attrs.deny_unknown_fields {
         quote! {
-            return Err(norito::json::Error::unknown_field(key));
+            return Err(norito::json::Error::Message(
+                "unknown JSON enum envelope field".into()
+            ));
         }
     } else {
         quote! {
-            parser.skip_value()?;
+            parser.skip_value_lexical()?;
         }
     };
     let result = quote! {
@@ -5951,27 +5958,26 @@ fn derive_enum_json_deserialize(
             #[allow(clippy::useless_let_if_seq)]
             fn json_deserialize(parser: &mut norito::json::Parser<'_>) -> ::core::result::Result<Self, norito::json::Error> {
                 parser.skip_ws();
+                parser.preflight_object_entries()?;
                 parser.expect(b'{')?;
                 parser.skip_ws();
                 let mut __norito_tag: ::core::option::Option<String> = ::core::option::Option::None;
-                let mut __norito_raw: ::core::option::Option<String> = ::core::option::Option::None;
+                let mut __norito_raw: ::core::option::Option<&str> = ::core::option::Option::None;
                 if !parser.try_consume_char(b'}')? {
                     loop {
                         parser.skip_ws();
-                        let key = parser.parse_string()?;
-                        parser.expect(b':')?;
-                        if key == #tag_lit {
+                        let key = parser.parse_key()?;
+                        if key.as_str() == #tag_lit {
                             if __norito_tag.is_some() {
                                 return Err(norito::json::Error::duplicate_field(#tag_lit));
                             }
                             let value = parser.parse_string()?;
                             __norito_tag = ::core::option::Option::Some(value);
-                        } else if key == #content_lit {
+                        } else if key.as_str() == #content_lit {
                             if __norito_raw.is_some() {
                                 return Err(norito::json::Error::duplicate_field(#content_lit));
                             }
-                            let raw = norito::json::RawValue::json_deserialize(parser)?;
-                            __norito_raw = ::core::option::Option::Some(raw.into_string());
+                            __norito_raw = ::core::option::Option::Some(parser.raw_value_slice()?);
                         } else {
                             #unknown_envelope_field
                         }
@@ -5986,17 +5992,11 @@ fn derive_enum_json_deserialize(
                 let tag = __norito_tag.ok_or_else(|| norito::json::Error::Message(
                     format!("missing `{}` field", #tag_lit).into(),
                 ))?;
-                let content_buf;
-                if let Some(raw) = __norito_raw {
-                    content_buf = raw;
-                } else {
-                    content_buf = "null".to_owned();
-                }
-                let __norito_content_str = content_buf.as_str();
+                let __norito_content_str = __norito_raw.unwrap_or("null");
                 match tag.as_str() {
                     #( #arms ),*,
-                    other => Err(norito::json::Error::Message(
-                        format!("unknown variant `{}`", other).into(),
+                    _ => Err(norito::json::Error::Message(
+                        "unknown JSON enum variant".into(),
                     )),
                 }
             }

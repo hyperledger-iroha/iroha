@@ -45,6 +45,8 @@ fn ensure_quota_config() {
         true,
         iroha_config::parameters::defaults::torii::ZK_PROVER_SCAN_PERIOD_SECS,
         iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_TTL_SECS,
+        iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT,
+        iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_BYTES,
         iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_INFLIGHT,
         iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_SCAN_BYTES,
         iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_SCAN_MILLIS,

@@ -596,6 +596,7 @@ pub enum MusubiPackageScopeV1 {
 /// Immutable binding from public namespace text to stable structural identity.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiNamespaceBindingV1 {
     /// Canonical public namespace.
     pub namespace: MusubiNamespaceV1,
@@ -769,6 +770,7 @@ impl fmt::Display for MusubiPackageIdV1 {
 /// User-facing package selector resolved through an immutable namespace binding.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiPackageSelectorV1 {
     /// Canonical public namespace text.
     pub namespace: MusubiNamespaceV1,
@@ -1046,7 +1048,10 @@ impl PartialOrd for MusubiVersionV1 {
 /// Comparator operator used by a canonical comma-separated requirement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiComparatorOpV1 {
     /// Greater than.
     Greater,
@@ -1063,6 +1068,7 @@ pub enum MusubiComparatorOpV1 {
 /// One exact comparator in a canonical requirement AST.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiVersionComparatorV1 {
     /// Comparator operator.
     pub op: MusubiComparatorOpV1,
@@ -1073,6 +1079,7 @@ pub struct MusubiVersionComparatorV1 {
 /// Payload of a `MAJOR.MINOR.*` wildcard requirement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiMinorWildcardV1 {
     /// Required major component.
     pub major: u64,
@@ -1083,7 +1090,10 @@ pub struct MusubiMinorWildcardV1 {
 /// Canonical Cargo-style version requirement AST.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiVersionReqV1 {
     /// Any stable release (`*`); prereleases still require explicit eligibility.
     Any,
@@ -1432,6 +1442,7 @@ digest_type!(MusubiQueryHashV1, "Digest of canonical query parameters.");
 /// Complete source-archive commitment whose domain-separated Norito hash is [`ArchiveId`].
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiArchiveCommitmentV1 {
     /// Canonical `SoraFS` root `CID`.
     pub root_cid: ManifestRootCid,
@@ -1519,6 +1530,7 @@ include!("musubi/bundle_file_decode.rs");
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(decode_from_slice)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiArtifactDescriptorV1 {
     /// Must equal [`MUSUBI_ARTIFACT_DESCRIPTOR_VERSION_V1`].
     pub version: u16,
@@ -1731,7 +1743,10 @@ impl MusubiArchiveRecordV1 {
 /// Lifecycle of one renewable `SoraFS` archive location.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiArchiveLocationStateV1 {
     /// Registered but not yet finalized at replication quorum.
     Pending,
@@ -1746,6 +1761,7 @@ pub enum MusubiArchiveLocationStateV1 {
 /// Canonical ordered key for one renewable archive location.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiArchiveLocationKeyV1 {
     /// Archive served by the location.
     pub archive_id: ArchiveId,
@@ -1993,6 +2009,7 @@ impl MusubiArchiveAvailabilityV1 {
 /// Bounded universal reverse references from one archive to exact published releases.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiArchiveReverseReferencesV1 {
     /// Referenced archive identity.
     pub archive_id: ArchiveId,
@@ -2060,7 +2077,10 @@ impl fmt::Display for MusubiReleaseIdV1 {
 /// Kotodama source edition accepted by Musubi V1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiKotodamaEditionV1 {
     /// First-release Kotodama edition.
     V1,
@@ -2069,6 +2089,7 @@ pub enum MusubiKotodamaEditionV1 {
 /// Exact IVM ABI binding embedded in every release and lock node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiAbiBindingV1 {
     /// Must equal [`MUSUBI_IVM_ABI_VERSION_V1`].
     pub abi_version: u16,
@@ -2111,6 +2132,7 @@ impl MusubiAbiBindingV1 {
 /// Normal dependency requirement in a published manifest.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiDependencyReqV1 {
     /// Parent-local import alias.
     pub alias: Name,
@@ -2135,7 +2157,10 @@ impl MusubiDependencyReqV1 {
 /// Dependency kind recorded in consumer-owned exact locks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiDependencyKindV1 {
     /// Published normal dependency.
     Normal,
@@ -2252,6 +2277,7 @@ impl fmt::Display for MusubiKeywordV1 {
 /// Immutable descriptive metadata committed by a release digest.
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiReleaseMetadataV1 {
     /// Human description.
     pub description: Option<MusubiDescriptionV1>,
@@ -2337,6 +2363,7 @@ impl MusubiRegistrySnapshotV1 {
 /// Parent-local exact edge in a publication proof or verification lock.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiExactDependencyEdgeV1 {
     /// Parent-local import alias.
     pub alias: Name,
@@ -2375,6 +2402,7 @@ impl MusubiExactDependencyEdgeV1 {
 /// Exact immutable dependency node used in publication verification.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiVerificationNodeV1 {
     /// Exact release identity.
     pub release: MusubiReleaseIdV1,
@@ -2431,6 +2459,7 @@ impl MusubiVerificationNodeV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(decode_from_slice)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiVerificationLockV1 {
     /// Lock schema identifier; must equal `musubi-verification-lock`.
     pub schema: String,
@@ -2609,6 +2638,7 @@ fn validate_exact_graph(
 /// Bounded exact resolution proof supplied at publication.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiResolutionProofV1 {
     /// Finalized universal-index snapshot used by the resolver.
     pub snapshot: MusubiRegistrySnapshotV1,
@@ -2862,6 +2892,7 @@ impl MusubiReleaseManifestV1 {
 /// Publication payload that binds a release to its independently validated exact proof.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiPublicationV1 {
     /// Immutable release manifest.
     pub manifest: MusubiReleaseManifestV1,
@@ -3520,6 +3551,7 @@ impl MusubiProviderBundleAttestationRecordV1 {
 /// Canonical, domain-separated payload authorized by a namespace owner.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiNamespaceDelegationPayloadV1 {
     /// Delegation payload schema version.
     pub version: u8,
@@ -3567,6 +3599,7 @@ impl MusubiNamespaceDelegationPayloadV1 {
 /// One owner-controller approval of a namespace delegation payload.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiNamespaceDelegationApprovalV1 {
     /// Controller key that produced the signature.
     pub public_key: PublicKey,
@@ -3577,6 +3610,7 @@ pub struct MusubiNamespaceDelegationApprovalV1 {
 /// Generation-bound authority to claim an absent package in one namespace.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiNamespaceDelegationV1 {
     /// Exact immutable authorization payload.
     pub payload: MusubiNamespaceDelegationPayloadV1,
@@ -3695,6 +3729,7 @@ impl MusubiNamespaceDelegationV1 {
 /// Independent package governance revisions used for compare-and-set mutations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiPackageRevisionsV1 {
     /// Owner, member, and invitation revision.
     pub governance: u64,
@@ -3721,6 +3756,7 @@ impl MusubiPackageRevisionsV1 {
 /// Authoritative package record stored in the stable home dataspace.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiPackageRecordV1 {
     /// Stable package identity.
     pub package: MusubiPackageIdV1,
@@ -3786,6 +3822,7 @@ impl MusubiPackageRecordV1 {
 /// Independent permissions granted to an accepted package maintainer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[allow(
     clippy::struct_excessive_bools,
     reason = "four independent permission bits are the canonical Musubi V1 wire shape"
@@ -3812,7 +3849,10 @@ impl MusubiMaintainerPermissionsV1 {
 /// Accepted package member role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiPackageRoleV1 {
     /// Package owner with governance authority.
     Owner,
@@ -3823,6 +3863,7 @@ pub enum MusubiPackageRoleV1 {
 /// Canonical package-local ordered key for an accepted member.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiPackageMemberKeyV1 {
     /// Stable package identity.
     pub package: MusubiPackageIdV1,
@@ -3851,6 +3892,7 @@ impl MusubiPackageMemberKeyV1 {
 /// Accepted package member record.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiPackageMemberV1 {
     /// Stable package identity.
     pub package: MusubiPackageIdV1,
@@ -3893,7 +3935,10 @@ impl MusubiPackageMemberV1 {
 /// Invitation lifecycle; only acceptance creates package authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiInvitationStateV1 {
     /// Awaiting the invited account's acceptance.
     Pending,
@@ -3908,6 +3953,7 @@ pub enum MusubiInvitationStateV1 {
 /// Package owner/maintainer invitation bound to a governance revision.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiMaintainerInvitationV1 {
     /// Stable invitation identity.
     pub invite_id: MusubiInviteIdV1,
@@ -3959,6 +4005,7 @@ impl MusubiMaintainerInvitationV1 {
 /// any pending invitations for the same account without requiring a scan.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiMaintainerDirectoryKeyV1 {
     /// Stable package identity.
     pub package: MusubiPackageIdV1,
@@ -4033,7 +4080,10 @@ impl MusubiMaintainerDirectoryKeyV1 {
 /// Accepted member or pending package-governance invitation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiMaintainerDirectoryEntryV1 {
     /// Accepted owner or maintainer with current authority.
     Accepted(MusubiPackageMemberV1),
@@ -4183,6 +4233,7 @@ fn maintainer_cursor_key_is_canonical_v1(raw: &str) -> bool {
 /// Mutable package metadata record, separate from immutable release metadata.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiPackageMetadataRecordV1 {
     /// Stable package identity.
     pub package: MusubiPackageIdV1,
@@ -4512,6 +4563,7 @@ impl MusubiAliasPricingPolicyV1 {
 /// Permanent global alias registration.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiAliasRecordV1 {
     /// Permanent alias name.
     pub alias: MusubiAliasNameV1,
@@ -4555,7 +4607,10 @@ impl MusubiAliasRecordV1 {
 /// Permanent alias history action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiAliasHistoryActionV1 {
     /// Initial paid registration.
     Registered,
@@ -4566,6 +4621,7 @@ pub enum MusubiAliasHistoryActionV1 {
 /// Canonical permanent-alias history key ordered by alias and revision.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiAliasHistoryKeyV1 {
     /// Permanent alias whose history is addressed.
     pub alias: MusubiAliasNameV1,
@@ -4584,6 +4640,7 @@ impl MusubiAliasHistoryKeyV1 {
 /// One immutable alias-history entry.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiAliasHistoryEntryV1 {
     /// Alias.
     pub alias: MusubiAliasNameV1,
@@ -4909,77 +4966,7 @@ impl Default for MusubiRegistryPolicyV1 {
     }
 }
 
-impl MusubiRegistryPolicyV1 {
-    /// Validate version, bounds, ordering, and mode-specific allowlist use.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if pricing is invalid, the version or revision is invalid, the allowlist
-    /// is oversized or noncanonical, or a non-allowlisted mode carries entries.
-    pub fn validate(&self) -> Result<(), ParseError> {
-        self.alias_pricing.validate()?;
-        if self.version != MUSUBI_REGISTRY_VERSION_V1
-            || self.revision == 0
-            || self.allowlisted_dataspaces.len() > MUSUBI_MAX_RESOLUTION_NODES_V1
-            || self
-                .allowlisted_dataspaces
-                .windows(2)
-                .any(|pair| pair[0] >= pair[1])
-            || (!matches!(self.mode, MusubiRegistryAdmissionModeV1::Allowlisted)
-                && !self.allowlisted_dataspaces.is_empty())
-        {
-            return Err(ParseError::new(
-                "Musubi registry policy is invalid or noncanonical",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Validate a strict first-release transition from `current`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if either policy is invalid, revision arithmetic overflows, the policy is
-    /// not the exact successor, or pricing changes do not use the required pricing revision.
-    pub fn validate_successor(&self, current: &Self) -> Result<(), ParseError> {
-        current.validate()?;
-        self.validate()?;
-
-        let expected_revision = current
-            .revision
-            .checked_add(1)
-            .ok_or_else(|| ParseError::new("Musubi registry policy revision overflow"))?;
-        if self.revision != expected_revision {
-            return Err(ParseError::new(
-                "Musubi replacement policy revision must be the exact successor",
-            ));
-        }
-
-        let prices_changed = self.alias_pricing.length_1_xor != current.alias_pricing.length_1_xor
-            || self.alias_pricing.length_2_xor != current.alias_pricing.length_2_xor
-            || self.alias_pricing.length_3_xor != current.alias_pricing.length_3_xor
-            || self.alias_pricing.length_4_xor != current.alias_pricing.length_4_xor
-            || self.alias_pricing.length_5_to_32_xor != current.alias_pricing.length_5_to_32_xor;
-        if prices_changed {
-            let expected_pricing_revision = current
-                .alias_pricing
-                .revision
-                .checked_add(1)
-                .ok_or_else(|| ParseError::new("Musubi alias pricing revision overflow"))?;
-            if self.alias_pricing.revision != expected_pricing_revision {
-                return Err(ParseError::new(
-                    "changed Musubi alias prices require the exact successor pricing revision",
-                ));
-            }
-        } else if self.alias_pricing != current.alias_pricing {
-            return Err(ParseError::new(
-                "unchanged Musubi alias prices must retain the current pricing policy",
-            ));
-        }
-
-        Ok(())
-    }
-}
+include!("musubi/registry_policy_impl.rs");
 
 include!("musubi/query_models.rs");
 

@@ -39,7 +39,7 @@ use crate::{
             ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1, ZK_AMS_T256_BP_GENERATOR_BASIS_DIGEST_V1,
             ZkAmsT256BulletproofSuiteV1, ZkAmsT256MembershipProofV1,
         },
-        sponge::Keccak256,
+        sponge::{Keccak256, Shake256Reader},
     },
 };
 

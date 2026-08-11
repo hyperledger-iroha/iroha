@@ -21851,74 +21851,7 @@ pub mod tests {
         assert_eq!(queue.active_len(), 1);
     }
 
-    #[test]
-    fn nexus_reconfigure_rebinds_frozen_manifests_without_reading_drifted_files() {
-        let dir = tempdir().expect("manifest directory");
-        let manifest_path = dir.path().join("future.manifest.json");
-        fs::write(
-            &manifest_path,
-            r#"{"lane":"future","governance":"parliament","version":1}"#,
-        )
-        .expect("write future manifest");
-        let registry_cfg = LaneRegistry {
-            manifest_directory: Some(dir.path().to_path_buf()),
-            ..LaneRegistry::default()
-        };
-        let mut governance = GovernanceCatalog::default();
-        governance.modules.insert(
-            "parliament".to_owned(),
-            iroha_config::parameters::actual::GovernanceModule::default(),
-        );
-        let frozen = Arc::new(LaneManifestRegistry::from_config(
-            &LaneCatalog::default(),
-            &governance,
-            &registry_cfg,
-        ));
-        let frozen_digest = frozen.consensus_policy_digest();
-
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let queue = Queue::test(config_factory(), &time_source);
-        let state = State::new_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        queue.install_lane_manifests_with_state(&frozen, &state);
-        fs::write(&manifest_path, b"{drifted-after-startup")
-            .expect("replace manifest after frozen load");
-
-        let expanded = LaneCatalog::new(
-            nonzero!(2_u32),
-            vec![
-                LaneConfig::default(),
-                LaneConfig {
-                    id: LaneId::new(1),
-                    alias: "future".to_owned(),
-                    governance: Some("parliament".to_owned()),
-                    ..LaneConfig::default()
-                },
-            ],
-        )
-        .expect("expanded catalog");
-        let mut nexus = state.nexus_snapshot();
-        nexus.enabled = true;
-        nexus.governance = governance;
-        nexus.registry = registry_cfg;
-        nexus.lane_catalog = expanded.clone();
-        nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&expanded);
-
-        queue.reconfigure_nexus_with_state(&nexus, &state, None);
-        let installed = queue.lane_manifests.read().clone();
-        assert_eq!(installed.consensus_policy_digest(), frozen_digest);
-        assert!(installed.ensure_lane_ready(LaneId::new(1)).is_ok());
-        assert_eq!(
-            installed
-                .lane_rules(LaneId::new(1))
-                .expect("frozen future rules")
-                .version,
-            1
-        );
-    }
+    include!("queue/nexus_reconfigure_manifest_reload_tests.rs");
 
     #[test]
     fn installing_manifests_populates_privacy_registry() {

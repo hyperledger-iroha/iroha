@@ -521,9 +521,229 @@ fn first_release_scanner_ignores_retired_root_attachment_layout() {
     )
     .expect("write retired root metadata");
 
-    assert!(list_attachment_locations().is_empty());
+    let mut stream = AttachmentDirectoryStream::open(attachments_root_dir())
+        .expect("open attachment discovery stream");
+    let discovery = discover_attachment_window(
+        &mut stream,
+        AttachmentDiscoveryGeometry {
+            max_locations: 4,
+            max_work_items: 16,
+        },
+        std::time::Instant::now(),
+        1_000,
+        |_| true,
+    );
+    assert!(discovery.locations.is_empty());
+    assert!(discovery.sweep_complete);
     assert!(find_attachment_location(&id).is_none());
     assert!(process_attachment_once(&id).is_none());
+}
+
+#[test]
+fn attachment_discovery_geometry_has_exact_boundaries_and_saturates() {
+    assert_eq!(
+        AttachmentDiscoveryGeometry::from_scan_bytes(0),
+        AttachmentDiscoveryGeometry {
+            max_locations: 0,
+            max_work_items: 0,
+        }
+    );
+    assert_eq!(
+        AttachmentDiscoveryGeometry::from_scan_bytes(ATTACHMENT_DISCOVERY_BYTES_PER_LOCATION - 1),
+        AttachmentDiscoveryGeometry {
+            max_locations: 1,
+            max_work_items: ATTACHMENT_DISCOVERY_WORK_PER_LOCATION,
+        }
+    );
+    assert_eq!(
+        AttachmentDiscoveryGeometry::from_scan_bytes(ATTACHMENT_DISCOVERY_BYTES_PER_LOCATION + 1)
+            .max_locations,
+        2
+    );
+
+    let saturated = AttachmentDiscoveryGeometry::from_scan_bytes(u64::MAX);
+    assert_eq!(
+        saturated.max_locations,
+        ATTACHMENT_DISCOVERY_MAX_LOCATIONS as usize
+    );
+    assert_eq!(
+        saturated.max_work_items,
+        ATTACHMENT_DISCOVERY_MAX_WORK_ITEMS
+    );
+}
+
+#[test]
+fn complete_attachment_discovery_window_is_canonically_ordered() {
+    let _env = TestDataDirGuard::new();
+    let tenant_keys = [format!("{:064x}", 2_u8), format!("{:064x}", 1_u8)];
+    let ids = [format!("{:064x}", 12_u8), format!("{:064x}", 11_u8)];
+    for tenant_key in &tenant_keys {
+        ensure_tenant_dir(tenant_key);
+        for id in &ids {
+            fs::write(attachment_meta_path(tenant_key, id), b"{}")
+                .expect("write discovery metadata fixture");
+        }
+    }
+    let mut expected: Vec<_> = ids
+        .iter()
+        .map(|id| AttachmentLocation {
+            tenant_key: tenant_keys[1].clone(),
+            id: id.clone(),
+        })
+        .collect();
+    expected.sort_unstable();
+
+    let mut stream = AttachmentDirectoryStream::open(attachments_root_dir())
+        .expect("open attachment discovery stream");
+    let discovery = discover_attachment_window(
+        &mut stream,
+        AttachmentDiscoveryGeometry {
+            max_locations: tenant_keys.len() * ids.len() + 1,
+            max_work_items: 64,
+        },
+        std::time::Instant::now(),
+        1_000,
+        |_| true,
+    );
+
+    assert!(discovery.sweep_complete);
+    assert_eq!(discovery.budget_reason(), None);
+    assert_eq!(discovery.locations, expected);
+}
+
+#[test]
+fn attachment_discovery_retry_queue_is_canonical_and_hard_bounded() {
+    let _env = TestDataDirGuard::new();
+    fs::create_dir_all(attachments_root_dir()).expect("create attachment root");
+    let hard_cap = ATTACHMENT_DISCOVERY_MAX_LOCATIONS as usize;
+    let tenant_key = format!("{:064x}", 5_u8);
+    let locations: Vec<_> = (0..=hard_cap)
+        .rev()
+        .map(|value| AttachmentLocation {
+            tenant_key: tenant_key.clone(),
+            id: format!("{value:064x}"),
+        })
+        .collect();
+    retry_pending_attachment_locations(locations);
+    retry_pending_attachment_locations(vec![AttachmentLocation {
+        tenant_key: format!("{:064x}", 4_u8),
+        id: format!("{:064x}", hard_cap - 1),
+    }]);
+
+    let state_guard = attachment_discovery_state().lock();
+    let queued = &state_guard.as_ref().expect("retry state").retry_locations;
+    assert_eq!(queued.len(), hard_cap);
+    assert!(queued.windows(2).all(|pair| pair[0] < pair[1]));
+    assert_eq!(queued[0].tenant_key, format!("{:064x}", 4_u8));
+    assert_eq!(queued[0].id, format!("{:064x}", hard_cap - 1));
+    drop(state_guard);
+    *attachment_discovery_state().lock() = None;
+}
+
+#[test]
+fn bounded_attachment_discovery_cursor_reaches_every_later_entry() {
+    let _env = TestDataDirGuard::new();
+    let tenant_key = format!("{:064x}", 3_u8);
+    ensure_tenant_dir(&tenant_key);
+    let expected: Vec<_> = (20_u8..25)
+        .map(|value| AttachmentLocation {
+            tenant_key: tenant_key.clone(),
+            id: format!("{value:064x}"),
+        })
+        .collect();
+    for location in &expected {
+        fs::write(
+            attachment_meta_path(&location.tenant_key, &location.id),
+            b"{}",
+        )
+        .expect("write discovery metadata fixture");
+    }
+
+    let mut stream = AttachmentDirectoryStream::open(attachments_root_dir())
+        .expect("open attachment discovery stream");
+    let geometry = AttachmentDiscoveryGeometry {
+        max_locations: 2,
+        max_work_items: 64,
+    };
+    let mut discovered = Vec::new();
+    let mut completed = false;
+    for _ in 0..8 {
+        let window = discover_attachment_window(
+            &mut stream,
+            geometry,
+            std::time::Instant::now(),
+            1_000,
+            |_| true,
+        );
+        assert!(window.locations.len() <= geometry.max_locations);
+        assert!(window.locations.windows(2).all(|pair| pair[0] < pair[1]));
+        completed = window.sweep_complete;
+        discovered.extend(window.locations);
+        if completed {
+            break;
+        }
+        assert_eq!(window.budget_reason(), Some("work"));
+    }
+    assert!(completed, "bounded cursor must finish the directory sweep");
+    discovered.sort_unstable();
+    assert_eq!(discovered, expected);
+}
+
+#[test]
+fn attachment_discovery_work_and_time_boundaries_do_not_consume_later_entries() {
+    let _env = TestDataDirGuard::new();
+    let tenant_key = format!("{:064x}", 4_u8);
+    let id = format!("{:064x}", 30_u8);
+    ensure_tenant_dir(&tenant_key);
+    fs::write(attachment_meta_path(&tenant_key, &id), b"{}")
+        .expect("write discovery metadata fixture");
+
+    let mut stream = AttachmentDirectoryStream::open(attachments_root_dir())
+        .expect("open attachment discovery stream");
+    let timed_out = discover_attachment_window(
+        &mut stream,
+        AttachmentDiscoveryGeometry {
+            max_locations: 4,
+            max_work_items: 4,
+        },
+        std::time::Instant::now(),
+        0,
+        |_| true,
+    );
+    assert_eq!(timed_out.work_items, 0);
+    assert_eq!(timed_out.budget_reason(), Some("time"));
+    assert_eq!(timed_out.pending_estimate(), 1);
+
+    let work_limited = discover_attachment_window(
+        &mut stream,
+        AttachmentDiscoveryGeometry {
+            max_locations: 4,
+            max_work_items: 1,
+        },
+        std::time::Instant::now(),
+        1_000,
+        |_| true,
+    );
+    assert_eq!(work_limited.work_items, 1);
+    assert!(work_limited.locations.is_empty());
+    assert_eq!(work_limited.budget_reason(), Some("work"));
+    assert_eq!(work_limited.pending_estimate(), 1);
+
+    let resumed = discover_attachment_window(
+        &mut stream,
+        AttachmentDiscoveryGeometry {
+            max_locations: 4,
+            max_work_items: 8,
+        },
+        std::time::Instant::now(),
+        1_000,
+        |_| true,
+    );
+    assert!(resumed.sweep_complete);
+    assert_eq!(
+        resumed.locations,
+        vec![AttachmentLocation { tenant_key, id }]
+    );
 }
 
 #[test]

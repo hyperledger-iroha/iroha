@@ -231,7 +231,7 @@ def test_wire_fixture_drift_rotates_only_diagnostics_suite_digest(
         "--print-records",
     )
     assert grouped_records.returncode == 0, grouped_records.stderr
-    assert len(grouped_records.stdout.splitlines()) == 1_317
+    assert len(grouped_records.stdout.splitlines()) == 1_376
 
     _source_fixture(tmp_path)
     grouped_before = _native_digest(tmp_path)
@@ -333,6 +333,7 @@ def test_production_manifest_exactly_covers_declared_source_roots() -> None:
     }
     required_omissions_closed = {
         "python/iroha_torii_client/client_status_models.py",
+        "python/iroha_torii_client/kaigi_relay_client.py",
         "javascript/iroha_js/src/browser.js",
         "javascript/iroha_js/src/strictLosslessJson.js",
         "javascript/iroha_js/src/sumeragiTyped.js",

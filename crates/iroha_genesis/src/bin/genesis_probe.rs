@@ -8,7 +8,6 @@
 
 use std::{
     any::Any,
-    fs,
     io::{Cursor, Read},
     path::PathBuf,
 };
@@ -20,7 +19,6 @@ use iroha_data_model::{
     parameter::{Parameter, Parameters, system::SumeragiNposParameters},
     transaction::Executable,
 };
-use iroha_version::codec::DecodeVersioned;
 use norito::{
     codec::Decode,
     core::{self, Header, LittleEndian, ReadBytesExt, header_flags},
@@ -35,7 +33,7 @@ fn main() -> Result<()> {
         .ok_or_else(|| eyre!("usage: genesis_probe <block-file>"))?
         .into();
 
-    let bytes = fs::read(&path)?;
+    let bytes = iroha_genesis::read_signed_genesis_bytes(&path)?;
     println!(
         "event=probe stage=start path={} size={}B",
         path.display(),
@@ -73,9 +71,11 @@ fn main() -> Result<()> {
     diagnose_manual_decode(bare_payload, 0, "flags-0");
 
     if let Ok(block) = std::panic::catch_unwind(|| {
-        core::reset_decode_state();
-        core::set_decode_flags(header.flags);
-        norito::codec::decode_adaptive::<SignedBlock>(bare_payload)
+        norito::with_decode_limits(iroha_genesis::signed_genesis_decode_limits_v1(), || {
+            core::reset_decode_state();
+            core::set_decode_flags(header.flags);
+            norito::codec::decode_adaptive::<SignedBlock>(bare_payload)
+        })
     }) {
         if let Ok(block) = block {
             dump_parameters(&block);
@@ -188,8 +188,8 @@ fn describe_flags(flags: u8) -> String {
 
 fn diagnose_signed_block(bytes: &[u8]) {
     println!("event=probe stage=decode kind=SignedBlock path=versioned start");
-    match std::panic::catch_unwind(|| SignedBlock::decode_all_versioned(bytes)) {
-        Ok(Ok(block)) => {
+    match iroha_genesis::decode_signed_genesis(bytes) {
+        Ok(block) => {
             let tx_count = block.external_transactions().len();
             let time_triggers = block.time_triggers().len();
             let hash = block.hash();
@@ -197,19 +197,19 @@ fn diagnose_signed_block(bytes: &[u8]) {
                 "event=probe stage=decode kind=SignedBlock outcome=ok hash={hash} tx_count={tx_count} time_triggers={time_triggers}"
             );
         }
-        Ok(Err(err)) => {
+        Err(err) => {
             println!("event=probe stage=decode kind=SignedBlock outcome=error err={err:?}")
-        }
-        Err(panic) => {
-            let msg = describe_panic(panic.as_ref());
-            println!("event=probe stage=decode kind=SignedBlock outcome=panic msg={msg}");
         }
     }
 }
 
 fn diagnose_manual_decode(payload: &[u8], flags: u8, label: &str) {
     println!("event=probe stage=decode kind=manual label={label} flags={flags:#x} start");
-    let outcome = std::panic::catch_unwind(|| manual_decode(payload, flags));
+    let outcome = std::panic::catch_unwind(|| {
+        norito::with_decode_limits(iroha_genesis::signed_genesis_decode_limits_v1(), || {
+            manual_decode(payload, flags)
+        })
+    });
     match outcome {
         Ok(Ok(stats)) => {
             let ManualDecodeStats {
@@ -234,7 +234,10 @@ fn diagnose_manual_decode(payload: &[u8], flags: u8, label: &str) {
     }
 }
 
-fn manual_decode(payload: &[u8], flags: u8) -> Result<ManualDecodeStats> {
+fn manual_decode(
+    payload: &[u8],
+    flags: u8,
+) -> std::result::Result<ManualDecodeStats, norito::Error> {
     core::reset_decode_state();
     core::set_decode_flags(flags);
     let mut cursor = Cursor::new(payload);
@@ -244,8 +247,8 @@ fn manual_decode(payload: &[u8], flags: u8) -> Result<ManualDecodeStats> {
     let signature_count = block.signatures().count();
     let transaction_count = block.transactions_vec().len();
     let result_count = block.results().len();
-    let bytes_consumed = usize::try_from(cursor.position())
-        .map_err(|_| eyre!("decoded payload length exceeds usize"))?;
+    let bytes_consumed =
+        usize::try_from(cursor.position()).expect("slice-backed cursor position always fits usize");
 
     Ok(ManualDecodeStats {
         bytes_consumed,
@@ -257,17 +260,37 @@ fn manual_decode(payload: &[u8], flags: u8) -> Result<ManualDecodeStats> {
 
 fn dump_parameters(block: &SignedBlock) {
     let mut params = Parameters::default();
-    let mut handshake_entries = Vec::new();
+    let mut handshake_index = 0_usize;
+    let mut custom_parameter_count = 0_usize;
+    let handshake_id = iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id();
+    let npos_id = SumeragiNposParameters::parameter_id();
     for tx in block.external_transactions() {
         if let Executable::Instructions(batch) = tx.instructions() {
             for instr in batch {
                 if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>() {
-                    if let Parameter::Custom(custom) = set_param.inner()
-                        && custom.id() == &iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id()
-                    {
-                        handshake_entries.push(custom.payload().clone());
+                    match set_param.inner() {
+                        Parameter::Custom(custom) => {
+                            custom_parameter_count += 1;
+                            println!("event=params custom_key={}", custom.id());
+                            if custom.id() == &handshake_id {
+                                let payload = custom.payload();
+                                println!("event=params handshake[{handshake_index}] raw={payload}");
+                                match payload.try_into_any::<norito::json::Value>() {
+                                    Ok(value) => println!(
+                                        "event=params handshake[{handshake_index}] json={value:?}"
+                                    ),
+                                    Err(err) => println!(
+                                        "event=params handshake[{handshake_index}] json_decode_error={err}"
+                                    ),
+                                }
+                                handshake_index += 1;
+                            }
+                            if custom.id() == &npos_id {
+                                params.set_parameter(set_param.inner().clone());
+                            }
+                        }
+                        parameter => params.set_parameter(parameter.clone()),
                     }
-                    params.set_parameter(set_param.inner().clone());
                 }
             }
         }
@@ -286,21 +309,15 @@ fn dump_parameters(block: &SignedBlock) {
         params.smart_contract(),
         params.block().max_transactions()
     );
-    println!(
-        "event=params custom_keys={:?}",
-        params.custom().keys().collect::<Vec<_>>()
-    );
-    for (idx, payload) in handshake_entries.iter().enumerate() {
-        println!("event=params handshake[{idx}] raw={payload}");
-        match payload.try_into_any::<norito::json::Value>() {
-            Ok(value) => println!("event=params handshake[{idx}] json={value:?}"),
-            Err(err) => println!("event=params handshake[{idx}] json_decode_error={err}"),
-        }
-    }
+    println!("event=params custom_key_count={custom_parameter_count}");
 }
 
 fn decode_transactions(payload: &[u8]) -> Result<()> {
-    match std::panic::catch_unwind(|| norito::codec::decode_adaptive::<SignedBlock>(payload)) {
+    match std::panic::catch_unwind(|| {
+        norito::with_decode_limits(iroha_genesis::signed_genesis_decode_limits_v1(), || {
+            norito::codec::decode_adaptive::<SignedBlock>(payload)
+        })
+    }) {
         Ok(Ok(block)) => {
             let tx_count = block.transactions_vec().len();
             println!("event=probe stage=transactions outcome=ok tx_count={tx_count}");

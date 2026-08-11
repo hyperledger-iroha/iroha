@@ -6,9 +6,11 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ffi::OsStr,
     fmt, fs,
+    io::{self, Read as _},
     path::{Path, PathBuf},
-    str::FromStr,
+    str::{self, FromStr},
     sync::Arc,
 };
 
@@ -33,6 +35,139 @@ use norito::{
     codec::Encode,
     json::{self, JsonDeserialize, JsonSerialize, Value as JsonValue},
 };
+
+/// First-release byte ceiling for one active lane manifest source.
+const LANE_MANIFEST_MAX_BYTES_V1: usize = 256 * 1024;
+/// First-release byte ceiling for the optional governance catalog overlay.
+const GOVERNANCE_OVERLAY_MAX_BYTES_V1: usize = 512 * 1024;
+/// First-release byte ceiling across all accepted active manifests and the overlay.
+const MANIFEST_SOURCE_AGGREGATE_MAX_BYTES_V1: usize = 16 * 1024 * 1024;
+/// Maximum raw bytes inside one JSON string literal before typed allocation.
+const MANIFEST_SOURCE_MAX_STRING_BYTES_V1: usize = 4 * 1024;
+/// Maximum string literals accepted in one source before typed allocation.
+const MANIFEST_SOURCE_MAX_STRINGS_V1: usize = 4 * 1024;
+/// Maximum cumulative raw string bytes accepted in one source.
+const MANIFEST_SOURCE_MAX_STRING_BYTES_TOTAL_V1: usize = 192 * 1024;
+/// Maximum structural rule/value units accepted in one source.
+const MANIFEST_SOURCE_MAX_RULE_UNITS_V1: usize = 8 * 1024;
+/// Maximum JSON container depth accepted by lane-manifest sources.
+const MANIFEST_SOURCE_MAX_JSON_DEPTH_V1: usize = 32;
+/// Aggregate first-release ceiling for retained source string literals.
+const MANIFEST_SOURCE_AGGREGATE_MAX_STRINGS_V1: usize = 128 * 1024;
+/// Aggregate first-release ceiling for retained source string bytes.
+const MANIFEST_SOURCE_AGGREGATE_MAX_STRING_BYTES_V1: usize = 8 * 1024 * 1024;
+/// Aggregate first-release ceiling for retained structural rule/value units.
+const MANIFEST_SOURCE_AGGREGATE_MAX_RULE_UNITS_V1: usize = 128 * 1024;
+/// Maximum canonical JSON size admitted after bounded typed parsing.
+const LANE_MANIFEST_MAX_CANONICAL_BYTES_V1: usize = 512 * 1024;
+/// Maximum canonical overlay size admitted after bounded typed parsing.
+const GOVERNANCE_OVERLAY_MAX_CANONICAL_BYTES_V1: usize = 1024 * 1024;
+/// Maximum active lane alias/module/key identifier width.
+const MANIFEST_SOURCE_MAX_IDENTIFIER_BYTES_V1: usize = 128;
+/// Maximum account or peer identity literal width.
+const MANIFEST_SOURCE_MAX_IDENTITY_BYTES_V1: usize = 512;
+/// Maximum Torii URL, module parameter, or hook string width.
+pub const MANIFEST_SOURCE_MAX_VALUE_BYTES_V1: usize = 4 * 1024;
+/// Maximum validator bindings in one lane manifest.
+pub const LANE_MANIFEST_MAX_VALIDATORS_V1: usize = 256;
+/// Maximum protected namespaces in one lane manifest.
+const LANE_MANIFEST_MAX_PROTECTED_NAMESPACES_V1: usize = 512;
+/// Maximum top-level hook declarations in one lane manifest.
+const LANE_MANIFEST_MAX_HOOKS_V1: usize = 128;
+/// Maximum privacy commitments in one lane manifest.
+const LANE_MANIFEST_MAX_PRIVACY_COMMITMENTS_V1: usize = 256;
+/// Maximum modules declared by the governance overlay.
+const GOVERNANCE_OVERLAY_MAX_MODULES_V1: usize = 256;
+/// Maximum parameters declared by one governance module.
+const GOVERNANCE_OVERLAY_MAX_PARAMS_PER_MODULE_V1: usize = 128;
+/// Maximum parameters across the complete governance overlay.
+const GOVERNANCE_OVERLAY_MAX_PARAMS_V1: usize = 4 * 1024;
+
+const MANIFEST_JSON_LIMITS_V1: ManifestJsonLimits = ManifestJsonLimits {
+    max_string_bytes: MANIFEST_SOURCE_MAX_STRING_BYTES_V1,
+    max_strings: MANIFEST_SOURCE_MAX_STRINGS_V1,
+    max_total_string_bytes: MANIFEST_SOURCE_MAX_STRING_BYTES_TOTAL_V1,
+    max_rule_units: MANIFEST_SOURCE_MAX_RULE_UNITS_V1,
+    max_depth: MANIFEST_SOURCE_MAX_JSON_DEPTH_V1,
+};
+
+#[derive(Clone, Copy, Debug)]
+struct ManifestJsonLimits {
+    max_string_bytes: usize,
+    max_strings: usize,
+    max_total_string_bytes: usize,
+    max_rule_units: usize,
+    max_depth: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ManifestJsonFootprint {
+    strings: usize,
+    string_bytes: usize,
+    rule_units: usize,
+}
+
+#[derive(Debug, Default)]
+struct ManifestSourceLoadBudget {
+    bytes: usize,
+    strings: usize,
+    string_bytes: usize,
+    rule_units: usize,
+}
+
+impl ManifestSourceLoadBudget {
+    fn remaining_bytes(&self) -> usize {
+        MANIFEST_SOURCE_AGGREGATE_MAX_BYTES_V1.saturating_sub(self.bytes)
+    }
+
+    fn charge_bytes(&mut self, bytes: usize) -> Result<(), String> {
+        let attempted = self
+            .bytes
+            .checked_add(bytes)
+            .ok_or_else(|| "lane-manifest aggregate source-byte counter overflowed".to_owned())?;
+        if attempted > MANIFEST_SOURCE_AGGREGATE_MAX_BYTES_V1 {
+            return Err(format!(
+                "lane-manifest aggregate source bytes {attempted} exceed first-release limit {MANIFEST_SOURCE_AGGREGATE_MAX_BYTES_V1}"
+            ));
+        }
+        self.bytes = attempted;
+        Ok(())
+    }
+
+    fn charge_json(&mut self, footprint: ManifestJsonFootprint) -> Result<(), String> {
+        let strings = self
+            .strings
+            .checked_add(footprint.strings)
+            .ok_or_else(|| "lane-manifest aggregate string counter overflowed".to_owned())?;
+        if strings > MANIFEST_SOURCE_AGGREGATE_MAX_STRINGS_V1 {
+            return Err(format!(
+                "lane-manifest aggregate string count {strings} exceeds first-release limit {MANIFEST_SOURCE_AGGREGATE_MAX_STRINGS_V1}"
+            ));
+        }
+        let string_bytes = self
+            .string_bytes
+            .checked_add(footprint.string_bytes)
+            .ok_or_else(|| "lane-manifest aggregate string-byte counter overflowed".to_owned())?;
+        if string_bytes > MANIFEST_SOURCE_AGGREGATE_MAX_STRING_BYTES_V1 {
+            return Err(format!(
+                "lane-manifest aggregate string bytes {string_bytes} exceed first-release limit {MANIFEST_SOURCE_AGGREGATE_MAX_STRING_BYTES_V1}"
+            ));
+        }
+        let rule_units = self
+            .rule_units
+            .checked_add(footprint.rule_units)
+            .ok_or_else(|| "lane-manifest aggregate rule counter overflowed".to_owned())?;
+        if rule_units > MANIFEST_SOURCE_AGGREGATE_MAX_RULE_UNITS_V1 {
+            return Err(format!(
+                "lane-manifest aggregate rule units {rule_units} exceed first-release limit {MANIFEST_SOURCE_AGGREGATE_MAX_RULE_UNITS_V1}"
+            ));
+        }
+        self.strings = strings;
+        self.string_bytes = string_bytes;
+        self.rule_units = rule_units;
+        Ok(())
+    }
+}
 
 /// Minimal manifest descriptor parsed from disk.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
@@ -593,10 +728,9 @@ pub struct LaneManifestRegistry {
     /// Test/telemetry registries assembled from statuses do not have a filesystem
     /// source and use their existing alias-bound statuses as templates instead.
     source_snapshot: Option<Arc<LaneManifestSourceSnapshot>>,
-    /// Every manifest alias discovered in the immutable configured source set,
-    /// including aliases for lanes not yet present in the active catalog.
+    /// Every manifest alias accepted for the immutable active-catalog source set.
     manifest_source_aliases: BTreeSet<String>,
-    /// Digest of the effective manifest source set, independent of the active lane catalog.
+    /// Digest of the effective active-catalog manifest source set.
     consensus_policy_digest: [u8; 32],
 }
 
@@ -612,16 +746,19 @@ impl Default for LaneManifestRegistry {
     }
 }
 
-/// Immutable parsed lane-manifest inputs captured by one filesystem scan.
+/// Deferred source locations or immutable parsed inputs from one bounded scan.
 ///
-/// Catalog lifecycle rebinding consumes only this snapshot. It never reopens a
-/// path, so a post-startup file replacement cannot change admission semantics
-/// outside the explicit, digest-checked hot-reload path.
+/// The first bind materializes only active aliases. Catalog lifecycle rebinding
+/// then consumes the materialized snapshot and never reopens a path, so a
+/// post-startup file replacement cannot change admission semantics outside the
+/// explicit, digest-checked hot-reload path.
 #[derive(Debug)]
 pub struct LaneManifestSourceSnapshot {
     manifests_by_alias: BTreeMap<String, FrozenLaneManifestSource>,
     governance_overlay: Option<FrozenGovernanceOverlaySource>,
     consensus_policy_digest: [u8; 32],
+    /// Deferred source configuration, consumed exactly once when the active lane catalog is known.
+    pending_registry: Option<LaneRegistry>,
 }
 
 #[derive(Debug)]
@@ -728,36 +865,62 @@ impl LaneManifestSourceSnapshot {
             manifests_by_alias: BTreeMap::new(),
             governance_overlay: None,
             consensus_policy_digest: [0; 32],
+            pending_registry: None,
         };
         snapshot.consensus_policy_digest = snapshot.compute_consensus_policy_digest();
         snapshot
     }
 
-    /// Capture and parse the configured manifest source set exactly once.
+    /// Capture the configured source locations for one active-catalog binding.
     ///
-    /// Invalid or unreadable sources remain represented in the snapshot and in
-    /// its digest. Binding an active governed/private lane to such a source
-    /// therefore fails closed instead of falling back to a later filesystem read.
+    /// Filesystem materialization is deferred until [`Self::bind`] supplies the
+    /// active lane aliases. This prevents unknown or future files in a manifest
+    /// directory from consuming startup memory. The materialized snapshot is
+    /// still immutable and never reopens files during catalog rebinding.
     #[must_use]
     pub fn load(registry_cfg: &LaneRegistry) -> Self {
+        let mut snapshot = Self {
+            manifests_by_alias: BTreeMap::new(),
+            governance_overlay: None,
+            consensus_policy_digest: [0; 32],
+            pending_registry: Some(registry_cfg.clone()),
+        };
+        snapshot.consensus_policy_digest = snapshot.compute_consensus_policy_digest();
+        snapshot
+    }
+
+    fn load_for_catalog(registry_cfg: &LaneRegistry, lane_catalog: &LaneCatalog) -> Self {
+        let active_aliases = lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| lane.alias.as_str())
+            .collect::<BTreeSet<_>>();
         let manifest_dir = registry_cfg.manifest_directory.as_deref();
         let cache_dir = registry_cfg.cache_directory.as_deref();
-        let manifests_by_alias =
-            LaneManifestRegistry::collect_manifest_sources(manifest_dir, cache_dir)
-                .into_iter()
-                .map(|(alias, path)| {
-                    let source = LaneManifestRegistry::freeze_manifest_source(path);
-                    (alias, source)
-                })
-                .collect();
+        let source_paths = LaneManifestRegistry::collect_manifest_sources(
+            manifest_dir,
+            cache_dir,
+            &active_aliases,
+        );
+        let mut budget = ManifestSourceLoadBudget::default();
+
+        // The overlay is applied before lane sources and therefore consumes the
+        // aggregate startup budget first, independent of directory iteration order.
         let governance_overlay = cache_dir
-            .map(|dir| dir.join("governance_catalog.json"))
-            .filter(|path| path.exists())
-            .map(LaneManifestRegistry::freeze_governance_overlay_source);
+            .and_then(LaneManifestRegistry::governance_overlay_path)
+            .map(|path| LaneManifestRegistry::freeze_governance_overlay_source(path, &mut budget));
+        let manifests_by_alias = source_paths
+            .into_iter()
+            .map(|(alias, path)| {
+                let source = LaneManifestRegistry::freeze_manifest_source(path, &mut budget);
+                (alias, source)
+            })
+            .collect();
         let mut snapshot = Self {
             manifests_by_alias,
             governance_overlay,
             consensus_policy_digest: [0; 32],
+            pending_registry: None,
         };
         snapshot.consensus_policy_digest = snapshot.compute_consensus_policy_digest();
         snapshot
@@ -777,7 +940,7 @@ impl LaneManifestSourceSnapshot {
         )
     }
 
-    /// Canonical digest of this source snapshot, independent of active lanes.
+    /// Canonical digest of this materialized active-catalog source snapshot.
     #[must_use]
     pub const fn consensus_policy_digest(&self) -> [u8; 32] {
         self.consensus_policy_digest
@@ -867,12 +1030,11 @@ impl LaneManifestRegistry {
         Self::default()
     }
 
-    /// Return the canonical digest of the configured manifest source set.
+    /// Return the canonical digest of the accepted active-catalog manifest source set.
     ///
-    /// The digest is independent of the active lane catalog so a peer restoring an older committed
-    /// height can still connect and catch up after a consensus-replayed lane transition. It binds
-    /// every pre-provisioned effective manifest and the governance overlay while excluding their
-    /// filesystem locations.
+    /// It binds each active lane source and the governance overlay while excluding
+    /// their filesystem locations. Unknown and future lane files are intentionally
+    /// outside the snapshot and cannot consume startup resources.
     #[must_use]
     pub fn consensus_policy_digest(&self) -> [u8; 32] {
         self.consensus_policy_digest
@@ -953,94 +1115,623 @@ impl LaneManifestRegistry {
         Hash::new_from_chunks(&[DOMAIN, encoded.as_slice()]).into()
     }
 
-    fn freeze_manifest_source(path: PathBuf) -> FrozenLaneManifestSource {
-        let raw = match fs::read_to_string(&path) {
+    fn freeze_manifest_source(
+        path: PathBuf,
+        budget: &mut ManifestSourceLoadBudget,
+    ) -> FrozenLaneManifestSource {
+        let read_limit = LANE_MANIFEST_MAX_BYTES_V1.min(budget.remaining_bytes());
+        if read_limit == 0 {
+            return Self::invalid_manifest_source(
+                path,
+                "active manifest aggregate source-byte budget is exhausted".to_owned(),
+                b"manifest-source-aggregate-byte-limit",
+            );
+        }
+        let raw = match Self::read_bounded_regular_file(&path, read_limit) {
             Ok(raw) => raw,
             Err(err) => {
-                return FrozenLaneManifestSource {
+                return Self::invalid_manifest_source(
                     path,
-                    parsed: Err(format!("unable to read manifest file: {err}")),
-                    content_digest: LaneManifestSourceContentDigestV1 {
-                        valid: false,
-                        digest: Hash::new(b"unreadable-manifest-source").into(),
-                    },
-                };
+                    format!("unable to read bounded regular manifest file: {err}"),
+                    b"unreadable-or-oversize-manifest-source",
+                );
             }
         };
-        match json::from_json::<ManifestFile>(&raw) {
-            Ok(parsed) => match json::to_json(&parsed) {
-                Ok(canonical) => FrozenLaneManifestSource {
+        let raw_digest: [u8; 32] = Hash::new(raw.as_slice()).into();
+        if let Err(err) = budget.charge_bytes(raw.len()) {
+            return Self::invalid_manifest_source_with_digest(path, err, raw_digest);
+        }
+        let parsed = match Self::parse_bounded_manifest_json(&raw, budget) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                return Self::invalid_manifest_source_with_digest(path, err, raw_digest);
+            }
+        };
+        // Do not retain raw and canonical copies at the same time.
+        drop(raw);
+        if let Err(err) = Self::validate_manifest_source_bounds(&parsed) {
+            return Self::invalid_manifest_source_with_digest(path, err, raw_digest);
+        }
+        let canonical = match json::to_json(&parsed) {
+            Ok(canonical) => canonical,
+            Err(err) => {
+                return Self::invalid_manifest_source_with_digest(
                     path,
-                    parsed: Ok(parsed),
-                    content_digest: LaneManifestSourceContentDigestV1 {
-                        valid: true,
-                        digest: Hash::new(canonical.as_bytes()).into(),
-                    },
-                },
-                Err(err) => FrozenLaneManifestSource {
-                    path,
-                    parsed: Err(format!("manifest canonical JSON encode error: {err}")),
-                    content_digest: LaneManifestSourceContentDigestV1 {
-                        valid: false,
-                        digest: Hash::new(raw.as_bytes()).into(),
-                    },
-                },
-            },
-            Err(err) => FrozenLaneManifestSource {
+                    format!("manifest canonical JSON encode error: {err}"),
+                    raw_digest,
+                );
+            }
+        };
+        if canonical.len() > LANE_MANIFEST_MAX_CANONICAL_BYTES_V1 {
+            return Self::invalid_manifest_source_with_digest(
                 path,
-                parsed: Err(format!("manifest JSON parse error: {err}")),
-                content_digest: LaneManifestSourceContentDigestV1 {
-                    valid: false,
-                    digest: Hash::new(raw.as_bytes()).into(),
-                },
+                format!(
+                    "manifest canonical JSON bytes {} exceed first-release limit {LANE_MANIFEST_MAX_CANONICAL_BYTES_V1}",
+                    canonical.len()
+                ),
+                raw_digest,
+            );
+        }
+        let canonical_digest = Hash::new(canonical.as_bytes()).into();
+        drop(canonical);
+        FrozenLaneManifestSource {
+            path,
+            parsed: Ok(parsed),
+            content_digest: LaneManifestSourceContentDigestV1 {
+                valid: true,
+                digest: canonical_digest,
             },
         }
     }
 
-    fn freeze_governance_overlay_source(path: PathBuf) -> FrozenGovernanceOverlaySource {
-        let raw = match fs::read_to_string(&path) {
+    fn freeze_governance_overlay_source(
+        path: PathBuf,
+        budget: &mut ManifestSourceLoadBudget,
+    ) -> FrozenGovernanceOverlaySource {
+        let read_limit = GOVERNANCE_OVERLAY_MAX_BYTES_V1.min(budget.remaining_bytes());
+        if read_limit == 0 {
+            return Self::invalid_governance_overlay_source(
+                path,
+                "manifest aggregate source-byte budget is exhausted before overlay load".to_owned(),
+                b"governance-overlay-aggregate-byte-limit",
+            );
+        }
+        let raw = match Self::read_bounded_regular_file(&path, read_limit) {
             Ok(raw) => raw,
             Err(err) => {
-                return FrozenGovernanceOverlaySource {
+                return Self::invalid_governance_overlay_source(
                     path,
-                    parsed: Err(format!("unable to read governance overlay: {err}")),
-                    content_digest: LaneManifestSourceContentDigestV1 {
-                        valid: false,
-                        digest: Hash::new(b"unreadable-governance-overlay").into(),
-                    },
-                };
+                    format!("unable to read bounded regular governance overlay: {err}"),
+                    b"unreadable-or-oversize-governance-overlay",
+                );
             }
         };
-        match json::from_json::<GovernanceCatalogFile>(&raw) {
-            Ok(parsed) => match json::to_json(&parsed) {
-                Ok(canonical) => FrozenGovernanceOverlaySource {
+        let raw_digest: [u8; 32] = Hash::new(raw.as_slice()).into();
+        if let Err(err) = budget.charge_bytes(raw.len()) {
+            return Self::invalid_governance_overlay_source_with_digest(path, err, raw_digest);
+        }
+        let parsed = match Self::parse_bounded_governance_overlay_json(&raw, budget) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                return Self::invalid_governance_overlay_source_with_digest(path, err, raw_digest);
+            }
+        };
+        drop(raw);
+        if let Err(err) = Self::validate_governance_overlay_source_bounds(&parsed) {
+            return Self::invalid_governance_overlay_source_with_digest(path, err, raw_digest);
+        }
+        let canonical = match json::to_json(&parsed) {
+            Ok(canonical) => canonical,
+            Err(err) => {
+                return Self::invalid_governance_overlay_source_with_digest(
                     path,
-                    parsed: Ok(parsed),
-                    content_digest: LaneManifestSourceContentDigestV1 {
-                        valid: true,
-                        digest: Hash::new(canonical.as_bytes()).into(),
-                    },
-                },
-                Err(err) => FrozenGovernanceOverlaySource {
-                    path,
-                    parsed: Err(format!(
-                        "governance overlay canonical JSON encode error: {err}"
-                    )),
-                    content_digest: LaneManifestSourceContentDigestV1 {
-                        valid: false,
-                        digest: Hash::new(raw.as_bytes()).into(),
-                    },
-                },
-            },
-            Err(err) => FrozenGovernanceOverlaySource {
+                    format!("governance overlay canonical JSON encode error: {err}"),
+                    raw_digest,
+                );
+            }
+        };
+        if canonical.len() > GOVERNANCE_OVERLAY_MAX_CANONICAL_BYTES_V1 {
+            return Self::invalid_governance_overlay_source_with_digest(
                 path,
-                parsed: Err(format!("governance overlay JSON parse error: {err}")),
-                content_digest: LaneManifestSourceContentDigestV1 {
-                    valid: false,
-                    digest: Hash::new(raw.as_bytes()).into(),
-                },
+                format!(
+                    "governance overlay canonical JSON bytes {} exceed first-release limit {GOVERNANCE_OVERLAY_MAX_CANONICAL_BYTES_V1}",
+                    canonical.len()
+                ),
+                raw_digest,
+            );
+        }
+        let canonical_digest = Hash::new(canonical.as_bytes()).into();
+        drop(canonical);
+        FrozenGovernanceOverlaySource {
+            path,
+            parsed: Ok(parsed),
+            content_digest: LaneManifestSourceContentDigestV1 {
+                valid: true,
+                digest: canonical_digest,
             },
         }
+    }
+
+    fn invalid_manifest_source(
+        path: PathBuf,
+        reason: String,
+        digest_marker: &[u8],
+    ) -> FrozenLaneManifestSource {
+        Self::invalid_manifest_source_with_digest(path, reason, Hash::new(digest_marker).into())
+    }
+
+    fn invalid_manifest_source_with_digest(
+        path: PathBuf,
+        reason: String,
+        digest: [u8; 32],
+    ) -> FrozenLaneManifestSource {
+        FrozenLaneManifestSource {
+            path,
+            parsed: Err(reason),
+            content_digest: LaneManifestSourceContentDigestV1 {
+                valid: false,
+                digest,
+            },
+        }
+    }
+
+    fn invalid_governance_overlay_source(
+        path: PathBuf,
+        reason: String,
+        digest_marker: &[u8],
+    ) -> FrozenGovernanceOverlaySource {
+        Self::invalid_governance_overlay_source_with_digest(
+            path,
+            reason,
+            Hash::new(digest_marker).into(),
+        )
+    }
+
+    fn invalid_governance_overlay_source_with_digest(
+        path: PathBuf,
+        reason: String,
+        digest: [u8; 32],
+    ) -> FrozenGovernanceOverlaySource {
+        FrozenGovernanceOverlaySource {
+            path,
+            parsed: Err(reason),
+            content_digest: LaneManifestSourceContentDigestV1 {
+                valid: false,
+                digest,
+            },
+        }
+    }
+
+    fn parse_bounded_manifest_json(
+        raw: &[u8],
+        budget: &mut ManifestSourceLoadBudget,
+    ) -> Result<ManifestFile, String> {
+        let raw = str::from_utf8(raw)
+            .map_err(|err| format!("manifest source is not valid UTF-8: {err}"))?;
+        let footprint = Self::preflight_manifest_json(raw.as_bytes(), MANIFEST_JSON_LIMITS_V1)?;
+        budget.charge_json(footprint)?;
+        json::from_json(raw).map_err(|err| format!("manifest JSON parse error: {err}"))
+    }
+
+    fn parse_bounded_governance_overlay_json(
+        raw: &[u8],
+        budget: &mut ManifestSourceLoadBudget,
+    ) -> Result<GovernanceCatalogFile, String> {
+        let raw = str::from_utf8(raw)
+            .map_err(|err| format!("governance overlay is not valid UTF-8: {err}"))?;
+        let footprint = Self::preflight_manifest_json(raw.as_bytes(), MANIFEST_JSON_LIMITS_V1)?;
+        budget.charge_json(footprint)?;
+        json::from_json(raw).map_err(|err| format!("governance overlay JSON parse error: {err}"))
+    }
+
+    fn preflight_manifest_json(
+        raw: &[u8],
+        limits: ManifestJsonLimits,
+    ) -> Result<ManifestJsonFootprint, String> {
+        let mut footprint = ManifestJsonFootprint::default();
+        let mut depth = 0_usize;
+        let mut in_string = false;
+        let mut escaped = false;
+        let mut current_string_bytes = 0_usize;
+        let mut in_scalar = false;
+
+        for byte in raw.iter().copied() {
+            if in_string {
+                if escaped {
+                    current_string_bytes =
+                        current_string_bytes.checked_add(1).ok_or_else(|| {
+                            "lane-manifest JSON string-byte counter overflowed".to_owned()
+                        })?;
+                    escaped = false;
+                } else {
+                    match byte {
+                        b'\\' => {
+                            current_string_bytes =
+                                current_string_bytes.checked_add(1).ok_or_else(|| {
+                                    "lane-manifest JSON string-byte counter overflowed".to_owned()
+                                })?;
+                            escaped = true;
+                        }
+                        b'"' => {
+                            in_string = false;
+                            footprint.strings =
+                                footprint.strings.checked_add(1).ok_or_else(|| {
+                                    "lane-manifest JSON string counter overflowed".to_owned()
+                                })?;
+                            footprint.string_bytes = footprint
+                                .string_bytes
+                                .checked_add(current_string_bytes)
+                                .ok_or_else(|| {
+                                    "lane-manifest JSON cumulative string-byte counter overflowed"
+                                        .to_owned()
+                                })?;
+                            Self::charge_manifest_rule_unit(&mut footprint.rule_units, limits)?;
+                            if footprint.strings > limits.max_strings {
+                                return Err(format!(
+                                    "lane-manifest JSON string count {} exceeds first-release limit {}",
+                                    footprint.strings, limits.max_strings
+                                ));
+                            }
+                            if footprint.string_bytes > limits.max_total_string_bytes {
+                                return Err(format!(
+                                    "lane-manifest JSON string bytes {} exceed first-release limit {}",
+                                    footprint.string_bytes, limits.max_total_string_bytes
+                                ));
+                            }
+                            current_string_bytes = 0;
+                        }
+                        _ => {
+                            current_string_bytes =
+                                current_string_bytes.checked_add(1).ok_or_else(|| {
+                                    "lane-manifest JSON string-byte counter overflowed".to_owned()
+                                })?;
+                        }
+                    }
+                }
+                if current_string_bytes > limits.max_string_bytes {
+                    return Err(format!(
+                        "lane-manifest JSON string bytes {current_string_bytes} exceed first-release limit {}",
+                        limits.max_string_bytes
+                    ));
+                }
+                continue;
+            }
+
+            match byte {
+                b'"' => {
+                    in_string = true;
+                    in_scalar = false;
+                }
+                b'{' | b'[' => {
+                    depth = depth.checked_add(1).ok_or_else(|| {
+                        "lane-manifest JSON nesting counter overflowed".to_owned()
+                    })?;
+                    if depth > limits.max_depth {
+                        return Err(format!(
+                            "lane-manifest JSON nesting depth {depth} exceeds first-release limit {}",
+                            limits.max_depth
+                        ));
+                    }
+                    Self::charge_manifest_rule_unit(&mut footprint.rule_units, limits)?;
+                    in_scalar = false;
+                }
+                b'}' | b']' => {
+                    depth = depth.checked_sub(1).ok_or_else(|| {
+                        "lane-manifest JSON closes a container before opening one".to_owned()
+                    })?;
+                    in_scalar = false;
+                }
+                b':' | b',' => {
+                    Self::charge_manifest_rule_unit(&mut footprint.rule_units, limits)?;
+                    in_scalar = false;
+                }
+                b' ' | b'\t' | b'\r' | b'\n' => in_scalar = false,
+                _ if !in_scalar => {
+                    Self::charge_manifest_rule_unit(&mut footprint.rule_units, limits)?;
+                    in_scalar = true;
+                }
+                _ => {}
+            }
+        }
+
+        if in_string || escaped {
+            return Err("lane-manifest JSON contains an unterminated string".to_owned());
+        }
+        if depth != 0 {
+            return Err("lane-manifest JSON contains an unterminated container".to_owned());
+        }
+        Ok(footprint)
+    }
+
+    fn charge_manifest_rule_unit(
+        rule_units: &mut usize,
+        limits: ManifestJsonLimits,
+    ) -> Result<(), String> {
+        *rule_units = rule_units
+            .checked_add(1)
+            .ok_or_else(|| "lane-manifest JSON rule-unit counter overflowed".to_owned())?;
+        if *rule_units > limits.max_rule_units {
+            return Err(format!(
+                "lane-manifest JSON rule units {} exceed first-release limit {}",
+                *rule_units, limits.max_rule_units
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_manifest_source_bounds(manifest: &ManifestFile) -> Result<(), String> {
+        Self::validate_optional_source_string(
+            "lane alias",
+            manifest.lane.as_deref(),
+            MANIFEST_SOURCE_MAX_IDENTIFIER_BYTES_V1,
+        )?;
+        Self::validate_optional_source_string(
+            "governance module",
+            manifest.governance.as_deref(),
+            MANIFEST_SOURCE_MAX_IDENTIFIER_BYTES_V1,
+        )?;
+        if let Some(validators) = manifest.validators.as_ref() {
+            Self::validate_source_collection_len(
+                "validator bindings",
+                validators.len(),
+                LANE_MANIFEST_MAX_VALIDATORS_V1,
+            )?;
+            for binding in validators {
+                Self::validate_optional_source_string(
+                    "validator identity",
+                    binding.validator.as_deref(),
+                    MANIFEST_SOURCE_MAX_IDENTITY_BYTES_V1,
+                )?;
+                Self::validate_optional_source_string(
+                    "validator peer identity",
+                    binding.peer_id.as_deref(),
+                    MANIFEST_SOURCE_MAX_IDENTITY_BYTES_V1,
+                )?;
+                Self::validate_optional_source_string(
+                    "validator Torii URL",
+                    binding.torii_url.as_deref(),
+                    MANIFEST_SOURCE_MAX_VALUE_BYTES_V1,
+                )?;
+            }
+        }
+        if let Some(namespaces) = manifest.protected_namespaces.as_ref() {
+            Self::validate_source_collection_len(
+                "protected namespaces",
+                namespaces.len(),
+                LANE_MANIFEST_MAX_PROTECTED_NAMESPACES_V1,
+            )?;
+            for namespace in namespaces {
+                Self::validate_source_string(
+                    "protected namespace",
+                    namespace,
+                    MANIFEST_SOURCE_MAX_IDENTIFIER_BYTES_V1,
+                )?;
+            }
+        }
+        if let Some(hooks) = manifest.hooks.as_ref() {
+            Self::validate_source_collection_len(
+                "governance hooks",
+                hooks.len(),
+                LANE_MANIFEST_MAX_HOOKS_V1,
+            )?;
+            for hook in hooks.keys() {
+                Self::validate_source_string(
+                    "governance hook name",
+                    hook,
+                    MANIFEST_SOURCE_MAX_IDENTIFIER_BYTES_V1,
+                )?;
+            }
+        }
+        if let Some(commitments) = manifest.privacy_commitments.as_ref() {
+            Self::validate_source_collection_len(
+                "privacy commitments",
+                commitments.len(),
+                LANE_MANIFEST_MAX_PRIVACY_COMMITMENTS_V1,
+            )?;
+            for commitment in commitments {
+                Self::validate_optional_source_string(
+                    "privacy commitment scheme",
+                    commitment.scheme.as_deref(),
+                    MANIFEST_SOURCE_MAX_IDENTIFIER_BYTES_V1,
+                )?;
+                if let Some(merkle) = commitment.merkle.as_ref() {
+                    Self::validate_optional_source_string(
+                        "privacy commitment root",
+                        merkle.root.as_deref(),
+                        MANIFEST_SOURCE_MAX_IDENTITY_BYTES_V1,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_governance_overlay_source_bounds(
+        overlay: &GovernanceCatalogFile,
+    ) -> Result<(), String> {
+        Self::validate_optional_source_string(
+            "default governance module",
+            overlay.default_module.as_deref(),
+            MANIFEST_SOURCE_MAX_IDENTIFIER_BYTES_V1,
+        )?;
+        Self::validate_source_collection_len(
+            "governance overlay modules",
+            overlay.modules.len(),
+            GOVERNANCE_OVERLAY_MAX_MODULES_V1,
+        )?;
+        let mut total_params = 0_usize;
+        for (name, module) in &overlay.modules {
+            Self::validate_source_string(
+                "governance overlay module name",
+                name,
+                MANIFEST_SOURCE_MAX_IDENTIFIER_BYTES_V1,
+            )?;
+            Self::validate_optional_source_string(
+                "governance overlay module type",
+                module.module_type.as_deref(),
+                MANIFEST_SOURCE_MAX_IDENTIFIER_BYTES_V1,
+            )?;
+            Self::validate_source_collection_len(
+                "governance overlay module parameters",
+                module.params.len(),
+                GOVERNANCE_OVERLAY_MAX_PARAMS_PER_MODULE_V1,
+            )?;
+            total_params = total_params
+                .checked_add(module.params.len())
+                .ok_or_else(|| "governance overlay parameter counter overflowed".to_owned())?;
+            for (key, value) in &module.params {
+                Self::validate_source_string(
+                    "governance overlay parameter name",
+                    key,
+                    MANIFEST_SOURCE_MAX_IDENTIFIER_BYTES_V1,
+                )?;
+                Self::validate_source_string(
+                    "governance overlay parameter value",
+                    value,
+                    MANIFEST_SOURCE_MAX_VALUE_BYTES_V1,
+                )?;
+            }
+        }
+        Self::validate_source_collection_len(
+            "governance overlay total parameters",
+            total_params,
+            GOVERNANCE_OVERLAY_MAX_PARAMS_V1,
+        )
+    }
+
+    fn validate_optional_source_string(
+        label: &str,
+        value: Option<&str>,
+        max_bytes: usize,
+    ) -> Result<(), String> {
+        value.map_or(Ok(()), |value| {
+            Self::validate_source_string(label, value, max_bytes)
+        })
+    }
+
+    fn validate_source_string(label: &str, value: &str, max_bytes: usize) -> Result<(), String> {
+        if value.len() > max_bytes {
+            return Err(format!(
+                "{label} bytes {} exceed first-release limit {max_bytes}",
+                value.len()
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_source_collection_len(
+        label: &str,
+        actual: usize,
+        maximum: usize,
+    ) -> Result<(), String> {
+        if actual > maximum {
+            return Err(format!(
+                "{label} count {actual} exceeds first-release limit {maximum}"
+            ));
+        }
+        Ok(())
+    }
+
+    fn read_bounded_regular_file(path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
+        let path_metadata = fs::symlink_metadata(path)?;
+        if path_metadata.file_type().is_symlink() || !path_metadata.file_type().is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "source must be a direct regular file, not a symlink or special file",
+            ));
+        }
+        if path_metadata.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "source metadata length {} exceeds bounded read limit {max_bytes}",
+                    path_metadata.len()
+                ),
+            ));
+        }
+
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+
+            options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt as _;
+
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        let mut file = options.open(path)?;
+        let opened_metadata = file.metadata()?;
+        if !opened_metadata.file_type().is_file()
+            || opened_metadata.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "opened source is not a bounded regular file",
+            ));
+        }
+        if !Self::manifest_file_metadata_matches(&path_metadata, &opened_metadata) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "source changed identity while it was opened",
+            ));
+        }
+
+        let capacity = usize::try_from(opened_metadata.len())
+            .unwrap_or(max_bytes)
+            .min(max_bytes)
+            .saturating_add(1);
+        let mut raw = Vec::with_capacity(capacity);
+        let take_limit = u64::try_from(max_bytes)
+            .unwrap_or(u64::MAX - 1)
+            .saturating_add(1);
+        file.by_ref().take(take_limit).read_to_end(&mut raw)?;
+        if raw.len() > max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("source exceeds bounded read limit {max_bytes}"),
+            ));
+        }
+        let final_metadata = file.metadata()?;
+        if !Self::manifest_file_metadata_matches(&opened_metadata, &final_metadata)
+            || final_metadata.len() != u64::try_from(raw.len()).unwrap_or(u64::MAX)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "source changed while it was being read",
+            ));
+        }
+        Ok(raw)
+    }
+
+    #[cfg(unix)]
+    fn manifest_file_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+
+        left.dev() == right.dev() && left.ino() == right.ino() && left.len() == right.len()
+    }
+
+    #[cfg(windows)]
+    fn manifest_file_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+        use std::os::windows::fs::MetadataExt as _;
+
+        left.file_type().is_file()
+            && right.file_type().is_file()
+            && left.volume_serial_number().is_some()
+            && left.file_index().is_some()
+            && left.volume_serial_number() == right.volume_serial_number()
+            && left.file_index() == right.file_index()
+            && left.len() == right.len()
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn manifest_file_metadata_matches(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+        false
     }
 
     /// Build the registry from one frozen scan of the provided source configuration.
@@ -1061,17 +1752,21 @@ impl LaneManifestRegistry {
         lane_catalog: &LaneCatalog,
         governance_catalog: &GovernanceCatalog,
     ) -> Self {
+        if let Some(registry_cfg) = source_snapshot.pending_registry.as_ref() {
+            let materialized = Arc::new(LaneManifestSourceSnapshot::load_for_catalog(
+                registry_cfg,
+                lane_catalog,
+            ));
+            return Self::from_source_snapshot(materialized, lane_catalog, governance_catalog);
+        }
+
         let mut statuses = BTreeMap::new();
         let mut effective_governance = governance_catalog.clone();
         source_snapshot.apply_governance_overlay(&mut effective_governance);
         let manifest_source_aliases = source_snapshot.manifests_by_alias.keys().cloned().collect();
         let consensus_policy_digest = source_snapshot.consensus_policy_digest();
         debug!(
-            aliases = ?source_snapshot
-                .manifests_by_alias
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>(),
+            alias_count = source_snapshot.manifests_by_alias.len(),
             "binding frozen lane manifest aliases"
         );
 
@@ -1151,17 +1846,6 @@ impl LaneManifestRegistry {
             statuses.insert(lane.id, status);
         }
 
-        // Warn about manifests targeting unknown lanes so operators can clean up.
-        for (alias, source) in &source_snapshot.manifests_by_alias {
-            if lane_catalog.by_alias(&alias).is_none() {
-                warn!(
-                    alias,
-                    path = %source.path.display(),
-                    "Found manifest for unknown lane alias"
-                );
-            }
-        }
-
         // Log governance modules lacking manifest declarations.
         for status in statuses.values() {
             if status.governance.is_some() && status.manifest_path.is_none() {
@@ -1192,13 +1876,20 @@ impl LaneManifestRegistry {
     fn collect_manifest_sources(
         manifest_dir: Option<&Path>,
         cache_dir: Option<&Path>,
+        active_aliases: &BTreeSet<&str>,
     ) -> BTreeMap<String, PathBuf> {
         let mut manifests = BTreeMap::new();
         let mut duplicate_aliases = BTreeSet::new();
 
         if let Some(dir) = manifest_dir {
             if dir.exists() {
-                Self::ingest_manifest_directory(dir, &mut manifests, &mut duplicate_aliases, false);
+                Self::ingest_manifest_directory(
+                    dir,
+                    active_aliases,
+                    &mut manifests,
+                    &mut duplicate_aliases,
+                    false,
+                );
             } else {
                 warn!(
                     path = %dir.display(),
@@ -1209,7 +1900,13 @@ impl LaneManifestRegistry {
 
         if let Some(dir) = cache_dir {
             if dir.exists() {
-                Self::ingest_manifest_directory(dir, &mut manifests, &mut duplicate_aliases, true);
+                Self::ingest_manifest_directory(
+                    dir,
+                    active_aliases,
+                    &mut manifests,
+                    &mut duplicate_aliases,
+                    true,
+                );
             } else if manifest_dir.is_some() {
                 debug!(
                     path = %dir.display(),
@@ -1223,6 +1920,7 @@ impl LaneManifestRegistry {
 
     fn ingest_manifest_directory(
         dir: &Path,
+        active_aliases: &BTreeSet<&str>,
         manifests: &mut BTreeMap<String, PathBuf>,
         duplicate_aliases: &mut BTreeSet<String>,
         override_existing: bool,
@@ -1230,16 +1928,29 @@ impl LaneManifestRegistry {
         match fs::read_dir(dir) {
             Ok(entries) => {
                 let mut seen_in_directory = BTreeSet::new();
+                let mut ignored_unknown_sources = 0_usize;
                 for entry in entries.flatten() {
-                    let path = entry.path();
-                    let Some(alias) = Self::manifest_alias_from_path(&path) else {
+                    let file_name = entry.file_name();
+                    if override_existing
+                        && file_name.as_os_str() == OsStr::new("governance_catalog.json")
+                    {
+                        continue;
+                    }
+                    let Some(alias) = Self::manifest_alias_from_file_name(&file_name) else {
                         continue;
                     };
+                    // Unknown and future files are rejected before path allocation,
+                    // metadata work, reads, parsing, or canonicalization.
+                    if !active_aliases.contains(&alias.as_str()) {
+                        ignored_unknown_sources = ignored_unknown_sources.saturating_add(1);
+                        continue;
+                    }
 
                     if duplicate_aliases.contains(&alias) {
                         warn!(
                             lane = %alias,
-                            path = %path.display(),
+                            directory = %dir.display(),
+                            file = ?file_name,
                             "manifest alias already invalidated by duplicate source; skipping"
                         );
                         continue;
@@ -1248,8 +1959,24 @@ impl LaneManifestRegistry {
                     if !seen_in_directory.insert(alias.clone()) {
                         warn!(
                             lane = %alias,
-                            path = %path.display(),
+                            directory = %dir.display(),
+                            file = ?file_name,
                             "duplicate manifest alias in directory; invalidating alias"
+                        );
+                        manifests.remove(&alias);
+                        duplicate_aliases.insert(alias);
+                        continue;
+                    }
+
+                    let path = entry.path();
+                    let is_direct_regular_file = entry
+                        .file_type()
+                        .is_ok_and(|file_type| file_type.is_file() && !file_type.is_symlink());
+                    if !is_direct_regular_file {
+                        warn!(
+                            lane = %alias,
+                            path = %path.display(),
+                            "active lane manifest source is not a direct regular file; skipping"
                         );
                         manifests.remove(&alias);
                         duplicate_aliases.insert(alias);
@@ -1278,6 +2005,13 @@ impl LaneManifestRegistry {
 
                     manifests.insert(alias, path);
                 }
+                if ignored_unknown_sources != 0 {
+                    debug!(
+                        directory = %dir.display(),
+                        ignored_unknown_sources,
+                        "ignored lane manifest sources outside the active catalog"
+                    );
+                }
             }
             Err(err) => {
                 warn!(
@@ -1289,23 +2023,25 @@ impl LaneManifestRegistry {
         }
     }
 
-    fn manifest_alias_from_path(path: &Path) -> Option<String> {
-        if !path.is_file() {
-            return None;
-        }
-        match path.extension().and_then(|ext| ext.to_str()) {
-            Some("json") => {}
-            _ => return None,
-        }
-        let stem = path.file_stem()?.to_str()?.trim();
+    fn manifest_alias_from_file_name(file_name: &OsStr) -> Option<String> {
+        let stem = file_name.to_str()?.strip_suffix(".json")?.trim();
         if stem.is_empty() {
             return None;
         }
         let alias = stem.strip_suffix(".manifest").unwrap_or(stem).trim();
-        if alias.is_empty() {
+        if alias.is_empty() || alias.len() > MANIFEST_SOURCE_MAX_IDENTIFIER_BYTES_V1 {
             return None;
         }
         Some(alias.to_string())
+    }
+
+    fn governance_overlay_path(cache_dir: &Path) -> Option<PathBuf> {
+        let path = cache_dir.join("governance_catalog.json");
+        match fs::symlink_metadata(&path) {
+            Ok(_) => Some(path),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(_) => Some(path),
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1420,10 +2156,9 @@ impl LaneManifestRegistry {
         lane_governance: Option<&str>,
         catalog: &GovernanceCatalog,
     ) -> Result<ManifestArtifacts, String> {
-        let contents = fs::read_to_string(path)
-            .map_err(|err| format!("unable to read manifest file: {err}"))?;
-        let parsed: ManifestFile = json::from_json(&contents)
-            .map_err(|err| format!("manifest JSON parse error: {err}"))?;
+        let mut budget = ManifestSourceLoadBudget::default();
+        let source = Self::freeze_manifest_source(path.to_path_buf(), &mut budget);
+        let parsed = source.parsed?;
         Self::validate_parsed_manifest(&parsed, lane_id, alias, lane_governance, catalog)
     }
 
@@ -1613,8 +2348,7 @@ impl LaneManifestRegistry {
         self.statuses.get(&lane_id)
     }
 
-    /// Return whether the configured source set contains `alias`, even when
-    /// that alias is not part of the current runtime catalog yet.
+    /// Return whether the frozen active-catalog source set contains `alias`.
     #[must_use]
     pub fn has_manifest_source_alias(&self, alias: &str) -> bool {
         self.manifest_source_aliases.contains(alias)
@@ -1852,7 +2586,7 @@ mod tests {
     }
 
     #[test]
-    fn source_policy_digest_is_catalog_height_independent_and_binds_future_manifests() {
+    fn source_policy_digest_binds_only_active_manifest_sources() {
         let first_dir = tempdir().expect("first manifest directory");
         let second_dir = tempdir().expect("second manifest directory");
         let compact = r#"{"lane":"future","version":1}"#;
@@ -1877,8 +2611,9 @@ mod tests {
         assert_eq!(
             baseline.consensus_policy_digest(),
             relocated.consensus_policy_digest(),
-            "path and JSON formatting changes must not partition peers"
+            "unknown future manifests must not enter the startup source set"
         );
+        assert!(!baseline.has_manifest_source_alias("future"));
 
         let expanded = LaneCatalog::new(
             nonzero!(2_u32),
@@ -1892,30 +2627,269 @@ mod tests {
             ],
         )
         .expect("expanded catalog");
-        assert_eq!(
-            baseline.consensus_policy_digest(),
-            registry_for(&expanded, first_dir.path()).consensus_policy_digest(),
-            "consensus-replayed catalog progress must not change the static source-set digest"
-        );
-
-        fs::write(
-            first_dir.path().join("future.manifest.json"),
-            r#"{"lane":"future","version":2}"#,
-        )
-        .expect("change future manifest semantics");
+        let expanded_compact = registry_for(&expanded, first_dir.path());
+        let expanded_formatted = registry_for(&expanded, second_dir.path());
         assert_ne!(
             baseline.consensus_policy_digest(),
-            registry_for(&LaneCatalog::default(), first_dir.path()).consensus_policy_digest(),
-            "pre-provisioned future manifest drift must be detected before lane activation"
+            expanded_compact.consensus_policy_digest(),
+            "a manifest enters the digest only when its lane alias is active"
+        );
+        assert_eq!(
+            expanded_compact.consensus_policy_digest(),
+            expanded_formatted.consensus_policy_digest(),
+            "path and JSON formatting changes must not partition active peers"
+        );
+    }
+
+    #[test]
+    fn bounded_regular_source_read_accepts_boundary_and_rejects_overflow() {
+        let dir = tempdir().expect("manifest directory");
+        let path = dir.path().join("source.json");
+        fs::write(&path, b"12345678").expect("write boundary source");
+        assert_eq!(
+            LaneManifestRegistry::read_bounded_regular_file(&path, 8)
+                .expect("boundary source is accepted"),
+            b"12345678"
+        );
+
+        fs::write(&path, b"123456789").expect("write overflow source");
+        let error = LaneManifestRegistry::read_bounded_regular_file(&path, 8)
+            .expect_err("max plus one must reject before an unbounded read");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_regular_source_read_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("manifest directory");
+        let target = dir.path().join("target.json");
+        let link = dir.path().join("link.json");
+        fs::write(&target, b"{}").expect("write target");
+        symlink(&target, &link).expect("create source symlink");
+
+        let error = LaneManifestRegistry::read_bounded_regular_file(&link, 8)
+            .expect_err("symlink source must be rejected");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn manifest_json_preflight_enforces_string_rule_and_depth_boundaries() {
+        let limits = ManifestJsonLimits {
+            max_string_bytes: 3,
+            max_strings: 2,
+            max_total_string_bytes: 2,
+            max_rule_units: 4,
+            max_depth: 1,
+        };
+        let footprint = LaneManifestRegistry::preflight_manifest_json(br#"{"a":"b"}"#, limits)
+            .expect("exact preflight boundary is accepted");
+        assert_eq!(footprint.strings, 2);
+        assert_eq!(footprint.string_bytes, 2);
+        assert_eq!(footprint.rule_units, 4);
+
+        assert!(
+            LaneManifestRegistry::preflight_manifest_json(br#"{"long":0}"#, limits).is_err(),
+            "one over the per-string bound must reject"
+        );
+        assert!(
+            LaneManifestRegistry::preflight_manifest_json(br#"{"aa":"bb"}"#, limits).is_err(),
+            "one over the cumulative string-byte bound must reject"
+        );
+        assert!(
+            LaneManifestRegistry::preflight_manifest_json(b"[0,0,0]", limits).is_err(),
+            "one over the structural rule bound must reject"
+        );
+        assert!(
+            LaneManifestRegistry::preflight_manifest_json(b"[[]]", limits).is_err(),
+            "one over the nesting bound must reject"
+        );
+    }
+
+    #[test]
+    fn manifest_shape_and_aggregate_budgets_reject_overflow() {
+        let mut manifest = ManifestFile {
+            validators: Some(vec![
+                ManifestValidatorBindingFile::default();
+                LANE_MANIFEST_MAX_VALIDATORS_V1 + 1
+            ]),
+            ..ManifestFile::default()
+        };
+        assert!(LaneManifestRegistry::validate_manifest_source_bounds(&manifest).is_err());
+        manifest.validators = Some(vec![
+            ManifestValidatorBindingFile::default();
+            LANE_MANIFEST_MAX_VALIDATORS_V1
+        ]);
+        assert!(LaneManifestRegistry::validate_manifest_source_bounds(&manifest).is_ok());
+        manifest.lane = Some("x".repeat(MANIFEST_SOURCE_MAX_IDENTIFIER_BYTES_V1 + 1));
+        assert!(LaneManifestRegistry::validate_manifest_source_bounds(&manifest).is_err());
+
+        let overlay = GovernanceCatalogFile {
+            modules: (0..=GOVERNANCE_OVERLAY_MAX_MODULES_V1)
+                .map(|index| (format!("module-{index}"), GovernanceModuleFile::default()))
+                .collect(),
+            ..GovernanceCatalogFile::default()
+        };
+        assert!(LaneManifestRegistry::validate_governance_overlay_source_bounds(&overlay).is_err());
+
+        let mut budget = ManifestSourceLoadBudget {
+            bytes: MANIFEST_SOURCE_AGGREGATE_MAX_BYTES_V1,
+            strings: MANIFEST_SOURCE_AGGREGATE_MAX_STRINGS_V1,
+            string_bytes: MANIFEST_SOURCE_AGGREGATE_MAX_STRING_BYTES_V1,
+            rule_units: MANIFEST_SOURCE_AGGREGATE_MAX_RULE_UNITS_V1,
+        };
+        budget.charge_bytes(0).expect("exact byte boundary");
+        budget
+            .charge_json(ManifestJsonFootprint::default())
+            .expect("exact JSON boundary");
+        assert!(budget.charge_bytes(1).is_err());
+        assert!(
+            budget
+                .charge_json(ManifestJsonFootprint {
+                    strings: 1,
+                    ..ManifestJsonFootprint::default()
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn active_oversize_manifest_is_represented_as_invalid_without_full_read() {
+        let dir = tempdir().expect("manifest directory");
+        let path = dir.path().join("default.manifest.json");
+        let file = fs::File::create(&path).expect("create sparse manifest");
+        file.set_len(u64::try_from(LANE_MANIFEST_MAX_BYTES_V1 + 1).expect("bound fits u64"))
+            .expect("extend sparse manifest");
+        let registry = LaneManifestRegistry::from_config(
+            &LaneCatalog::default(),
+            &GovernanceCatalog::default(),
+            &LaneRegistry {
+                manifest_directory: Some(dir.path().to_path_buf()),
+                ..LaneRegistry::default()
+            },
+        );
+
+        assert!(registry.has_manifest_source_alias("default"));
+        let source = registry
+            .source_snapshot
+            .as_ref()
+            .expect("materialized snapshot")
+            .manifests_by_alias
+            .get("default")
+            .expect("active source retained as invalid");
+        assert!(
+            source
+                .parsed
+                .as_ref()
+                .expect_err("oversize source must be invalid")
+                .contains("bounded")
+        );
+    }
+
+    #[test]
+    fn oversize_governance_overlay_is_represented_as_invalid_without_full_read() {
+        let cache = tempdir().expect("manifest cache directory");
+        let path = cache.path().join("governance_catalog.json");
+        let file = fs::File::create(&path).expect("create sparse governance overlay");
+        file.set_len(
+            u64::try_from(GOVERNANCE_OVERLAY_MAX_BYTES_V1 + 1).expect("overlay bound fits u64"),
+        )
+        .expect("extend sparse governance overlay");
+        let registry = LaneManifestRegistry::from_config(
+            &LaneCatalog::default(),
+            &GovernanceCatalog::default(),
+            &LaneRegistry {
+                cache_directory: Some(cache.path().to_path_buf()),
+                ..LaneRegistry::default()
+            },
+        );
+
+        let overlay = registry
+            .source_snapshot
+            .as_ref()
+            .expect("materialized snapshot")
+            .governance_overlay
+            .as_ref()
+            .expect("overlay retained as invalid");
+        assert!(
+            overlay
+                .parsed
+                .as_ref()
+                .expect_err("oversize overlay must be invalid")
+                .contains("bounded")
+        );
+    }
+
+    #[test]
+    fn unknown_sparse_manifest_does_not_enter_snapshot_or_digest() {
+        let populated = tempdir().expect("populated manifest directory");
+        let empty = tempdir().expect("empty manifest directory");
+        let path = populated.path().join("future.manifest.json");
+        let file = fs::File::create(&path).expect("create unknown sparse manifest");
+        file.set_len(
+            u64::try_from(LANE_MANIFEST_MAX_BYTES_V1 + 1).expect("manifest bound fits u64"),
+        )
+        .expect("extend unknown sparse manifest");
+        let registry_for = |directory: &Path| {
+            LaneManifestRegistry::from_config(
+                &LaneCatalog::default(),
+                &GovernanceCatalog::default(),
+                &LaneRegistry {
+                    manifest_directory: Some(directory.to_path_buf()),
+                    ..LaneRegistry::default()
+                },
+            )
+        };
+
+        let skipped = registry_for(populated.path());
+        let baseline = registry_for(empty.path());
+        assert!(!skipped.has_manifest_source_alias("future"));
+        assert_eq!(
+            skipped.consensus_policy_digest(),
+            baseline.consensus_policy_digest()
         );
     }
 
     #[test]
     fn frozen_source_rebind_ignores_post_load_file_drift_and_preserves_digest() {
         let dir = tempdir().expect("manifest directory");
-        let path = dir.path().join("future.manifest.json");
+        let path = dir.path().join("default.manifest.json");
+        fs::write(&path, r#"{"lane":"default","version":1}"#).expect("write active manifest");
+        let registry_cfg = LaneRegistry {
+            manifest_directory: Some(dir.path().to_path_buf()),
+            ..LaneRegistry::default()
+        };
+        let lane_catalog = LaneCatalog::default();
+        let governance = GovernanceCatalog::default();
+        let baseline = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
+        let digest = baseline.consensus_policy_digest();
+
+        fs::write(&path, b"{not-json").expect("drift manifest after startup");
+        let rebound = baseline.rebind(&lane_catalog, &governance);
+        assert_eq!(rebound.consensus_policy_digest(), digest);
+        assert_eq!(
+            rebound
+                .lane_rules(LaneId::SINGLE)
+                .expect("frozen active rules")
+                .version,
+            1
+        );
+
+        let freshly_loaded = LaneManifestRegistry::from_config(
+            &lane_catalog,
+            &GovernanceCatalog::default(),
+            &registry_cfg,
+        );
+        assert_ne!(freshly_loaded.consensus_policy_digest(), digest);
+        assert!(freshly_loaded.lane_rules(LaneId::SINGLE).is_none());
+    }
+
+    #[test]
+    fn frozen_source_rebind_does_not_activate_unknown_future_manifest() {
+        let dir = tempdir().expect("manifest directory");
         fs::write(
-            &path,
+            dir.path().join("future.manifest.json"),
             r#"{"lane":"future","governance":"parliament","version":1}"#,
         )
         .expect("write future manifest");
@@ -1929,9 +2903,8 @@ mod tests {
             .insert("parliament".to_owned(), ConfigGovernanceModule::default());
         let baseline =
             LaneManifestRegistry::from_config(&LaneCatalog::default(), &governance, &registry_cfg);
-        let digest = baseline.consensus_policy_digest();
+        assert!(!baseline.has_manifest_source_alias("future"));
 
-        fs::write(&path, b"{not-json").expect("drift manifest after startup");
         let expanded = LaneCatalog::new(
             nonzero!(2_u32),
             vec![
@@ -1946,20 +2919,21 @@ mod tests {
         )
         .expect("expanded catalog");
         let rebound = baseline.rebind(&expanded, &governance);
-        assert_eq!(rebound.consensus_policy_digest(), digest);
-        assert!(rebound.ensure_lane_ready(LaneId::new(1)).is_ok());
         assert_eq!(
             rebound
-                .lane_rules(LaneId::new(1))
-                .expect("frozen future rules")
-                .version,
-            1
+                .ensure_lane_ready(LaneId::new(1))
+                .expect_err("unknown future source must not be retained")
+                .reason(),
+            GovernanceGuardReason::MissingManifest
         );
 
-        let freshly_loaded =
+        let explicitly_reloaded =
             LaneManifestRegistry::from_config(&expanded, &governance, &registry_cfg);
-        assert_ne!(freshly_loaded.consensus_policy_digest(), digest);
-        assert!(freshly_loaded.ensure_lane_ready(LaneId::new(1)).is_err());
+        assert!(
+            explicitly_reloaded
+                .ensure_lane_ready(LaneId::new(1))
+                .is_ok()
+        );
     }
 
     #[test]

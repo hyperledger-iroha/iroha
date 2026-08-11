@@ -80,6 +80,17 @@ breaks ties. A remote indeterminate response is accepted only when its status,
 reject header, Norito error envelope, and transaction hash all match; malformed
 or unrelated evidence becomes `invalid_proxy_response`.
 
+Proxy and fanout response memory is admitted before route execution. Each
+cross-dataspace fanout holds one `torii.max_content_len` working-set slot from
+`torii.query_fanout_max_retained_bytes`; request decoding, one sequential route
+body, canonical accumulation, and final encoding must all fit the deterministic
+phase envelope inside that slot. Iterable fanout is therefore limited to the
+canonical Norito identity forms that Core can scan into a bounded accumulator;
+unsupported predicates, selectors, sorting, JSON fanout, or oversized frames
+fail before exhaustive route materialization. HTTP bridge and public-dataspace
+responses are streamed under the same configured body ceiling, with the
+smaller contract-view ceiling taking precedence when applicable.
+
 ## Routing and horizontal capacity
 
 The canonical account identity remains domainless. Dataspace and lane routing

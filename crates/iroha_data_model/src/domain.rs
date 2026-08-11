@@ -156,6 +156,13 @@ impl norito::json::FastJsonWrite for DomainId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.to_string(), out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(&self.to_string(), out)
+    }
 }
 
 #[cfg(feature = "json")]

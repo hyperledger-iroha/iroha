@@ -26,6 +26,53 @@ enum UncheckedAccountControllerWire {
     Multisig(UncheckedMultisigPolicyWire),
 }
 
+#[cfg(feature = "json")]
+#[test]
+fn every_named_musubi_json_model_rejects_unknown_fields() {
+    for (path, source) in [
+        ("musubi.rs", include_str!("musubi.rs")),
+        (
+            "musubi/query_models.rs",
+            include_str!("musubi/query_models.rs"),
+        ),
+        (
+            "musubi/replication_order_lifecycle.rs",
+            include_str!("musubi/replication_order_lifecycle.rs"),
+        ),
+        ("isi/musubi.rs", include_str!("isi/musubi.rs")),
+        (
+            "query/musubi_queries.rs",
+            include_str!("query/musubi_queries.rs"),
+        ),
+    ] {
+        let lines = source.lines().collect::<Vec<_>>();
+        for (derive_index, derive) in lines.iter().enumerate() {
+            if !derive.contains("derive(DeriveJsonSerialize, DeriveJsonDeserialize)") {
+                continue;
+            }
+            let declaration_index = (derive_index + 1..lines.len().min(derive_index + 15))
+                .find(|index| {
+                    let line = lines[*index].trim_start();
+                    line.starts_with("pub struct ")
+                        || line.starts_with("pub enum ")
+                        || line.starts_with("struct ")
+                        || line.starts_with("enum ")
+                })
+                .unwrap_or_else(|| panic!("{path}: JSON derive lacks a nearby model declaration"));
+            let declaration = lines[declaration_index].trim();
+            if declaration.contains("struct ") && declaration.contains('(') {
+                continue;
+            }
+            assert!(
+                lines[derive_index..declaration_index]
+                    .iter()
+                    .any(|line| line.contains("deny_unknown_fields")),
+                "{path}: {declaration} must reject unknown JSON fields"
+            );
+        }
+    }
+}
+
 fn account(seed: u8) -> AccountId {
     let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
         .expect("fixture seed derives a checked keypair");

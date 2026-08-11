@@ -142,7 +142,11 @@ quotes each mutation, but private keys remain with the client:
 Both mutation routes reject unknown fields, including `private_key`, and return
 `submitted: false` with canonical `transaction_payload_b64` and
 `signing_message_b64`. The caller validates the payload, signs locally, and
-submits through the ordinary transaction pipeline.
+submits through the ordinary transaction pipeline. Preparing either draft also
+requires exact-NetworkId canonical account authentication over the exact HTTP
+method, path, query, and raw JSON body. The authenticated account must equal the
+body `authority`; CIDR allowlists or a deployment-wide API token are additional
+admission controls and never substitute for that signature.
 
 The JS SDK (`javascript/iroha_js/src/toriiClient.js`) wraps these read surfaces
 via `ToriiClient.getUaidPortfolio`, `.getUaidBindings`, and

@@ -42,6 +42,12 @@ const MODERATION_EVIDENCE_VIEWER_AUDIT_DIGEST_SET_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.local.evidence-viewer-audit-digest-set.v1";
 const MODERATION_EVIDENCE_VIEWER_MAX_SESSION_TTL_MS: u64 = 15 * 60 * 1_000;
 const MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_MAX_WINDOW_SECS: u64 = 24 * 60 * 60;
+/// Maximum records returned from each collection in one V1 local moderation read view.
+///
+/// This matches the first-release SoraFS HTTP list-page ceiling. Runtime read
+/// views enforce it as well so non-HTTP callers cannot accidentally turn a
+/// paginated projection back into a full retained-state clone.
+pub const MODERATION_READ_VIEW_MAX_RECORDS_V1: usize = 500;
 pub(crate) const MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_VERSION_V1: u16 = 1;
 /// Schema version for durable authenticated-screening admission receipts.
 pub const MODERATION_SCREENING_ADMISSION_RECEIPT_VERSION_V1: u16 = 1;
@@ -101,6 +107,24 @@ pub struct ModerationModelRegistrySnapshot {
     /// Admitted reproducibility manifests sorted by manifest id.
     pub reproducibility_manifests: Vec<ModerationReproRegistryRecord>,
     /// Admitted adversarial corpus manifests sorted by corpus digest.
+    pub adversarial_corpora: Vec<ModerationCorpusRegistryRecord>,
+}
+
+/// Bounded read view of the local moderation model registry.
+///
+/// Total counts describe authoritative retained state while the record vectors
+/// contain at most the caller's already-admitted response limit. This keeps
+/// HTTP readback allocation proportional to the response instead of cloning
+/// the full durable registry before pagination.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModerationModelRegistryReadView {
+    /// Total admitted reproducibility manifests.
+    pub reproducibility_manifest_count: usize,
+    /// Total admitted adversarial corpus manifests.
+    pub adversarial_corpus_count: usize,
+    /// First reproducibility manifest records in canonical map order.
+    pub reproducibility_manifests: Vec<ModerationReproRegistryRecord>,
+    /// First adversarial corpus records in canonical map order.
     pub adversarial_corpora: Vec<ModerationCorpusRegistryRecord>,
 }
 
@@ -1133,6 +1157,30 @@ pub struct ModerationScreeningSnapshot {
     pub authenticated_admissions: Vec<ModerationScreeningAdmissionReceiptV1>,
 }
 
+/// Bounded read view of local screening and quarantine state.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModerationScreeningReadView {
+    /// Total authenticated screening admissions retained locally.
+    pub authenticated_admission_count: usize,
+    /// Total screening records retained locally.
+    pub screening_count: usize,
+    /// Total quarantine records retained locally.
+    pub quarantine_count: usize,
+    /// First screening records in canonical map order.
+    pub screening_records: Vec<ModerationScreeningRecord>,
+    /// First quarantine records in canonical map order.
+    pub quarantine_records: Vec<ModerationQuarantineRecord>,
+}
+
+/// Bounded read view of the local quarantine queue.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModerationQuarantineReadView {
+    /// Total quarantine records retained locally.
+    pub quarantine_count: usize,
+    /// First quarantine records in canonical map order.
+    pub quarantine_records: Vec<ModerationQuarantineRecord>,
+}
+
 /// Error raised by the local screening/quarantine runtime.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ModerationScreeningError {
@@ -1577,6 +1625,16 @@ impl ModerationModelRegistry {
         ModerationModelRegistrySnapshot {
             reproducibility_manifests: self.repro_manifests.values().cloned().collect(),
             adversarial_corpora: self.corpora.values().cloned().collect(),
+        }
+    }
+
+    pub(crate) fn read_view(&self, limit: usize) -> ModerationModelRegistryReadView {
+        let limit = limit.min(MODERATION_READ_VIEW_MAX_RECORDS_V1);
+        ModerationModelRegistryReadView {
+            reproducibility_manifest_count: self.repro_manifests.len(),
+            adversarial_corpus_count: self.corpora.len(),
+            reproducibility_manifests: self.repro_manifests.values().take(limit).cloned().collect(),
+            adversarial_corpora: self.corpora.values().take(limit).cloned().collect(),
         }
     }
 
@@ -2250,6 +2308,47 @@ impl ModerationScreeningRuntime {
             quarantine_records: self.quarantine_records.values().cloned().collect(),
             authenticated_admissions: self.authenticated_admissions.values().cloned().collect(),
         }
+    }
+
+    pub(crate) fn read_view(&self, limit: usize) -> ModerationScreeningReadView {
+        let limit = limit.min(MODERATION_READ_VIEW_MAX_RECORDS_V1);
+        ModerationScreeningReadView {
+            authenticated_admission_count: self.authenticated_admissions.len(),
+            screening_count: self.screening_records.len(),
+            quarantine_count: self.quarantine_records.len(),
+            screening_records: self
+                .screening_records
+                .values()
+                .take(limit)
+                .cloned()
+                .collect(),
+            quarantine_records: self
+                .quarantine_records
+                .values()
+                .take(limit)
+                .cloned()
+                .collect(),
+        }
+    }
+
+    pub(crate) fn quarantine_read_view(&self, limit: usize) -> ModerationQuarantineReadView {
+        let limit = limit.min(MODERATION_READ_VIEW_MAX_RECORDS_V1);
+        ModerationQuarantineReadView {
+            quarantine_count: self.quarantine_records.len(),
+            quarantine_records: self
+                .quarantine_records
+                .values()
+                .take(limit)
+                .cloned()
+                .collect(),
+        }
+    }
+
+    pub(crate) fn quarantine_record(
+        &self,
+        quarantine_id: &[u8; 16],
+    ) -> Option<ModerationQuarantineRecord> {
+        self.quarantine_records.get(quarantine_id).cloned()
     }
 
     fn screening_outcome(
@@ -6801,5 +6900,90 @@ mod tests {
             ModerationScreeningError::ResourceExhausted { .. }
         ));
         assert_eq!(screening.snapshot(), screening_before);
+    }
+
+    #[test]
+    fn moderation_read_views_bound_clones_before_response_materialization() {
+        let retained = MODERATION_READ_VIEW_MAX_RECORDS_V1 + 1;
+        let mut registry = ModerationModelRegistry::with_entry_limit(retained);
+        for index in 0..retained {
+            let mut manifest_id = [0_u8; 16];
+            manifest_id[..8].copy_from_slice(
+                &u64::try_from(index)
+                    .expect("fixture index fits u64")
+                    .to_be_bytes(),
+            );
+            registry.repro_manifests.insert(
+                manifest_id,
+                ModerationReproRegistryRecord {
+                    manifest_id,
+                    manifest_digest: [2; 32],
+                    runner_hash: [3; 32],
+                    runtime_version: "runner-1".to_owned(),
+                    issued_at_unix: 1,
+                    model_count: 1,
+                    signer_count: 1,
+                },
+            );
+        }
+        for index in 0..2_u8 {
+            let corpus_digest = [index; 32];
+            registry.corpora.insert(
+                corpus_digest,
+                ModerationCorpusRegistryRecord {
+                    corpus_digest,
+                    issued_at_unix: 1,
+                    cohort_label: None,
+                    family_count: 1,
+                    variant_count: 1,
+                },
+            );
+        }
+
+        let registry_view = registry.read_view(usize::MAX);
+        assert_eq!(registry_view.reproducibility_manifest_count, retained);
+        assert_eq!(registry_view.adversarial_corpus_count, 2);
+        assert_eq!(
+            registry_view.reproducibility_manifests.len(),
+            MODERATION_READ_VIEW_MAX_RECORDS_V1
+        );
+        assert_eq!(registry_view.adversarial_corpora.len(), 2);
+
+        let mut screening = ModerationScreeningRuntime::with_entry_limit(retained);
+        let mut first_quarantine_id = None;
+        for index in 0..retained {
+            let outcome = screening
+                .record_screening(screening_input(
+                    &format!("bounded-read-{index}"),
+                    ModerationScreeningVerdict::Quarantine,
+                ))
+                .expect("record screening read-view fixture");
+            first_quarantine_id.get_or_insert(
+                outcome
+                    .quarantine
+                    .expect("quarantine verdict creates queue record")
+                    .quarantine_id,
+            );
+        }
+
+        let screening_view = screening.read_view(usize::MAX);
+        assert_eq!(screening_view.screening_count, retained);
+        assert_eq!(screening_view.quarantine_count, retained);
+        assert_eq!(
+            screening_view.screening_records.len(),
+            MODERATION_READ_VIEW_MAX_RECORDS_V1
+        );
+        assert_eq!(
+            screening_view.quarantine_records.len(),
+            MODERATION_READ_VIEW_MAX_RECORDS_V1
+        );
+        let quarantine_view = screening.quarantine_read_view(1);
+        assert_eq!(quarantine_view.quarantine_count, retained);
+        assert_eq!(quarantine_view.quarantine_records.len(), 1);
+        assert!(
+            screening
+                .quarantine_record(&first_quarantine_id.expect("first quarantine id"))
+                .is_some()
+        );
     }
 }

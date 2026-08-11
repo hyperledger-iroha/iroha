@@ -169,6 +169,8 @@ public final class TransportRequest {
       final String normalizedName = name.toLowerCase(Locale.ROOT);
       if ("x-iroha-signature".equals(normalizedName)
           || "x-iroha-nonce".equals(normalizedName)
+          || "x-iroha-operator-nonce".equals(normalizedName)
+          || "x-iroha-operator-signature".equals(normalizedName)
           || "x-iroha-onboarding-token".equals(normalizedName)) {
         carriesOneShotHeader = true;
         break;

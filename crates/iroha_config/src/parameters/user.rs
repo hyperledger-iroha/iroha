@@ -14262,6 +14262,16 @@ pub struct Torii {
     /// Maximum concurrent heavy query executions admitted by Torii.
     #[config(default = "defaults::torii::QUERY_HEAVY_MAX_INFLIGHT")]
     pub query_heavy_max_inflight: NonZeroUsize,
+    /// Aggregate bytes reserved for signed-query ingress and cross-dataspace fanout.
+    /// Torii reserves one quarter for four complete pre-body slots and uses the
+    /// remainder for complete fanout working sets. Each ingress slot covers five
+    /// simultaneously live variable representations: the decoded signed query,
+    /// its canonical frame, a nested routing-scope decode, that scope's canonical
+    /// frame, and serializer scratch. The admitted request and response frames are
+    /// smaller derived shares after fixed route metadata and overlapping execution
+    /// phases; neither equals `max_content_len`.
+    #[config(default = "defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES")]
+    pub query_fanout_max_retained_bytes: Bytes<u64>,
     /// Maximum time a query waits for execution capacity before Torii rejects it.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::QUERY_QUEUE_TIMEOUT_MS))"
@@ -14509,6 +14519,18 @@ pub struct Torii {
         default = "defaults::torii::ZK_PROVER_REPORTS_TTL_SECS"
     )]
     pub zk_prover_reports_ttl_secs: u64,
+    /// Maximum number of background ZK prover reports retained on disk.
+    #[config(
+        env = "TORII_ZK_PROVER_REPORTS_MAX_COUNT",
+        default = "defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT"
+    )]
+    pub zk_prover_reports_max_count: u64,
+    /// Maximum aggregate bytes retained by prover reports and summary shards.
+    #[config(
+        env = "TORII_ZK_PROVER_REPORTS_MAX_BYTES",
+        default = "defaults::torii::ZK_PROVER_REPORTS_MAX_BYTES"
+    )]
+    pub zk_prover_reports_max_bytes: u64,
     /// Maximum number of attachments processed concurrently by the prover worker.
     #[config(
         env = "TORII_ZK_PROVER_MAX_INFLIGHT",
@@ -14640,116 +14662,9 @@ pub struct Torii {
     pub recipient_lookup: Option<ToriiRecipientLookup>,
 }
 
-/// Geo lookup configuration for peer telemetry.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct ToriiPeerGeo {
-    /// Enable geo lookups for peer telemetry.
-    #[config(default = "defaults::torii::peer_geo::ENABLED")]
-    pub enabled: bool,
-    /// Optional geo endpoint; required and HTTPS-only when lookups are enabled.
-    pub endpoint: Option<Url>,
-}
+include!("user/torii_peer_geo.rs");
 
-impl Default for ToriiPeerGeo {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::torii::peer_geo::ENABLED,
-            endpoint: defaults::torii::peer_geo::endpoint(),
-        }
-    }
-}
-
-impl ToriiPeerGeo {
-    fn parse(self) -> actual::ToriiPeerGeo {
-        actual::ToriiPeerGeo {
-            enabled: self.enabled,
-            endpoint: self.endpoint,
-        }
-    }
-}
-
-#[cfg(test)]
-mod torii_peer_geo_tests {
-    use super::*;
-
-    #[test]
-    fn torii_peer_geo_parse_copies_enabled_and_endpoint() {
-        let endpoint = Url::parse("https://geo.example").expect("valid endpoint");
-        let parsed = ToriiPeerGeo {
-            enabled: true,
-            endpoint: Some(endpoint.clone()),
-        }
-        .parse();
-        assert!(parsed.enabled);
-        assert_eq!(
-            parsed.endpoint.as_ref().map(Url::as_str),
-            Some(endpoint.as_str())
-        );
-    }
-
-    #[test]
-    fn torii_peer_geo_parse_preserves_missing_endpoint() {
-        let parsed = ToriiPeerGeo {
-            enabled: true,
-            endpoint: None,
-        }
-        .parse();
-        assert_eq!(parsed.endpoint, None);
-    }
-}
-
-/// Guard rails for SoraNet privacy ingestion endpoints.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct ToriiSoranetPrivacyIngest {
-    /// Master enable switch for the `/v1/soranet/privacy/*` endpoints.
-    #[config(default = "defaults::torii::soranet_privacy_ingest::ENABLED")]
-    pub enabled: bool,
-    /// Require a token header before accepting telemetry.
-    #[config(default = "defaults::torii::soranet_privacy_ingest::REQUIRE_TOKEN")]
-    pub require_token: bool,
-    /// Accepted token values.
-    #[config(default = "defaults::torii::soranet_privacy_ingest::tokens()")]
-    pub tokens: Vec<String>,
-    /// Requests-per-second budget (None disables limiting).
-    pub rate_per_sec: Option<u32>,
-    /// Burst capacity for the ingest limiter.
-    pub burst: Option<u32>,
-    /// CIDR allow-list for trusted submitters; empty -> deny.
-    #[config(default = "defaults::torii::soranet_privacy_ingest::allow_cidrs()")]
-    pub allow_cidrs: Vec<String>,
-}
-
-impl Default for ToriiSoranetPrivacyIngest {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::torii::soranet_privacy_ingest::ENABLED,
-            require_token: defaults::torii::soranet_privacy_ingest::REQUIRE_TOKEN,
-            tokens: defaults::torii::soranet_privacy_ingest::tokens(),
-            rate_per_sec: defaults::torii::soranet_privacy_ingest::RATE_PER_SEC,
-            burst: defaults::torii::soranet_privacy_ingest::BURST,
-            allow_cidrs: defaults::torii::soranet_privacy_ingest::allow_cidrs(),
-        }
-    }
-}
-
-impl ToriiSoranetPrivacyIngest {
-    fn parse(self) -> actual::SoranetPrivacyIngest {
-        actual::SoranetPrivacyIngest {
-            enabled: self.enabled,
-            require_token: self.require_token,
-            tokens: self.tokens,
-            rate_per_sec: self
-                .rate_per_sec
-                .or(defaults::torii::soranet_privacy_ingest::RATE_PER_SEC)
-                .and_then(std::num::NonZeroU32::new),
-            burst: self
-                .burst
-                .or(defaults::torii::soranet_privacy_ingest::BURST)
-                .and_then(std::num::NonZeroU32::new),
-            allow_cidrs: self.allow_cidrs,
-        }
-    }
-}
+include!("user/torii_soranet_privacy_ingest.rs");
 
 /// User configuration for authenticated native Bootle/Lantern blind issuance.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
@@ -15407,6 +15322,87 @@ impl Torii {
                 "torii.zk_prover_max_scan_millis must be greater than zero so pending work can make progress",
             );
         }
+        if self.zk_prover_reports_max_count == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.zk_prover_reports_max_count must be greater than zero",
+            );
+        }
+        if self.iso_bridge.store_max_records == 0 {
+            emit_torii_config_error(
+                emitter,
+                "torii.iso_bridge.store_max_records must be greater than zero",
+            );
+        }
+        if self.iso_bridge.store_max_records
+            > defaults::torii::ISO_BRIDGE_STORE_MAX_RECORDS_HARD_LIMIT_V1
+        {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.iso_bridge.store_max_records must not exceed the first-release hard maximum of {}",
+                    defaults::torii::ISO_BRIDGE_STORE_MAX_RECORDS_HARD_LIMIT_V1
+                ),
+            );
+        }
+        let minimum_report_store_bytes = defaults::torii::ZK_PROVER_REPORT_MAX_BYTES_V1
+            .saturating_add(defaults::torii::ZK_PROVER_REPORT_SUMMARY_MAX_BYTES_V1);
+        if self.zk_prover_reports_max_bytes < minimum_report_store_bytes {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.zk_prover_reports_max_bytes must be at least {minimum_report_store_bytes} so one maximum-size report and its summary can be retained"
+                ),
+            );
+        }
+        let max_content_len = self.max_content_len.get();
+        let query_fanout_max_retained_bytes = self.query_fanout_max_retained_bytes.get();
+        if max_content_len == 0 {
+            emit_torii_config_error(emitter, "torii.max_content_len must be greater than zero");
+        }
+        if max_content_len > defaults::torii::TORII_PROXY_MAX_INNER_BODY_BYTES_V1 {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.max_content_len must not exceed the first-release Torii proxy inner-body maximum of {} bytes",
+                    defaults::torii::TORII_PROXY_MAX_INNER_BODY_BYTES_V1
+                ),
+            );
+        }
+        if query_fanout_max_retained_bytes < defaults::torii::QUERY_FANOUT_MIN_POOL_BYTES_V1 {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.query_fanout_max_retained_bytes must be at least {} bytes for four bounded ingress slots and one fanout working set",
+                    defaults::torii::QUERY_FANOUT_MIN_POOL_BYTES_V1
+                ),
+            );
+        }
+        if usize::try_from(max_content_len).is_err() {
+            emit_torii_config_error(
+                emitter,
+                "torii.max_content_len must fit the platform address space",
+            );
+        }
+        let proxy_http_memory_geometry_fits = usize::try_from(max_content_len)
+            .ok()
+            .zip(usize::try_from(defaults::torii::TORII_PROXY_HTTP_MEMORY_PHASE_UNITS_V1).ok())
+            .and_then(|(bytes, phase_units)| bytes.checked_mul(phase_units))
+            .zip(usize::try_from(defaults::torii::TORII_PROXY_HTTP_FIXED_MEMORY_HEADROOM_V1).ok())
+            .and_then(|(bytes, fixed_headroom)| bytes.checked_add(fixed_headroom))
+            .is_some();
+        if !proxy_http_memory_geometry_fits {
+            emit_torii_config_error(
+                emitter,
+                "torii.max_content_len is too large for the first-release internal proxy memory envelope on this platform",
+            );
+        }
+        if usize::try_from(query_fanout_max_retained_bytes).is_err() {
+            emit_torii_config_error(
+                emitter,
+                "torii.query_fanout_max_retained_bytes must fit the platform address space",
+            );
+        }
         if let Some(preauth_allow_cidrs) = self.preauth_allow_cidrs.as_ref() {
             validate_explicit_trust_cidrs(
                 emitter,
@@ -15465,6 +15461,7 @@ impl Torii {
                 .and_then(std::num::NonZeroU32::new),
             query_max_inflight: self.query_max_inflight,
             query_heavy_max_inflight: self.query_heavy_max_inflight,
+            query_fanout_max_retained_bytes: self.query_fanout_max_retained_bytes,
             query_queue_timeout: self.query_queue_timeout_ms.get(),
             tx_rate_per_authority_per_sec: self
                 .tx_rate_per_authority_per_sec
@@ -15592,6 +15589,8 @@ impl Torii {
             zk_prover_enabled: self.zk_prover_enabled,
             zk_prover_scan_period_secs: self.zk_prover_scan_period_secs,
             zk_prover_reports_ttl_secs: self.zk_prover_reports_ttl_secs,
+            zk_prover_reports_max_count: self.zk_prover_reports_max_count,
+            zk_prover_reports_max_bytes: self.zk_prover_reports_max_bytes,
             zk_prover_max_inflight: self.zk_prover_max_inflight,
             zk_prover_max_scan_bytes: self.zk_prover_max_scan_bytes,
             zk_prover_max_scan_millis: self.zk_prover_max_scan_millis,
@@ -17496,7 +17495,9 @@ pub struct ToriiFaucet {
     pub asset_definition_id: String,
     /// Fixed quantity transferred by each accepted faucet claim.
     pub amount: Quantity,
-    /// Leading-zero-bit difficulty for faucet proof-of-work (0 disables PoW).
+    /// Leading-zero-bit difficulty for faucet proof-of-work.
+    ///
+    /// Enabling the faucet requires a non-zero value.
     #[config(default = "defaults::torii::faucet::POW_DIFFICULTY_BITS")]
     pub pow_difficulty_bits: u8,
     /// Scrypt `log2(N)` cost parameter for faucet proof-of-work.
@@ -17646,6 +17647,13 @@ impl ToriiFaucet {
         if amount.is_none() {
             emit_torii_config_error(emitter, "torii.faucet.amount must be greater than zero");
         }
+        let pow_difficulty_bits = NonZeroU8::new(self.pow_difficulty_bits);
+        if pow_difficulty_bits.is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.faucet.pow_difficulty_bits must be greater than zero when enabled",
+            );
+        }
         let pow_scrypt_log_n = NonZeroU8::new(self.pow_scrypt_log_n);
         if pow_scrypt_log_n.is_none() {
             emit_torii_config_error(
@@ -17680,6 +17688,7 @@ impl ToriiFaucet {
             signer,
             asset_definition_id,
             amount,
+            pow_difficulty_bits,
             pow_scrypt_log_n,
             pow_scrypt_r,
             pow_scrypt_p,
@@ -17690,6 +17699,7 @@ impl ToriiFaucet {
                 Some(signer),
                 Some(asset_definition_id),
                 Some(amount),
+                Some(pow_difficulty_bits),
                 Some(pow_scrypt_log_n),
                 Some(pow_scrypt_r),
                 Some(pow_scrypt_p),
@@ -17700,7 +17710,7 @@ impl ToriiFaucet {
                 signer,
                 asset_definition_id,
                 amount,
-                pow_difficulty_bits: self.pow_difficulty_bits,
+                pow_difficulty_bits,
                 pow_scrypt_log_n: pow_scrypt_log_n.get(),
                 pow_scrypt_r: pow_scrypt_r.get(),
                 pow_scrypt_p: pow_scrypt_p.get(),
@@ -17919,167 +17929,8 @@ mod torii_kagemusha_commands_tests {
 }
 
 #[cfg(test)]
-mod torii_faucet_tests {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use super::*;
-    use iroha_crypto::PublicKey;
-    use iroha_data_model::DomainId;
-
-    static NEXT_KEY_FILE: AtomicU64 = AtomicU64::new(0);
-
-    struct TestKeyFile(PathBuf);
-
-    impl TestKeyFile {
-        fn create(contents: &str) -> Self {
-            let sequence = NEXT_KEY_FILE.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "iroha-config-faucet-{}-{sequence}.key",
-                std::process::id()
-            ));
-            fs::write(&path, contents).expect("write faucet key file");
-            Self(path)
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TestKeyFile {
-        fn drop(&mut self) {
-            let _ = fs::remove_file(&self.0);
-        }
-    }
-
-    fn sample_faucet() -> (ToriiFaucet, TestKeyFile) {
-        let public_key: PublicKey =
-            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-                .parse()
-                .expect("public key");
-        let key_file = TestKeyFile::create(
-            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53\n",
-        );
-        let asset_definition_id = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("sora", "universal").expect("domain"),
-            "xor".parse().expect("name"),
-        )
-        .to_string();
-        (
-            ToriiFaucet {
-                enabled: true,
-                authority: AccountId::new(public_key).to_string(),
-                private_key_file: key_file.path().to_path_buf(),
-                asset_definition_id,
-                amount: Quantity::from(25_000_u64),
-                pow_difficulty_bits: 18,
-                pow_scrypt_log_n: 13,
-                pow_scrypt_r: 8,
-                pow_scrypt_p: 1,
-                pow_max_anchor_age_blocks: 4,
-                pow_adaptive_lookback_blocks: 32,
-                pow_adaptive_claims_per_extra_bit: 3,
-                pow_adaptive_max_extra_bits: 5,
-                pow_vrf_seed_enabled: true,
-            },
-            key_file,
-        )
-    }
-
-    #[test]
-    fn torii_faucet_parse_maps_enabled_config() {
-        let (faucet, _key_file) = sample_faucet();
-        let expected_authority = faucet.authority.clone();
-        let expected_asset = faucet.asset_definition_id.clone();
-        let mut emitter = Emitter::new();
-        let parsed = faucet.parse(&mut emitter).expect("enabled faucet");
-        assert!(emitter.into_result().is_ok());
-        assert_eq!(parsed.authority.to_string(), expected_authority);
-        assert_eq!(parsed.asset_definition_id, expected_asset);
-        assert_eq!(parsed.amount.to_string(), "25000");
-        assert_eq!(parsed.pow_difficulty_bits, 18);
-        assert_eq!(parsed.pow_scrypt_log_n, 13);
-        assert_eq!(parsed.pow_scrypt_r, 8);
-        assert_eq!(parsed.pow_scrypt_p, 1);
-        assert_eq!(parsed.pow_max_anchor_age_blocks.get(), 4);
-        assert_eq!(parsed.pow_adaptive_lookback_blocks, 32);
-        assert_eq!(parsed.pow_adaptive_claims_per_extra_bit, 3);
-        assert_eq!(parsed.pow_adaptive_max_extra_bits, 5);
-        assert!(parsed.pow_vrf_seed_enabled);
-    }
-
-    #[test]
-    fn torii_faucet_parse_returns_none_when_disabled() {
-        let (mut faucet, _key_file) = sample_faucet();
-        faucet.enabled = false;
-        let mut emitter = Emitter::new();
-        assert!(faucet.parse(&mut emitter).is_none());
-        assert!(emitter.into_result().is_ok());
-    }
-
-    #[test]
-    fn torii_faucet_parse_rejects_zero_amount() {
-        let (mut faucet, _key_file) = sample_faucet();
-        faucet.amount = Quantity::zero();
-        let mut emitter = Emitter::new();
-        assert!(faucet.parse(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn torii_faucet_parse_accepts_asset_alias_selector() {
-        let (mut faucet, _key_file) = sample_faucet();
-        faucet.asset_definition_id = "xor#universal".to_owned();
-        let mut emitter = Emitter::new();
-        let parsed = faucet
-            .parse(&mut emitter)
-            .expect("alias selector should parse");
-        assert!(emitter.into_result().is_ok());
-        assert_eq!(parsed.asset_definition_id, "xor#universal");
-    }
-
-    #[test]
-    fn torii_faucet_parse_rejects_invalid_asset_selector() {
-        let (mut faucet, _key_file) = sample_faucet();
-        faucet.asset_definition_id = "not a selector".to_owned();
-        let mut emitter = Emitter::new();
-        assert!(faucet.parse(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn torii_faucet_parse_rejects_non_positive_pow_anchor_age() {
-        let (mut faucet, _key_file) = sample_faucet();
-        faucet.pow_max_anchor_age_blocks = 0;
-        let mut emitter = Emitter::new();
-        assert!(faucet.parse(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn torii_faucet_parse_rejects_non_positive_scrypt_log_n() {
-        let (mut faucet, _key_file) = sample_faucet();
-        faucet.pow_scrypt_log_n = 0;
-        let mut emitter = Emitter::new();
-        assert!(faucet.parse(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-
-    #[test]
-    fn torii_faucet_parse_rejects_signer_authority_mismatch_without_panicking() {
-        let (mut faucet, _key_file) = sample_faucet();
-        faucet.authority = AccountId::new(
-            KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
-                .expect("different authority")
-                .public_key()
-                .clone(),
-        )
-        .to_string();
-        let mut emitter = Emitter::new();
-        assert!(faucet.parse(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-}
+#[path = "user/torii_faucet_tests.rs"]
+mod torii_faucet_tests;
 
 /// RAM-LFE runtime configuration.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
@@ -18420,8 +18271,8 @@ pub struct IsoBridge {
     /// Age retention window for durable ISO records (seconds); zero disables age pruning.
     pub store_retention_secs: u64,
     #[config(default = "defaults::torii::ISO_BRIDGE_STORE_MAX_RECORDS")]
-    #[norito(default)]
-    /// Maximum durable ISO records to retain; zero disables count pruning.
+    #[norito(default = "defaults::torii::iso_bridge_store_max_records")]
+    /// Maximum durable ISO records to retain (non-zero and bounded by the V1 hard limit).
     pub store_max_records: u64,
     #[norito(default)]
     /// Optional external audit export directory for manifest/notary preimages.
@@ -33753,23 +33604,9 @@ policy_digest_hex = "{policy_digest_hex}"
         );
     }
 
-    #[test]
-    fn zk_prover_scan_time_budget_must_allow_progress() {
-        let mut table = base_table();
-        table
-            .get_mut("torii")
-            .and_then(Value::as_table_mut)
-            .expect("torii table")
-            .insert("zk_prover_max_scan_millis".into(), Value::Integer(0));
-
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("zero scan time budget must fail closed");
-        let report = format!("{error:?}");
-        assert!(
-            report.contains("zk_prover_max_scan_millis must be greater than zero"),
-            "{report}"
-        );
-    }
+    include!("user/zk_prover_report_retention_tests.rs");
+    include!("user/query_fanout_memory_tests.rs");
+    include!("user/iso_bridge_store_memory_tests.rs");
 
     #[test]
     fn disabled_kagemusha_command_middleware_ignores_dormant_subordinates() {

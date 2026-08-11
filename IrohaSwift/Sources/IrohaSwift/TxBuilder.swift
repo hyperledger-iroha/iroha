@@ -959,6 +959,7 @@ public final class IrohaSDK: @unchecked Sendable {
 
     public init(baseURL: URL,
                 session: URLSession = .shared,
+                operatorSigningContext: ToriiOperatorSigningContext? = nil,
                 defaultSigningAlgorithm: SigningAlgorithm = .ed25519,
                 accelerationSettings: AccelerationSettings = AccelerationSettings(),
                 pipelineSubmitOptions: PipelineSubmitOptions = .default,
@@ -967,7 +968,11 @@ public final class IrohaSDK: @unchecked Sendable {
                 creationTimeProvider: (@Sendable () -> UInt64)? = nil) {
         self.baseURL = baseURL
         self.defaultSigningAlgorithm = defaultSigningAlgorithm
-        let client = ToriiClient(baseURL: baseURL, session: session)
+        let client = ToriiClient(
+            baseURL: baseURL,
+            session: session,
+            operatorSigningContext: operatorSigningContext
+        )
         self.toriiClient = client
         self.toriiRestClient = client
         self.accelerationSettings = accelerationSettings

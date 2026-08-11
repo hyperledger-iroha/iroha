@@ -64,21 +64,6 @@ fn tool_registry_skips_ws_and_sse_routes() {
     assert!(
         tools
             .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.commit_certificates")
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.validator_sets.list")
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.validator_sets.get")
-    );
-    assert!(
-        tools
-            .iter()
             .any(|tool| tool.name == "iroha.sumeragi.pacemaker")
     );
     assert!(
@@ -86,17 +71,24 @@ fn tool_registry_skips_ws_and_sse_routes() {
             .iter()
             .any(|tool| tool.name == "iroha.sumeragi.phases")
     );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.params")
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.status")
-    );
     for retired in [
+        "iroha.sumeragi.commit_certificates",
+        "iroha.sumeragi.validator_sets.list",
+        "iroha.sumeragi.validator_sets.get",
+        "iroha.sumeragi.params",
+        "iroha.sumeragi.status",
+        "iroha.sumeragi.leader",
+        "iroha.sumeragi.qc",
+        "iroha.sumeragi.checkpoints",
+        "iroha.sumeragi.consensus_keys",
+        "iroha.sumeragi.bls_keys",
+        "iroha.sumeragi.key_lifecycle",
+        "iroha.sumeragi.telemetry",
+        "iroha.sumeragi.commit_qc.get",
+        "iroha.sumeragi.evidence.count",
+        "iroha.sumeragi.evidence.list",
+        "iroha.sumeragi.vrf.penalties",
+        "iroha.sumeragi.vrf.epoch",
         "iroha.sumeragi.rbc",
         "iroha.sumeragi.rbc.sessions",
         "iroha.sumeragi.rbc.delivered",
@@ -108,62 +100,6 @@ fn tool_registry_skips_ws_and_sse_routes() {
             "retired MCP tool {retired} leaked"
         );
     }
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.leader")
-    );
-    assert!(tools.iter().any(|tool| tool.name == "iroha.sumeragi.qc"));
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.checkpoints")
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.consensus_keys")
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.bls_keys")
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.key_lifecycle")
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.telemetry")
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.commit_qc.get")
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.evidence.count")
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.evidence.list")
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.vrf.penalties")
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|tool| tool.name == "iroha.sumeragi.vrf.epoch")
-    );
     assert!(tools.iter().any(|tool| tool.name == "iroha.da.ingest"));
     assert!(
         tools
@@ -667,6 +603,73 @@ fn tool_registry_skips_ws_and_sse_routes() {
     );
     assert!(tools.iter().any(|tool| tool.name == "iroha.blocks.list"));
     assert!(tools.iter().any(|tool| tool.name == "iroha.blocks.get"));
+}
+
+#[test]
+fn musubi_mcp_dispatch_requires_a_fresh_exact_target_account_proof() {
+    let path = route_catalog::musubi::RELEASE_PUBLISH.path();
+    assert_eq!(
+        target_extra_header_policy(&Method::POST, path).expect("cataloged Musubi route"),
+        ExtraHeaderPolicy::CanonicalAccountAuthentication
+    );
+
+    let mut forwarded = HeaderMap::new();
+    for (name, value) in [
+        (crate::HEADER_ACCOUNT, "outer-account"),
+        (crate::HEADER_SIGNATURE, "outer-signature"),
+        (crate::HEADER_TIMESTAMP_MS, "1725000000000"),
+        (crate::HEADER_NONCE, "outer-nonce"),
+    ] {
+        forwarded.insert(name, HeaderValue::from_str(value).expect("header"));
+    }
+    let missing = apply_extra_headers_with_policy(
+        &mut forwarded,
+        None,
+        ExtraHeaderPolicy::CanonicalAccountAuthentication,
+    )
+    .expect_err("outer MCP authentication must not become the inner Musubi proof");
+    assert!(missing.contains("required"));
+    assert!(forwarded.is_empty());
+
+    let incomplete = norito::json!({
+        "X-Iroha-Account": TEST_ACCOUNT_I105,
+        "X-Iroha-Signature": "target-signature"
+    });
+    let error = apply_extra_headers_with_policy(
+        &mut forwarded,
+        Some(&incomplete),
+        ExtraHeaderPolicy::CanonicalAccountAuthentication,
+    )
+    .expect_err("incomplete Musubi target proof must fail before route dispatch");
+    assert!(error.contains("complete account/signature/timestamp/nonce tuple"));
+
+    let complete = norito::json!({
+        "X-Iroha-Account": TEST_ACCOUNT_I105,
+        "X-Iroha-Signature": "target-signature",
+        "X-Iroha-Timestamp-Ms": 1725000000000_u64,
+        "X-Iroha-Nonce": "target-nonce"
+    });
+    apply_extra_headers_with_policy(
+        &mut forwarded,
+        Some(&complete),
+        ExtraHeaderPolicy::CanonicalAccountAuthentication,
+    )
+    .expect("complete exact-target Musubi proof");
+    for name in [
+        crate::HEADER_ACCOUNT,
+        crate::HEADER_SIGNATURE,
+        crate::HEADER_TIMESTAMP_MS,
+        crate::HEADER_NONCE,
+    ] {
+        assert!(forwarded.contains_key(name));
+        assert!(forwarded.get(name).expect("target header").is_sensitive());
+    }
+
+    assert!(
+        target_extra_header_policy(&Method::POST, "/v1/musubi/instructions/publish-release")
+            .is_err(),
+        "retired Musubi path must never acquire a dispatch authentication policy"
+    );
 }
 
 #[test]

@@ -109,7 +109,6 @@ def connect_session_fixture(
         "token_wallet": token_wallet,
         "token_management": token_management,
         "token_relay": token_relay,
-        "ttl": 30,
     }
     response.pop("node")
     return request, response

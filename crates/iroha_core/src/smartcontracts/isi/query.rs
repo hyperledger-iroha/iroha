@@ -1,6 +1,34 @@
 //! Query functionality. The common error type is also defined here,
 //! alongside functions for converting them into HTTP responses.
 
+mod canonical_topk;
+mod ordinary_memory;
+mod singular_memory;
+
+pub use canonical_topk::{
+    CANONICAL_QUERY_OUTPUT_CONTAINER_OVERHEAD_BYTES, CANONICAL_QUERY_PREBOUNDED_SOURCE_BYTES,
+    CANONICAL_QUERY_RETAINED_ITEM_OVERHEAD_BYTES, CanonicalQueryOutputAccumulator,
+    CanonicalQueryOutputLimits, canonical_query_candidate_allocation_bytes,
+};
+pub use ordinary_memory::{
+    ORDINARY_ABI_VERSION_SOURCE_BYTES, ORDINARY_NAME_ID_SOURCE_BYTES,
+    ORDINARY_QUERY_FIXED_CONTAINER_OVERHEAD_BYTES, ORDINARY_QUERY_RETAINED_ITEM_OVERHEAD_BYTES,
+    OrdinaryQueryExecutionLimitError, OrdinaryQueryExecutionLimits, OrdinaryQueryMemoryLease,
+    OrdinaryQueryMemoryReservation,
+};
+pub(crate) use ordinary_memory::{
+    OrdinaryQueryCursorBinding, OrdinaryQueryCursorMemory, OrdinaryQueryCursorPolicy,
+    OrdinaryQueryMemoryAdmission, ensure_response_admitted as ensure_ordinary_response_admitted,
+    ensure_stored_revalidation_admitted as ensure_ordinary_stored_revalidation_admitted,
+};
+pub use singular_memory::SingularQueryOutputLimits;
+pub(crate) use singular_memory::{
+    BorrowedSingularOption, SingularQueryVecBuilder, own_singular_query_struct,
+    own_singular_query_value, own_singular_query_values, singular_query_decode_limits,
+    singular_query_ensure_value_fits, singular_query_frame_limit, singular_query_limits_active,
+    singular_query_vec_push, singular_query_vec_with_capacity,
+};
+
 use std::{
     cell::Cell,
     collections::BinaryHeap,
@@ -113,6 +141,10 @@ pub trait SortableQueryOutput {
 pub struct QueryLimits {
     max_fetch_size: u64,
     count_mode: QueryCountMode,
+    canonical_output_limits: Option<CanonicalQueryOutputLimits>,
+    singular_output_limits: Option<SingularQueryOutputLimits>,
+    ordinary_execution_limits: Option<OrdinaryQueryExecutionLimits>,
+    server_memory_budget: bool,
 }
 
 /// Whether query pagination should compute exact counts or only bounded continuation metadata.
@@ -189,11 +221,16 @@ impl QueryExecutionBudget {
         self.max_bytes
     }
 
-    fn ensure(self, items: u64, bytes: u64) -> Result<(), Error> {
+    pub(super) fn ensure(self, items: u64, bytes: u64) -> Result<(), Error> {
         let weighted = self
             .units_per_item
-            .saturating_mul(items)
-            .saturating_add(self.units_per_byte.saturating_mul(bytes));
+            .checked_mul(items)
+            .and_then(|item_units| {
+                self.units_per_byte
+                    .checked_mul(bytes)
+                    .and_then(|byte_units| item_units.checked_add(byte_units))
+            })
+            .ok_or(Error::GasBudgetExceeded)?;
         if items > self.max_items || bytes > self.max_bytes || weighted > self.max_units {
             return Err(Error::GasBudgetExceeded);
         }
@@ -202,15 +239,28 @@ impl QueryExecutionBudget {
 
     fn remaining_bytes(self, items: u64, bytes: u64) -> Result<u64, Error> {
         self.ensure(items, bytes)?;
-        let cap_remaining = self.max_bytes.saturating_sub(bytes);
+        let cap_remaining = self
+            .max_bytes
+            .checked_sub(bytes)
+            .ok_or(Error::GasBudgetExceeded)?;
         if self.units_per_byte == 0 {
             return Ok(cap_remaining);
         }
-        let item_units = self.units_per_item.saturating_mul(items);
-        let byte_units = self.units_per_byte.saturating_mul(bytes);
+        let item_units = self
+            .units_per_item
+            .checked_mul(items)
+            .ok_or(Error::GasBudgetExceeded)?;
+        let byte_units = self
+            .units_per_byte
+            .checked_mul(bytes)
+            .ok_or(Error::GasBudgetExceeded)?;
+        let used_units = item_units
+            .checked_add(byte_units)
+            .ok_or(Error::GasBudgetExceeded)?;
         let units_remaining = self
             .max_units
-            .saturating_sub(item_units.saturating_add(byte_units));
+            .checked_sub(used_units)
+            .ok_or(Error::GasBudgetExceeded)?;
         Ok(cap_remaining.min(units_remaining / self.units_per_byte))
     }
 }
@@ -244,7 +294,10 @@ impl QueryExecutionStats {
         value: &T,
         budget: Option<QueryExecutionBudget>,
     ) -> Result<(), Error> {
-        self.processed_items = self.processed_items.saturating_add(1);
+        self.processed_items = self
+            .processed_items
+            .checked_add(1)
+            .ok_or(Error::GasBudgetExceeded)?;
         self.record_value_bytes(value, budget)
     }
 
@@ -253,6 +306,10 @@ impl QueryExecutionStats {
         value: &T,
         budget: Option<QueryExecutionBudget>,
     ) -> Result<(), Error> {
+        self.processed_items = self
+            .processed_items
+            .checked_add(1)
+            .ok_or(Error::GasBudgetExceeded)?;
         self.record_value_bytes(value, budget)
     }
 
@@ -266,7 +323,10 @@ impl QueryExecutionStats {
         };
         let remaining = budget.remaining_bytes(self.processed_items, self.processed_bytes)?;
         let encoded = bounded_bare_encoded_len(value, remaining)?;
-        self.processed_bytes = self.processed_bytes.saturating_add(encoded);
+        self.processed_bytes = self
+            .processed_bytes
+            .checked_add(encoded)
+            .ok_or(Error::GasBudgetExceeded)?;
         budget.ensure(self.processed_items, self.processed_bytes)
     }
 
@@ -280,7 +340,10 @@ impl QueryExecutionStats {
         };
         let remaining = budget.remaining_bytes(self.processed_items, self.processed_bytes)?;
         let encoded = bounded_framed_encoded_len(value, remaining)?;
-        self.processed_bytes = self.processed_bytes.saturating_add(encoded);
+        self.processed_bytes = self
+            .processed_bytes
+            .checked_add(encoded)
+            .ok_or(Error::GasBudgetExceeded)?;
         budget.ensure(self.processed_items, self.processed_bytes)
     }
 
@@ -296,7 +359,10 @@ impl QueryExecutionStats {
         if encoded > remaining {
             return Err(Error::GasBudgetExceeded);
         }
-        self.processed_bytes = self.processed_bytes.saturating_add(encoded);
+        self.processed_bytes = self
+            .processed_bytes
+            .checked_add(encoded)
+            .ok_or(Error::GasBudgetExceeded)?;
         budget.ensure(self.processed_items, self.processed_bytes)
     }
 
@@ -305,7 +371,10 @@ impl QueryExecutionStats {
         encoded: u64,
         budget: Option<QueryExecutionBudget>,
     ) -> Result<(), Error> {
-        self.processed_items = self.processed_items.saturating_add(1);
+        self.processed_items = self
+            .processed_items
+            .checked_add(1)
+            .ok_or(Error::GasBudgetExceeded)?;
         self.record_precomputed_bytes(encoded, budget)
     }
 }
@@ -376,12 +445,16 @@ fn bounded_framed_encoded_len<T: NoritoSerialize>(value: &T, limit: u64) -> Resu
         let remainder = Header::SIZE % align;
         if remainder == 0 { 0 } else { align - remainder }
     };
-    let overhead = header.saturating_add(u64::try_from(padding).unwrap_or(u64::MAX));
+    let overhead = header
+        .checked_add(u64::try_from(padding).map_err(|_| Error::GasBudgetExceeded)?)
+        .ok_or(Error::GasBudgetExceeded)?;
     if overhead > limit {
         return Err(Error::GasBudgetExceeded);
     }
-    bounded_bare_encoded_len(value, limit - overhead)
-        .map(|payload| overhead.saturating_add(payload))
+    let payload = bounded_bare_encoded_len(value, limit - overhead)?;
+    overhead
+        .checked_add(payload)
+        .ok_or(Error::GasBudgetExceeded)
 }
 
 fn bounded_encoded_vec_tiebreak_len<T: NoritoSerialize>(
@@ -395,7 +468,9 @@ fn bounded_encoded_vec_tiebreak_len<T: NoritoSerialize>(
         return Err(Error::GasBudgetExceeded);
     }
     let payload = bounded_bare_encoded_len(value, limit - VEC_LENGTH_PREFIX)?;
-    Ok(VEC_LENGTH_PREFIX.saturating_add(payload))
+    VEC_LENGTH_PREFIX
+        .checked_add(payload)
+        .ok_or(Error::GasBudgetExceeded)
 }
 
 fn materialize_admitted_tiebreak_key<T: SortableQueryOutput>(
@@ -436,6 +511,10 @@ impl QueryLimits {
         Self {
             max_fetch_size: max_fetch_size.max(1),
             count_mode: QueryCountMode::Exact,
+            canonical_output_limits: None,
+            singular_output_limits: None,
+            ordinary_execution_limits: None,
+            server_memory_budget: false,
         }
     }
 
@@ -444,6 +523,59 @@ impl QueryLimits {
     pub fn with_count_mode(mut self, count_mode: QueryCountMode) -> Self {
         self.count_mode = count_mode;
         self
+    }
+
+    /// Enable bounded canonical top-K output for a server-owned ephemeral lane.
+    #[must_use]
+    pub fn with_canonical_output_limits(mut self, limits: CanonicalQueryOutputLimits) -> Self {
+        self.canonical_output_limits = Some(limits);
+        self.server_memory_budget = true;
+        self
+    }
+
+    /// Enable bounded singular-output ownership for a server-owned ephemeral lane.
+    #[must_use]
+    pub fn with_singular_output_limits(mut self, limits: SingularQueryOutputLimits) -> Self {
+        self.singular_output_limits = Some(limits);
+        self.server_memory_budget = true;
+        self
+    }
+
+    /// Enable the server-owned memory corridor for one ordinary Torii query.
+    ///
+    /// This is independent of canonical fanout and remains disabled for IVM
+    /// and other in-process query callers.
+    #[must_use]
+    pub(crate) fn with_ordinary_execution_limits(
+        mut self,
+        limits: OrdinaryQueryExecutionLimits,
+    ) -> Self {
+        self.ordinary_execution_limits = Some(limits);
+        self.server_memory_budget = true;
+        self
+    }
+
+    pub(crate) fn with_server_memory_budget(mut self) -> Self {
+        self.server_memory_budget = true;
+        self
+    }
+
+    pub(crate) const fn ordinary_execution_limits(self) -> Option<OrdinaryQueryExecutionLimits> {
+        self.ordinary_execution_limits
+    }
+
+    pub(crate) fn ordinary_cursor_policy(
+        self,
+        pool_generation: u64,
+    ) -> Option<OrdinaryQueryCursorPolicy> {
+        self.ordinary_execution_limits.map(|ordinary| {
+            OrdinaryQueryCursorPolicy::new(
+                ordinary,
+                self.max_fetch_size,
+                self.count_mode,
+                pool_generation,
+            )
+        })
     }
 }
 
@@ -796,307 +928,6 @@ trait ExecuteSingularQuery {
     fn execute(self, state: &impl StateReadOnly) -> Result<SingularQueryOutputBox, Error>;
 }
 
-fn preflight_singular_source_materialization(
-    query: &SingularQueryBox,
-    state: &impl StateReadOnly,
-    budget: Option<QueryExecutionBudget>,
-) -> Result<u64, Error> {
-    let Some(budget) = budget else {
-        return Ok(0);
-    };
-    let limit = budget.remaining_bytes(1, 0)?;
-    let world = state.world();
-
-    fn charge<T: NoritoSerialize>(value: &T, remaining: &mut u64) -> Result<(), Error> {
-        let bytes = bounded_bare_encoded_len(value, *remaining)?;
-        *remaining = (*remaining).saturating_sub(bytes);
-        Ok(())
-    }
-
-    fn reject_unbounded(name: &str) -> Error {
-        Error::Conversion(format!(
-            "IVM singular query `{name}` has no bounded materialization adapter"
-        ))
-    }
-
-    let mut remaining = limit;
-
-    // These entity queries otherwise clone arbitrarily large metadata/content
-    // before the generic output enum can be measured. Measure the borrowed
-    // state value first, so the only owned materialization is already bounded.
-    // The match is deliberately exhaustive: a new singular variant cannot enter
-    // metered IVM execution until it supplies either a borrowed preflight or an
-    // explicitly fixed-size result. Synthesized/decode-heavy legacy singulars
-    // fail closed instead of allocating first and checking later.
-    match query {
-        SingularQueryBox::FindExecutorDataModel(_) => {
-            let model = world.executor_data_model();
-            if model.permissions().is_empty() {
-                return Err(reject_unbounded("FindExecutorDataModel fallback"));
-            }
-            charge(model, &mut remaining)?;
-        }
-        SingularQueryBox::FindParameters(_) => charge(world.parameters(), &mut remaining)?,
-        SingularQueryBox::FindAccountById(query) => {
-            if let Ok(account) = world.account(query.account_id()) {
-                charge(account.value().as_ref(), &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindAccountByAlias(query) => {
-            let now_ms = state.latest_block().map_or(0, |block| {
-                u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-            });
-            let account_id = crate::sns::resolve_active_account_alias(
-                world,
-                &state.nexus().dataspace_catalog,
-                query.alias(),
-                now_ms,
-            )
-            .ok_or_else(|| reject_unbounded("FindAccountByAlias without indexed binding"))?;
-            if let Ok(account) = world.account(&account_id) {
-                charge(account.value().as_ref(), &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindAliasesByAccountId(_) => {
-            return Err(reject_unbounded("FindAliasesByAccountId"));
-        }
-        SingularQueryBox::FindAccountRecoveryPolicyByAlias(query) => {
-            if let Some(policy) = world.account_recovery_policies().get(query.alias()) {
-                charge(policy, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindAccountRecoveryRequestByAlias(query) => {
-            if let Some(request) = world.account_recovery_requests().get(query.alias()) {
-                charge(request, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindProofRecordById(query) => {
-            if let Some(record) = world.proofs().get(&query.id) {
-                charge(record, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindContractManifestByCodeHash(query) => {
-            if let Some(manifest) = world.contract_manifests().get(&query.code_hash) {
-                charge(manifest, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindAbiVersion(_) => {}
-        SingularQueryBox::FindAssetById(query) => {
-            if let Ok(asset) = world.asset(query.asset_id()) {
-                charge(asset.value().as_ref(), &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindDomainById(query) => {
-            if let Ok(domain) = world.domain(query.domain_id()) {
-                charge(domain, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindAssetDefinitionById(query) => {
-            if let Some(definition) = world.asset_definitions().get(query.asset_definition_id()) {
-                charge(definition, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindAssetEscrowById(query) => {
-            if let Some(record) = world.asset_escrows().get(&query.escrow_id) {
-                charge(record, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindTriggerById(_) => {
-            return Err(reject_unbounded("FindTriggerById"));
-        }
-        SingularQueryBox::FindTwitterBindingByHash(query) => {
-            if let Some(record) = world.twitter_bindings().get(&query.binding_hash.digest) {
-                charge(record, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindOracleFeedById(query) => {
-            if let Some(record) = world.oracle_feeds().get(&query.feed_id) {
-                charge(record, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindOracleDisputeById(query) => {
-            if let Some(record) = world.oracle_disputes().get(&query.dispute_id) {
-                charge(record, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindOracleChangeById(query) => {
-            if let Some(record) = world.oracle_changes().get(&query.change_id) {
-                charge(record, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindOracleProviderStatsByKey(_) => {}
-        SingularQueryBox::FindLatestDefiOracleAttestation(query) => {
-            if let Some(record) = world
-                .defi_oracle_attestations()
-                .get(&query.key)
-                .and_then(|records| records.last())
-            {
-                charge(record, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindDomainEndorsements(query) => {
-            if let Some(hashes) = world.domain_endorsements_by_domain().get(&query.domain_id) {
-                charge(hashes, &mut remaining)?;
-                for hash in hashes {
-                    if let Some(record) = world.domain_endorsements().get(hash) {
-                        charge(record, &mut remaining)?;
-                    }
-                }
-            }
-        }
-        SingularQueryBox::FindDomainEndorsementPolicy(query) => {
-            if let Some(policy) = world.domain_endorsement_policies().get(&query.domain_id) {
-                charge(policy, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindDomainCommittee(query) => {
-            if let Some(committee) = world.domain_committees().get(&query.committee_id) {
-                charge(committee, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindDaPinIntentByTicket(query) => {
-            if let Some(intent) = world.da_pin_intents_by_ticket().get(&query.storage_ticket) {
-                charge(intent, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindDaPinIntentByManifest(query) => {
-            if let Some(ticket) = world.da_pin_intents_by_manifest().get(&query.manifest_hash)
-                && let Some(intent) = world.da_pin_intents_by_ticket().get(ticket)
-            {
-                charge(intent, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindDaPinIntentByAlias(query) => {
-            if let Some(ticket) = world.da_pin_intents_by_alias().get(&query.alias)
-                && let Some(intent) = world.da_pin_intents_by_ticket().get(ticket)
-            {
-                charge(intent, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindDaPinIntentByLaneEpochSequence(query) => {
-            if let Some(ticket) = world.da_pin_intents_by_lane_epoch().get(&(
-                query.lane_id,
-                query.epoch,
-                query.sequence,
-            )) && let Some(intent) = world.da_pin_intents_by_ticket().get(ticket)
-            {
-                charge(intent, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindLaneRelayEnvelopeByRef(_) => {
-            return Err(reject_unbounded("FindLaneRelayEnvelopeByRef"));
-        }
-        SingularQueryBox::FindFeeSponsorProgramById(query) => {
-            if let Some(policy) = world.fee_sponsor_programs().get(&query.id) {
-                charge(policy, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindFxCorridorPolicyRegistry(_) => {
-            return Err(reject_unbounded("FindFxCorridorPolicyRegistry"));
-        }
-        SingularQueryBox::FindFxCorridorPolicyById(_) => {
-            return Err(reject_unbounded("FindFxCorridorPolicyById"));
-        }
-        SingularQueryBox::FindSorafsProviderOwner(query) => {
-            if let Some(owner) = world.provider_owners().get(&query.provider_id) {
-                charge(owner, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindSorafsPinManifest(query) => {
-            if let Some(manifest) = world.pin_manifests().get(&query.digest) {
-                charge(manifest, &mut remaining)?;
-            }
-        }
-        SingularQueryBox::FindSorafsPinManifests(_) => {
-            return Err(reject_unbounded("SoraFS pin-manifest page query"));
-        }
-        SingularQueryBox::FindSorafsOrderbookPolicy(_)
-        | SingularQueryBox::FindSorafsOrderbookOrderById(_)
-        | SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_)
-        | SingularQueryBox::FindSorafsOrderbookReceiptById(_)
-        | SingularQueryBox::FindSorafsOrderbookTradeById(_)
-        | SingularQueryBox::FindSorafsOrderbookChannelById(_)
-        | SingularQueryBox::FindSorafsOrderbookStatus(_)
-        | SingularQueryBox::FindSorafsOrderbookOrders(_)
-        | SingularQueryBox::FindSorafsOrderbookReceipts(_)
-        | SingularQueryBox::FindSorafsOrderbookTrades(_)
-        | SingularQueryBox::FindSorafsOrderbookChannels(_)
-        | SingularQueryBox::FindSorafsOrderbookEvents(_) => {
-            return Err(reject_unbounded("SoraFS orderbook query"));
-        }
-        SingularQueryBox::FindSorafsReservePolicy(_)
-        | SingularQueryBox::FindSorafsReserveProviderById(_)
-        | SingularQueryBox::FindSorafsReserveMovementById(_)
-        | SingularQueryBox::FindSorafsReserveAppealById(_)
-        | SingularQueryBox::FindSorafsReserveProviders(_)
-        | SingularQueryBox::FindSorafsReserveMovements(_)
-        | SingularQueryBox::FindSorafsReserveAppeals(_)
-        | SingularQueryBox::FindSorafsReserveEvents(_) => {
-            return Err(reject_unbounded("SoraFS reserve query"));
-        }
-        SingularQueryBox::FindSorafsPopIssuerPolicy(_)
-        | SingularQueryBox::FindSorafsPopCredentialCommitmentByDigest(_)
-        | SingularQueryBox::FindSorafsPopCommitmentRootByVersion(_)
-        | SingularQueryBox::FindSorafsPopRevocationPublicationByVersion(_)
-        | SingularQueryBox::FindSorafsPopRevocationByNonceCommitment(_)
-        | SingularQueryBox::FindSorafsPopAuditDigestBySequence(_)
-        | SingularQueryBox::FindSorafsPopRegistryStatus(_) => {
-            return Err(reject_unbounded("SoraFS PoP registry query"));
-        }
-        SingularQueryBox::FindSorafsRepairTask(_)
-        | SingularQueryBox::FindSorafsRepairTasks(_)
-        | SingularQueryBox::FindSorafsRepairStatus(_)
-        | SingularQueryBox::FindSorafsRepairEvents(_) => {
-            return Err(reject_unbounded("SoraFS repair query"));
-        }
-        SingularQueryBox::FindSorafsProofOutcome(_)
-        | SingularQueryBox::FindSorafsProofOutcomeEvents(_) => {
-            return Err(reject_unbounded("SoraFS proof-outcome query"));
-        }
-        SingularQueryBox::FindSorafsReputationJournalAuthorityPolicy(_)
-        | SingularQueryBox::FindSorafsReputationJournalEventBySourceId(_)
-        | SingularQueryBox::FindSorafsReputationJournalEvents(_) => {
-            return Err(reject_unbounded("SoraFS reputation-journal query"));
-        }
-        SingularQueryBox::FindSorafsModerationPolicy(_)
-        | SingularQueryBox::FindSorafsModerationAppeal(_)
-        | SingularQueryBox::FindSorafsModerationJurorEligibility(_)
-        | SingularQueryBox::FindSorafsModerationCase(_)
-        | SingularQueryBox::FindSorafsModerationCommit(_)
-        | SingularQueryBox::FindSorafsModerationReveal(_)
-        | SingularQueryBox::FindSorafsModerationChallenge(_)
-        | SingularQueryBox::FindSorafsModerationOutcome(_)
-        | SingularQueryBox::FindSorafsModerationNoShow(_)
-        | SingularQueryBox::FindSorafsModerationStatus(_)
-        | SingularQueryBox::FindSorafsModerationSnapshot(_)
-        | SingularQueryBox::FindSorafsModerationEvents(_) => {
-            return Err(reject_unbounded("SoraFS moderation query"));
-        }
-        SingularQueryBox::FindDataspaceNameOwnerById(_) => {
-            return Err(reject_unbounded("FindDataspaceNameOwnerById"));
-        }
-        SingularQueryBox::FindMusubiExactPackageV1(_)
-        | SingularQueryBox::FindMusubiExactReleaseV1(_)
-        | SingularQueryBox::FindMusubiProviderBundleAttestationV1(_)
-        | SingularQueryBox::FindMusubiResolverIndexV1(_)
-        | SingularQueryBox::FindMusubiVersionsV1(_)
-        | SingularQueryBox::FindMusubiMaintainersV1(_)
-        | SingularQueryBox::FindMusubiArchiveLocationsV1(_)
-        | SingularQueryBox::FindMusubiArchiveRetentionV1(_)
-        | SingularQueryBox::FindMusubiAliasV1(_)
-        | SingularQueryBox::FindMusubiAliasHistoryV1(_)
-        | SingularQueryBox::FindMusubiOrderedPrefixV1(_) => {
-            return Err(reject_unbounded("Musubi V1 query"));
-        }
-        SingularQueryBox::FindNftById(query) => {
-            if let Ok(nft) = world.nft(query.nft_id()) {
-                charge(nft.value().as_ref(), &mut remaining)?;
-            }
-        }
-    }
-    Ok(limit.saturating_sub(remaining))
-}
-
 impl ExecuteSingularQuery for SingularQueryBox {
     fn execute(self, state: &impl StateReadOnly) -> Result<SingularQueryOutputBox, Error> {
         match self {
@@ -1412,7 +1243,22 @@ where
     (norito::codec::Encode::encode(&query) == payload).then_some(query)
 }
 
-fn encode_stored_query_revalidation_request(request: &QueryRequest) -> Result<Vec<u8>, Error> {
+fn encode_stored_query_revalidation_request(
+    request: &QueryRequest,
+    max_bytes: Option<u64>,
+) -> Result<Vec<u8>, Error> {
+    if let Some(max_bytes) = max_bytes {
+        let max_bytes = usize::try_from(max_bytes).map_err(|_| Error::CapacityLimit)?;
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        return norito::core::to_bytes_bounded(request, max_bytes).map_err(|error| match error {
+            norito::core::BoundedEncodeError::FrameTooLarge { .. }
+            | norito::core::BoundedEncodeError::AllocationFailed { .. } => Error::CapacityLimit,
+            norito::core::BoundedEncodeError::Serialization(error) => Error::Conversion(format!(
+                "failed to encode stored-query authorization request: {error}"
+            )),
+        });
+    }
     norito::encode_canonical(request).map_err(|error| {
         Error::Conversion(format!(
             "failed to encode stored-query authorization request: {error}"
@@ -1707,7 +1553,7 @@ pub fn apply_query_postprocessing<I>(
 ) -> Result<ErasedQueryIterator, Error>
 where
     I: Iterator<Item: SortableQueryOutput>,
-    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
@@ -2484,6 +2330,12 @@ fn try_handle_find_transactions_ephemeral(
     limits: QueryLimits,
     budget: Option<QueryExecutionBudget>,
 ) -> Result<(QueryOutput, QueryExecutionStats), Error> {
+    if limits.canonical_output_limits.is_some() {
+        return Err(Error::Conversion(
+            "canonical fanout rejects `FindTransactions` before source execution because a carrier materializes transaction rows before per-row admission"
+                .to_owned(),
+        ));
+    }
     validate_transaction_sorted_materialization_budget(params, limits)?;
     let page = scan_transaction_page(
         state,
@@ -2816,24 +2668,46 @@ where
         return Err(Error::FetchSizeTooBig);
     }
 
-    let offset = usize::try_from(params.pagination.offset_value()).unwrap_or(usize::MAX);
-    let limit = params
-        .pagination
-        .limit_value()
-        .map(|limit| usize::try_from(limit.get()).unwrap_or(usize::MAX));
+    let offset = params.pagination.offset_value();
+    let limit = params.pagination.limit_value().map(|limit| limit.get());
     let fetch_size_usize = usize::try_from(fetch_size.get()).unwrap_or(usize::MAX);
-    let first_take = limit.map_or(fetch_size_usize, |limit| limit.min(fetch_size_usize));
-    let mut iter = iter.skip(offset).peekable();
-    let first_batch_values: Vec<_> = iter.by_ref().take(first_take).collect();
+    let first_take = limit.map_or(fetch_size.get(), |limit| limit.min(fetch_size.get()));
+    let first_take = usize::try_from(first_take).map_err(|_| Error::CapacityLimit)?;
+    let budget = limits
+        .ordinary_execution_limits
+        .map(OrdinaryQueryExecutionLimits::execution_budget);
+    let mut stats = QueryExecutionStats::default();
+    let mut iter = iter;
+    let mut skipped = 0_u64;
+    while skipped < offset {
+        let Some(value) = iter.next() else {
+            break;
+        };
+        stats.record_skipped_value(&value, budget)?;
+        skipped = skipped.checked_add(1).ok_or(Error::GasBudgetExceeded)?;
+    }
+    let mut first_batch_values = Vec::new();
+    first_batch_values
+        .try_reserve_exact(first_take.min(fetch_size_usize))
+        .map_err(|_| Error::CapacityLimit)?;
+    while first_batch_values.len() < first_take {
+        let Some(value) = iter.next() else {
+            break;
+        };
+        stats.record_item(&value, budget)?;
+        first_batch_values.push(value);
+    }
     let batch_len = first_batch_values.len();
     let selector_for_deferred = selector.clone();
     let mut batch_iter =
         ErasedQueryIterator::new(first_batch_values.into_iter(), selector, fetch_size);
     let (first_batch, _next) = batch_iter.next_batch(0)?;
 
-    let remaining_limit = limit.map(|limit| limit.saturating_sub(batch_len));
-    let has_more = remaining_limit != Some(0) && iter.peek().is_some();
-    if !has_more {
+    let batch_len_u64 = u64::try_from(batch_len).map_err(|_| Error::CapacityLimit)?;
+    let remaining_limit = limit
+        .map(|limit| limit.checked_sub(batch_len_u64).ok_or(Error::CapacityLimit))
+        .transpose()?;
+    if remaining_limit == Some(0) {
         return Ok(PreparedQueryStart {
             first_batch,
             remaining_items: None,
@@ -2841,29 +2715,57 @@ where
         });
     }
 
-    let first_cursor = NonZeroU64::new(u64::try_from(batch_len).unwrap_or(u64::MAX))
-        .expect("stored bounded continuation requires a non-empty first batch");
-    let requested_tail = remaining_limit.unwrap_or(usize::MAX);
-    let retained_item_limit = requested_tail.min(MAX_STORED_QUERY_RETAINED_ITEMS);
-    let must_detect_item_overflow = requested_tail > retained_item_limit;
-    let mut deferred_values = Vec::with_capacity(retained_item_limit.min(1_024));
+    let requested_tail = remaining_limit.unwrap_or(u64::MAX);
+    let configured_retained_items = limits.ordinary_execution_limits.map_or(
+        u64::try_from(MAX_STORED_QUERY_RETAINED_ITEMS).unwrap_or(u64::MAX),
+        |ordinary| ordinary.max_cursor_retained_items(),
+    );
+    let retained_item_limit = requested_tail.min(configured_retained_items);
+    let retained_item_limit =
+        usize::try_from(retained_item_limit).map_err(|_| Error::CapacityLimit)?;
+    let must_detect_item_overflow =
+        requested_tail > u64::try_from(retained_item_limit).map_err(|_| Error::CapacityLimit)?;
+    let configured_retained_bytes = limits
+        .ordinary_execution_limits
+        .map_or(MAX_STORED_QUERY_RETAINED_BYTES, |ordinary| {
+            ordinary.max_cursor_value_bytes()
+        });
+    let mut deferred_values = Vec::new();
+    deferred_values
+        .try_reserve_exact(retained_item_limit)
+        .map_err(|_| Error::CapacityLimit)?;
     let mut retained_bytes = 0_u64;
     while deferred_values.len() < retained_item_limit {
         let Some(value) = iter.next() else {
             break;
         };
-        let remaining_bytes = MAX_STORED_QUERY_RETAINED_BYTES.saturating_sub(retained_bytes);
+        stats.record_item(&value, budget)?;
+        let remaining_bytes = configured_retained_bytes
+            .checked_sub(retained_bytes)
+            .ok_or(Error::CapacityLimit)?;
         let value_bytes = match bounded_bare_encoded_len(&value, remaining_bytes) {
             Ok(bytes) => bytes,
             Err(Error::GasBudgetExceeded) => return Err(Error::CapacityLimit),
             Err(error) => return Err(error),
         };
-        retained_bytes = retained_bytes.saturating_add(value_bytes);
+        retained_bytes = retained_bytes
+            .checked_add(value_bytes)
+            .ok_or(Error::CapacityLimit)?;
         deferred_values.push(value);
     }
-    if must_detect_item_overflow && iter.next().is_some() {
+    if must_detect_item_overflow && let Some(value) = iter.next() {
+        stats.record_item(&value, budget)?;
         return Err(Error::CapacityLimit);
     }
+    if deferred_values.is_empty() {
+        return Ok(PreparedQueryStart {
+            first_batch,
+            remaining_items: None,
+            deferred_continuation: None,
+        });
+    }
+    let first_cursor = NonZeroU64::new(batch_len_u64)
+        .expect("stored bounded continuation requires a non-empty first batch");
     let deferred_continuation = DeferredQueryContinuation::new(first_cursor, None, move || {
         ErasedQueryIterator::new_streaming_with_cursor(
             deferred_values.into_iter(),
@@ -3014,7 +2916,16 @@ where
         return live_query_store.handle_iter_start_prepared(prepared, authority, gas_budget);
     }
 
-    let batched = apply_query_postprocessing(iter, selector, params, limits)?;
+    let server_execution_budget = limits
+        .ordinary_execution_limits
+        .map(OrdinaryQueryExecutionLimits::execution_budget);
+    let (batched, _) = apply_query_postprocessing_with_budget(
+        iter,
+        selector,
+        params,
+        limits,
+        server_execution_budget,
+    )?;
     live_query_store.handle_iter_start(batched, authority, gas_budget)
 }
 
@@ -3181,6 +3092,11 @@ where
     if batch_size.get() > max_fetch {
         return Err(Error::FetchSizeTooBig);
     }
+    if limits.canonical_output_limits.is_some() {
+        return Err(Error::Conversion(
+            "canonical query execution requires pre-source admission dispatch".to_owned(),
+        ));
+    }
     let mut stats = QueryExecutionStats::default();
 
     if limits.count_mode == QueryCountMode::Bounded && params.sorting.sort_by_metadata_key.is_none()
@@ -3333,14 +3249,14 @@ where
             break;
         };
         stats.record_skipped_value(&value, budget)?;
-        skipped = skipped.saturating_add(1);
+        skipped = skipped.checked_add(1).ok_or(Error::GasBudgetExceeded)?;
     }
     while !limit.is_some_and(|limit| count >= limit) {
         let Some(value) = iter.next() else {
             break;
         };
-        count = count.saturating_add(1);
         stats.record_item(&value, budget)?;
+        count = count.checked_add(1).ok_or(Error::GasBudgetExceeded)?;
         if first_batch_values.len() < fetch_size {
             first_batch_values.push(value);
         }
@@ -3350,8 +3266,14 @@ where
     let mut batch_iter =
         ErasedQueryIterator::new(first_batch_values.into_iter(), selector, batch_size);
     let (batch, _next) = batch_iter.next_batch(0)?;
-    let remaining_items = count.saturating_sub(u64::try_from(batch_len).unwrap_or(u64::MAX));
-    debug_assert_eq!(stats.processed_items(), count);
+    let batch_len = u64::try_from(batch_len).map_err(|_| Error::GasBudgetExceeded)?;
+    let remaining_items = count
+        .checked_sub(batch_len)
+        .ok_or(Error::GasBudgetExceeded)?;
+    debug_assert_eq!(
+        stats.processed_items(),
+        skipped.checked_add(count).unwrap_or(u64::MAX)
+    );
     Ok((QueryOutput::new(batch, remaining_items, None), stats))
 }
 
@@ -3360,11 +3282,11 @@ fn apply_query_postprocessing_with_budget<I>(
     selector: SelectorTuple<I::Item>,
     params: &QueryParams,
     limits: QueryLimits,
-    budget_items: Option<u64>,
+    budget: Option<QueryExecutionBudget>,
 ) -> Result<(ErasedQueryIterator, u64), Error>
 where
     I: Iterator<Item: SortableQueryOutput>,
-    I::Item: HasProjection<SelectorMarker, AtomType = ()> + Send + Sync + 'static,
+    I::Item: HasProjection<SelectorMarker, AtomType = ()> + NoritoSerialize + Send + Sync + 'static,
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
@@ -3379,17 +3301,21 @@ where
     }
 
     // sort & paginate, erase the iterator with QueryBatchedErasedIterator
-    let (output, processed_items) = if let Some(key) = params.sorting.sort_by_metadata_key.as_ref()
-    {
+    let materialized_item_limit = limits
+        .ordinary_execution_limits
+        .map(OrdinaryQueryExecutionLimits::max_cursor_retained_items);
+    let mut stats = QueryExecutionStats::default();
+    let output = if let Some(key) = params.sorting.sort_by_metadata_key.as_ref() {
         // if sorting was requested, we need to retrieve all the results first
         let mut count = 0_u64;
         let mut values = Vec::new();
         let mut sort_keys = Vec::new();
         let mut tiebreak_keys = Vec::new();
         for value in iter {
-            count = count.saturating_add(1);
-            if budget_items.is_some_and(|limit| count > limit) {
-                return Err(Error::GasBudgetExceeded);
+            stats.record_item(&value, budget)?;
+            count = count.checked_add(1).ok_or(Error::GasBudgetExceeded)?;
+            if materialized_item_limit.is_some_and(|limit| count > limit) {
+                return Err(Error::CapacityLimit);
             }
             sort_keys.push(value.get_metadata_sorting_key(key).cloned());
             tiebreak_keys.push(value.tiebreak_key());
@@ -3397,44 +3323,62 @@ where
         }
         let order = params.sorting.order.unwrap_or(SortOrder::Asc);
 
-        (
-            ErasedQueryIterator::new(
-                IncrementalSortedValues::new(
-                    values,
-                    sort_keys,
-                    tiebreak_keys,
-                    params.pagination,
-                    fetch_size,
-                    order,
-                ),
-                selector,
+        ErasedQueryIterator::new(
+            IncrementalSortedValues::new(
+                values,
+                sort_keys,
+                tiebreak_keys,
+                params.pagination,
                 fetch_size,
+                order,
             ),
-            count,
+            selector,
+            fetch_size,
         )
     } else {
         // FP: this collect is very deliberate
         #[allow(clippy::needless_collect)]
         let mut count = 0_u64;
+        let mut skipped = 0_u64;
+        let offset = params.pagination.offset_value();
+        let limit = params.pagination.limit_value().map(|limit| limit.get());
         let output = {
             let mut output = Vec::new();
-            for value in iter.paginate(params.pagination) {
-                count = count.saturating_add(1);
-                if budget_items.is_some_and(|limit| count > limit) {
-                    return Err(Error::GasBudgetExceeded);
+            if let Some(materialized_item_limit) = materialized_item_limit {
+                let requested = limit
+                    .unwrap_or(materialized_item_limit)
+                    .min(materialized_item_limit);
+                let requested = usize::try_from(requested).map_err(|_| Error::CapacityLimit)?;
+                output
+                    .try_reserve_exact(requested)
+                    .map_err(|_| Error::CapacityLimit)?;
+            }
+            let mut iter = iter;
+            while skipped < offset {
+                let Some(value) = iter.next() else {
+                    break;
+                };
+                stats.record_skipped_value(&value, budget)?;
+                skipped = skipped.checked_add(1).ok_or(Error::GasBudgetExceeded)?;
+            }
+            while !limit.is_some_and(|limit| count >= limit) {
+                let Some(value) = iter.next() else {
+                    break;
+                };
+                stats.record_item(&value, budget)?;
+                count = count.checked_add(1).ok_or(Error::GasBudgetExceeded)?;
+                if materialized_item_limit.is_some_and(|limit| count > limit) {
+                    return Err(Error::CapacityLimit);
                 }
                 output.push(value);
             }
             output
         };
 
-        (
-            ErasedQueryIterator::new(output.into_iter(), selector, fetch_size),
-            count,
-        )
+        ErasedQueryIterator::new(output.into_iter(), selector, fetch_size)
     };
 
-    Ok((output, processed_items))
+    Ok((output, stats.processed_items()))
 }
 
 fn validate_query_request_limits(
@@ -3886,8 +3830,20 @@ impl ValidQueryRequest {
         replay_state: Option<Weak<State>>,
         stored_start_budget: Option<u64>,
     ) -> Result<QueryResponse, Error> {
+        if let Some(ordinary_limits) = self.limits.ordinary_execution_limits {
+            ordinary_memory::ensure_request_admitted(
+                &self.request,
+                ordinary_memory::OrdinaryCursorMode::Stored,
+                self.limits,
+                ordinary_limits,
+            )?;
+        }
+        let revalidation_limit = self
+            .limits
+            .ordinary_execution_limits
+            .map(OrdinaryQueryExecutionLimits::max_revalidation_archive_bytes);
         let revalidation_archive = matches!(&self.request, QueryRequest::Start(_))
-            .then(|| encode_stored_query_revalidation_request(&self.request))
+            .then(|| encode_stored_query_revalidation_request(&self.request, revalidation_limit))
             .transpose()?;
         let response = self.execute_stored_inner(
             live_query_store,
@@ -4240,6 +4196,12 @@ impl ValidQueryRequest {
                                 iroha_data_model::query::block::prelude::FindBlockHeaders
                             ),
                             QueryItemKind::ProofRecord => {
+                                if limits.canonical_output_limits.is_some() {
+                                    return Err(Error::Conversion(
+                                        "canonical fanout rejects proof queries before source execution because their implementations are not protocol-bounded"
+                                            .to_owned(),
+                                    ));
+                                }
                                 let pred = dec::<
                                     iroha_data_model::query::dsl::CompoundPredicate<
                                         iroha_data_model::proof::ProofRecord,
@@ -5038,7 +5000,11 @@ impl ValidQueryRequest {
                     authority,
                     stored_cursor_budget,
                     replay_state.clone(),
-                    |e| try_decode_query::<iroha_data_model::query::role::prelude::FindRoleIds>(e),
+                    |e| {
+                        e.payload()
+                            .is_empty()
+                            .then_some(iroha_data_model::query::role::prelude::FindRoleIds)
+                    },
                 )? {
                     return Ok(resp);
                 }
@@ -5157,9 +5123,9 @@ impl ValidQueryRequest {
                     stored_cursor_budget,
                     replay_state.clone(),
                     |e| {
-                        try_decode_query::<
+                        e.payload().is_empty().then_some(
                             iroha_data_model::query::trigger::prelude::FindActiveTriggerIds,
-                        >(e)
+                        )
                     },
                 )? {
                     return Ok(resp);
@@ -5186,6 +5152,12 @@ impl ValidQueryRequest {
                     return Ok(resp);
                 }
                 if let Some(erased) = query::iter_query_inner::<CommittedTransaction>(qbox) {
+                    if limits.canonical_output_limits.is_some() {
+                        return Err(Error::Conversion(
+                            "canonical fanout rejects `FindTransactions` before payload decoding or source execution"
+                                .into(),
+                        ));
+                    }
                     if decode_iter_query_payload_exact::<
                         iroha_data_model::query::transaction::prelude::FindTransactions,
                     >(erased.payload())
@@ -5465,20 +5437,38 @@ impl ValidQueryRequest {
         budget: Option<QueryExecutionBudget>,
     ) -> Result<(QueryResponse, QueryExecutionStats), Error> {
         let Self { request, limits } = self;
+        if let Some(ordinary_limits) = limits.ordinary_execution_limits {
+            ordinary_memory::ensure_request_admitted(
+                &request,
+                ordinary_memory::OrdinaryCursorMode::Ephemeral,
+                limits,
+                ordinary_limits,
+            )?;
+        }
+        let budget = limits
+            .ordinary_execution_limits
+            .map(OrdinaryQueryExecutionLimits::execution_budget)
+            .or(budget);
         let budget_items = budget;
         match request {
             QueryRequest::Singular(singular_query) => {
-                let source_bytes =
-                    preflight_singular_source_materialization(&singular_query, state, budget)?;
                 let mut stats = QueryExecutionStats::default();
-                // The borrowed preflight is real deterministic work and must
-                // be admitted together with the one result item before the
-                // query clones or synthesizes its owned output.
-                stats.record_preflighted_item(source_bytes, budget)?;
-                let output = singular_query.execute(state)?;
-                // Materializing the generic output and framing the response
-                // are separate serialization passes, charged below and by
-                // `execute_ephemeral_with_stats`, respectively.
+                if limits.server_memory_budget
+                    && let Some(server_budget) = budget
+                {
+                    let source_bytes =
+                        ordinary_memory::preflight_server_singular_source_materialization(
+                            &singular_query,
+                            state,
+                            server_budget,
+                            limits.singular_output_limits.is_some(),
+                        )?;
+                    stats.record_preflighted_item(source_bytes, Some(server_budget))?;
+                }
+                let output =
+                    singular_memory::execute_with_limits(limits.singular_output_limits, || {
+                        singular_query.execute(state)
+                    })?;
                 stats.record_value_bytes(&output, budget)?;
                 Ok((QueryResponse::Singular(output), stats))
             }
@@ -5513,7 +5503,7 @@ impl ValidQueryRequest {
                 ) -> Result<Option<(QueryResponse, QueryExecutionStats)>, Error>
                 where
                     T: Send + Sync + 'static,
-                    Q: super::super::ValidQuery<Item = T>,
+                    Q: super::super::ValidQuery<Item = T> + 'static,
                     T: HasProjection<SelectorMarker, AtomType = ()>
                         + HasProjection<PredicateMarker>
                         + crate::smartcontracts::isi::query::SortableQueryOutput
@@ -5527,7 +5517,29 @@ impl ValidQueryRequest {
                     F: Fn(&query::ErasedIterQuery<T>) -> Option<Q>,
                 {
                     if let Some(erased) = query::iter_query_inner::<T>(qbox) {
-                        // Decode the concrete query variant from the payload
+                        if let Some(output_limits) = limits.canonical_output_limits {
+                            canonical_topk::ensure_canonical_query_source_admitted::<T, Q>(
+                                erased.predicate(),
+                                erased.selector(),
+                                params,
+                                output_limits,
+                            )?;
+                            let Some(concrete) = decode(erased) else {
+                                return Ok(None);
+                            };
+                            let (output, stats) = canonical_topk::execute_canonical_query(
+                                concrete,
+                                erased.predicate_cloned(),
+                                erased.selector_cloned(),
+                                state,
+                                params,
+                                limits,
+                                output_limits,
+                                budget,
+                            )?;
+                            return Ok(Some((QueryResponse::Iterable(output), stats)));
+                        }
+                        // Decode the concrete query variant from the payload.
                         let Some(concrete) = decode(erased) else {
                             return Ok(None);
                         };
@@ -5551,6 +5563,12 @@ impl ValidQueryRequest {
                 // Fast-DSL path: when the boxed query payload is not present, reconstruct
                 // from item kind and encoded predicate/selector.
                 if iter_query.query_box().is_none() {
+                    if limits.canonical_output_limits.is_some() {
+                        return Err(Error::Conversion(
+                            "canonical fanout rejects opaque fast-DSL starts before nested payload, predicate, or selector decoding"
+                                .to_owned(),
+                        ));
+                    }
                     #[cfg(feature = "fast_dsl")]
                     {
                         use iroha_data_model::query::QueryItemKind;
@@ -5568,10 +5586,6 @@ impl ValidQueryRequest {
                             // Unit queries have an empty canonical payload. Reject any other bytes so
                             // parameterized or malformed payloads cannot become global queries.
                             ($itemty:ty, $find:ty) => {{
-                                let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
-                                    dec(&iter_query.predicate_bytes)?;
-                                let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
-                                    dec(&iter_query.selector_bytes)?;
                                 let concrete: $find =
                                     decode_iter_query_payload_exact(&iter_query.query_payload)
                                         .ok_or_else(|| {
@@ -5579,6 +5593,10 @@ impl ValidQueryRequest {
                                                 "malformed payload for unit iterable query".into(),
                                             )
                                         })?;
+                                let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
+                                    dec(&iter_query.predicate_bytes)?;
+                                let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
+                                    dec(&iter_query.selector_bytes)?;
                                 let iter = ValidQuery::execute(concrete, pred, state)?;
                                 let (output, processed_items) =
                                     apply_query_postprocessing_ephemeral_with_budget(
@@ -5592,10 +5610,6 @@ impl ValidQueryRequest {
                             }};
                             // For queries that always require a payload (e.g., FindPermissionsByAccountId)
                             (require_payload $itemty:ty, $find:ty) => {{
-                                let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
-                                    dec(&iter_query.predicate_bytes)?;
-                                let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
-                                    dec(&iter_query.selector_bytes)?;
                                 let concrete: $find = decode_iter_query_payload_exact(
                                     &iter_query.query_payload,
                                 )
@@ -5605,6 +5619,10 @@ impl ValidQueryRequest {
                                             .into(),
                                     )
                                 })?;
+                                let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
+                                    dec(&iter_query.predicate_bytes)?;
+                                let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
+                                    dec(&iter_query.selector_bytes)?;
                                 let iter = ValidQuery::execute(concrete, pred, state)?;
                                 let (output, processed_items) =
                                     apply_query_postprocessing_ephemeral_with_budget(
@@ -6072,7 +6090,32 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     None,
-                    |e| try_decode_query::<iroha_data_model::query::role::prelude::FindRoleIds>(e),
+                    |e| {
+                        e.payload()
+                            .is_empty()
+                            .then_some(iroha_data_model::query::role::prelude::FindRoleIds)
+                    },
+                )? {
+                    return Ok((resp, processed_items));
+                }
+                if let Some((resp, processed_items)) = run_dispatch::<
+                    iroha_data_model::role::RoleId,
+                    iroha_data_model::query::role::prelude::FindRolesByAccountId,
+                    _,
+                >(
+                    qbox,
+                    params,
+                    limits,
+                    budget_items,
+                    state,
+                    live_query_store,
+                    authority,
+                    None,
+                    |e| {
+                        try_decode_query::<
+                            iroha_data_model::query::role::prelude::FindRolesByAccountId,
+                        >(e)
+                    },
                 )? {
                     return Ok((resp, processed_items));
                 }
@@ -6107,9 +6150,9 @@ impl ValidQueryRequest {
                     authority,
                     None,
                     |e| {
-                        try_decode_query::<
+                        e.payload().is_empty().then_some(
                             iroha_data_model::query::trigger::prelude::FindActiveTriggerIds,
-                        >(e)
+                        )
                     },
                 )? {
                     return Ok((resp, processed_items));
@@ -6136,6 +6179,12 @@ impl ValidQueryRequest {
                     return Ok((resp, processed_items));
                 }
                 if let Some(erased) = query::iter_query_inner::<CommittedTransaction>(qbox) {
+                    if limits.canonical_output_limits.is_some() {
+                        return Err(Error::Conversion(
+                            "canonical fanout rejects `FindTransactions` before payload decoding or source execution"
+                                .into(),
+                        ));
+                    }
                     if decode_iter_query_payload_exact::<
                         iroha_data_model::query::transaction::prelude::FindTransactions,
                     >(erased.payload())
@@ -6722,58 +6771,7 @@ mod tests {
         assert!(next2.is_none());
     }
 
-    #[tokio::test]
-    async fn ephemeral_sorted_query_respects_offset_and_limit() {
-        use iroha_data_model::{
-            domain::Domain,
-            query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
-        };
-        use nonzero_ext::nonzero;
-
-        let mut d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
-        let mut d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
-        let mut d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
-        let d4 = Domain::new(DomainId::try_new("d4", "universal").unwrap()).build(&ALICE_ID);
-        d1.metadata_mut()
-            .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
-        d2.metadata_mut()
-            .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
-        d3.metadata_mut()
-            .insert("rank".parse().unwrap(), Json::from(norito::json!(3)));
-
-        let params = QueryParams {
-            pagination: Pagination {
-                offset: 1,
-                limit: Some(nonzero!(2_u64)),
-            },
-            sorting: Sorting::by_metadata_key("rank".parse().unwrap()),
-            fetch_size: FetchSize {
-                fetch_size: Some(nonzero!(2_u64)),
-            },
-        };
-
-        let selector = SelectorTuple::<Domain>::default();
-        let (output, _processed_items) = apply_query_postprocessing_ephemeral_with_budget(
-            vec![d4, d3.clone(), d1, d2.clone()].into_iter(),
-            selector,
-            &params,
-            QueryLimits::default(),
-            None,
-        )
-        .expect("postprocess");
-
-        let (batch, remaining, cursor) = output.into_parts();
-        assert!(cursor.is_none());
-        assert_eq!(remaining, 0);
-        let mut tuple_iter = batch.into_iter();
-        let v = match tuple_iter.next().expect("slice") {
-            iroha_data_model::query::QueryOutputBatchBox::Domain(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert_eq!(v.len(), 2);
-        assert_eq!(v[0].id, d2.id);
-        assert_eq!(v[1].id, d3.id);
-    }
+    include!("query/ephemeral_sorted_offset_test.rs");
 
     fn domain_with_query_payload(name: &str, payload_bytes: usize, rank: u64) -> Domain {
         let mut domain =
@@ -6802,363 +6800,168 @@ mod tests {
         assert!(matches!(error, Error::GasBudgetExceeded));
     }
 
-    fn root_account_alias(label: &str) -> iroha_data_model::account::AccountAlias {
-        iroha_data_model::account::AccountAlias::domainless(
-            label.parse().expect("alias label"),
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
-        )
+    #[test]
+    fn query_budget_rejects_cross_term_overflow_near_u64_max() {
+        let budget = QueryExecutionBudget::from_weighted_limit(u64::MAX, 1, 1);
+        let half_plus_one = u64::MAX / 2 + 1;
+
+        assert_eq!(
+            budget.ensure(half_plus_one, half_plus_one),
+            Err(Error::GasBudgetExceeded),
+            "individually in-range item and byte terms must not overflow into admission"
+        );
+        assert_eq!(
+            budget.remaining_bytes(half_plus_one, half_plus_one),
+            Err(Error::GasBudgetExceeded)
+        );
     }
 
     #[test]
-    fn singular_alias_preflight_uses_the_index_and_rejects_large_account_before_clone() {
-        let alias = root_account_alias("budgeted-alias");
-        let account_id = ALICE_ID.clone();
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
-        metadata.insert(
-            "oversized".parse().expect("metadata key"),
-            Json::new("x".repeat(128 * 1024)),
+    fn metered_singular_alias_query_preserves_ivm_execution() {
+        let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
         );
-        let account = Account::new(account_id.clone())
-            .with_metadata(metadata)
-            .build(&account_id);
-        let mut world = World::with([], [account], []);
-        let selector = crate::sns::selector_for_account_alias(
-            &alias,
-            &iroha_data_model::nexus::DataSpaceCatalog::default(),
-        )
-        .expect("SNS selector");
-        let address = iroha_data_model::account::AccountAddress::from_account_id(&account_id)
-            .expect("account address");
-        let lease = iroha_data_model::sns::NameRecordV1::new(
-            selector.clone(),
-            account_id.clone(),
-            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
-            0,
-            0,
-            u64::MAX,
-            u64::MAX,
-            u64::MAX,
-            iroha_data_model::metadata::Metadata::default(),
-        );
-        world.smart_contract_state_mut_for_testing().insert(
-            crate::sns::record_storage_key(&selector),
-            norito::codec::Encode::encode(&lease),
-        );
-        world
-            .account_aliases
-            .insert(alias.clone(), account_id.clone());
-        world.account_rekey_records.insert(
-            alias.clone(),
-            iroha_data_model::account::rekey::AccountRekeyRecord::new(
-                alias.clone(),
-                account_id.clone(),
+        let request = ValidQueryRequest {
+            request: QueryRequest::Singular(
+                iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
+                    ALICE_ID.clone(),
+                    None,
+                    None,
+                )
+                .into(),
             ),
-        );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let query = SingularQueryBox::FindAccountByAlias(
-            iroha_data_model::query::account::prelude::FindAccountByAlias { alias },
-        );
-        let budget = QueryExecutionBudget::from_weighted_limit(512, 0, 1);
+            limits: QueryLimits::default(),
+        };
+        let view = state.view();
+        let (response, stats) = request
+            .execute_ephemeral_with_stats(
+                view.query_handle(),
+                &view,
+                &ALICE_ID,
+                Some(QueryExecutionBudget::from_weighted_limit(1_000_000, 1, 1)),
+            )
+            .expect("ordinary metered singular queries remain available to the IVM host");
 
-        let error = preflight_singular_source_materialization(&query, &state.view(), Some(budget))
-            .expect_err("large indexed account must fail before materialization");
-        assert!(matches!(error, Error::GasBudgetExceeded));
+        assert!(matches!(
+            response,
+            QueryResponse::Singular(SingularQueryOutputBox::AccountAliasBindingRecords(records))
+                if records.is_empty()
+        ));
+        assert_eq!(stats.processed_items(), 0);
     }
 
     #[test]
-    fn singular_alias_preflight_never_falls_back_to_a_world_scan() {
-        let alias = root_account_alias("unindexed-alias");
-        let account_id = ALICE_ID.clone();
-        let account = Account::new(account_id.clone()).build(&account_id);
-        let world = World::with([], [account], []);
-        let (replacement_id, replacement_value) = iroha_data_model::IntoKeyValue::into_key_value(
-            Account::new(account_id.clone())
-                .with_label(Some(alias.clone()))
-                .build(&account_id),
-        );
-        let mut block = world.block();
-        {
-            let mut transaction = block.transaction_without_telemetry(
-                iroha_config::parameters::actual::LaneConfig::default(),
-                0,
-            );
-            transaction.insert_account_for_testing(replacement_id, replacement_value);
-            transaction.apply();
-        }
-        block.commit();
+    fn server_metered_alias_query_fails_before_resolution() {
+        let world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let query = SingularQueryBox::FindAccountByAlias(
-            iroha_data_model::query::account::prelude::FindAccountByAlias { alias },
+        let alias = iroha_data_model::account::AccountAlias::domainless(
+            "server-alias".parse().expect("alias label"),
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         );
+        let request = ValidQueryRequest {
+            request: QueryRequest::Singular(
+                iroha_data_model::query::account::prelude::FindAccountByAlias { alias }.into(),
+            ),
+            limits: QueryLimits::default().with_singular_output_limits(
+                SingularQueryOutputLimits::new(64 * 1_024, 64 * 1_024),
+            ),
+        };
+        let view = state.view();
+        let error = request
+            .execute_ephemeral_with_stats(
+                view.query_handle(),
+                &view,
+                &ALICE_ID,
+                Some(QueryExecutionBudget::from_weighted_limit(1_000_000, 1, 1)),
+            )
+            .expect_err("server lane must reject alias resolution before loading a block");
 
-        let error = preflight_singular_source_materialization(
-            &query,
-            &state.view(),
-            Some(QueryExecutionBudget::from_weighted_limit(1_000_000, 1, 1)),
-        )
-        .expect_err("unindexed aliases must fail closed without scanning accounts");
         assert!(matches!(error, Error::Conversion(_)));
     }
 
     #[test]
-    fn proof_outcome_singular_query_is_dispatched_but_metered_ivm_fails_closed() {
-        let state = State::new_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
+    fn server_singular_preflight_charges_synthesized_account_and_asset_shapes() {
+        let domain_id = DomainId::try_new("preflight", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id,
+            "coin".parse().expect("asset name"),
         );
-        let query = || {
-            SingularQueryBox::FindSorafsProofOutcomeEvents(
-                iroha_data_model::query::sorafs::prelude::FindSorafsProofOutcomeEvents {
-                    expected_finalized_cursor: None,
-                    after: None,
-                    limit: 1,
-                },
-            )
-        };
-        let view = state.view();
-
-        let preflight_error = preflight_singular_source_materialization(
-            &query(),
-            &view,
-            Some(QueryExecutionBudget::from_weighted_limit(1_000_000, 1, 1)),
+        let definition = AssetDefinition::numeric(
+            definition_id.clone(),
+            "coin".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
         )
-        .expect_err("metered IVM query must reject decode-heavy materialization");
-        assert!(
-            matches!(
-                &preflight_error,
-                Error::Conversion(message)
-                    if message.contains("SoraFS proof-outcome query")
-            ),
-            "unexpected preflight error: {preflight_error}"
-        );
-
-        let dispatch_error = ExecuteSingularQuery::execute(query(), &view)
-            .expect_err("empty test state has no finalized anchor");
-        assert!(
-            matches!(
-                &dispatch_error,
-                Error::Conversion(message)
-                    if message.contains("require at least one committed block")
-            ),
-            "unexpected dispatch error: {dispatch_error}"
-        );
-    }
-
-    #[test]
-    fn reputation_journal_query_is_dispatched_but_metered_ivm_fails_closed() {
-        let state = State::new_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let query = || {
-            SingularQueryBox::FindSorafsReputationJournalEvents(
-                iroha_data_model::query::sorafs::prelude::FindSorafsReputationJournalEvents {
-                    expected_finalized_cursor: None,
-                    after: None,
-                    limit: 1,
-                },
-            )
-        };
-        let view = state.view();
-
-        let preflight_error = preflight_singular_source_materialization(
-            &query(),
-            &view,
-            Some(QueryExecutionBudget::from_weighted_limit(1_000_000, 1, 1)),
-        )
-        .expect_err("metered IVM query must reject decode-heavy materialization");
-        assert!(
-            matches!(
-                &preflight_error,
-                Error::Conversion(message)
-                    if message.contains("SoraFS reputation-journal query")
-            ),
-            "unexpected preflight error: {preflight_error}"
-        );
-
-        let dispatch_error = ExecuteSingularQuery::execute(query(), &view)
-            .expect_err("empty test state has no finalized anchor");
-        assert!(
-            matches!(
-                &dispatch_error,
-                Error::Conversion(message)
-                    if message.contains("latest finalized Kura block")
-            ),
-            "unexpected dispatch error: {dispatch_error}"
-        );
-    }
-
-    #[test]
-    fn proof_outcome_lookup_is_dispatched_but_metered_ivm_fails_closed() {
-        let state = State::new_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let query = || {
-            SingularQueryBox::FindSorafsProofOutcome(
-                iroha_data_model::query::sorafs::prelude::FindSorafsProofOutcome {
-                    kind: iroha_data_model::sorafs::proof_ledger::ProofOutcomeKindV1::Pdp,
-                    identity_digest: [0x51; 32],
-                    expected_finalized_cursor: None,
-                },
-            )
-        };
-        let view = state.view();
-
-        let preflight_error = preflight_singular_source_materialization(
-            &query(),
-            &view,
-            Some(QueryExecutionBudget::from_weighted_limit(1_000_000, 1, 1)),
-        )
-        .expect_err("metered IVM lookup must reject decode-heavy materialization");
-        assert!(
-            matches!(
-                &preflight_error,
-                Error::Conversion(message)
-                    if message.contains("SoraFS proof-outcome query")
-            ),
-            "unexpected preflight error: {preflight_error}"
-        );
-
-        let dispatch_error = ExecuteSingularQuery::execute(query(), &view)
-            .expect_err("empty test state has no finalized anchor");
-        assert!(
-            matches!(
-                &dispatch_error,
-                Error::Conversion(message)
-                    if message.contains("require at least one committed block")
-            ),
-            "unexpected dispatch error: {dispatch_error}"
-        );
-    }
-
-    #[test]
-    fn singular_manifest_preflight_rejects_large_record_before_clone() {
-        let code_hash = Hash::new(b"large-manifest");
-        let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
-            seiyaku_name: Some("x".repeat(128 * 1024)),
-            code_hash: Some(code_hash),
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            states: None,
-            error_codes: None,
-            kotoba: None,
-            provenance: None,
-        };
-        let mut world = World::default();
-        world.contract_manifests.insert(code_hash, manifest);
+        .build(&ALICE_ID);
+        let asset_id = AssetId::new(definition_id, ALICE_ID.clone());
+        let asset = Asset::new(asset_id.clone(), 7_u32);
+        let world = World::with_assets([domain], [account], [definition], [asset], []);
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let query = SingularQueryBox::FindContractManifestByCodeHash(
-            iroha_data_model::query::smart_contract::prelude::FindContractManifestByCodeHash {
-                code_hash,
-            },
+        let view = state.view();
+        let budget = QueryExecutionBudget::from_weighted_limit(u64::MAX, 0, 1);
+
+        let account_query = SingularQueryBox::FindAccountById(
+            iroha_data_model::query::account::prelude::FindAccountById::new(ALICE_ID.clone()),
+        );
+        let (stored_account_id, stored_account) = view
+            .world()
+            .accounts()
+            .get_key_value(&ALICE_ID)
+            .expect("stored account");
+        let expected_account = bounded_bare_encoded_len(stored_account_id, u64::MAX)
+            .expect("account id length")
+            .checked_add(
+                bounded_bare_encoded_len(stored_account.as_ref(), u64::MAX)
+                    .expect("account details length"),
+            )
+            .and_then(|bytes| bytes.checked_add(64))
+            .expect("account preflight length");
+        assert_eq!(
+            ordinary_memory::preflight_server_singular_source_materialization(
+                &account_query,
+                &view,
+                budget,
+                true,
+            )
+            .expect("account preflight"),
+            expected_account,
         );
 
-        let error = preflight_singular_source_materialization(
-            &query,
-            &state.view(),
-            Some(QueryExecutionBudget::from_weighted_limit(512, 0, 1)),
-        )
-        .expect_err("large manifest must fail before materialization");
-        assert!(matches!(error, Error::GasBudgetExceeded));
-    }
-
-    #[test]
-    fn singular_preflight_work_is_charged_and_exact_budget_passes() {
-        let code_hash = Hash::new(b"metered-manifest");
-        let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
-            seiyaku_name: Some("metered".repeat(32)),
-            code_hash: Some(code_hash),
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            states: None,
-            error_codes: None,
-            kotoba: None,
-            provenance: None,
-        };
-        let mut world = World::default();
-        world.contract_manifests.insert(code_hash, manifest.clone());
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
+        let asset_query = SingularQueryBox::FindAssetById(
+            iroha_data_model::query::asset::prelude::FindAssetById::new(asset_id.clone()),
         );
-        let query = SingularQueryBox::FindContractManifestByCodeHash(
-            iroha_data_model::query::smart_contract::prelude::FindContractManifestByCodeHash {
-                code_hash,
-            },
+        let stored_asset = view.world().asset(&asset_id).expect("stored asset");
+        let expected_asset = bounded_bare_encoded_len(stored_asset.id(), u64::MAX)
+            .expect("asset id length")
+            .checked_add(
+                bounded_bare_encoded_len(stored_asset.value().as_ref(), u64::MAX)
+                    .expect("asset value length"),
+            )
+            .and_then(|bytes| bytes.checked_add(32))
+            .expect("asset preflight length");
+        assert_eq!(
+            ordinary_memory::preflight_server_singular_source_materialization(
+                &asset_query,
+                &view,
+                budget,
+                true,
+            )
+            .expect("asset preflight"),
+            expected_asset,
         );
-        let output = SingularQueryOutputBox::ContractManifest(manifest.clone());
-        let response = QueryResponse::Singular(output.clone());
-        let source_bytes =
-            bounded_bare_encoded_len(&manifest, u64::MAX).expect("measure borrowed manifest");
-        let output_bytes =
-            bounded_bare_encoded_len(&output, u64::MAX).expect("measure generic output");
-        let response_bytes =
-            bounded_framed_encoded_len(&response, u64::MAX).expect("measure framed response");
-        let exact_units = 1_u64
-            .saturating_add(source_bytes)
-            .saturating_add(output_bytes)
-            .saturating_add(response_bytes);
-
-        let tight_budget = QueryExecutionBudget::from_weighted_limit(
-            exact_units.saturating_sub(source_bytes).saturating_sub(1),
-            1,
-            1,
-        );
-        let measured =
-            preflight_singular_source_materialization(&query, &state.view(), Some(tight_budget))
-                .expect("borrowed source fits the initial preflight window");
-        assert_eq!(measured, source_bytes);
-        let mut tight_stats = QueryExecutionStats::default();
-        tight_stats
-            .record_preflighted_item(measured, Some(tight_budget))
-            .expect("item and preflight source fit before owned materialization");
-        tight_stats
-            .record_value_bytes(&output, Some(tight_budget))
-            .expect("generic output still fits");
-        assert!(matches!(
-            tight_stats.record_response(&response, Some(tight_budget)),
-            Err(Error::GasBudgetExceeded)
-        ));
-
-        let exact_budget = QueryExecutionBudget::from_weighted_limit(exact_units, 1, 1);
-        let measured =
-            preflight_singular_source_materialization(&query, &state.view(), Some(exact_budget))
-                .expect("exact budget admits borrowed source");
-        let mut exact_stats = QueryExecutionStats::default();
-        exact_stats
-            .record_preflighted_item(measured, Some(exact_budget))
-            .expect("charge borrowed source");
-        exact_stats
-            .record_value_bytes(&output, Some(exact_budget))
-            .expect("charge generic output");
-        exact_stats
-            .record_response(&response, Some(exact_budget))
-            .expect("charge framed response");
-        assert_eq!(exact_stats.processed_items(), 1);
-        assert_eq!(exact_stats.processed_bytes(), exact_units - 1);
     }
 
     #[test]
@@ -7342,7 +7145,11 @@ mod tests {
             fetch_size: FetchSize::new(Some(nonzero!(2_u64))),
             ..QueryParams::default()
         };
-        let budget = QueryExecutionBudget::from_weighted_limit(byte_budget.saturating_add(2), 1, 1);
+        let budget = QueryExecutionBudget::from_weighted_limit(
+            byte_budget.checked_add(3).expect("item work"),
+            1,
+            1,
+        );
 
         let (output, stats) = apply_query_postprocessing_ephemeral_with_budget(
             vec![skipped, first.clone(), second.clone()].into_iter(),
@@ -7364,7 +7171,7 @@ mod tests {
             .expect("response length fits u64"),
             "iterable framing measurement must match the canonical codec",
         );
-        assert_eq!(stats.processed_items(), 2);
+        assert_eq!(stats.processed_items(), 3);
         assert_eq!(stats.processed_bytes(), byte_budget);
         assert_eq!(
             domain_ids_from_batch(output.batch),
@@ -7567,6 +7374,67 @@ mod tests {
         };
 
         assert_eq!(error, Error::CapacityLimit);
+    }
+
+    #[test]
+    fn stored_bounded_runtime_applies_the_server_execution_budget() {
+        use iroha_data_model::query::parameters::FetchSize;
+
+        let decode = norito::DecodeLimits::new(16, 1_024, 32, 4 * 1_024, 8);
+        let source_bytes = ORDINARY_NAME_ID_SOURCE_BYTES;
+        let response_bytes = 4 * 1_024;
+        let archive_bytes = 1_024;
+        let execution_headroom = OrdinaryQueryExecutionLimits::required_execution_headroom_bytes(
+            1,
+            source_bytes,
+            response_bytes,
+            archive_bytes,
+            decode,
+        )
+        .expect("execution geometry");
+        let cursor_retained = OrdinaryQueryExecutionLimits::required_cursor_retained_bytes(
+            1,
+            source_bytes,
+            source_bytes,
+            archive_bytes,
+        )
+        .expect("cursor geometry");
+        let ordinary = OrdinaryQueryExecutionLimits::try_new(
+            1,
+            QueryExecutionBudget::from_weighted_limit(2, 1, 0),
+            1,
+            execution_headroom,
+            source_bytes,
+            response_bytes,
+            1,
+            source_bytes,
+            cursor_retained,
+            archive_bytes,
+            decode,
+        )
+        .expect("two-item page-plus-tail budget");
+        let values = ["one", "two", "probe"].map(|name| {
+            name.parse::<RoleId>()
+                .expect("protocol-bounded role identifier")
+        });
+        let params = QueryParams {
+            fetch_size: FetchSize::new(Some(nonzero!(1_u64))),
+            ..QueryParams::default()
+        };
+
+        let result = prepare_stored_unsorted_bounded_start(
+            values.into_iter(),
+            SelectorTuple::<RoleId>::default(),
+            &params,
+            QueryLimits::new(1)
+                .with_count_mode(QueryCountMode::Bounded)
+                .with_ordinary_execution_limits(ordinary),
+        );
+        let error = match result {
+            Ok(_) => panic!("the overflow probe must share the actual server work budget"),
+            Err(error) => error,
+        };
+        assert_eq!(error, Error::GasBudgetExceeded);
     }
 
     #[tokio::test]

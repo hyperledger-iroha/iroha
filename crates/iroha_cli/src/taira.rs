@@ -13,6 +13,7 @@ use iroha::{
     client::{Client as IrohaClient, TransactionWaitOptions, TransactionWaitTerminalStatus},
     config::Config,
     data_model::{
+        NetworkId,
         account::{AccountId, address::ChainDiscriminantGuard},
         isi::{InstructionBox, Log},
         level::Level as LogLevel,
@@ -40,12 +41,12 @@ const DEFAULT_GAS_ASSET_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const DEFAULT_ALIAS_PREFIX: &str = "taira-rollout-canary";
 const DEFAULT_WRITE_TTL_MS: u64 = 120_000;
 const DEFAULT_WRITE_STATUS_TIMEOUT_MS: u64 = 120_000;
-const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v2";
+const FAUCET_POW_ALGORITHM: &str = "scrypt-leading-zero-bits-v2";
+const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v3";
 const ACCOUNT_ONBOARDING_TOKEN_HEADER: &str = "x-iroha-onboarding-token";
 
 const REQUIRED_MCP_TOOLS: &[&str] = &[
     "iroha.health",
-    "iroha.sumeragi.status",
     "iroha.musubi.queries.exact_package",
     "iroha.musubi.queries.exact_release",
     "iroha.musubi.instructions.release_yank_set",
@@ -66,7 +67,7 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
         "sumeragi_status",
         RouteCheckMethod::Get,
         "/v1/sumeragi/status",
-        &[200],
+        &[401],
     ),
     (
         "pipeline_transaction_status",
@@ -96,7 +97,7 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
         "validator_sets",
         RouteCheckMethod::Get,
         "/v1/sumeragi/validator-sets",
-        &[200],
+        &[401],
     ),
     (
         "public_lane_validators",
@@ -113,14 +114,14 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
         "/v1/contracts/state",
         &[400],
     ),
-    // The V1 directory is POST-only. An empty object must reach the mounted
-    // typed handler and fail schema validation, distinguishing it from the
-    // retired pre-release GET search route without depending on registry data.
+    // The V1 directory is POST-only and authenticates before typed body decode.
+    // An unsigned malformed object must therefore fail at the mounted canonical
+    // account boundary, independently of registry data.
     (
         "musubi_ordered_prefix",
         RouteCheckMethod::PostEmptyObject,
         "/v1/musubi/queries/ordered-prefix",
-        &[400],
+        &[401],
     ),
 ];
 
@@ -551,7 +552,7 @@ fn run_write_canary(
         );
     }
 
-    let faucet = claim_faucet(&http, &public_root, &signer.account_id)?;
+    let faucet = claim_faucet(&http, &public_root, &signer.account_id, &config.network_id)?;
     let faucet_contract = validate_faucet_response(
         faucet.body.as_ref(),
         &signer.account_id,
@@ -1508,7 +1509,12 @@ fn wait_for_pipeline_terminal_status(
     }
 }
 
-fn claim_faucet(http: &HttpClient, public_root: &str, account_id: &AccountId) -> Result<HttpJson> {
+fn claim_faucet(
+    http: &HttpClient,
+    public_root: &str,
+    account_id: &AccountId,
+    expected_network_id: &NetworkId,
+) -> Result<HttpJson> {
     let puzzle_url = join_url(public_root, "/v1/accounts/faucet/puzzle")?;
     let puzzle = http_json(http, reqwest::Method::GET, puzzle_url.as_str(), None)?;
     if puzzle.status != 200 {
@@ -1524,7 +1530,8 @@ fn claim_faucet(http: &HttpClient, public_root: &str, account_id: &AccountId) ->
             text: puzzle.text,
         });
     };
-    let claim_body = solve_faucet_puzzle(&account_id.to_string(), puzzle_body)?;
+    let claim_body =
+        solve_faucet_puzzle(&account_id.to_string(), expected_network_id, puzzle_body)?;
     let claim_url = join_url(public_root, "/v1/accounts/faucet")?;
     http_json(
         http,
@@ -1534,14 +1541,46 @@ fn claim_faucet(http: &HttpClient, public_root: &str, account_id: &AccountId) ->
     )
 }
 
-fn solve_faucet_puzzle(account_id: &str, puzzle: &Value) -> Result<Value> {
+fn solve_faucet_puzzle(
+    account_id: &str,
+    expected_network_id: &NetworkId,
+    puzzle: &Value,
+) -> Result<Value> {
+    let algorithm = required_str(puzzle, "algorithm")?;
+    if algorithm != FAUCET_POW_ALGORITHM {
+        eyre::bail!(
+            "unsupported faucet puzzle algorithm `{algorithm}`; expected `{FAUCET_POW_ALGORITHM}`"
+        );
+    }
+    let network_id_literal = required_str(puzzle, "network_id")?;
+    let network_id = network_id_literal
+        .parse::<NetworkId>()
+        .wrap_err("faucet puzzle network_id is not a canonical NetworkId")?;
+    if network_id.to_string() != network_id_literal {
+        eyre::bail!("faucet puzzle network_id is not canonically encoded");
+    }
+    if &network_id != expected_network_id {
+        eyre::bail!(
+            "faucet puzzle network_id `{network_id}` does not match configured network `{expected_network_id}`"
+        );
+    }
+    let chain_discriminant = u16::try_from(required_u64(puzzle, "chain_discriminant")?)
+        .map_err(|_| eyre!("faucet puzzle chain_discriminant is too large"))?;
+    if chain_discriminant != DEFAULT_CHAIN_DISCRIMINANT {
+        eyre::bail!(
+            "faucet puzzle chain_discriminant `{chain_discriminant}` does not match Taira `{DEFAULT_CHAIN_DISCRIMINANT}`"
+        );
+    }
     let difficulty_bits = required_u64(puzzle, "difficulty_bits")?;
+    if difficulty_bits == 0 {
+        eyre::bail!("faucet puzzle difficulty_bits must be positive");
+    }
     let mut body = Map::new();
     body.insert("account_id".into(), Value::String(account_id.to_owned()));
-    if difficulty_bits == 0 {
-        return Ok(Value::Object(body));
-    }
     let anchor_height = required_u64(puzzle, "anchor_height")?;
+    if anchor_height == 0 {
+        eyre::bail!("faucet puzzle anchor_height must be positive");
+    }
     let anchor_hash_hex = required_str(puzzle, "anchor_block_hash_hex")?;
     let challenge_salt_hex = optional_str(puzzle, "challenge_salt_hex");
     let log_n = u8::try_from(required_u64(puzzle, "scrypt_log_n")?)
@@ -1552,6 +1591,7 @@ fn solve_faucet_puzzle(account_id: &str, puzzle: &Value) -> Result<Value> {
         .map_err(|_| eyre!("faucet puzzle scrypt_p is too large"))?;
     let challenge = build_faucet_challenge(
         account_id,
+        &network_id,
         anchor_height,
         anchor_hash_hex,
         challenge_salt_hex,
@@ -1591,22 +1631,36 @@ fn optional_str<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
 
 fn build_faucet_challenge(
     account_id: &str,
+    network_id: &NetworkId,
     anchor_height: u64,
     anchor_hash_hex: &str,
     challenge_salt_hex: Option<&str>,
 ) -> Result<[u8; 32]> {
-    let anchor_hash = hex::decode(anchor_hash_hex)
-        .wrap_err_with(|| format!("invalid faucet anchor hash `{anchor_hash_hex}`"))?;
+    let anchor_hash = decode_exact_lower_hex(anchor_hash_hex, "anchor_block_hash_hex", 32)?;
     let mut hasher = Sha256::new();
     hasher.update(FAUCET_POW_DOMAIN_SEPARATOR);
+    hasher.update(network_id.as_bytes());
     hasher.update(account_id.as_bytes());
     hasher.update(anchor_height.to_be_bytes());
     hasher.update(anchor_hash);
-    if let Some(salt) = challenge_salt_hex.filter(|value| !value.is_empty()) {
-        let salt = hex::decode(salt).wrap_err("invalid faucet challenge salt")?;
+    if let Some(salt) = challenge_salt_hex {
+        let salt = decode_exact_lower_hex(salt, "challenge_salt_hex", 32)?;
         hasher.update(salt);
     }
     Ok(hasher.finalize().into())
+}
+
+fn decode_exact_lower_hex(value: &str, field: &str, byte_length: usize) -> Result<Vec<u8>> {
+    if value.len() != byte_length.saturating_mul(2)
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        eyre::bail!(
+            "faucet puzzle {field} must be an exact lowercase {byte_length}-byte hex string"
+        );
+    }
+    hex::decode(value).wrap_err_with(|| format!("invalid faucet puzzle {field}"))
 }
 
 fn solve_faucet_pow(
@@ -2025,6 +2079,7 @@ mod tests {
             202 => "Accepted",
             307 => "Temporary Redirect",
             400 => "Bad Request",
+            401 => "Unauthorized",
             404 => "Not Found",
             503 => "Service Unavailable",
             _ => "OK",
@@ -2093,9 +2148,13 @@ mod tests {
                 MockResponse::json(400, norito::json!({"error": "missing transaction hash"}))
             }
             ("GET", "/v1/transactions/status") => MockResponse::text(404, "not found"),
-            ("POST", "/v1/musubi/queries/ordered-prefix") => {
-                MockResponse::json(400, norito::json!({"error": "missing typed request"}))
-            }
+            ("POST", "/v1/musubi/queries/ordered-prefix") => MockResponse::json(
+                401,
+                norito::json!({
+                    "code": "canonical_authentication_required",
+                    "message": "canonical account request authentication is required"
+                }),
+            ),
             ("GET", "/v1/mcp") => MockResponse::json(200, norito::json!({"ok": true})),
             ("POST", "/v1/mcp") if request.body.contains("tools/list") => {
                 let tools: Vec<Value> = REQUIRED_MCP_TOOLS
@@ -2217,9 +2276,21 @@ mod tests {
                     }),
                 )
             }
-            ("GET", "/v1/accounts/faucet/puzzle") => {
-                MockResponse::json(200, norito::json!({ "difficulty_bits": 0 }))
-            }
+            ("GET", "/v1/accounts/faucet/puzzle") => MockResponse::json(
+                200,
+                norito::json!({
+                    "algorithm": FAUCET_POW_ALGORITHM,
+                    "network_id": (crate::fallback_config().network_id.to_string()),
+                    "chain_discriminant": DEFAULT_CHAIN_DISCRIMINANT,
+                    "difficulty_bits": 1,
+                    "anchor_height": 1,
+                    "anchor_block_hash_hex": ("11".repeat(32)),
+                    "challenge_salt_hex": null,
+                    "scrypt_log_n": 1,
+                    "scrypt_r": 1,
+                    "scrypt_p": 1
+                }),
+            ),
             ("POST", "/v1/accounts/faucet") => {
                 let request_body =
                     json::from_str::<Value>(&request.body).expect("decode faucet request");
@@ -2852,8 +2923,10 @@ mod tests {
 
     #[test]
     fn faucet_challenge_matches_python_fixture_shape() {
+        let network_id = crate::fallback_config().network_id;
         let challenge = build_faucet_challenge(
             "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            &network_id,
             7,
             &"11".repeat(32),
             Some(&"22".repeat(32)),
@@ -2864,21 +2937,49 @@ mod tests {
     }
 
     #[test]
-    fn solve_faucet_puzzle_handles_zero_difficulty_without_pow_fields() {
+    fn faucet_challenge_rejects_same_label_different_genesis_replay() {
+        let first_network = crate::fallback_config().network_id;
+        let second_network =
+            NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"foreign-faucet-genesis"),
+            ));
+        let account_id = "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
+        let first = build_faucet_challenge(
+            account_id,
+            &first_network,
+            7,
+            &"11".repeat(32),
+            Some(&"22".repeat(32)),
+        )
+        .expect("first challenge");
+        let second = build_faucet_challenge(
+            account_id,
+            &second_network,
+            7,
+            &"11".repeat(32),
+            Some(&"22".repeat(32)),
+        )
+        .expect("second challenge");
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn solve_faucet_puzzle_rejects_zero_difficulty() {
+        let network_id = crate::fallback_config().network_id;
         let puzzle = norito::json!({
+            "algorithm": FAUCET_POW_ALGORITHM,
+            "network_id": (network_id.to_string()),
+            "chain_discriminant": DEFAULT_CHAIN_DISCRIMINANT,
             "difficulty_bits": 0,
         });
-        let body = solve_faucet_puzzle(
+        let error = solve_faucet_puzzle(
             "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            &network_id,
             &puzzle,
         )
-        .expect("claim body");
-        let body = body.as_object().expect("object");
-        assert_eq!(
-            body.get("account_id").and_then(Value::as_str),
-            Some("testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
-        );
-        assert!(!body.contains_key("pow_nonce_hex"));
+        .expect_err("zero-difficulty faucet puzzle must fail closed");
+        assert!(format!("{error:#}").contains("difficulty_bits must be positive"));
     }
 
     #[test]

@@ -13,6 +13,33 @@ fn needs_size_attribute_is_parsed() {
 }
 
 #[test]
+fn bounded_with_attribute_is_parsed_and_duplicate_is_rejected() {
+    let field: syn::Field = syn::parse_quote! {
+        #[norito(bounded_with = "checked::serialize")]
+        demo: u32
+    };
+    let attrs = FieldAttr::parse(&field.attrs).expect("valid bounded writer attribute");
+    assert_eq!(
+        attrs
+            .bounded_with
+            .expect("bounded writer path")
+            .to_token_stream()
+            .to_string(),
+        "checked :: serialize"
+    );
+
+    let duplicate: syn::Field = syn::parse_quote! {
+        #[norito(
+            bounded_with = "checked::serialize",
+            bounded_with = "checked::other"
+        )]
+        demo: u32
+    };
+    let error = FieldAttr::parse(&duplicate.attrs).expect_err("duplicate path must reject");
+    assert_eq!(error.to_string(), "duplicate `bounded_with` attribute");
+}
+
+#[test]
 fn required_attribute_is_parsed_and_duplicate_is_rejected() {
     let field: syn::Field = syn::parse_quote! {
         #[norito(required)]

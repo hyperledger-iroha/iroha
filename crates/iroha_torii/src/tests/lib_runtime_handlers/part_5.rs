@@ -791,7 +791,7 @@ async fn account_get_handler_returns_not_found_for_missing_account() {
 
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn account_read_for_routes_skips_route_unavailable_until_success() {
+async fn account_read_for_routes_rejects_multiroute_before_route_fetch() {
     let keypair =
         checked_torii_test_ed25519_keypair(0x2c, "derive Torii routed account-read fixture key");
     let account_id = AccountId::new(keypair.public_key().clone());
@@ -807,21 +807,21 @@ async fn account_read_for_routes_skips_route_unavailable_until_success() {
     )
     .await;
 
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(
         response
             .headers()
-            .get("x-iroha-routed-by")
+            .get("x-iroha-reject-code")
             .and_then(|value| value.to_str().ok()),
-        Some("proxy"),
-        "mixed local/proxy fanout should report proxy routing",
+        Some("query_unsupported")
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("account read body");
-    let payload: AccountReadResponse =
-        norito::json::from_slice(&body).expect("account read payload");
-    assert_eq!(payload.account_id, account_id);
+    assert!(
+        response
+            .headers()
+            .get("x-iroha-fanout-routes-attempted")
+            .is_none(),
+        "the rejection must precede local or remote account source execution"
+    );
 }
 
 #[cfg(feature = "app_api")]
@@ -1354,7 +1354,7 @@ async fn trusted_internal_asset_read_is_exactly_scoped_bound_and_conflict_safe()
 
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn account_read_for_routes_prefers_not_found_over_route_unavailable_when_missing() {
+async fn account_read_for_routes_rejects_multiroute_before_missing_source_scan() {
     let missing =
         checked_torii_test_account_id(0x2d, "derive Torii missing routed account-read fixture key");
     let mut app = mk_app_state_for_tests();
@@ -1369,14 +1369,20 @@ async fn account_read_for_routes_prefers_not_found_over_route_unavailable_when_m
     )
     .await;
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert_ne!(
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
         response
             .headers()
             .get("x-iroha-reject-code")
             .and_then(|value| value.to_str().ok()),
-        Some("route_unavailable"),
-        "a definitive missing-account response should outrank an unrelated unavailable route",
+        Some("query_unsupported")
+    );
+    assert!(
+        response
+            .headers()
+            .get("x-iroha-fanout-routes-attempted")
+            .is_none(),
+        "the rejection must precede missing-account source execution"
     );
 }
 
@@ -1484,7 +1490,39 @@ fn trigger_completion_query_falls_back_to_reconstructed_entrypoint_hash() {
 }
 
 #[test]
-fn trigger_completion_query_honors_explicit_from_height() {
+fn trigger_completion_record_visit_stops_without_buffering_the_block() {
+    let mut sample = make_persisted_data_trigger_completion_block(1, None);
+    sample.block.set_trigger_completions(vec![
+        TriggerCompletedEvent::new(
+            sample.trigger_id.clone(),
+            sample.trigger_execution_hash,
+            0,
+            TriggerCompletedOutcome::Success,
+        ),
+        TriggerCompletedEvent::new(
+            sample.trigger_id.clone(),
+            sample.trigger_execution_hash,
+            1,
+            TriggerCompletedOutcome::Success,
+        ),
+    ]);
+
+    let mut visited = 0_u8;
+    let completed =
+        super::visit_trigger_completion_records_for_block(&sample.block, 1, false, None, |_| {
+            visited = visited.saturating_add(1);
+            false
+        });
+
+    assert!(!completed);
+    assert_eq!(
+        visited, 1,
+        "the visitor must stop before building later records"
+    );
+}
+
+#[test]
+fn trigger_completion_query_caps_explicit_from_height() {
     let app = mk_app_state_for_tests();
     let sample = make_persisted_data_trigger_completion_block(1, None);
     let header = sample.block.header();
@@ -1535,13 +1573,9 @@ fn trigger_completion_query_honors_explicit_from_height() {
         },
     )
     .expect("query response");
-    assert_eq!(explicit_history.from_height, 1);
-    assert_eq!(explicit_history.scanned_blocks, 4);
-    assert_eq!(explicit_history.completions.len(), 1);
-    assert_eq!(
-        explicit_history.completions[0].completion.trigger_id,
-        sample.trigger_id.to_string()
-    );
+    assert_eq!(explicit_history.from_height, 3);
+    assert_eq!(explicit_history.scanned_blocks, 2);
+    assert!(explicit_history.completions.is_empty());
 }
 
 #[tokio::test]
@@ -2075,7 +2109,11 @@ async fn pipeline_status_handler_prefers_state_over_stale_rejected_cache() {
     let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
     app.pipeline_status_cache.record_entry(
         tx_hash,
-        PipelineStatusEntry::fresh(PipelineStatusKind::Rejected, None, Some(rejection)),
+        PipelineStatusEntry::fresh(
+            PipelineStatusKind::Rejected,
+            None,
+            Some(pipeline_rejection_summary(&rejection)),
+        ),
     );
 
     let height = header.height();
@@ -2126,7 +2164,11 @@ async fn public_pipeline_status_does_not_expose_rejection_details() {
     let reason = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
     app.pipeline_status_cache.record_entry(
         tx_hash,
-        PipelineStatusEntry::fresh(PipelineStatusKind::Rejected, None, Some(reason.clone())),
+        PipelineStatusEntry::fresh(
+            PipelineStatusKind::Rejected,
+            None,
+            Some(pipeline_rejection_summary(&reason)),
+        ),
     );
 
     let resp = super::handler_pipeline_transaction_status(

@@ -4364,6 +4364,8 @@ pub(crate) mod valid {
     use std::{num::NonZeroUsize, time::Instant};
 
     use commit::CommittedBlock;
+    #[cfg(test)]
+    use iroha_data_model::ChainId;
     use iroha_data_model::nexus::AxtPolicySnapshot;
     #[cfg(test)]
     use iroha_data_model::soracloud::{
@@ -4371,7 +4373,6 @@ pub(crate) mod valid {
         SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
     };
     use iroha_data_model::{
-        ChainId,
         events::pipeline::PipelineEventBox,
         nexus::{GroupBinding, HandleBudget, HandleSubject},
     };
@@ -17083,6 +17084,8 @@ pub(crate) mod valid {
             .expect("exact control-only autonomous anchor must validate");
         }
 
+        include!("block/autonomous_anchor_network_test.rs");
+
         #[test]
         fn autonomous_anchor_admission_uses_lane_slot_author_not_global_leader() {
             let fixture = autonomous_anchor_fixture(None, 0);
@@ -26557,8 +26560,6 @@ pub(crate) mod valid {
         let peer1 = PeerId::new(kp1.public_key().clone());
         let peer2 = PeerId::new(kp2.public_key().clone());
         let topology = Topology::new(vec![peer1, peer2]);
-        let chain_id: ChainId = "chain".parse().unwrap();
-
         // Create a signed block with only leader signature
         let (account_id, keypair) = gen_account_in("dummy");
         let mut builder = TransactionBuilder::new(
@@ -29862,6 +29863,10 @@ mod tests {
         .expect("dataspace catalog")
     }
 
+    fn native_amx_test_network_id() -> iroha_data_model::NetworkId {
+        crate::sumeragi::synthetic_network_id("native-amx-test-genesis")
+    }
+
     fn native_amx_test_world_with_keys() -> (World, Vec<KeyPair>) {
         let world = World::new();
         let keypairs = (0..4)
@@ -30321,11 +30326,7 @@ mod tests {
                 view: 0,
             },
             epoch: 0,
-            network_id: iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
-                iroha_data_model::block::BlockHeader,
-            >::from_untyped_unchecked(
-                Hash::new(b"native-amx-test-genesis"),
-            )),
+            network_id: native_amx_test_network_id(),
             source_id,
             tx_entrypoint_hash,
             plan_digest,
@@ -30498,11 +30499,7 @@ mod tests {
         NativeAmxReceipt {
             version: 2,
             source_id,
-            network_id: iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
-                iroha_data_model::block::BlockHeader,
-            >::from_untyped_unchecked(
-                Hash::new(b"native-amx-test-genesis"),
-            )),
+            network_id: native_amx_test_network_id(),
             plan_digest: routing_plan.digest(),
             lane_id: coordinator.lane_id,
             dataspace_id: coordinator.dataspace_id,
@@ -31103,7 +31100,7 @@ mod tests {
             tx.hash_as_entrypoint(),
             &routing_plan,
             source_id,
-            Hash::new(b"native-amx-test-chain"),
+            native_amx_test_network_id(),
             &dataspace_catalog,
             &authority,
             Some(expected_native_amx_test_context(42)),
@@ -31180,7 +31177,7 @@ mod tests {
                 entrypoint_hash,
                 &routing_plan,
                 source_id,
-                Hash::new(b"native-amx-test-chain"),
+                native_amx_test_network_id(),
                 &dataspace_catalog,
                 &stale_first_predecessor,
                 Some(expected_native_amx_test_context(42)),
@@ -31193,7 +31190,7 @@ mod tests {
                 entrypoint_hash,
                 &routing_plan,
                 source_id,
-                Hash::new(b"native-amx-test-chain"),
+                native_amx_test_network_id(),
                 None,
                 Some(expected_native_amx_test_context(42)),
             )
@@ -31263,7 +31260,7 @@ mod tests {
                 entrypoint_hash,
                 &routing_plan,
                 source_id,
-                Hash::new(b"native-amx-test-chain"),
+                native_amx_test_network_id(),
                 Some(bindings),
                 Some(expected_native_amx_test_context(42)),
             )
@@ -31295,7 +31292,7 @@ mod tests {
                     entrypoint_hash,
                     &routing_plan,
                     source_id,
-                    Hash::new(b"native-amx-test-chain"),
+                    native_amx_test_network_id(),
                     &native_amx_test_catalog(paynet, cbuae),
                     &drifted,
                     Some(expected_native_amx_test_context(42)),
@@ -31487,7 +31484,7 @@ mod tests {
                 entrypoint_hash,
                 &routing_plan,
                 source_id,
-                Hash::new(b"native-amx-test-chain"),
+                native_amx_test_network_id(),
                 &native_amx_test_catalog(paynet, cbuae),
                 &historical_authority,
                 Some(expected_native_amx_test_context(42)),
@@ -31560,7 +31557,7 @@ mod tests {
             tx.hash_as_entrypoint(),
             &routing_plan,
             source_id,
-            Hash::new(b"native-amx-test-chain"),
+            native_amx_test_network_id(),
             &dataspace_catalog,
             &authority,
             Some(expected_native_amx_test_context(42)),
@@ -31611,7 +31608,7 @@ mod tests {
                 entrypoint_hash,
                 &routing_plan,
                 source_id,
-                Hash::new(b"native-amx-test-chain"),
+                native_amx_test_network_id(),
                 &dataspace_catalog,
                 &authority,
                 Some(expected_native_amx_test_context(42)),
@@ -31824,7 +31821,7 @@ mod tests {
                 entrypoint_hash,
                 &routing_plan,
                 source_id,
-                Hash::new(b"native-amx-test-chain"),
+                native_amx_test_network_id(),
                 &dataspace_catalog,
                 &authority,
                 Some(expected_native_amx_test_context(42)),

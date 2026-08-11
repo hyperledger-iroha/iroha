@@ -183,6 +183,18 @@ impl FastJsonWrite for NumericSpec {
         }
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"scale\":")?;
+        self.scale.json_serialize_to(out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 impl JsonDeserialize for NumericSpec {
@@ -1900,6 +1912,14 @@ impl FastJsonWrite for Quantity {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        // A quantity is capped by the 512-bit mantissa and decimal-scale policy.
+        json::write_json_string_to(&self.to_string(), out)
+    }
 }
 
 impl JsonDeserialize for Quantity {
@@ -2224,6 +2244,13 @@ impl<'a> norito::core::DecodeFromSlice<'a> for XorQuantity {
 impl FastJsonWrite for XorQuantity {
     fn write_json(&self, out: &mut String) {
         self.0.write_json(out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.write_json_to(out)
     }
 }
 
@@ -2703,6 +2730,14 @@ impl<'a> NoritoDeserialize<'a> for Numeric {
 impl FastJsonWrite for Numeric {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        // A numeric is capped by the 512-bit mantissa and decimal-scale policy.
+        json::write_json_string_to(&self.to_string(), out)
     }
 }
 

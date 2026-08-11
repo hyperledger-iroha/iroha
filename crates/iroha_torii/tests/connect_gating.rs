@@ -28,6 +28,35 @@ fn request_with_loopback_connect_info(
     request
 }
 
+async fn connect_aggregate_status(
+    app: &axum::Router,
+    cfg: &iroha_config::parameters::actual::Root,
+) -> axum::response::Response {
+    let uri = Uri::from_static("/v1/connect/status/aggregate");
+    let headers = iroha_torii::operator_signed_request_headers(
+        &cfg.common.key_pair,
+        &iroha_torii::test_utils::signed_query_network_id(),
+        &axum::http::Method::GET,
+        &uri,
+        &[],
+    )
+    .expect("sign Connect aggregate status request");
+    let mut request = Request::builder()
+        .uri(uri)
+        .header(axum::http::header::ACCEPT, "application/json")
+        .body(axum::body::Body::empty())
+        .expect("Connect aggregate status request");
+    *request.headers_mut() = headers;
+    request.headers_mut().insert(
+        axum::http::header::ACCEPT,
+        "application/json".parse().unwrap(),
+    );
+    app.clone()
+        .oneshot(request_with_loopback_connect_info(request))
+        .await
+        .expect("Connect aggregate status response")
+}
+
 fn connect_session_request_body(seed: u8) -> (String, String) {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 
@@ -301,6 +330,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             query_max_inflight: iroha_config::parameters::defaults::torii::QUERY_MAX_INFLIGHT,
             query_heavy_max_inflight:
                 iroha_config::parameters::defaults::torii::QUERY_HEAVY_MAX_INFLIGHT,
+            query_fanout_max_retained_bytes:
+                iroha_config::parameters::defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES,
             query_queue_timeout: std::time::Duration::from_millis(
                 iroha_config::parameters::defaults::torii::QUERY_QUEUE_TIMEOUT_MS,
             ),
@@ -441,6 +472,10 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             zk_prover_scan_period_secs: 30,
             zk_prover_reports_ttl_secs:
                 iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_TTL_SECS,
+            zk_prover_reports_max_count:
+                iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT,
+            zk_prover_reports_max_bytes:
+                iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_BYTES,
             zk_prover_max_inflight:
                 iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_INFLIGHT,
             zk_prover_max_scan_bytes:
@@ -1177,16 +1212,7 @@ async fn connect_endpoints_report_typed_unavailability_when_disabled() {
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
 
     // Ordinary REST routes return the shared typed error envelope.
-    let resp = app
-        .oneshot(request_with_loopback_connect_info(
-            Request::builder()
-                .uri(Uri::from_static("/v1/connect/status"))
-                .header(axum::http::header::ACCEPT, "application/json")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        ))
-        .await
-        .unwrap();
+    let resp = connect_aggregate_status(&app, &cfg).await;
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = http_body_util::BodyExt::collect(resp.into_body())
         .await
@@ -1206,15 +1232,19 @@ async fn connect_status_present_when_enabled() {
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
 
-    let resp = app
+    let unsigned = app
+        .clone()
         .oneshot(
             Request::builder()
-                .uri(Uri::from_static("/v1/connect/status"))
+                .uri(Uri::from_static("/v1/connect/status/aggregate"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
+    assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
+
+    let resp = connect_aggregate_status(&app, &cfg).await;
     assert_eq!(resp.status(), StatusCode::OK);
 
     let body = http_body_util::BodyExt::collect(resp.into_body())
@@ -1257,15 +1287,7 @@ async fn connect_status_forces_unknown_relay_strategy_to_local_only() {
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
 
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri(Uri::from_static("/v1/connect/status"))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = connect_aggregate_status(&app, &cfg).await;
     assert_eq!(resp.status(), StatusCode::OK);
 
     let body = http_body_util::BodyExt::collect(resp.into_body())
@@ -1317,15 +1339,7 @@ async fn connect_status_normalizes_relay_strategy_aliases() {
         let torii = build_torii(&cfg);
         let app = torii.api_router_for_tests();
 
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri(Uri::from_static("/v1/connect/status"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = connect_aggregate_status(&app, &cfg).await;
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = http_body_util::BodyExt::collect(resp.into_body())
@@ -1383,16 +1397,7 @@ async fn connect_status_reports_broadcast_effective_when_p2p_attached() {
 
     let mut payload_opt = None;
     for _ in 0..50 {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(Uri::from_static("/v1/connect/status"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = connect_aggregate_status(&app, &cfg).await;
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = http_body_util::BodyExt::collect(resp.into_body())
@@ -1455,16 +1460,7 @@ async fn connect_status_reports_local_only_when_relay_disabled_with_p2p_attached
 
     let mut payload_opt = None;
     for _ in 0..50 {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(Uri::from_static("/v1/connect/status"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = connect_aggregate_status(&app, &cfg).await;
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = http_body_util::BodyExt::collect(resp.into_body())
@@ -1526,16 +1522,7 @@ async fn connect_status_reports_unknown_strategy_as_local_only_with_p2p_attached
 
     let mut payload_opt = None;
     for _ in 0..50 {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(Uri::from_static("/v1/connect/status"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = connect_aggregate_status(&app, &cfg).await;
         assert_eq!(resp.status(), StatusCode::OK);
 
         let body = http_body_util::BodyExt::collect(resp.into_body())
@@ -1590,13 +1577,11 @@ async fn connect_status_reports_unknown_strategy_as_local_only_with_p2p_attached
 
 #[tokio::test]
 async fn connect_session_delete_endpoint_removes_tokens() {
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
-
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
 
-    let (sid_fixed, req_body) = connect_session_request_body(0x24);
+    let (_sid_fixed, req_body) = connect_session_request_body(0x24);
     let create_resp = app
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -1676,13 +1661,11 @@ async fn connect_session_delete_endpoint_removes_tokens() {
 
 #[tokio::test]
 async fn connect_session_status_requires_management_token() {
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
-
     let cfg = minimal_actual_config(true);
     let torii = build_torii(&cfg);
     let app = torii.api_router_for_tests();
 
-    let (sid_fixed, req_body) = connect_session_request_body(0x34);
+    let (_sid_fixed, req_body) = connect_session_request_body(0x34);
     let create_resp = app
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -1711,6 +1694,22 @@ async fn connect_session_status_requires_management_token() {
         .expect("token_management present");
 
     let status_uri = format!("/v1/connect/status?sid={sid}");
+    let missing_sid_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/v1/connect/status"))
+                .header(
+                    axum::http::header::AUTHORIZATION,
+                    format!("Bearer {token_management}"),
+                )
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_sid_resp.status(), StatusCode::BAD_REQUEST);
+
     let missing_token_resp = app
         .clone()
         .oneshot(
@@ -2100,16 +2099,7 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
     let mut mismatch_total = 0u64;
     let mut sessions_total = u64::MAX;
     for _ in 0..20 {
-        let status = app2
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(Uri::from_static("/v1/connect/status"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let status = connect_aggregate_status(&app2, &cfg).await;
         assert_eq!(status.status(), StatusCode::OK);
         let body = http_body_util::BodyExt::collect(status.into_body())
             .await
@@ -2296,15 +2286,7 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
     };
     assert_eq!(second_frame.seq, 2);
 
-    let status = app2
-        .oneshot(
-            Request::builder()
-                .uri(Uri::from_static("/v1/connect/status"))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let status = connect_aggregate_status(&app2, &cfg).await;
     assert_eq!(status.status(), StatusCode::OK);
     let status_body = http_body_util::BodyExt::collect(status.into_body())
         .await
@@ -2387,16 +2369,7 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
     // Wait until async bus attachment reports active P2P relay wiring.
     let mut relay_p2p_attached = false;
     for _ in 0..50 {
-        let status = app2
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(Uri::from_static("/v1/connect/status"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let status = connect_aggregate_status(&app2, &cfg).await;
         assert_eq!(status.status(), StatusCode::OK);
         let status_body = http_body_util::BodyExt::collect(status.into_body())
             .await
@@ -2448,16 +2421,7 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
     let mut relay_effective_strategy = String::new();
     relay_p2p_attached = false;
     for _ in 0..50 {
-        let status = app2
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(Uri::from_static("/v1/connect/status"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let status = connect_aggregate_status(&app2, &cfg).await;
         assert_eq!(status.status(), StatusCode::OK);
         let status_body = http_body_util::BodyExt::collect(status.into_body())
             .await
@@ -2591,16 +2555,7 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
     let mut relay_effective_strategy = String::new();
     let mut relay_p2p_attached = true;
     for _ in 0..50 {
-        let status = app2
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(Uri::from_static("/v1/connect/status"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let status = connect_aggregate_status(&app2, &cfg).await;
         assert_eq!(status.status(), StatusCode::OK);
         let status_body = http_body_util::BodyExt::collect(status.into_body())
             .await
@@ -2701,16 +2656,7 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
     // Wait for async P2P bus attachment before sending frames.
     let mut relay_p2p_attached = false;
     for _ in 0..50 {
-        let status = app2
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(Uri::from_static("/v1/connect/status"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let status = connect_aggregate_status(&app2, &cfg).await;
         assert_eq!(status.status(), StatusCode::OK);
         let status_body = http_body_util::BodyExt::collect(status.into_body())
             .await
@@ -2762,16 +2708,7 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
     let mut relay_effective_strategy = String::new();
     relay_p2p_attached = false;
     for _ in 0..50 {
-        let status = app2
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(Uri::from_static("/v1/connect/status"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let status = connect_aggregate_status(&app2, &cfg).await;
         assert_eq!(status.status(), StatusCode::OK);
         let status_body = http_body_util::BodyExt::collect(status.into_body())
             .await
@@ -2870,16 +2807,7 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
     // Wait for async P2P bus attachment before sending frames.
     let mut relay_p2p_attached = false;
     for _ in 0..50 {
-        let status = app2
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(Uri::from_static("/v1/connect/status"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let status = connect_aggregate_status(&app2, &cfg).await;
         assert_eq!(status.status(), StatusCode::OK);
         let status_body = http_body_util::BodyExt::collect(status.into_body())
             .await
@@ -2931,16 +2859,7 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
     let mut relay_effective_strategy = String::new();
     relay_p2p_attached = false;
     for _ in 0..50 {
-        let status = app2
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(Uri::from_static("/v1/connect/status"))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let status = connect_aggregate_status(&app2, &cfg).await;
         assert_eq!(status.status(), StatusCode::OK);
         let status_body = http_body_util::BodyExt::collect(status.into_body())
             .await

@@ -603,6 +603,9 @@ fn minimal_config_snapshot() {
                 ),
                 query_max_inflight: 128,
                 query_heavy_max_inflight: 32,
+                query_fanout_max_retained_bytes: Bytes(
+                    64000000,
+                ),
                 query_queue_timeout: 25ms,
                 tx_rate_per_authority_per_sec: Some(
                     10000,
@@ -646,8 +649,6 @@ fn minimal_config_snapshot() {
                 api_fee_receiver: None,
                 soranet_privacy_ingest: SoranetPrivacyIngest {
                     enabled: false,
-                    require_token: true,
-                    tokens: [],
                     rate_per_sec: Some(
                         8,
                     ),
@@ -742,6 +743,8 @@ fn minimal_config_snapshot() {
                 zk_prover_enabled: false,
                 zk_prover_scan_period_secs: 30,
                 zk_prover_reports_ttl_secs: 604800,
+                zk_prover_reports_max_count: 4096,
+                zk_prover_reports_max_bytes: 268435456,
                 zk_prover_max_inflight: 2,
                 zk_prover_max_scan_bytes: 16777216,
                 zk_prover_max_scan_millis: 2000,
@@ -789,7 +792,7 @@ fn minimal_config_snapshot() {
                     profiles: [],
                     store_dir: None,
                     store_retention_secs: 0,
-                    store_max_records: 0,
+                    store_max_records: 256,
                     audit_export_dir: None,
                     embedded_signature_policy: None,
                     signer: None,
@@ -5179,45 +5182,11 @@ fn logger_level_env_accepts_lowercase() {
     assert_eq!(cfg.logger.level, Level::INFO);
 }
 
-#[test]
-fn tls_fallback_defaults_to_tls_only() {
-    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
-
-    let cfg: Actual = ConfigReader::new()
-        .read_toml_with_extends(fixtures_dir().join("base.toml"))
-        .expect("base file should be valid")
-        .read_and_complete::<User>()
-        .expect("user config")
-        .parse()
-        .expect("actual config");
-
-    assert!(!cfg.network.tls_enabled);
-    assert!(
-        !cfg.network.tls_fallback_to_plain,
-        "plaintext fallback must stay opt-in when TLS-over-TCP is enabled"
-    );
-}
+include!("fixtures/tls_fallback_defaults_test.rs");
 
 include!("fixtures/trusted_proxy_defaults_test.rs");
 
-#[test]
-fn torii_internal_api_trust_defaults_to_exact_loopback_hosts() {
-    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
-
-    let cfg: Actual = ConfigReader::new()
-        .read_toml_with_extends(fixtures_dir().join("base.toml"))
-        .expect("base file should be valid")
-        .read_and_complete::<User>()
-        .expect("user config")
-        .parse()
-        .expect("actual config");
-
-    assert_eq!(
-        cfg.torii.internal_api_trusted_cidrs,
-        ["127.0.0.1/32", "::1/128"],
-    );
-    assert!(cfg.torii.api_rate_limit_bypass_cidrs.is_empty());
-}
+include!("fixtures/torii_internal_api_trust_defaults_test.rs");
 
 #[test]
 fn network_defaults_carry_maximal_sumeragi_v2_progress_frames() {

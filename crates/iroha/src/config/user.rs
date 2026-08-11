@@ -699,10 +699,12 @@ pub struct Musubi {
 
 /// Raw authenticated archive-fetch values admitted from `[musubi.fetch]`.
 ///
-/// These fields have no environment mappings. API credentials are named only by
+/// These fields have no environment mappings. Operator credentials are named only by
 /// platform-owned files and are never embedded in this configuration value.
 #[derive(Clone, Default, ReadConfig)]
 pub struct MusubiFetch {
+    /// Exact genesis-lineage identity used to sign stream-token issuance requests.
+    pub network_id: Option<NetworkId>,
     /// Stable, non-secret client label sent to `SoraFS` token issuers.
     pub client_id: Option<String>,
     /// Optional bounded request timeout in milliseconds.
@@ -717,13 +719,14 @@ impl fmt::Debug for MusubiFetch {
         formatter
             .debug_struct("MusubiFetch")
             .field("configured", &!self.provider_gateways.is_empty())
+            .field("network_id_configured", &self.network_id.is_some())
             .field("provider_gateway_count", &self.provider_gateways.len())
             .field("request_timeout_ms", &self.request_timeout_ms)
             .finish_non_exhaustive()
     }
 }
 
-/// One trusted provider identity, HTTPS origin, and runtime-only API-token file.
+/// One trusted provider identity, HTTPS origin, and runtime-only operator key file.
 #[derive(Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct MusubiFetchProviderGateway {
@@ -731,8 +734,10 @@ pub struct MusubiFetchProviderGateway {
     pub provider_id: String,
     /// Provider-specific `SoraFS` HTTPS origin.
     pub url: String,
-    /// Platform-owned file containing the provider's Torii API token.
-    pub api_token_file: String,
+    /// Canonical operator public key authorized by this provider.
+    pub operator_public_key: String,
+    /// Platform-owned file containing the provider-authorized operator private key.
+    pub operator_private_key_file: String,
 }
 
 impl fmt::Debug for MusubiFetchProviderGateway {
@@ -740,7 +745,14 @@ impl fmt::Debug for MusubiFetchProviderGateway {
         formatter
             .debug_struct("MusubiFetchProviderGateway")
             .field("provider_id", &self.provider_id)
-            .field("api_token_configured", &!self.api_token_file.is_empty())
+            .field(
+                "operator_public_key_configured",
+                &!self.operator_public_key.is_empty(),
+            )
+            .field(
+                "operator_private_key_configured",
+                &!self.operator_private_key_file.is_empty(),
+            )
             .finish_non_exhaustive()
     }
 }

@@ -218,13 +218,17 @@ outputs = [
   "fuzz/sorafs_chunker/sf1_profile_v1_backpressure.json",
   "fuzz/sorafs_chunker/sf1_profile_v1_input.bin",
 ]
-generator = "cargo run --locked -p sorafs_chunker --features dev-tools --bin export_vectors"
-generator_sources = ["crates/sorafs_chunker/src/bin/export_vectors.rs"]
+generator = "cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p sorafs_chunker --features dev-tools --bin export_vectors -- --write --staging-root \"${IROHA_SF1_FIXTURE_STAGE:?set an existing absolute empty mode-0700 private external staging root}\" --signing-key-file \"${IROHA_SF1_MANIFEST_SIGNING_KEY_FILE:?set an absolute private fixture-signing key file}\""
+generator_sources = [
+  "crates/sorafs_chunker/src/bin/export_vectors.rs",
+  "scripts/check_sf1_vectors.mjs",
+  "scripts/tests/check_sf1_vectors.test.mjs",
+]
 inputs = [
   "crates/sorafs_chunker/Cargo.toml",
   "crates/sorafs_chunker/src/**/*.rs",
 ]
-check = "node scripts/check_sf1_vectors.mjs"
+check = "node --test scripts/tests/check_sf1_vectors.test.mjs && node scripts/check_sf1_vectors.mjs"
 
 [[generated]]
 name = "sorafs-por-aggregate-fixtures"
@@ -585,6 +589,36 @@ inputs = [
 check = "cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures -- --check"
 
 [[generated]]
+name = "connect-kagemusha-recipient-v2-fixtures"
+kind = "file"
+outputs = [
+  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_receive_offer_v2.hex",
+  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_payment_request_v2.hex",
+  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_payment_request_v2_fresh_amount.hex",
+  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_registration_lineage_v2.hex",
+  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_checkpoint_envelope.hex",
+  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_checkpoint_publisher_public_key.hex",
+  "crates/connect_norito_bridge/tests/fixtures/offline_recipient_trusted_checkpoint_v2.hex",
+]
+generator = "CARGO_TARGET_DIR=\"${IROHA_CONNECT_RECIPIENT_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute private external Cargo target directory}\" IROHA_CONNECT_RECIPIENT_FIXTURE_STAGE=\"${IROHA_CONNECT_RECIPIENT_FIXTURE_STAGE:?set an existing absolute empty mode-0700 external stage directory}\" cargo test --locked --offline -p connect_norito_bridge --lib recipient_receive_offer_v2_fixture_owner -- --ignored"
+generator_sources = [
+  "crates/connect_norito_bridge/Cargo.toml",
+  "crates/connect_norito_bridge/src/lib.rs",
+  "crates/connect_norito_bridge/src/kagemusha_bridge_tests/tests/recipient_fixture_owner.rs",
+]
+inputs = [
+  "Cargo.toml",
+  "crates/iroha_core/src/**/*.rs",
+  "crates/iroha_crypto/src/**/*.rs",
+  "crates/iroha_data_model/src/**/*.rs",
+  "crates/iroha_primitives/src/**/*.rs",
+  "crates/iroha_torii_shared/src/**/*.rs",
+  "crates/norito/src/**/*.rs",
+  "rust-toolchain.toml",
+]
+check = "CARGO_TARGET_DIR=\"${IROHA_CONNECT_RECIPIENT_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute private external Cargo target directory}\" env -u IROHA_CONNECT_RECIPIENT_FIXTURE_STAGE cargo test --locked --offline -p connect_norito_bridge --lib recipient_receive_offer_v2_fixture_owner -- --ignored"
+
+[[generated]]
 name = "swift-kagemusha-peer-payment-v4-fixture"
 kind = "file"
 outputs = [
@@ -603,6 +637,66 @@ inputs = [
   "crates/norito/src/**/*.rs",
 ]
 check = "cargo run --locked --offline --jobs 1 -Z unstable-options --lockfile-path Cargo.lock -p kotlin-fixture-gen --features dev-tools --bin swift_kagemusha_peer_payment_v4 -- --recipient-request-hex \"$PWD/crates/connect_norito_bridge/tests/fixtures/offline_recipient_payment_request_v2.hex\" --check \"$PWD/crates/connect_norito_bridge/tests/fixtures/offline_peer_payment_v4.hex\""
+
+[[generated]]
+name = "mochi-canonical-torii-binary-fixtures"
+kind = "file"
+outputs = [
+  "mochi/mochi-core/tests/fixtures/canonical_block_wire.bin",
+  "mochi/mochi-core/tests/fixtures/canonical_event_message.bin",
+  "mochi/mochi-core/tests/fixtures/canonical_pipeline_event_message.bin",
+  "mochi/mochi-core/tests/fixtures/canonical_data_event_message.bin",
+]
+generator = "CARGO_TARGET_DIR=\"${IROHA_MOCHI_CANONICAL_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute private external Cargo target directory}\" IROHA_MOCHI_CANONICAL_FIXTURE_STAGE=\"${IROHA_MOCHI_CANONICAL_FIXTURE_STAGE:?set an existing absolute empty mode-0700 external stage directory}\" cargo test --locked --offline -p mochi-core --lib canonical_torii_binary_fixture_owner -- --ignored"
+generator_sources = [
+  "mochi/mochi-core/Cargo.toml",
+  "mochi/mochi-core/src/torii.rs",
+  "mochi/mochi-core/src/torii/tests/canonical_fixture_owner.rs",
+  "mochi/mochi-core/src/torii/tests_part1.rs",
+]
+inputs = [
+  "Cargo.toml",
+  "crates/iroha_crypto/src/**/*.rs",
+  "crates/iroha_data_model/src/**/*.rs",
+  "crates/iroha_primitives/src/**/*.rs",
+  "crates/iroha_telemetry/src/**/*.rs",
+  "crates/iroha_test_samples/src/**/*.rs",
+  "crates/iroha_torii_shared/src/**/*.rs",
+  "crates/iroha_version/src/**/*.rs",
+  "crates/norito/src/**/*.rs",
+  "rust-toolchain.toml",
+]
+check = "CARGO_TARGET_DIR=\"${IROHA_MOCHI_CANONICAL_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute private external Cargo target directory}\" env -u IROHA_MOCHI_CANONICAL_FIXTURE_STAGE cargo test --locked --offline -p mochi-core --lib canonical_torii_binary_fixture_owner -- --ignored"
+
+[[generated]]
+name = "mochi-torii-replay-fixtures"
+kind = "file"
+outputs = [
+  "mochi/mochi-integration/tests/fixtures/torii_replay/status.json",
+  "mochi/mochi-integration/tests/fixtures/torii_replay/sumeragi.json",
+  "mochi/mochi-integration/tests/fixtures/torii_replay/sumeragi_diagnostics.json",
+  "mochi/mochi-integration/tests/fixtures/torii_replay/configuration.json",
+  "mochi/mochi-integration/tests/fixtures/torii_replay/metrics.prom",
+  "mochi/mochi-integration/tests/fixtures/torii_replay/query.bin",
+]
+generator = "CARGO_TARGET_DIR=\"${IROHA_MOCHI_REPLAY_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute private external Cargo target directory}\" IROHA_MOCHI_REPLAY_FIXTURE_STAGE=\"${IROHA_MOCHI_REPLAY_FIXTURE_STAGE:?set an existing absolute empty mode-0700 external stage directory}\" cargo test --locked --offline -p mochi-integration --lib torii_replay_fixture_owner -- --ignored"
+generator_sources = [
+  "mochi/mochi-integration/Cargo.toml",
+  "mochi/mochi-integration/src/mock_torii.rs",
+  "mochi/mochi-integration/src/mock_torii/tests/replay_fixture_owner.rs",
+]
+inputs = [
+  "Cargo.toml",
+  "crates/iroha_crypto/src/**/*.rs",
+  "crates/iroha_data_model/src/**/*.rs",
+  "crates/iroha_primitives/src/**/*.rs",
+  "crates/iroha_telemetry/src/**/*.rs",
+  "crates/iroha_torii_shared/src/**/*.rs",
+  "crates/norito/src/**/*.rs",
+  "mochi/mochi-core/src/**/*.rs",
+  "rust-toolchain.toml",
+]
+check = "CARGO_TARGET_DIR=\"${IROHA_MOCHI_REPLAY_FIXTURE_CARGO_TARGET_DIR:?set an existing absolute private external Cargo target directory}\" env -u IROHA_MOCHI_REPLAY_FIXTURE_STAGE cargo test --locked --offline -p mochi-integration --lib torii_replay_fixture_owner -- --ignored"
 
 [[generated]]
 name = "kotodama-v1-artifacts-and-manifests"
@@ -710,19 +804,6 @@ inputs = [
   "defaults/*.toml",
 ]
 check = "bash scripts/tests/consistency.sh docker-compose"
-
-# TODO: Restore scripts/etenraku_analysis.py and the licensed reference
-# recording so this historical trace can be reproduced inside the repository.
-[[generated]]
-name = "iroha-monitor-etenraku-reference-trace"
-kind = "file"
-outputs = ["crates/iroha_monitor/src/etenraku_trace.rs"]
-generator = "historical scripts/etenraku_analysis.py reference-recording analysis"
-generator_sources = []
-inputs = []
-check = "cargo test --locked -p iroha_monitor"
-external = true
-provenance = "historical reference trace; the original generator and recording are not tracked"
 
 # Kagami profile generation consumes the ignored/untracked root Cargo.lock at
 # runtime. The fail-closed wrapper authenticates its stable regular-file bytes

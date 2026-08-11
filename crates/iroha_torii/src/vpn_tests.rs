@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use axum::{body::to_bytes, response::IntoResponse};
 use iroha_core::state::World;
-use iroha_crypto::KeyPair;
+use iroha_crypto::{KeyPair, Signature};
 use iroha_data_model::{
     Registrable,
     account::{Account, AccountId},

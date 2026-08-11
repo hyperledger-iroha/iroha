@@ -2679,17 +2679,16 @@ def inspect_signed_privacy_pq_masp_note_action_v1(
 
 def inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
     signed_transaction_versioned: bytes | bytearray | memoryview,
-    canonical_genesis_hash: bytes | bytearray | memoryview,
+    network_id: NetworkId,
 ) -> dict[str, Any]:
-    """Authenticate and inspect one exact genesis-bound ZK-X509 presentation."""
+    """Authenticate and inspect one exact NetworkId-bound ZK-X509 presentation."""
 
     if not isinstance(
         signed_transaction_versioned,
         (bytes, bytearray, memoryview),
     ):
         raise TypeError("signed_transaction_versioned must be bytes-like")
-    if not isinstance(canonical_genesis_hash, (bytes, bytearray, memoryview)):
-        raise TypeError("canonical_genesis_hash must be bytes-like")
+    network_id = _require_network_id(network_id)
     entrypoint = "inspect_signed_privacy_zk_x509_identity_presentation_action_v1"
     try:
         inspector = getattr(_crypto, entrypoint)
@@ -2700,7 +2699,7 @@ def inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
     try:
         result = inspector(
             bytes(signed_transaction_versioned),
-            bytes(canonical_genesis_hash),
+            network_id,
         )
     except Exception:
         raise ValueError("invalid canonical signed ZK-X509 presentation action") from None

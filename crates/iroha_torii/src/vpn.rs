@@ -16,10 +16,7 @@ use iroha_core::{
 };
 use iroha_crypto::{
     Algorithm, Hash, HashOf, PublicKey,
-    soranet::{
-        certificate::{RelayCertificateBundleV2, select_vpn_endpoint},
-        directory::GuardDirectorySnapshotV2,
-    },
+    soranet::{certificate::select_vpn_endpoint, directory::GuardDirectorySnapshotV2},
 };
 use iroha_data_model::{
     ValidationFail,
@@ -86,26 +83,15 @@ impl VpnRelayTrust {
         relay_id: [u8; 32],
         at_unix: i64,
     ) -> Result<Self, String> {
-        let snapshot = GuardDirectorySnapshotV2::authenticate_bytes_at(
+        let selected = GuardDirectorySnapshotV2::authenticate_relay_bytes_at(
             snapshot_bytes,
             expected_snapshot_digest,
+            relay_id,
             at_unix,
         )
         .map_err(|error| format!("VPN guard directory authentication failed: {error}"))?;
-        let bundle = snapshot
-            .relays
-            .iter()
-            .map(|entry| RelayCertificateBundleV2::from_cbor(&entry.certificate))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| format!("VPN relay certificate decode failed: {error}"))?
-            .into_iter()
-            .find(|bundle| bundle.certificate.relay_id == relay_id)
-            .ok_or_else(|| {
-                format!(
-                    "VPN relay {} is absent from the authenticated guard directory",
-                    hex::encode(relay_id)
-                )
-            })?;
+        let snapshot_valid_until_unix = selected.snapshot_valid_until_unix;
+        let bundle = selected.relay;
         if !bundle.certificate.roles.exit {
             return Err("VPN relay certificate does not authorize the exit role".to_owned());
         }
@@ -114,9 +100,7 @@ impl VpnRelayTrust {
         let canonical_bundle = bundle
             .try_to_cbor()
             .map_err(|error| format!("VPN relay certificate encode failed: {error}"))?;
-        let valid_until_unix = snapshot
-            .valid_until_unix
-            .min(bundle.certificate.valid_until);
+        let valid_until_unix = snapshot_valid_until_unix.min(bundle.certificate.valid_until);
         let valid_until_ms = u64::try_from(valid_until_unix)
             .ok()
             .and_then(|seconds| seconds.checked_mul(1_000))

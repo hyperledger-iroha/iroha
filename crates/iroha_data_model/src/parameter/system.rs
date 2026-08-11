@@ -66,6 +66,13 @@ impl JsonSerialize for ConsensusFingerprint {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(&format!("0x{}", hex::encode(self.0)), out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(&format!("0x{}", hex::encode(self.0)), out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -167,6 +174,22 @@ mod json_support {
         json::write_json_string(key, out);
         out.push(':');
         value.json_serialize(out);
+    }
+
+    pub(super) fn write_field_to<T: JsonSerialize>(
+        out: &mut dyn json::JsonWriteSink,
+        first: &mut bool,
+        key: &str,
+        value: &T,
+    ) -> Result<(), json::BoundedJsonError> {
+        if *first {
+            *first = false;
+        } else {
+            out.push(',')?;
+        }
+        json::write_json_string_to(key, out)?;
+        out.push(':')?;
+        value.json_serialize_to(out)
     }
 
     pub(super) fn expect_object(value: json::Value, context: &str) -> Result<Map, json::Error> {
@@ -834,6 +857,82 @@ impl JsonSerialize for SumeragiNposParameters {
     fn json_serialize(&self, out: &mut String) {
         SumeragiNposParametersJson::from(self.clone()).json_serialize(out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        let mut first = true;
+        json_support::write_field_to(out, &mut first, "epoch_seed", &self.epoch_seed)?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "vrf_commit_window_blocks",
+            &self.vrf_commit_window_blocks,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "vrf_reveal_window_blocks",
+            &self.vrf_reveal_window_blocks,
+        )?;
+        json_support::write_field_to(out, &mut first, "max_validators", &self.max_validators)?;
+        json_support::write_field_to(out, &mut first, "min_self_bond", &self.min_self_bond)?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "min_nomination_bond",
+            &self.min_nomination_bond,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "max_nominator_concentration_pct",
+            &self.max_nominator_concentration_pct,
+        )?;
+        json_support::write_field_to(out, &mut first, "seat_band_pct", &self.seat_band_pct)?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "max_entity_correlation_pct",
+            &self.max_entity_correlation_pct,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "finality_margin_blocks",
+            &self.finality_margin_blocks,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "evidence_horizon_blocks",
+            &self.evidence_horizon_blocks,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "activation_lag_blocks",
+            &self.activation_lag_blocks,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "slashing_delay_blocks",
+            &self.slashing_delay_blocks,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "epoch_length_blocks",
+            &self.epoch_length_blocks,
+        )?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -888,6 +987,43 @@ impl JsonSerialize for Parameter {
         }
         out.push('}');
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        match self {
+            Parameter::Sumeragi(value) => {
+                out.push_str("\"Sumeragi\":")?;
+                value.json_serialize_to(out)?;
+            }
+            Parameter::Block(value) => {
+                out.push_str("\"Block\":")?;
+                value.json_serialize_to(out)?;
+            }
+            Parameter::Transaction(value) => {
+                out.push_str("\"Transaction\":")?;
+                value.json_serialize_to(out)?;
+            }
+            Parameter::SmartContract(value) => {
+                out.push_str("\"SmartContract\":")?;
+                value.json_serialize_to(out)?;
+            }
+            Parameter::Executor(value) => {
+                out.push_str("\"Executor\":")?;
+                value.json_serialize_to(out)?;
+            }
+            Parameter::Custom(value) => {
+                out.push_str("\"Custom\":")?;
+                value.json_serialize_to(out)?;
+            }
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -937,6 +1073,17 @@ impl JsonSerialize for SumeragiConsensusMode {
             SumeragiConsensusMode::Npos => "Npos",
         };
         json::write_json_string(label, out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        let label = match self {
+            SumeragiConsensusMode::Permissioned => "Permissioned",
+            SumeragiConsensusMode::Npos => "Npos",
+        };
+        json::write_json_string_to(label, out)
     }
 }
 
@@ -1000,6 +1147,22 @@ impl JsonSerialize for SumeragiParameter {
             }
         }
         out.push('}');
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        match self {
+            SumeragiParameter::MaxClockDriftMs(value) => {
+                out.push_str("{\"MaxClockDriftMs\":")?;
+                value.json_serialize_to(out)?;
+            }
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -1072,6 +1235,66 @@ impl JsonSerialize for SumeragiParameters {
             &self.key_allowed_hsm_providers,
         );
         out.push('}');
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        let mut first = true;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "block_cadence_ms",
+            &self.block_cadence_ms,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "max_clock_drift_ms",
+            &self.max_clock_drift_ms,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "key_activation_lead_blocks",
+            &self.key_activation_lead_blocks,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "key_overlap_grace_blocks",
+            &self.key_overlap_grace_blocks,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "key_expiry_grace_blocks",
+            &self.key_expiry_grace_blocks,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "key_require_hsm",
+            &self.key_require_hsm,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "key_allowed_algorithms",
+            &self.key_allowed_algorithms,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "key_allowed_hsm_providers",
+            &self.key_allowed_hsm_providers,
+        )?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -1313,6 +1536,24 @@ impl JsonSerialize for BlockParameters {
         json_support::write_field(out, &mut first, "max_transactions", &self.max_transactions);
         out.push('}');
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        let mut first = true;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "max_transactions",
+            &self.max_transactions,
+        )?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -1523,6 +1764,31 @@ impl JsonSerialize for Parameters {
         }
         out.push('}');
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        let mut first = true;
+        json_support::write_field_to(out, &mut first, "sumeragi", &self.sumeragi)?;
+        json_support::write_field_to(out, &mut first, "block", &self.block)?;
+        json_support::write_field_to(out, &mut first, "transaction", &self.transaction)?;
+        json_support::write_field_to(out, &mut first, "executor", &self.executor)?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "smart_contract",
+            &self.smart_contract,
+        )?;
+        if !self.custom.is_empty() {
+            json_support::write_field_to(out, &mut first, "custom", &self.custom)?;
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -1625,6 +1891,22 @@ impl JsonSerialize for BlockParameter {
             }
         }
         out.push('}');
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        match self {
+            BlockParameter::MaxTransactions(value) => {
+                out.push_str("{\"MaxTransactions\":")?;
+                value.json_serialize_to(out)?;
+            }
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -1771,6 +2053,67 @@ impl JsonSerialize for TransactionParameters {
         json_support::write_field(out, &mut first, "require_sequence", &self.require_sequence);
         out.push('}');
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        let mut first = true;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "max_signatures",
+            &self.max_signatures,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "max_instructions",
+            &self.max_instructions,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "ivm_bytecode_size",
+            &self.ivm_bytecode_size,
+        )?;
+        json_support::write_field_to(out, &mut first, "max_tx_bytes", &self.max_tx_bytes)?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "max_decompressed_bytes",
+            &self.max_decompressed_bytes,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "max_metadata_depth",
+            &self.max_metadata_depth,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "max_time_to_live_ms",
+            &self.max_time_to_live_ms,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "require_height_ttl",
+            &self.require_height_ttl,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "require_sequence",
+            &self.require_sequence,
+        )?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -1901,6 +2244,55 @@ impl JsonSerialize for TransactionParameter {
         }
         out.push('}');
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        match self {
+            TransactionParameter::MaxSignatures(value) => {
+                out.push_str("\"MaxSignatures\":")?;
+                value.json_serialize_to(out)?;
+            }
+            TransactionParameter::MaxInstructions(value) => {
+                out.push_str("\"MaxInstructions\":")?;
+                value.json_serialize_to(out)?;
+            }
+            TransactionParameter::IvmBytecodeSize(value) => {
+                out.push_str("\"IvmBytecodeSize\":")?;
+                value.json_serialize_to(out)?;
+            }
+            TransactionParameter::MaxTxBytes(value) => {
+                out.push_str("\"MaxTxBytes\":")?;
+                value.json_serialize_to(out)?;
+            }
+            TransactionParameter::MaxDecompressedBytes(value) => {
+                out.push_str("\"MaxDecompressedBytes\":")?;
+                value.json_serialize_to(out)?;
+            }
+            TransactionParameter::MaxMetadataDepth(value) => {
+                out.push_str("\"MaxMetadataDepth\":")?;
+                value.json_serialize_to(out)?;
+            }
+            TransactionParameter::MaxTimeToLiveMs(value) => {
+                out.push_str("\"MaxTimeToLiveMs\":")?;
+                value.json_serialize_to(out)?;
+            }
+            TransactionParameter::RequireHeightTtl(value) => {
+                out.push_str("\"RequireHeightTtl\":")?;
+                value.json_serialize_to(out)?;
+            }
+            TransactionParameter::RequireSequence(value) => {
+                out.push_str("\"RequireSequence\":")?;
+                value.json_serialize_to(out)?;
+            }
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -1992,6 +2384,38 @@ impl JsonSerialize for SmartContractParameters {
         json_support::write_field(out, &mut first, "max_output_bytes", &self.max_output_bytes);
         out.push('}');
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        let mut first = true;
+        json_support::write_field_to(out, &mut first, "fuel", &self.fuel)?;
+        json_support::write_field_to(out, &mut first, "memory", &self.memory)?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "execution_depth",
+            &self.execution_depth,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "max_output_items",
+            &self.max_output_items,
+        )?;
+        json_support::write_field_to(
+            out,
+            &mut first,
+            "max_output_bytes",
+            &self.max_output_bytes,
+        )?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -2067,6 +2491,39 @@ impl JsonSerialize for SmartContractParameter {
             }
         }
         out.push('}');
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('{')?;
+        match self {
+            SmartContractParameter::Fuel(value) => {
+                out.push_str("\"Fuel\":")?;
+                value.json_serialize_to(out)?;
+            }
+            SmartContractParameter::Memory(value) => {
+                out.push_str("\"Memory\":")?;
+                value.json_serialize_to(out)?;
+            }
+            SmartContractParameter::ExecutionDepth(value) => {
+                out.push_str("\"ExecutionDepth\":")?;
+                value.json_serialize_to(out)?;
+            }
+            SmartContractParameter::MaxOutputItems(value) => {
+                out.push_str("\"MaxOutputItems\":")?;
+                value.json_serialize_to(out)?;
+            }
+            SmartContractParameter::MaxOutputBytes(value) => {
+                out.push_str("\"MaxOutputBytes\":")?;
+                value.json_serialize_to(out)?;
+            }
+        }
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 

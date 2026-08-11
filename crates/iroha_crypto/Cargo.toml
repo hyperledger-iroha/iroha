@@ -201,3 +201,8 @@ harness = false
 [[test]]
 name = "iroha_crypto_group_01"
 path = "tests/grouped/group_01.rs"
+
+[[test]]
+name = "public_key_sizing_allocations"
+path = "tests/public_key_sizing_allocations.rs"
+required-features = ["pqc"]

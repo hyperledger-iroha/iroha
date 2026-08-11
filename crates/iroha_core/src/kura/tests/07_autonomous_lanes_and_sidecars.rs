@@ -387,11 +387,8 @@ fn autonomous_entrypoint_claim_rejects_legacy_and_unknown_states() {
     let temp_dir = TempDir::new().expect("temp dir");
     let network_id = test_network_id(b"legacy-claim-genesis");
     let entrypoint_hash = Hash::new(b"legacy-claim-entrypoint");
-    let path = Kura::autonomous_lane_entrypoint_claim_path(
-        temp_dir.path(),
-        &network_id,
-        &entrypoint_hash,
-    );
+    let path =
+        Kura::autonomous_lane_entrypoint_claim_path(temp_dir.path(), &network_id, &entrypoint_hash);
     fs::create_dir_all(path.parent().expect("claim parent")).expect("create claim parent");
     let common = (
         network_id,
@@ -656,13 +653,8 @@ fn autonomous_merge_bundle_certifies_origin_while_new_view_advances_cursor() {
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
     let origin = payload.origin_proposal.clone();
     let availability = durable_lane_payload_availability_for_kura(&payload, &origin, &signer);
-    let new_view = next_durable_lane_view_certificate_for_kura(
-        &origin,
-        &payload,
-        &signer,
-        network_id,
-        epoch,
-    );
+    let new_view =
+        next_durable_lane_view_certificate_for_kura(&origin, &payload, &signer, network_id, epoch);
     let cursor = crate::lane_consensus::retarget_lane_block_proposal_view(
         &origin,
         new_view.certificate.body.target_view,
@@ -772,7 +764,8 @@ fn autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation() 
         payload.origin_proposal.descriptor.proposal_height,
     );
     let view_state_temp = Kura::autonomous_lane_block_view_state_temp_path(&view_state_path);
-    let temp_bytes = norito::encode_canonical(&advanced_state).expect("encode crash-temp view state");
+    let temp_bytes =
+        norito::encode_canonical(&advanced_state).expect("encode crash-temp view state");
     fs::write(&view_state_temp, &temp_bytes).expect("stage higher-view crash temp");
     let main_before = fs::read(&view_state_path).expect("read stable main view state");
 
@@ -782,21 +775,14 @@ fn autonomous_view_state_latest_read_only_selects_crash_temp_without_mutation() 
         let _geometry_guard = kura.lane_geometry_lock.lock();
         let _sidecar_guard = kura.sidecar_lock.lock();
         kura.read_autonomous_lane_block_record_read_only_latest_locked(
-            lane_entry,
-            lane_id,
-            1,
-            network_id,
-            epoch,
+            lane_entry, lane_id, 1, network_id, epoch,
         )
         .expect("read logical view-state winner")
         .expect("read retained autonomous attempt")
     };
-    let current = Kura::validate_autonomous_lane_block_artifact(
-        &record.artifact,
-        network_id,
-        epoch,
-    )
-    .expect("validate read-only logical winner");
+    let current =
+        Kura::validate_autonomous_lane_block_artifact(&record.artifact, network_id, epoch)
+            .expect("validate read-only logical winner");
     assert_eq!(current.descriptor.lane_block_view, 1);
     assert_eq!(
         fs::read(&view_state_path).expect("reread stable main view state"),
@@ -851,14 +837,8 @@ fn durable_autonomous_merge_source_requires_every_exact_component_and_survives_r
             .is_err(),
         "the execution input alone must not substitute for durable READY evidence"
     );
-    kura.persist_lane_payload_availability_certificate(
-        lane_id,
-        1,
-        availability,
-        network_id,
-        epoch,
-    )
-    .expect("persist exact READY certificate");
+    kura.persist_lane_payload_availability_certificate(lane_id, 1, availability, network_id, epoch)
+        .expect("persist exact READY certificate");
     assert_eq!(
         kura.durable_autonomous_lane_merge_source(lane_id, 1, network_id, epoch),
         Err("certified lane block pair lacks the exact autonomous slot"),
@@ -1346,11 +1326,7 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
     let mut certificate_prefix = Vec::with_capacity(256);
     for _ in 1..=256 {
         let durable = next_durable_lane_view_certificate_for_kura(
-            &current,
-            &payload,
-            &signer,
-            network_id,
-            epoch,
+            &current, &payload, &signer, network_id, epoch,
         );
         current = crate::lane_consensus::retarget_lane_block_proposal_view(
             &current,
@@ -1399,11 +1375,7 @@ fn autonomous_lane_view_compacts_at_257_and_recovers_crash_atomically() {
 
     for target_view in 257..=258 {
         let durable = next_durable_lane_view_certificate_for_kura(
-            &current,
-            &payload,
-            &signer,
-            network_id,
-            epoch,
+            &current, &payload, &signer, network_id, epoch,
         );
         current = match kura
             .persist_lane_new_view_certificate(lane_id, 1, durable, network_id, epoch)
@@ -1621,7 +1593,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     );
     assert!(
         kura.claim_autonomous_lifecycle_process_generation(
-            Hash::new(b"wrong lifecycle process chain"),
+            test_network_id(b"wrong lifecycle process genesis"),
             &local_peer,
         )
         .is_err(),
@@ -1937,7 +1909,7 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
         .expect("rebind exact lifecycle key identity");
     assert!(
         kura.read_only_active_autonomous_lifecycle_attempt_inventory(
-            Hash::new(b"wrong read-only lifecycle inventory chain"),
+            test_network_id(b"wrong read-only lifecycle inventory genesis"),
             &local_peer,
             lane.lane_id,
             lane.dataspace_id,
@@ -2602,7 +2574,8 @@ fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointe
     }
 
     let mut drifted_chain_generation = process_generation_record.clone();
-    drifted_chain_generation.body.network_id = test_network_id(b"drifted-process-generation-genesis");
+    drifted_chain_generation.body.network_id =
+        test_network_id(b"drifted-process-generation-genesis");
     drifted_chain_generation.record_hash = drifted_chain_generation
         .body
         .canonical_hash()

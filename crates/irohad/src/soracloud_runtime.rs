@@ -134,9 +134,12 @@ use sorafs_car::{
     },
     compute_chunk_plan_digest_sha3, compute_por_root,
 };
+#[cfg(test)]
 use sorafs_node::store::StoredManifest;
 use tokio::{sync::RwLock as AsyncRwLock, task::JoinHandle};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
+
+mod remote_stream_token_auth;
 
 const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_VERSION_V1: u32 = 1;
 const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_DIR: &str = "uploaded_model_keys";
@@ -170,12 +173,38 @@ const SORACLOUD_REMOTE_HYDRATION_PLAN_MAX_RESPONSE_BYTES: u64 = 16 * 1024 * 1024
 const SORACLOUD_REMOTE_STREAM_TOKEN_MAX_RESPONSE_BYTES: u64 = 64 * 1024;
 const SORACLOUD_REMOTE_CHUNK_MAX_RESPONSE_BYTES: u64 = 64 * 1024 * 1024;
 const SORACLOUD_REMOTE_HYDRATION_PAGE_LIMIT: usize = 500;
+const SORACLOUD_REMOTE_HYDRATION_MAX_SOURCES: usize = 4_096;
+const SORACLOUD_REMOTE_HYDRATION_MAX_PROVIDERS_PER_SOURCE: usize = 128;
+const SORACLOUD_REMOTE_HYDRATION_MAX_IN_MEMORY_PAYLOAD_BYTES: u64 = 256 * 1024 * 1024;
+const SORACLOUD_LOCAL_HYDRATION_STREAM_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
+const SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const SORACLOUD_HF_IMPORT_MANIFEST_MAX_BYTES: u64 = 2 * 1024 * 1024;
+const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+const SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_MAX_REPLICAS: usize = 4_096;
+const SORACLOUD_RUNTIME_STATE_MAX_STRING_BYTES: usize = 4 * 1024;
+const SORACLOUD_APARTMENT_AUTONOMY_SUMMARY_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const SORACLOUD_INROU_BOOTSTRAP_USER_DATA_MAX_BYTES: u64 = 1024 * 1024;
+const SORACLOUD_RUNTIME_STDERR_TAIL_BYTES: u64 = 64 * 1024;
+const SORACLOUD_HF_RUNNER_RESPONSE_OVERHEAD_BYTES: u64 = 64 * 1024;
+const SORACLOUD_HF_RUNNER_SCRIPT_MAX_BYTES: u64 = 1024 * 1024;
+const SORACLOUD_HF_MODEL_INFO_MAX_TAGS: usize = 1_024;
+const SORACLOUD_HF_MODEL_INFO_MAX_SIBLINGS: usize = 4_096;
+const SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES: usize = 4 * 1024;
+const SORACLOUD_HF_IMPORT_MAX_RECORDED_SKIPS: usize = 512;
+const SORACLOUD_HF_IMPORT_MANIFEST_MAX_FILES: usize = 128;
+const SORACLOUD_HF_IMPORT_MANIFEST_MAX_TOTAL_FILE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const SORACLOUD_HF_IMPORT_MANIFEST_MAX_ERROR_BYTES: usize = 64 * 1024;
+const SORACLOUD_HF_IMPORT_MANIFEST_MAX_TEXT_BYTES: usize = 8 * 1024;
+const SORACLOUD_ARTIFACT_CACHE_MAX_DIRECTORY_ENTRIES: usize = 65_536;
+const SORACLOUD_HYDRATION_MAX_REQUIRED_ARTIFACTS: usize = 65_536;
+const SORACLOUD_RUNTIME_ARTIFACT_PATH_MAX_BYTES: usize = 4 * 1024;
 
 fn build_remote_hydration_http_client() -> eyre::Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(30))
         .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
         .build()
         .wrap_err("build Soracloud remote hydration HTTP client")
 }
@@ -292,6 +321,150 @@ fn read_soracloud_http_response_bounded(
     let declared_length = response.content_length();
     read_soracloud_http_response_body_bounded(&mut response, declared_length, maximum_bytes)
         .wrap_err_with(|| format!("read bounded {label} response"))
+}
+
+fn open_soracloud_regular_file_no_follow(
+    path: &Path,
+    label: &str,
+) -> io::Result<(fs::File, fs::Metadata)> {
+    let named = fs::symlink_metadata(path)?;
+    if named.file_type().is_symlink() || !named.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} {} must be a regular file", path.display()),
+        ));
+    }
+    #[cfg(unix)]
+    if named.nlink() != 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{label} {} must have exactly one hard link, found {}",
+                path.display(),
+                named.nlink()
+            ),
+        ));
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    let opened = file.metadata()?;
+    if !same_soracloud_regular_file(&named, &opened) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} {} changed while it was opened", path.display()),
+        ));
+    }
+    Ok((file, opened))
+}
+
+fn same_soracloud_regular_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    if !left.is_file() || !right.is_file() || left.len() != right.len() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        left.dev() == right.dev()
+            && left.ino() == right.ino()
+            && left.nlink() == right.nlink()
+            && left.mtime() == right.mtime()
+            && left.mtime_nsec() == right.mtime_nsec()
+            && left.ctime() == right.ctime()
+            && left.ctime_nsec() == right.ctime_nsec()
+    }
+    #[cfg(not(unix))]
+    {
+        left.modified().ok() == right.modified().ok()
+    }
+}
+
+fn read_soracloud_regular_file_bounded(
+    path: &Path,
+    maximum_bytes: u64,
+    label: &str,
+) -> io::Result<Vec<u8>> {
+    if maximum_bytes == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{label} byte limit must be positive"),
+        ));
+    }
+    let (mut file, fingerprint) = open_soracloud_regular_file_no_follow(path, label)?;
+    if fingerprint.len() > maximum_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{label} {} requires {} bytes, exceeding the {maximum_bytes}-byte limit",
+                path.display(),
+                fingerprint.len()
+            ),
+        ));
+    }
+    let capacity = usize::try_from(fingerprint.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} {} is too large to address", path.display()),
+        )
+    })?;
+    let mut payload = Vec::new();
+    payload.try_reserve_exact(capacity).map_err(|error| {
+        io::Error::other(format!(
+            "reserve {label} {} bounded buffer: {error}",
+            path.display()
+        ))
+    })?;
+    file.by_ref()
+        .take(maximum_bytes.saturating_add(1))
+        .read_to_end(&mut payload)?;
+    let observed = u64::try_from(payload.len()).unwrap_or(u64::MAX);
+    if observed > maximum_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{label} {} exceeds the {maximum_bytes}-byte limit",
+                path.display()
+            ),
+        ));
+    }
+    let opened_after = file.metadata()?;
+    let named_after = fs::symlink_metadata(path)?;
+    if observed != fingerprint.len()
+        || !same_soracloud_regular_file(&fingerprint, &opened_after)
+        || !same_soracloud_regular_file(&opened_after, &named_after)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{label} {} changed while it was read", path.display()),
+        ));
+    }
+    Ok(payload)
+}
+
+fn read_soracloud_regular_text_bounded(
+    path: &Path,
+    maximum_bytes: u64,
+    label: &str,
+) -> io::Result<String> {
+    String::from_utf8(read_soracloud_regular_file_bounded(
+        path,
+        maximum_bytes,
+        label,
+    )?)
+    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 /// Runtime-manager configuration derived from the explicit Soracloud runtime settings.
@@ -2018,7 +2191,7 @@ fn load_or_create_uploaded_model_encryption_secret(state_dir: &Path) -> io::Resu
     let key_dir = uploaded_model_encryption_key_dir(state_dir);
     fs::create_dir_all(&key_dir)?;
     let key_path = uploaded_model_encryption_key_path(state_dir);
-    match fs::read(&key_path) {
+    match read_soracloud_regular_file_bounded(&key_path, 32, "uploaded model encryption key") {
         Ok(bytes) => bytes.try_into().map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -3044,20 +3217,15 @@ impl SoracloudIvmHost {
             .join(sanitize_path_component(self.service_name().as_ref()))
             .join(sanitize_path_component(self.service_version()))
             .join(relative);
-        let file = match fs::File::open(path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(_) => return Err(VMError::PermissionDenied),
-        };
-        let read_limit = Memory::HEAP_MAX_SIZE.saturating_add(1);
-        let mut bytes = Vec::new();
-        file.take(read_limit)
-            .read_to_end(&mut bytes)
-            .map_err(|_| VMError::PermissionDenied)?;
-        if bytes.len() > SORACLOUD_HOST_VARIABLE_RESPONSE_MAX_BYTES {
-            return Err(VMError::PermissionDenied);
+        match read_soracloud_regular_file_bounded(
+            &path,
+            u64::try_from(SORACLOUD_HOST_VARIABLE_RESPONSE_MAX_BYTES).unwrap_or(u64::MAX),
+            "Soracloud service material",
+        ) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(VMError::PermissionDenied),
         }
-        Ok(Some(bytes))
     }
 
     fn read_service_config(
@@ -3174,20 +3342,9 @@ impl SoracloudIvmHost {
         {
             return Err(VMError::PermissionDenied);
         }
-        if response
-            .content_length()
-            .is_some_and(|content_length| content_length > response_cap)
-        {
-            return Err(VMError::PermissionDenied);
-        }
-        let mut body = Vec::with_capacity(response_cap as usize);
-        response
-            .take(response_cap.saturating_add(1))
-            .read_to_end(&mut body)
-            .map_err(|_| VMError::PermissionDenied)?;
-        if u64::try_from(body.len()).unwrap_or(u64::MAX) > response_cap {
-            return Err(VMError::PermissionDenied);
-        }
+        let body =
+            read_soracloud_http_response_bounded(response, response_cap, "Soracloud IVM egress")
+                .map_err(|_| VMError::PermissionDenied)?;
         let body_hash = Hash::new(&body);
         if body_hash != expected_hash {
             return Err(VMError::PermissionDenied);
@@ -3777,6 +3934,7 @@ struct HfLocalRunnerWorkerCacheKey {
     runner_program: String,
     runner_script_path: PathBuf,
     runner_script_revision: String,
+    maximum_response_bytes: usize,
 }
 
 struct HfLocalRunnerWorker {
@@ -3923,6 +4081,7 @@ pub(crate) struct SoracloudRuntimeManager {
     last_service_lease_usage_submission_bytes: Mutex<BTreeMap<(String, String), u64>>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
     sorafs_provider_cache: Option<Arc<AsyncRwLock<ProviderAdvertCache>>>,
+    remote_stream_token_operator: Option<remote_stream_token_auth::RemoteStreamTokenOperator>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4044,6 +4203,7 @@ impl SoracloudRuntimeManager {
             last_service_lease_usage_submission_bytes: Mutex::new(BTreeMap::new()),
             sorafs_node: None,
             sorafs_provider_cache: None,
+            remote_stream_token_operator: None,
         }
     }
 
@@ -4091,13 +4251,18 @@ impl SoracloudRuntimeManager {
     /// # Errors
     ///
     /// Returns an error before producing a runtime handle or background child
-    /// when a production signer boundary is absent or no longer qualified,
-    /// persisted state cannot be restored, or the initial authoritative
-    /// reconciliation does not complete.
+    /// when a production signer boundary is absent or no longer qualified, an
+    /// enabled remote-hydration cache lacks an exact-network operator identity,
+    /// persisted state cannot be restored, or initial reconciliation fails.
     pub fn start(
         mut self,
         shutdown_signal: ShutdownSignal,
     ) -> eyre::Result<(SoracloudRuntimeManagerHandle, Child)> {
+        remote_stream_token_auth::ensure_startup_binding(
+            self.remote_stream_token_operator.as_ref(),
+            self.state.network_id_ref(),
+            self.sorafs_provider_cache.is_some(),
+        )?;
         if self.config.production_mode {
             self.mutation_sink
                 .as_ref()
@@ -4335,9 +4500,11 @@ impl SoracloudRuntimeManager {
             let view = self.state.view();
             self.submit_http_service_runtime_state_updates(&view, &snapshot, &bundle_registry);
         }
-        write_json_atomic(
+        write_json_atomic_bounded(
             &self.config.state_dir.join("runtime_snapshot.json"),
             &snapshot,
+            SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
+            "Soracloud runtime snapshot",
         )?;
         *self.snapshot.write() = snapshot;
         Ok(())
@@ -4942,8 +5109,12 @@ impl SoracloudRuntimeManager {
 
     fn restore_persisted_snapshot(&self) -> eyre::Result<bool> {
         let path = self.runtime_snapshot_path();
-        let Some(snapshot) = read_json_optional::<SoracloudRuntimeSnapshot>(&path)
-            .wrap_err_with(|| format!("read {}", path.display()))?
+        let Some(snapshot) = read_json_optional::<SoracloudRuntimeSnapshot>(
+            &path,
+            SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
+            "Soracloud runtime snapshot",
+        )
+        .wrap_err_with(|| format!("read {}", path.display()))?
         else {
             return Ok(false);
         };
@@ -5431,8 +5602,12 @@ impl SoracloudRuntimeManager {
             .transpose()?;
         let bootstrap_user_data = match inrou.bootstrap_user_data_path.as_ref() {
             Some(path) => Some(
-                fs::read_to_string(resolve_inrou_bundle_member_path(&bundle_root, path)?)
-                    .wrap_err("read Inrou bootstrap user-data overlay")?,
+                read_soracloud_regular_text_bounded(
+                    &resolve_inrou_bundle_member_path(&bundle_root, path)?,
+                    SORACLOUD_INROU_BOOTSTRAP_USER_DATA_MAX_BYTES,
+                    "Inrou bootstrap user-data overlay",
+                )
+                .wrap_err("read bounded Inrou bootstrap user-data overlay")?,
             ),
             None => None,
         };
@@ -5714,8 +5889,12 @@ impl SoracloudRuntimeManager {
             .transpose()?;
         let bootstrap_user_data = match inrou.bootstrap_user_data_path.as_ref() {
             Some(path) => Some(
-                fs::read_to_string(resolve_inrou_bundle_member_path(&bundle_root, path)?)
-                    .wrap_err("read Inrou bootstrap user-data overlay")?,
+                read_soracloud_regular_text_bounded(
+                    &resolve_inrou_bundle_member_path(&bundle_root, path)?,
+                    SORACLOUD_INROU_BOOTSTRAP_USER_DATA_MAX_BYTES,
+                    "Inrou bootstrap user-data overlay",
+                )
+                .wrap_err("read bounded Inrou bootstrap user-data overlay")?,
             ),
             None => None,
         };
@@ -6291,7 +6470,7 @@ impl SoracloudRuntimeManager {
     ) -> eyre::Result<()> {
         let source_root = self.hf_source_root(source_id);
         let manifest_path = source_root.join("import_manifest.json");
-        if let Some(existing) = read_json_optional::<HfLocalImportManifestV1>(&manifest_path)
+        if let Some(existing) = read_hf_import_manifest(&self.config.state_dir, source_id)
             .wrap_err_with(|| format!("read {}", manifest_path.display()))?
             && existing.source_id == source_id
             && existing.repo_id == source.repo_id
@@ -6334,41 +6513,19 @@ impl SoracloudRuntimeManager {
         let raw_model_info_path = source_root.join("model_info.json");
         write_bytes_atomic(&raw_model_info_path, &model_info_bytes)
             .wrap_err_with(|| format!("write {}", raw_model_info_path.display()))?;
+        drop(model_info_bytes);
 
-        let resolved_commit = model_info
-            .get("sha")
-            .and_then(norito::json::Value::as_str)
-            .map(ToOwned::to_owned);
-        let pipeline_tag = model_info
-            .get("pipeline_tag")
-            .and_then(norito::json::Value::as_str)
-            .map(ToOwned::to_owned);
-        let library_name = model_info
-            .get("library_name")
-            .and_then(norito::json::Value::as_str)
-            .map(ToOwned::to_owned);
-        let tags = model_info
-            .get("tags")
-            .and_then(norito::json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(norito::json::Value::as_str)
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
+        let resolved_commit = bounded_hf_model_info_string(&model_info, "sha")?;
+        let pipeline_tag = bounded_hf_model_info_string(&model_info, "pipeline_tag")?;
+        let library_name = bounded_hf_model_info_string(&model_info, "library_name")?;
+        let tags =
+            bounded_hf_model_info_strings(&model_info, "tags", SORACLOUD_HF_MODEL_INFO_MAX_TAGS)?;
 
         let mut imported_files = Vec::new();
         let mut skipped_files = Vec::new();
         let mut imported_total_bytes = 0_u64;
-        let mut sibling_paths = model_info
-            .get("siblings")
-            .and_then(norito::json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|entry| entry.get("rfilename").and_then(norito::json::Value::as_str))
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
-        sibling_paths.sort();
-        sibling_paths.dedup();
+        let sibling_paths = bounded_hf_model_info_sibling_paths(&model_info)?;
+        drop(model_info);
 
         for path in sibling_paths {
             if !hf_import_file_selected(&path, &self.config.hf.import_file_allowlist) {
@@ -6377,8 +6534,12 @@ impl SoracloudRuntimeManager {
             if imported_files.len()
                 >= usize::try_from(self.config.hf.import_max_files).unwrap_or(usize::MAX)
             {
-                skipped_files.push(format!("{path} (skipped: file limit reached)"));
-                continue;
+                record_hf_import_skip(
+                    &mut skipped_files,
+                    "remaining selected files omitted after the configured file limit was reached"
+                        .to_owned(),
+                );
+                break;
             }
 
             let file_url = hf_repo_file_url(
@@ -6392,7 +6553,10 @@ impl SoracloudRuntimeManager {
                 .send()
                 .wrap_err_with(|| format!("query HF file headers from {file_url}"))?;
             if !head.status().is_success() {
-                skipped_files.push(format!("{path} (skipped: HEAD returned {})", head.status()));
+                record_hf_import_skip(
+                    &mut skipped_files,
+                    format!("{path} (skipped: HEAD returned {})", head.status()),
+                );
                 continue;
             }
             let Some(content_length) = head
@@ -6401,22 +6565,31 @@ impl SoracloudRuntimeManager {
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| value.parse::<u64>().ok())
             else {
-                skipped_files.push(format!("{path} (skipped: missing Content-Length)"));
+                record_hf_import_skip(
+                    &mut skipped_files,
+                    format!("{path} (skipped: missing Content-Length)"),
+                );
                 continue;
             };
             if content_length > self.config.hf.import_max_file_bytes {
-                skipped_files.push(format!(
-                    "{path} (skipped: {content_length} bytes exceeds per-file cap {})",
-                    self.config.hf.import_max_file_bytes
-                ));
+                record_hf_import_skip(
+                    &mut skipped_files,
+                    format!(
+                        "{path} (skipped: {content_length} bytes exceeds per-file cap {})",
+                        self.config.hf.import_max_file_bytes
+                    ),
+                );
                 continue;
             }
             let next_total = imported_total_bytes.saturating_add(content_length);
             if next_total > self.config.hf.import_max_total_bytes {
-                skipped_files.push(format!(
-                    "{path} (skipped: aggregate import cap {} bytes reached)",
-                    self.config.hf.import_max_total_bytes
-                ));
+                record_hf_import_skip(
+                    &mut skipped_files,
+                    format!(
+                        "{path} (skipped: aggregate import cap {} bytes reached)",
+                        self.config.hf.import_max_total_bytes
+                    ),
+                );
                 continue;
             }
 
@@ -6425,23 +6598,22 @@ impl SoracloudRuntimeManager {
                 .send()
                 .wrap_err_with(|| format!("download HF file from {file_url}"))?;
             if !response.status().is_success() {
-                skipped_files.push(format!(
-                    "{path} (skipped: GET returned {})",
-                    response.status()
-                ));
+                record_hf_import_skip(
+                    &mut skipped_files,
+                    format!("{path} (skipped: GET returned {})", response.status()),
+                );
                 continue;
             }
-            let body = read_soracloud_http_response_bounded(
-                response,
-                content_length.max(1),
-                "Hugging Face file",
-            )
-            .wrap_err_with(|| format!("read HF file response from {file_url}"))?;
-            let actual_len = u64::try_from(body.len()).unwrap_or(u64::MAX);
-            if actual_len != content_length {
-                skipped_files.push(format!(
-                    "{path} (skipped: body length {actual_len} bytes did not match HEAD length {content_length})"
-                ));
+            if response
+                .content_length()
+                .is_some_and(|declared| declared != content_length)
+            {
+                record_hf_import_skip(
+                    &mut skipped_files,
+                    format!(
+                        "{path} (skipped: GET Content-Length did not match HEAD length {content_length})"
+                    ),
+                );
                 continue;
             }
 
@@ -6452,13 +6624,18 @@ impl SoracloudRuntimeManager {
                 fs::create_dir_all(parent)
                     .wrap_err_with(|| format!("create {}", parent.display()))?;
             }
-            write_bytes_atomic(&local_path, &body)
-                .wrap_err_with(|| format!("write {}", local_path.display()))?;
+            let payload_hash = write_reader_atomic_bounded(
+                &local_path,
+                response,
+                content_length,
+                self.config.hf.import_max_file_bytes,
+            )
+            .wrap_err_with(|| format!("stream HF file response from {file_url}"))?;
             imported_total_bytes = next_total;
             imported_files.push(HfImportedFileV1 {
                 path,
-                content_length: actual_len,
-                payload_hash: Hash::new(&body).to_string(),
+                content_length,
+                payload_hash: payload_hash.to_string(),
                 local_path: local_path.display().to_string(),
             });
         }
@@ -6480,8 +6657,15 @@ impl SoracloudRuntimeManager {
             raw_model_info_path: Some(raw_model_info_path.display().to_string()),
             import_error: None,
         };
-        write_json_atomic(&manifest_path, &manifest)
-            .wrap_err_with(|| format!("write {}", manifest_path.display()))?;
+        validate_hf_import_manifest_bounds(&manifest)
+            .wrap_err("validate bounded Hugging Face import manifest")?;
+        write_json_atomic_bounded(
+            &manifest_path,
+            &manifest,
+            SORACLOUD_HF_IMPORT_MANIFEST_MAX_BYTES,
+            "Hugging Face import manifest",
+        )
+        .wrap_err_with(|| format!("write {}", manifest_path.display()))?;
         Ok(())
     }
 
@@ -6511,9 +6695,16 @@ impl SoracloudRuntimeManager {
             raw_model_info_path: None,
             import_error: Some(error.to_owned()),
         };
+        validate_hf_import_manifest_bounds(&manifest)
+            .wrap_err("validate bounded Hugging Face import error manifest")?;
         let manifest_path = source_root.join("import_manifest.json");
-        write_json_atomic(&manifest_path, &manifest)
-            .wrap_err_with(|| format!("write {}", manifest_path.display()))?;
+        write_json_atomic_bounded(
+            &manifest_path,
+            &manifest,
+            SORACLOUD_HF_IMPORT_MANIFEST_MAX_BYTES,
+            "Hugging Face import manifest",
+        )
+        .wrap_err_with(|| format!("write {}", manifest_path.display()))?;
         Ok(())
     }
 
@@ -6523,32 +6714,19 @@ impl SoracloudRuntimeManager {
         snapshot: &SoracloudRuntimeSnapshot,
         bundle_registry: &BTreeMap<(String, String), SoraDeploymentBundleV1>,
     ) -> eyre::Result<()> {
-        let stored_manifests = if let Some(sorafs_node) = self.sorafs_node.as_ref() {
-            if sorafs_node.is_enabled() {
-                sorafs_node
-                    .stored_manifests()
-                    .wrap_err("list stored SoraFS manifests for Soracloud hydration")?
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
         let remote_sources = collect_remote_hydration_sources(view, &self.state);
         let mut required = BTreeMap::<String, (Hash, String, u64)>::new();
-        let mut hydrated_payloads = BTreeMap::<Hash, Option<Vec<u8>>>::new();
-        for (service_name, versions) in &snapshot.services {
-            for (service_version, plan) in versions {
-                if let Some(bundle) =
-                    bundle_registry.get(&(service_name.clone(), service_version.clone()))
-                    && let Some(payload) =
-                        soracloud_hf_generated_bundle_payload_if_applicable(bundle)
-                {
-                    hydrated_payloads
-                        .entry(bundle.container.bundle_hash)
-                        .or_insert(Some(payload));
-                }
+        for versions in snapshot.services.values() {
+            for plan in versions.values() {
                 for artifact in &plan.artifacts {
+                    if artifact.local_cache_path.len() > SORACLOUD_RUNTIME_ARTIFACT_PATH_MAX_BYTES
+                        || artifact.artifact_path.len() > SORACLOUD_RUNTIME_ARTIFACT_PATH_MAX_BYTES
+                    {
+                        eyre::bail!(
+                            "Soracloud runtime artifact path exceeds the {}-byte hydration limit",
+                            SORACLOUD_RUNTIME_ARTIFACT_PATH_MAX_BYTES
+                        );
+                    }
                     let artifact_hash =
                         Hash::from_str(&artifact.artifact_hash).wrap_err_with(|| {
                             format!("parse Soracloud artifact hash `{}`", artifact.artifact_hash)
@@ -6561,6 +6739,12 @@ impl SoracloudRuntimeManager {
                             entry.2 = entry.2.min(maximum_bytes);
                         })
                         .or_insert((artifact_hash, artifact.artifact_path.clone(), maximum_bytes));
+                    if required.len() > SORACLOUD_HYDRATION_MAX_REQUIRED_ARTIFACTS {
+                        eyre::bail!(
+                            "Soracloud runtime snapshot requires more than {} distinct hydrated artifacts",
+                            SORACLOUD_HYDRATION_MAX_REQUIRED_ARTIFACTS
+                        );
+                    }
                 }
             }
         }
@@ -6570,17 +6754,35 @@ impl SoracloudRuntimeManager {
             if verify_cached_soracloud_artifact(&cache_path, artifact_hash, maximum_bytes).is_ok() {
                 continue;
             }
-            let payload = if let Some(cached) = hydrated_payloads.get(&artifact_hash) {
-                cached.clone()
-            } else {
-                let resolved = self.read_committed_sorafs_payload(
-                    view,
-                    &stored_manifests,
-                    &remote_sources,
-                    artifact_hash,
-                )?;
-                hydrated_payloads.insert(artifact_hash, resolved.clone());
-                resolved
+            let generated_payload = bundle_registry
+                .values()
+                .find(|bundle| bundle.container.bundle_hash == artifact_hash)
+                .and_then(soracloud_hf_generated_bundle_payload_if_applicable);
+            let payload = match generated_payload {
+                Some(payload) => Some(payload),
+                None => {
+                    if self.hydrate_local_sorafs_payload_to_cache(
+                        &remote_sources,
+                        artifact_hash,
+                        &cache_path,
+                        maximum_bytes,
+                    )? {
+                        verify_cached_soracloud_artifact(
+                            &cache_path,
+                            artifact_hash,
+                            maximum_bytes,
+                        )
+                        .map_err(|error| {
+                            eyre::eyre!(
+                                "verify streamed local Soracloud artifact `{artifact_path}` at {}: {}",
+                                cache_path.display(),
+                                error.message
+                            )
+                        })?;
+                        continue;
+                    }
+                    self.read_committed_remote_sorafs_payload(&remote_sources, artifact_hash)?
+                }
             };
             let Some(payload) = payload else {
                 continue;
@@ -6611,68 +6813,112 @@ impl SoracloudRuntimeManager {
         Ok(())
     }
 
-    fn read_committed_sorafs_payload(
+    fn hydrate_local_sorafs_payload_to_cache(
         &self,
-        _view: &StateView<'_>,
-        stored_manifests: &[StoredManifest],
         remote_sources: &[RemoteHydrationSource],
         expected_hash: Hash,
-    ) -> eyre::Result<Option<Vec<u8>>> {
-        let maximum_payload_bytes = self.remote_hydration_payload_limit();
-        if let Some(sorafs_node) = self.sorafs_node.as_ref() {
-            for manifest in stored_manifests {
-                if manifest.content_length() == 0
-                    || manifest.content_length() > maximum_payload_bytes
-                {
-                    iroha_logger::warn!(
-                        manifest_id = %manifest.manifest_id(),
-                        content_length = manifest.content_length(),
-                        maximum_payload_bytes,
-                        "skipping Soracloud hydration candidate outside the configured payload limit"
-                    );
-                    continue;
+        cache_path: &Path,
+        maximum_bytes: u64,
+    ) -> eyre::Result<bool> {
+        let Some(sorafs_node) = self.sorafs_node.as_ref() else {
+            return Ok(false);
+        };
+        if !sorafs_node.is_enabled() {
+            return Ok(false);
+        }
+
+        for source in remote_sources {
+            let Ok(manifest_digest) = parse_sorafs_manifest_digest_hex(&source.manifest_digest_hex)
+            else {
+                continue;
+            };
+            let Ok(manifest) = sorafs_node.manifest_metadata_by_digest(&manifest_digest) else {
+                continue;
+            };
+            let Ok(manifest_cid) = hex::decode(&source.manifest_cid_hex) else {
+                continue;
+            };
+            if manifest.manifest_cid() != manifest_cid.as_slice()
+                || manifest.content_length() == 0
+                || manifest.content_length() > maximum_bytes
+            {
+                continue;
+            }
+            let content_length = manifest.content_length();
+            let manifest_id = manifest.manifest_id().to_owned();
+            let expected_payload_digest = *manifest.payload_digest();
+            let write_result = write_atomic_file(cache_path, |file| {
+                let mut payload_hasher = blake3::Hasher::new();
+                let mut cursor = 0_u64;
+                while cursor < content_length {
+                    let remaining = content_length - cursor;
+                    let read_len = usize::try_from(
+                        remaining.min(SORACLOUD_LOCAL_HYDRATION_STREAM_CHUNK_BYTES),
+                    )
+                    .map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "local SoraFS hydration chunk length does not fit this host",
+                        )
+                    })?;
+                    let chunk = sorafs_node
+                        .read_payload_range(&manifest_id, cursor, read_len)
+                        .map_err(|error| {
+                            io::Error::other(format!(
+                                "read local SoraFS hydration chunk at {cursor}: {error}"
+                            ))
+                        })?;
+                    if chunk.len() != read_len {
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "local SoraFS hydration chunk was truncated",
+                        ));
+                    }
+                    payload_hasher.update(&chunk);
+                    file.write_all(&chunk)?;
+                    cursor = cursor
+                        .checked_add(u64::try_from(chunk.len()).map_err(|_| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "local SoraFS hydration byte count does not fit u64",
+                            )
+                        })?)
+                        .ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "local SoraFS hydration byte count overflow",
+                            )
+                        })?;
                 }
-                let Ok(content_length) = usize::try_from(manifest.content_length()) else {
-                    iroha_logger::warn!(
-                        manifest_id = %manifest.manifest_id(),
-                        content_length = manifest.content_length(),
-                        "skipping Soracloud hydration candidate with oversized SoraFS payload"
-                    );
-                    continue;
-                };
-                let payload =
-                    match sorafs_node.read_payload_range(manifest.manifest_id(), 0, content_length)
-                    {
-                        Ok(payload) => payload,
-                        Err(error) => {
-                            iroha_logger::warn!(
-                                ?error,
-                                manifest_id = %manifest.manifest_id(),
-                                "failed to read committed SoraFS payload during Soracloud hydration"
-                            );
-                            continue;
-                        }
-                    };
-                if payload.len() != content_length
-                    || blake3::hash(&payload).as_bytes() != manifest.payload_digest()
-                {
-                    iroha_logger::warn!(
-                        manifest_id = %manifest.manifest_id(),
-                        "skipping corrupt local SoraFS hydration payload"
-                    );
-                    continue;
+                if payload_hasher.finalize().as_bytes() != &expected_payload_digest {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "local SoraFS hydration payload digest mismatch",
+                    ));
                 }
-                if Hash::new(&payload) == expected_hash {
-                    return Ok(Some(payload));
+                file.rewind()?;
+                let (actual_hash, hashed_bytes) =
+                    Hash::new_from_reader_bounded(&mut *file, maximum_bytes)?;
+                if hashed_bytes != content_length || actual_hash != expected_hash {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "local SoraFS hydration artifact hash mismatch",
+                    ));
+                }
+                Ok(((), content_length))
+            });
+            match write_result {
+                Ok(()) => return Ok(true),
+                Err(error) => {
+                    iroha_logger::debug!(
+                        ?error,
+                        manifest_id = %manifest_id,
+                        "local committed SoraFS payload did not match the requested Soracloud artifact"
+                    );
                 }
             }
         }
-        if let Some(payload) =
-            self.read_committed_remote_sorafs_payload(remote_sources, expected_hash)?
-        {
-            return Ok(Some(payload));
-        }
-        Ok(None)
+        Ok(false)
     }
 
     fn read_committed_remote_sorafs_payload(
@@ -6818,7 +7064,7 @@ impl SoracloudRuntimeManager {
                 );
             }
             if manifest.content_length() == 0
-                || manifest.content_length() > self.remote_hydration_payload_limit()
+                || manifest.content_length() > self.in_memory_hydration_payload_limit()
             {
                 eyre::bail!(
                     "local SoraFS guest-image payload is empty or exceeds the configured hydration limit"
@@ -7058,8 +7304,8 @@ impl SoracloudRuntimeManager {
                 &files,
                 &inrou_root,
                 self.config.hf.import_max_files,
-                self.remote_hydration_payload_limit(),
-                self.remote_hydration_payload_limit(),
+                self.in_memory_hydration_payload_limit(),
+                self.in_memory_hydration_payload_limit(),
             )
             .wrap_err_with(|| {
                 format!(
@@ -7119,6 +7365,11 @@ impl SoracloudRuntimeManager {
         .expect("Soracloud runtime cache budgets are nonempty")
     }
 
+    fn in_memory_hydration_payload_limit(&self) -> u64 {
+        self.remote_hydration_payload_limit()
+            .min(SORACLOUD_REMOTE_HYDRATION_MAX_IN_MEMORY_PAYLOAD_BYTES)
+    }
+
     fn fetch_remote_manifest_metadata(
         &self,
         client: &reqwest::blocking::Client,
@@ -7174,7 +7425,7 @@ impl SoracloudRuntimeManager {
             Ok(dto) => validate_remote_manifest_response(
                 source,
                 dto,
-                self.remote_hydration_payload_limit(),
+                self.in_memory_hydration_payload_limit(),
             )
             .inspect_err(|error| {
                 iroha_logger::debug!(
@@ -7245,47 +7496,28 @@ impl SoracloudRuntimeManager {
             .map(|chunk| u64::from(chunk.length))
             .max()
             .unwrap_or(0);
-        let mut request_body = norito::json::native::Map::new();
-        request_body.insert(
-            "manifest_id_hex".into(),
-            norito::json::Value::from(manifest_id_hex),
-        );
-        request_body.insert(
-            "provider_id_hex".into(),
-            norito::json::Value::from(hex::encode(provider_id)),
-        );
-        request_body.insert("ttl_secs".into(), norito::json::Value::from(60_u64));
-        request_body.insert("max_streams".into(), norito::json::Value::from(1_u16));
-        request_body.insert(
-            "rate_limit_bytes".into(),
-            norito::json::Value::from(max_chunk_len.max(1)),
-        );
-        request_body.insert(
-            "requests_per_minute".into(),
-            norito::json::Value::from(
-                u32::try_from(plan.chunks.len().saturating_add(8)).unwrap_or(u32::MAX),
-            ),
-        );
-        let request_body = norito::json::Value::Object(request_body);
-        let request_body = match norito::json::to_vec(&request_body) {
-            Ok(body) => body,
+        let request = match remote_stream_token_auth::build_request(
+            client,
+            self.remote_stream_token_operator.as_ref(),
+            url.clone(),
+            manifest_id_hex,
+            provider_id,
+            max_chunk_len,
+            plan.chunks.len(),
+            client_id,
+            nonce,
+        ) {
+            Ok(request) => request,
             Err(error) => {
                 iroha_logger::debug!(
                     ?error,
                     url = %url,
-                    "failed to encode remote Soracloud hydration token request"
+                    "failed to build authenticated remote Soracloud hydration token request"
                 );
                 return None;
             }
         };
-        let response = match client
-            .post(url.clone())
-            .header("X-SoraFS-Client", client_id)
-            .header("X-SoraFS-Nonce", nonce)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(request_body)
-            .send()
-        {
+        let response = match client.execute(request) {
             Ok(response) => response,
             Err(error) => {
                 iroha_logger::debug!(
@@ -7410,17 +7642,17 @@ impl SoracloudRuntimeManager {
         view: &StateView<'_>,
         snapshot: &SoracloudRuntimeSnapshot,
     ) -> eyre::Result<()> {
-        let artifact_observations = collect_artifact_cache_observations(view, snapshot);
+        let artifact_observations = collect_artifact_cache_observations(view, snapshot)?;
         let artifact_candidates = collect_artifact_cache_candidates(
             self.artifacts_root().as_path(),
             &artifact_observations,
         )?;
         let journal_sequences = collect_runtime_receipt_artifact_sequences(view, |receipt| {
             receipt.journal_artifact_hash
-        });
+        })?;
         let checkpoint_sequences = collect_runtime_receipt_artifact_sequences(view, |receipt| {
             receipt.checkpoint_artifact_hash
-        });
+        })?;
 
         prune_cache_bucket(
             artifact_candidates.bundle,
@@ -7525,7 +7757,7 @@ impl ArtifactCacheCandidates {
 fn collect_artifact_cache_observations(
     view: &StateView<'_>,
     snapshot: &SoracloudRuntimeSnapshot,
-) -> BTreeMap<String, CacheObservationMetadata> {
+) -> eyre::Result<BTreeMap<String, CacheObservationMetadata>> {
     let world = view.world();
     let mut observations = BTreeMap::new();
 
@@ -7550,7 +7782,7 @@ fn collect_artifact_cache_observations(
                     sanitize_path_component(&artifact.artifact_hash),
                     runtime_cache_bucket_for_kind(artifact.kind),
                     observation_sequence,
-                );
+                )?;
             }
         }
     }
@@ -7563,7 +7795,7 @@ fn collect_artifact_cache_observations(
             record
                 .promoted_sequence
                 .unwrap_or(record.registered_sequence),
-        );
+        )?;
     }
 
     for (_, record) in world.soracloud_model_artifacts().iter() {
@@ -7572,10 +7804,10 @@ fn collect_artifact_cache_observations(
             hash_cache_name(record.weight_artifact_hash),
             RuntimeCacheBucket::ModelArtifact,
             record.registered_sequence,
-        );
+        )?;
     }
 
-    observations
+    Ok(observations)
 }
 
 fn runtime_cache_bucket_for_kind(kind: SoraArtifactKindV1) -> RuntimeCacheBucket {
@@ -7594,7 +7826,15 @@ fn upsert_cache_observation(
     key: String,
     bucket: RuntimeCacheBucket,
     observation_sequence: u64,
-) {
+) -> eyre::Result<()> {
+    if !observations.contains_key(&key)
+        && observations.len() >= SORACLOUD_ARTIFACT_CACHE_MAX_DIRECTORY_ENTRIES
+    {
+        eyre::bail!(
+            "Soracloud artifact observations exceed the {}-entry reconciliation limit",
+            SORACLOUD_ARTIFACT_CACHE_MAX_DIRECTORY_ENTRIES
+        );
+    }
     match observations.entry(key) {
         std::collections::btree_map::Entry::Occupied(mut entry) => {
             let existing = entry.get_mut();
@@ -7610,6 +7850,7 @@ fn upsert_cache_observation(
             });
         }
     }
+    Ok(())
 }
 
 fn collect_artifact_cache_candidates(
@@ -7621,8 +7862,17 @@ fn collect_artifact_cache_candidates(
         return Ok(candidates);
     }
 
+    let mut scanned_entries = 0_usize;
     for entry in fs::read_dir(root).wrap_err_with(|| format!("read {}", root.display()))? {
         let entry = entry?;
+        scanned_entries = scanned_entries.saturating_add(1);
+        if scanned_entries > SORACLOUD_ARTIFACT_CACHE_MAX_DIRECTORY_ENTRIES {
+            eyre::bail!(
+                "Soracloud artifact cache {} exceeds the {}-entry reconciliation limit",
+                root.display(),
+                SORACLOUD_ARTIFACT_CACHE_MAX_DIRECTORY_ENTRIES
+            );
+        }
         if !entry.file_type()?.is_file() {
             continue;
         }
@@ -7651,13 +7901,21 @@ fn collect_artifact_cache_candidates(
 fn collect_runtime_receipt_artifact_sequences(
     view: &StateView<'_>,
     select_hash: impl Fn(&SoraRuntimeReceiptV1) -> Option<Hash>,
-) -> BTreeMap<String, u64> {
+) -> eyre::Result<BTreeMap<String, u64>> {
     let mut sequences = BTreeMap::new();
     for (_, receipt) in view.world().soracloud_runtime_receipts().iter() {
         let Some(hash) = select_hash(receipt) else {
             continue;
         };
         let key = hash_cache_name(hash);
+        if !sequences.contains_key(&key)
+            && sequences.len() >= SORACLOUD_ARTIFACT_CACHE_MAX_DIRECTORY_ENTRIES
+        {
+            eyre::bail!(
+                "Soracloud runtime receipt artifact observations exceed the {}-entry reconciliation limit",
+                SORACLOUD_ARTIFACT_CACHE_MAX_DIRECTORY_ENTRIES
+            );
+        }
         sequences
             .entry(key)
             .and_modify(|sequence: &mut u64| {
@@ -7665,7 +7923,7 @@ fn collect_runtime_receipt_artifact_sequences(
             })
             .or_insert(receipt.emitted_sequence);
     }
-    sequences
+    Ok(sequences)
 }
 
 fn collect_fixed_bucket_candidates(
@@ -7678,7 +7936,17 @@ fn collect_fixed_bucket_candidates(
         return Ok(candidates);
     }
 
-    for entry in fs::read_dir(root).wrap_err_with(|| format!("read {}", root.display()))? {
+    for (index, entry) in fs::read_dir(root)
+        .wrap_err_with(|| format!("read {}", root.display()))?
+        .enumerate()
+    {
+        if index >= SORACLOUD_ARTIFACT_CACHE_MAX_DIRECTORY_ENTRIES {
+            eyre::bail!(
+                "Soracloud {bucket_name} cache {} exceeds the {}-entry reconciliation limit",
+                root.display(),
+                SORACLOUD_ARTIFACT_CACHE_MAX_DIRECTORY_ENTRIES
+            );
+        }
         let entry = entry?;
         if !entry.file_type()?.is_file() {
             continue;
@@ -8633,6 +8901,26 @@ fn execute_generated_hf_infer_local_read(
     }
 }
 
+fn hf_local_runner_maximum_frame_bytes(
+    hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+) -> Result<usize, SoracloudRuntimeExecutionError> {
+    let maximum = hf_config
+        .inference_max_response_bytes
+        .checked_add(SORACLOUD_HF_RUNNER_RESPONSE_OVERHEAD_BYTES)
+        .ok_or_else(|| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                "local HF runner response limit overflow",
+            )
+        })?;
+    usize::try_from(maximum).map_err(|_| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            "local HF runner response limit does not fit this host",
+        )
+    })
+}
+
 fn execute_generated_hf_local_runner(
     request: &SoracloudLocalReadRequest,
     context: &ResolvedLocalReadContext,
@@ -8783,6 +9071,7 @@ fn execute_generated_hf_local_runner(
         runner_program: hf_config.local_runner_program.trim().to_owned(),
         runner_script_path,
         runner_script_revision: Hash::new(HF_LOCAL_RUNNER_SCRIPT_V1.as_bytes()).to_string(),
+        maximum_response_bytes: hf_local_runner_maximum_frame_bytes(hf_config)?,
     };
     let output = execute_hf_local_runner_request(
         hf_local_workers,
@@ -8840,6 +9129,17 @@ fn execute_generated_hf_local_runner(
             ),
         )
     })?;
+    if u64::try_from(response_bytes.len()).unwrap_or(u64::MAX)
+        > hf_config.inference_max_response_bytes
+    {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "local HF runner response for source `{}` exceeds the configured {}-byte response limit",
+                binding.source_id, hf_config.inference_max_response_bytes
+            ),
+        ));
+    }
     let result_commitment = Hash::new(&response_bytes);
     Ok(SoracloudLocalReadResponse {
         response_bytes,
@@ -8994,6 +9294,7 @@ fn probe_hf_local_runner_for_source(
         runner_program: hf_config.local_runner_program.trim().to_owned(),
         runner_script_path,
         runner_script_revision: Hash::new(HF_LOCAL_RUNNER_SCRIPT_V1.as_bytes()).to_string(),
+        maximum_response_bytes: hf_local_runner_maximum_frame_bytes(hf_config)?,
     };
     let output = execute_hf_local_runner_request(
         hf_local_workers,
@@ -10129,12 +10430,26 @@ fn read_apartment_autonomy_execution_summary(
     SoracloudRuntimeExecutionError,
 > {
     let summary_path = apartment_autonomy_summary_path(state_dir, apartment_name, run_id);
-    let Some(summary_bytes) = fs::read(&summary_path)
-        .ok()
-        .filter(|bytes| !bytes.is_empty())
-    else {
-        return Ok(None);
+    let summary_bytes = match read_soracloud_regular_file_bounded(
+        &summary_path,
+        SORACLOUD_APARTMENT_AUTONOMY_SUMMARY_MAX_BYTES,
+        "Soracloud apartment autonomy execution summary",
+    ) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                format!(
+                    "failed to read autonomy execution summary at {}: {error}",
+                    summary_path.display()
+                ),
+            ));
+        }
     };
+    if summary_bytes.is_empty() {
+        return Ok(None);
+    }
     let summary =
         norito::json::from_slice::<SoracloudApartmentAutonomyExecutionSummaryV1>(&summary_bytes)
             .map_err(|error| {
@@ -10232,6 +10547,19 @@ fn persist_apartment_autonomy_execution_summary(
             ),
         )
     })?;
+    if u64::try_from(summary_bytes.len()).unwrap_or(u64::MAX)
+        > SORACLOUD_APARTMENT_AUTONOMY_SUMMARY_MAX_BYTES
+    {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "autonomy execution summary for apartment `{}` run `{}` exceeds the {}-byte persisted-state limit",
+                summary.apartment_name,
+                summary.run_id,
+                SORACLOUD_APARTMENT_AUTONOMY_SUMMARY_MAX_BYTES
+            ),
+        ));
+    }
     write_bytes_atomic(&summary_path, &summary_bytes).map_err(|error| {
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
@@ -12242,12 +12570,197 @@ fn hf_import_file_selected(path: &str, allowlist: &[String]) -> bool {
     })
 }
 
+fn bounded_hf_model_info_string(
+    model_info: &norito::json::Value,
+    field: &str,
+) -> eyre::Result<Option<String>> {
+    let Some(value) = model_info.get(field).and_then(norito::json::Value::as_str) else {
+        return Ok(None);
+    };
+    if value.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES {
+        eyre::bail!(
+            "Hugging Face model-info field `{field}` exceeds the {}-byte string limit",
+            SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES
+        );
+    }
+    Ok(Some(value.to_owned()))
+}
+
+fn bounded_hf_model_info_strings(
+    model_info: &norito::json::Value,
+    field: &str,
+    maximum_items: usize,
+) -> eyre::Result<Vec<String>> {
+    let Some(values) = model_info
+        .get(field)
+        .and_then(norito::json::Value::as_array)
+    else {
+        return Ok(Vec::new());
+    };
+    if values.len() > maximum_items {
+        eyre::bail!(
+            "Hugging Face model-info field `{field}` contains {} items, exceeding the {maximum_items}-item limit",
+            values.len()
+        );
+    }
+    let mut strings = Vec::new();
+    strings
+        .try_reserve_exact(values.len())
+        .wrap_err_with(|| format!("reserve bounded Hugging Face model-info `{field}` values"))?;
+    for value in values {
+        let Some(value) = value.as_str() else {
+            continue;
+        };
+        if value.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES {
+            eyre::bail!(
+                "Hugging Face model-info field `{field}` contains a string exceeding the {}-byte limit",
+                SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES
+            );
+        }
+        strings.push(value.to_owned());
+    }
+    Ok(strings)
+}
+
+fn bounded_hf_model_info_sibling_paths(
+    model_info: &norito::json::Value,
+) -> eyre::Result<Vec<String>> {
+    let Some(siblings) = model_info
+        .get("siblings")
+        .and_then(norito::json::Value::as_array)
+    else {
+        return Ok(Vec::new());
+    };
+    if siblings.len() > SORACLOUD_HF_MODEL_INFO_MAX_SIBLINGS {
+        eyre::bail!(
+            "Hugging Face model-info contains {} sibling entries, exceeding the {}-entry limit",
+            siblings.len(),
+            SORACLOUD_HF_MODEL_INFO_MAX_SIBLINGS
+        );
+    }
+    let mut paths = Vec::new();
+    paths
+        .try_reserve_exact(siblings.len())
+        .wrap_err("reserve bounded Hugging Face sibling paths")?;
+    for entry in siblings {
+        let Some(path) = entry.get("rfilename").and_then(norito::json::Value::as_str) else {
+            continue;
+        };
+        if path.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES {
+            eyre::bail!(
+                "Hugging Face sibling path exceeds the {}-byte limit",
+                SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES
+            );
+        }
+        paths.push(path.to_owned());
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn record_hf_import_skip(skipped_files: &mut Vec<String>, message: String) {
+    if skipped_files.len() < SORACLOUD_HF_IMPORT_MAX_RECORDED_SKIPS {
+        skipped_files.push(message);
+    }
+}
+
 fn read_hf_import_manifest(
     state_dir: &Path,
     source_id: &str,
 ) -> io::Result<Option<HfLocalImportManifestV1>> {
     let path = hf_local_import_manifest_path(state_dir, source_id);
-    read_json_optional(&path)
+    let manifest = read_json_optional(
+        &path,
+        SORACLOUD_HF_IMPORT_MANIFEST_MAX_BYTES,
+        "Hugging Face import manifest",
+    )?;
+    manifest
+        .map(|manifest| {
+            validate_hf_import_manifest_bounds(&manifest)?;
+            Ok(manifest)
+        })
+        .transpose()
+}
+
+fn validate_hf_import_manifest_bounds(manifest: &HfLocalImportManifestV1) -> io::Result<()> {
+    if manifest.tags.len() > SORACLOUD_HF_MODEL_INFO_MAX_TAGS
+        || manifest.imported_files.len() > SORACLOUD_HF_IMPORT_MANIFEST_MAX_FILES
+        || manifest.skipped_files.len() > SORACLOUD_HF_IMPORT_MAX_RECORDED_SKIPS
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Hugging Face import manifest collection count exceeds its fixed limit",
+        ));
+    }
+    let fixed_text = [
+        manifest.source_id.as_str(),
+        manifest.repo_id.as_str(),
+        manifest.requested_revision.as_str(),
+        manifest.model_name.as_str(),
+        manifest.adapter_id.as_str(),
+    ];
+    if fixed_text
+        .into_iter()
+        .chain(manifest.resolved_commit.as_deref())
+        .chain(manifest.pipeline_tag.as_deref())
+        .chain(manifest.library_name.as_deref())
+        .chain(manifest.raw_model_info_path.as_deref())
+        .chain(manifest.tags.iter().map(String::as_str))
+        .any(|value| value.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Hugging Face import manifest contains an oversized string",
+        ));
+    }
+    if manifest
+        .skipped_files
+        .iter()
+        .any(|value| value.len() > SORACLOUD_HF_IMPORT_MANIFEST_MAX_TEXT_BYTES)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Hugging Face import manifest skip record contains an oversized string",
+        ));
+    }
+    if manifest
+        .import_error
+        .as_ref()
+        .is_some_and(|error| error.len() > SORACLOUD_HF_IMPORT_MANIFEST_MAX_ERROR_BYTES)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Hugging Face import manifest error exceeds its fixed byte limit",
+        ));
+    }
+    let mut total_file_bytes = 0_u64;
+    for file in &manifest.imported_files {
+        if file.path.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES
+            || file.payload_hash.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES
+            || file.local_path.len() > SORACLOUD_HF_MODEL_INFO_MAX_STRING_BYTES
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Hugging Face import manifest file record contains an oversized string",
+            ));
+        }
+        total_file_bytes = total_file_bytes
+            .checked_add(file.content_length)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Hugging Face import manifest file byte count overflow",
+                )
+            })?;
+        if total_file_bytes > SORACLOUD_HF_IMPORT_MANIFEST_MAX_TOTAL_FILE_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Hugging Face import manifest file bytes exceed the fixed aggregate limit",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn hf_local_source_root(state_dir: &Path, source_id: &str) -> PathBuf {
@@ -12279,7 +12792,11 @@ fn hf_local_runner_stderr_log_path(state_dir: &Path, source_id: &str) -> PathBuf
 
 fn ensure_hf_local_runner_script(state_dir: &Path) -> io::Result<PathBuf> {
     let path = hf_local_runner_script_path(state_dir);
-    match fs::read_to_string(&path) {
+    match read_soracloud_regular_text_bounded(
+        &path,
+        SORACLOUD_HF_RUNNER_SCRIPT_MAX_BYTES,
+        "Hugging Face local runner script",
+    ) {
         Ok(current) if current == HF_LOCAL_RUNNER_SCRIPT_V1 => Ok(path),
         Ok(_) | Err(_) => {
             write_bytes_atomic(&path, HF_LOCAL_RUNNER_SCRIPT_V1.as_bytes())?;
@@ -12375,9 +12892,34 @@ fn remove_hf_local_runner_worker_if_same(
 }
 
 fn stderr_log_excerpt(path: &Path) -> String {
-    let Ok(contents) = fs::read_to_string(path) else {
+    let Ok((mut file, metadata)) =
+        open_soracloud_regular_file_no_follow(path, "runtime stderr log")
+    else {
         return String::new();
     };
+    let start = metadata
+        .len()
+        .saturating_sub(SORACLOUD_RUNTIME_STDERR_TAIL_BYTES);
+    if file.seek(io::SeekFrom::Start(start)).is_err() {
+        return String::new();
+    }
+    let mut bytes = Vec::new();
+    if file
+        .take(SORACLOUD_RUNTIME_STDERR_TAIL_BYTES)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return String::new();
+    }
+    let tail_start = if start == 0 {
+        0
+    } else {
+        bytes
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(bytes.len(), |index| index.saturating_add(1))
+    };
+    let contents = String::from_utf8_lossy(&bytes[tail_start..]);
     let mut tail = contents
         .lines()
         .rev()
@@ -12391,6 +12933,63 @@ fn stderr_log_excerpt(path: &Path) -> String {
     }
     tail.reverse();
     tail.join(" | ")
+}
+
+fn read_hf_local_runner_line_bounded(
+    reader: &mut impl io::BufRead,
+    maximum_bytes: usize,
+) -> io::Result<Option<Vec<u8>>> {
+    if maximum_bytes == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "resident HF runner response limit must be positive",
+        ));
+    }
+    let framed_limit = maximum_bytes.checked_add(2).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "resident HF runner framed response limit overflow",
+        )
+    })?;
+    let mut line = Vec::new();
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            if line.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let take = newline.map_or(available.len(), |index| index.saturating_add(1));
+        let next_len = line.len().checked_add(take).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "resident HF runner response length overflow",
+            )
+        })?;
+        if next_len > framed_limit {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("resident HF runner response exceeds the {maximum_bytes}-byte limit"),
+            ));
+        }
+        line.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if newline.is_some() {
+            break;
+        }
+    }
+    while matches!(line.last(), Some(b'\r' | b'\n')) {
+        let _ = line.pop();
+    }
+    if line.len() > maximum_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("resident HF runner response exceeds the {maximum_bytes}-byte limit"),
+        ));
+    }
+    Ok(Some(line))
 }
 
 impl HfLocalRunnerWorker {
@@ -12472,27 +13071,23 @@ impl HfLocalRunnerWorker {
                 "resident HF local runner stdout pipe is unavailable",
             )
         })?;
-        let (stdout_tx, stdout_rx) = mpsc::channel();
+        let (stdout_tx, stdout_rx) = mpsc::sync_channel(1);
         let source_id = cache_key.source_id.clone();
+        let maximum_response_bytes = cache_key.maximum_response_bytes;
         let stdout_reader = thread::Builder::new()
             .name(format!("hf-runner-{}", sanitize_path_component(&source_id)))
             .spawn(move || {
-                use io::BufRead as _;
-
                 let mut reader = io::BufReader::new(stdout);
-                let mut line = String::new();
                 loop {
-                    line.clear();
-                    match reader.read_line(&mut line) {
-                        Ok(0) => break,
-                        Ok(_) => {
-                            let payload = line.trim_end_matches(['\r', '\n']).as_bytes().to_vec();
-                            if stdout_tx.send(Ok(payload)).is_err() {
+                    match read_hf_local_runner_line_bounded(&mut reader, maximum_response_bytes) {
+                        Ok(None) => break,
+                        Ok(Some(payload)) => {
+                            if stdout_tx.try_send(Ok(payload)).is_err() {
                                 break;
                             }
                         }
                         Err(error) => {
-                            let _ = stdout_tx.send(Err(error));
+                            let _ = stdout_tx.try_send(Err(error));
                             break;
                         }
                     }
@@ -12738,7 +13333,17 @@ fn write_hosted_http_runtime_state(
 fn read_hosted_http_runtime_state(
     materialization_dir: &Path,
 ) -> io::Result<Option<SoracloudHostedHttpRuntimeStateV1>> {
-    read_json_optional(&hosted_http_runtime_state_path(materialization_dir))
+    let state = read_json_optional(
+        &hosted_http_runtime_state_path(materialization_dir),
+        SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_MAX_BYTES,
+        "Soracloud hosted HTTP runtime state",
+    )?;
+    state
+        .map(|state| {
+            validate_hosted_http_runtime_state_bounds(&state)?;
+            Ok(state)
+        })
+        .transpose()
 }
 
 fn build_native_service_data_dir(state_dir: &Path, service_name: &str) -> PathBuf {
@@ -12751,11 +13356,49 @@ fn write_hosted_http_runtime_state_document(
     materialization_dir: &Path,
     runtime_state: &SoracloudHostedHttpRuntimeStateV1,
 ) -> eyre::Result<()> {
-    write_json_atomic(
+    validate_hosted_http_runtime_state_bounds(runtime_state)?;
+    write_json_atomic_bounded(
         &hosted_http_runtime_state_path(materialization_dir),
         runtime_state,
+        SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_MAX_BYTES,
+        "Soracloud hosted HTTP runtime state",
     )
     .map_err(eyre::Report::from)
+}
+
+fn validate_hosted_http_runtime_state_bounds(
+    runtime_state: &SoracloudHostedHttpRuntimeStateV1,
+) -> io::Result<()> {
+    if runtime_state.replicas.len() > SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_MAX_REPLICAS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Soracloud hosted HTTP runtime state exceeds its replica count limit",
+        ));
+    }
+    if [
+        Some(runtime_state.service_name.as_str()),
+        Some(runtime_state.service_version.as_str()),
+        runtime_state.listen_base_url.as_deref(),
+        runtime_state.last_error.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .chain(runtime_state.replicas.iter().flat_map(|replica| {
+        [
+            replica.listen_base_url.as_deref(),
+            replica.last_error.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+    }))
+    .any(|value| value.len() > SORACLOUD_RUNTIME_STATE_MAX_STRING_BYTES)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Soracloud hosted HTTP runtime state contains an oversized string",
+        ));
+    }
+    Ok(())
 }
 
 fn runtime_error_summary(error: &eyre::Report) -> String {
@@ -16566,12 +17209,39 @@ fn sorafs_materialization_matches(
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Ok(false);
         }
-        let bytes = fs::read(&target).wrap_err_with(|| format!("read {}", target.display()))?;
-        if bytes.as_slice() != &payload[file.start..file.end] {
+        if !soracloud_file_matches_bytes(&target, &payload[file.start..file.end])
+            .wrap_err_with(|| format!("compare {}", target.display()))?
+        {
             return Ok(false);
         }
     }
     Ok(true)
+}
+
+fn soracloud_file_matches_bytes(path: &Path, expected: &[u8]) -> io::Result<bool> {
+    let (mut file, fingerprint) =
+        open_soracloud_regular_file_no_follow(path, "existing SoraFS materialization member")?;
+    if fingerprint.len() != u64::try_from(expected.len()).unwrap_or(u64::MAX) {
+        return Ok(false);
+    }
+    let mut compared = 0_usize;
+    let mut buffer = [0_u8; 64 * 1024];
+    while compared < expected.len() {
+        let read_capacity = buffer.len().min(expected.len() - compared);
+        let read = file.read(&mut buffer[..read_capacity])?;
+        if read == 0 || buffer[..read] != expected[compared..compared + read] {
+            return Ok(false);
+        }
+        compared += read;
+    }
+    let mut trailing = [0_u8; 1];
+    if file.read(&mut trailing)? != 0 {
+        return Ok(false);
+    }
+    let opened_after = file.metadata()?;
+    let named_after = fs::symlink_metadata(path)?;
+    Ok(same_soracloud_regular_file(&fingerprint, &opened_after)
+        && same_soracloud_regular_file(&opened_after, &named_after))
 }
 
 fn copy_sorafs_materialization_tree(
@@ -16764,23 +17434,23 @@ fn collect_remote_hydration_sources(
             );
             continue;
         }
-        let mut provider_ids = record
-            .provider_completions
-            .iter()
-            .filter(|completion| {
-                completion.assignment_revision == record.assignment_revision
-                    && completion.completion_epoch >= record.issued_epoch
-                    && completion.completion_epoch <= completed_epoch
-                    && completion.completion_authority.is_valid()
-                    && completion.finalized_anchor.is_valid()
-                    && order.assignments.iter().any(|assignment| {
-                        assignment.provider_id == *completion.provider_id.as_bytes()
-                    })
-            })
-            .map(|completion| *completion.provider_id.as_bytes())
-            .collect::<Vec<_>>();
-        provider_ids.sort();
-        provider_ids.dedup();
+        let mut provider_ids = BTreeSet::new();
+        for completion in record.provider_completions.iter().filter(|completion| {
+            completion.assignment_revision == record.assignment_revision
+                && completion.completion_epoch >= record.issued_epoch
+                && completion.completion_epoch <= completed_epoch
+                && completion.completion_authority.is_valid()
+                && completion.finalized_anchor.is_valid()
+                && order
+                    .assignments
+                    .iter()
+                    .any(|assignment| assignment.provider_id == *completion.provider_id.as_bytes())
+        }) {
+            provider_ids.insert(*completion.provider_id.as_bytes());
+            if provider_ids.len() > SORACLOUD_REMOTE_HYDRATION_MAX_PROVIDERS_PER_SOURCE {
+                let _ = provider_ids.pop_last();
+            }
+        }
         if provider_ids.is_empty() {
             continue;
         }
@@ -16794,18 +17464,27 @@ fn collect_remote_hydration_sources(
             manifest_digest_hex.clone(),
             manifest_cid_hex.clone(),
         );
-        let entry = sources.entry(key).or_insert_with(|| RemoteHydrationSource {
-            manifest_digest_hex,
-            manifest_cid_hex,
-            chunker_handle,
-            provider_ids: Vec::new(),
-        });
-        for provider_id in provider_ids {
-            if !entry.provider_ids.contains(&provider_id) {
-                entry.provider_ids.push(provider_id);
+        {
+            let entry = sources.entry(key).or_insert_with(|| RemoteHydrationSource {
+                manifest_digest_hex,
+                manifest_cid_hex,
+                chunker_handle,
+                provider_ids: Vec::new(),
+            });
+            for provider_id in provider_ids {
+                if let Err(index) = entry.provider_ids.binary_search(&provider_id) {
+                    entry.provider_ids.insert(index, provider_id);
+                    if entry.provider_ids.len()
+                        > SORACLOUD_REMOTE_HYDRATION_MAX_PROVIDERS_PER_SOURCE
+                    {
+                        let _ = entry.provider_ids.pop();
+                    }
+                }
             }
         }
-        entry.provider_ids.sort();
+        if sources.len() > SORACLOUD_REMOTE_HYDRATION_MAX_SOURCES {
+            let _ = sources.pop_last();
+        }
     }
 
     sources.into_values().collect()
@@ -17002,7 +17681,80 @@ where
     write_bytes_atomic(path, payload.as_bytes())
 }
 
+fn write_json_atomic_bounded<T>(
+    path: &Path,
+    value: &T,
+    maximum_bytes: u64,
+    label: &str,
+) -> io::Result<()>
+where
+    T: norito::json::JsonSerialize + ?Sized,
+{
+    let payload = norito::json::to_json(value)
+        .map_err(|error| io::Error::other(format!("serialize {label}: {error}")))?;
+    if u64::try_from(payload.len()).unwrap_or(u64::MAX) > maximum_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "serialized {label} requires {} bytes, exceeding the {maximum_bytes}-byte limit",
+                payload.len()
+            ),
+        ));
+    }
+    write_bytes_atomic(path, payload.as_bytes())
+}
+
 fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_atomic_file(path, |file| {
+        file.write_all(bytes)?;
+        Ok(((), u64::try_from(bytes.len()).unwrap_or(u64::MAX)))
+    })
+}
+
+fn write_reader_atomic_bounded(
+    path: &Path,
+    mut reader: impl io::Read,
+    exact_bytes: u64,
+    maximum_bytes: u64,
+) -> io::Result<Hash> {
+    if maximum_bytes == 0 || exact_bytes > maximum_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "atomic Soracloud stream length {exact_bytes} is outside the 0..={maximum_bytes} byte limit"
+            ),
+        ));
+    }
+    write_atomic_file(path, |file| {
+        let read_limit = exact_bytes
+            .saturating_add(1)
+            .min(maximum_bytes.saturating_add(1));
+        let observed = io::copy(&mut reader.by_ref().take(read_limit), &mut *file)?;
+        if observed != exact_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "atomic Soracloud stream yielded {observed} bytes instead of the declared {exact_bytes}"
+                ),
+            ));
+        }
+        file.rewind()?;
+        let (payload_hash, hashed_bytes) = Hash::new_from_reader_bounded(&mut *file, maximum_bytes)
+            .map_err(|error| io::Error::other(format!("hash atomic Soracloud stream: {error}")))?;
+        if hashed_bytes != exact_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "atomic Soracloud stream changed while it was hashed",
+            ));
+        }
+        Ok((payload_hash, observed))
+    })
+}
+
+fn write_atomic_file<T>(
+    path: &Path,
+    write: impl FnOnce(&mut fs::File) -> io::Result<(T, u64)>,
+) -> io::Result<T> {
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path must have a parent"))?;
@@ -17061,11 +17813,11 @@ fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let created_identity =
         SoracloudAtomicFileIdentity::from_metadata(&file.metadata()?, &tmp_path)?;
     let result = (|| {
-        file.write_all(bytes)?;
+        let (value, expected_bytes) = write(&mut file)?;
         file.sync_all()?;
         let written_identity =
             SoracloudAtomicFileIdentity::from_metadata(&file.metadata()?, &tmp_path)?;
-        if written_identity.bytes != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+        if written_identity.bytes != expected_bytes
             || !written_identity.same_file_as(&created_identity)
         {
             return Err(io::Error::new(
@@ -17105,7 +17857,7 @@ fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
             }
             fs::File::open(parent)?.sync_all()?;
         }
-        Ok(())
+        Ok(value)
     })();
     if result.is_err()
         && let Ok(metadata) = fs::symlink_metadata(&tmp_path)
@@ -17248,11 +18000,11 @@ fn write_service_secret_materializations(
     Ok(())
 }
 
-fn read_json_optional<T>(path: &Path) -> io::Result<Option<T>>
+fn read_json_optional<T>(path: &Path, maximum_bytes: u64, label: &str) -> io::Result<Option<T>>
 where
     T: norito::json::JsonDeserialize,
 {
-    let payload = match fs::read(path) {
+    let payload = match read_soracloud_regular_file_bounded(path, maximum_bytes, label) {
         Ok(payload) => payload,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
@@ -17403,6 +18155,59 @@ mod tests {
             error.to_string().contains("exceeds the 8-byte limit"),
             "unexpected error: {error:?}"
         );
+    }
+
+    #[test]
+    fn bounded_regular_file_rejects_oversized_metadata_before_reading() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let path = temp_dir.path().join("oversized-state.json");
+        let file = fs::File::create(&path)?;
+        file.set_len(9)?;
+
+        let error = read_soracloud_regular_file_bounded(&path, 8, "test state")
+            .expect_err("max-plus-one state file must fail");
+        assert!(error.to_string().contains("exceeding the 8-byte limit"));
+        Ok(())
+    }
+
+    #[test]
+    fn hf_runner_line_reader_bounds_one_frame() -> Result<()> {
+        let mut exact = io::BufReader::new(io::Cursor::new(b"12345678\r\nnext\n"));
+        assert_eq!(
+            read_hf_local_runner_line_bounded(&mut exact, 8)?,
+            Some(b"12345678".to_vec())
+        );
+        assert_eq!(
+            read_hf_local_runner_line_bounded(&mut exact, 8)?,
+            Some(b"next".to_vec())
+        );
+
+        let mut oversized = io::BufReader::new(io::Cursor::new(b"123456789\n"));
+        let error = read_hf_local_runner_line_bounded(&mut oversized, 8)
+            .expect_err("max-plus-one runner frame must fail");
+        assert!(error.to_string().contains("exceeds the 8-byte limit"));
+        Ok(())
+    }
+
+    #[test]
+    fn atomic_stream_write_hashes_exact_bounded_payload() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let path = temp_dir.path().join("model.bin");
+        let payload = b"streamed-model";
+        let hash = write_reader_atomic_bounded(
+            &path,
+            io::Cursor::new(payload),
+            u64::try_from(payload.len())?,
+            1024,
+        )?;
+        assert_eq!(hash, Hash::new(payload));
+        assert_eq!(fs::read(&path)?, payload);
+
+        let mismatch_path = temp_dir.path().join("mismatch.bin");
+        write_reader_atomic_bounded(&mismatch_path, io::Cursor::new(b"too-long"), 3, 1024)
+            .expect_err("misreported streamed payload must fail");
+        assert!(!mismatch_path.exists());
+        Ok(())
     }
 
     #[test]
@@ -19072,6 +19877,8 @@ mod tests {
             service_dir
                 .join("replicas/replica-0001/runtime_plan.json")
                 .as_path(),
+            SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
+            "test runtime plan",
         )?
         .expect("replica runtime plan");
         let cache_key = HostedHttpWorkerCacheKey {
@@ -22408,6 +23215,8 @@ mod tests {
             &temp_dir
                 .path()
                 .join("services/web_portal/2026.02.0/effective_env.json"),
+            SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
+            "test effective environment",
         )?
         .expect("effective env should exist");
         assert_eq!(
@@ -22428,6 +23237,8 @@ mod tests {
             &temp_dir
                 .path()
                 .join("services/web_portal/2026.02.0/secret_envelopes/db/password"),
+            SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
+            "test materialized secret envelope",
         )?
         .expect("materialized secret envelope should exist");
         assert_eq!(materialized_secret_entry.secret_name, "db/password");
@@ -25646,12 +26457,16 @@ mod tests {
                 service_dir
                     .join("replicas/replica-0001/runtime_plan.json")
                     .as_path(),
+                SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
+                "test replica runtime plan",
             )?
             .expect("replica one runtime plan");
             let replica_two_plan: SoracloudRuntimeServicePlan = read_json_optional(
                 service_dir
                     .join("replicas/replica-0002/runtime_plan.json")
                     .as_path(),
+                SORACLOUD_RUNTIME_SNAPSHOT_MAX_BYTES,
+                "test replica runtime plan",
             )?
             .expect("replica two runtime plan");
             let replica_one_root = replica_one_plan
@@ -26244,6 +27059,7 @@ mod tests {
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             Arc::clone(&state),
         )
+        .with_test_remote_stream_token_operator(*state.network_id_ref())
         .with_sorafs_provider_cache(provider_cache);
         manager.reconcile_once()?;
 
@@ -26323,6 +27139,7 @@ mod tests {
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             Arc::clone(&state),
         )
+        .with_test_remote_stream_token_operator(*state.network_id_ref())
         .with_sorafs_provider_cache(provider_cache);
         manager.reconcile_once()?;
 

@@ -10,8 +10,9 @@ public sealed class SignedIterableQueryBuilderTests
 {
     private const string FixtureSeedHex = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
     private const string FixtureAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
-    private const string FixtureNetworkId = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+    private const string FixtureNetworkIdLiteral = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+    private static readonly NetworkId FixtureNetworkId = NetworkId.Parse(FixtureNetworkIdLiteral);
 
     [Fact]
     public void BuildSignedEncodesZeroPayloadIterableQueries()
@@ -164,16 +165,14 @@ public sealed class SignedIterableQueryBuilderTests
             () => new SignedIterableQueryBuilder(FixtureAccountId.Insert(8, " "), FixtureNetworkId));
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149")]
-    [InlineData("hash:32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149#A2F0")]
-    [InlineData("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#0000")]
-    public void ConstructorRejectsNonCanonicalNetworkId(string networkId)
+    [Fact]
+    public void ConstructorRequiresNominalNetworkId()
     {
-        AssertArgumentException(
-            "networkId",
-            () => new SignedIterableQueryBuilder(FixtureAccountId, networkId));
+        Assert.Throws<ArgumentNullException>(
+            () => new SignedIterableQueryBuilder(FixtureAccountId, null!));
+        Assert.Throws<FormatException>(() => NetworkId.Parse("chain/dev"));
+        Assert.Throws<FormatException>(() => NetworkId.Parse("genesis"));
+        Assert.Throws<FormatException>(() => NetworkId.Parse(""));
     }
 
     [Fact]
@@ -534,7 +533,7 @@ public sealed class SignedIterableQueryBuilderTests
         offset += consumed;
 
         Assert.Equal(payload.Length, offset);
-        Assert.Equal(Convert.FromHexString(FixtureNetworkId.Substring(5, 64)), networkId);
+        Assert.Equal(Convert.FromHexString(FixtureNetworkIdLiteral.Substring(5, 64)), networkId);
         Assert.NotEmpty(authority);
         Assert.True(BinaryPrimitives.ReadUInt64LittleEndian(creationTime) > 0);
         Assert.Equal(100_000ul, BinaryPrimitives.ReadUInt64LittleEndian(timeToLive));

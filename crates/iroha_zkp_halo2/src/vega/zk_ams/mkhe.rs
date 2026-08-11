@@ -950,6 +950,14 @@ impl RnsPolynomial {
         }
     }
 
+    /// Test whether every stored residue is zero without allocating a
+    /// release-sized comparison polynomial.
+    fn is_zero(&self) -> bool {
+        self.coefficients
+            .iter()
+            .all(|coefficient| *coefficient == 0)
+    }
+
     fn from_flat(profile: &BgvProfile, coefficients: Vec<u64>) -> Result<Self, ZkAmsMkheErrorV1> {
         profile.validate()?;
         if coefficients.len() != profile.ring_degree * profile.moduli.len() {
@@ -1414,7 +1422,7 @@ fn validate_public_key(
     }
     public.a.validate(profile)?;
     public.b.validate(profile)?;
-    if public.a == RnsPolynomial::zero(profile) || public.b == RnsPolynomial::zero(profile) {
+    if public.a.is_zero() || public.b.is_zero() {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     Ok(())

@@ -8,6 +8,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use iroha_crypto::Hash;
+
+const REPLAY_KEY_DIGEST_DOMAIN_V1: &[u8] = b"iroha:torii:replay-cache:v1\0";
+
 /// Reason a nonce could not be admitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InsertError {
@@ -23,8 +27,8 @@ pub(crate) enum InsertError {
 struct Inner {
     ttl: Duration,
     capacity: NonZeroUsize,
-    entries: HashMap<String, Instant>,
-    expirations: BinaryHeap<Reverse<(Instant, String)>>,
+    entries: HashMap<Hash, Instant>,
+    expirations: BinaryHeap<Reverse<(Instant, Hash)>>,
 }
 
 impl Inner {
@@ -82,6 +86,11 @@ impl ReplayCache {
     }
 
     fn check_and_insert_at(&self, key: String, now: Instant) -> Result<(), InsertError> {
+        // Callers may include an attacker-sized authority representation in
+        // this key. Retain only a domain-separated fixed-size digest; keeping
+        // the original String in both indices would turn the count cap into a
+        // large variable-byte cache.
+        let key = Hash::new_from_chunks(&[REPLAY_KEY_DIGEST_DOMAIN_V1, key.as_bytes()]);
         let mut inner = self
             .inner
             .lock()
@@ -185,5 +194,28 @@ mod tests {
             cache.check_and_insert("new".to_owned()),
             Err(InsertError::Capacity)
         );
+    }
+
+    #[test]
+    fn retained_replay_keys_are_fixed_size_digests() {
+        let cache = ReplayCache::new(
+            Duration::from_secs(300),
+            NonZeroUsize::new(1).expect("non-zero"),
+        );
+        cache
+            .check_and_insert("x".repeat(1024 * 1024))
+            .expect("large transient key should hash into one cache slot");
+
+        let inner = cache
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let retained_key = inner.entries.keys().next().expect("one retained digest");
+        assert_eq!(std::mem::size_of_val(retained_key), Hash::LENGTH);
+        let Reverse((_expires_at, queued_key)) = inner
+            .expirations
+            .peek()
+            .expect("one retained expiration digest");
+        assert_eq!(std::mem::size_of_val(queued_key), Hash::LENGTH);
     }
 }

@@ -47,10 +47,14 @@ curl -sS -G "$TORII_BASE/v1/pipeline/transactions/status" \
 1. Record the height that finalized while the test transaction was processed (from `/v1/pipeline/transactions/status`).
 2. Fetch the recovery snapshot and verify it embeds the expected DAG fingerprint and footprint metadata:
 
-```bash
-curl -sS "$TORII_BASE/v1/pipeline/recovery/$HEIGHT" \
-  -H "Authorization: Bearer $API_TOKEN" | jq .
-```
+Use an SDK configured with an immutable operator signing context for the exact
+genesis `NetworkId` (for example, Swift
+`ToriiClient.getPipelineRecovery(height:)`). The request must carry fresh
+`X-Iroha-Operator-Public-Key`, `X-Iroha-Operator-Timestamp-Ms`,
+`X-Iroha-Operator-Nonce`, and `X-Iroha-Operator-Signature` headers calculated
+over `GET`, the substituted path, the exact query, and an empty body. Dispatch
+once with redirects and retries disabled. A bearer or API token is not a
+fallback for this node-local endpoint.
 
 3. The response must advertise `format = "pipeline.recovery.v1"` as enforced by `handler_pipeline_recovery`. Missing heights must return `404` exactly as covered by `crates/iroha_torii/tests/pipeline_recovery_endpoint.rs`. Capture both the populated and missing responses in the evidence bundle.
 

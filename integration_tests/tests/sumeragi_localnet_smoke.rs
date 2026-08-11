@@ -4065,39 +4065,11 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
             );
         }
 
-        let url = format!(
-            "{}/v1/sumeragi/status",
-            peer.torii_url().trim_end_matches('/')
-        );
-        let response = HttpClient::new()
-            .get(url)
-            .header("Accept", "application/json")
-            .send()
+        let status_client = peer.client();
+        let payload = task::spawn_blocking(move || status_client.get_sumeragi_status_json())
             .await
-            .wrap_err("fetch sumeragi status endpoint as JSON")?;
-        let status = response.status();
-        ensure!(
-            status.is_success(),
-            "sumeragi status endpoint returned {status}"
-        );
-
-        let content_type = response
-            .headers()
-            .get("content-type")
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default()
-            .to_owned();
-        ensure!(
-            content_type.starts_with("application/json"),
-            "expected JSON status payload, got content-type={content_type}"
-        );
-
-        let body = response
-            .bytes()
-            .await
-            .wrap_err("read sumeragi status JSON body")?;
-        let payload: Value =
-            norito::json::from_slice(&body).wrap_err("parse sumeragi status JSON payload")?;
+            .wrap_err("join operator-signed Sumeragi status JSON request")?
+            .wrap_err("fetch and decode operator-signed Sumeragi status JSON payload")?;
         let mode_tag = payload
             .get("mode_tag")
             .and_then(Value::as_str)

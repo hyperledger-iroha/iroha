@@ -133,7 +133,7 @@ sends the nonce-bearing body once without redirects or retries.
   list DTOs snapshot assigned arrays and return detached arrays on access while
   preserving malformed missing/null list rejection in the raw converters
 - verifying-key registry read/write helpers validate exact backend/name route text, canonical I105 authority, circuit, gas-schedule, curve, CID, commitment, and status request fields, plus positive version, `vk_len`, and max proof-size fields before HTTP dispatch, and inline verifying-key byte arrays are snapshotted on assignment and access before serialization; request models contain no private-key field, accepted 32-byte hex casing/prefixes and status labels are canonicalized only after exact text preflight, verifying-key read responses validate the detail envelope, id/record backend-name material, version/height/status fields, lowercase hashes, inline key base64, and record metadata before returning raw JSON to callers, and verifying-key register/update responses return typed unsigned drafts only after exact-field, canonical-base64, payload-prehash, configured-chain, authority, single-operation, identifier, and full-record validation
-- identifier resolve requests validate exact policy ids and encrypted-input text before dispatch; identifier policy listing responses plus raw policy summary/page DTO deserialization validate exact policy ids, resolver public keys, page totals, list items, and duplicate object keys inside decoded policy parameter or ignored extension JSON, and both ToriiClient/raw resolve receipts require the current nested `payload`/`attestation` envelope, reject retired flat receipt fields, and validate exact payload identifiers, attestation signatures, canonical proof base64, execution/opening metadata, duplicate object keys, and positive canonical timestamp strings before callers trust Torii JSON responses; padded, whitespace-containing, control-character, malformed, noncanonical, zero-timestamp, unknown-extension, or mixed signed/proof receipt shapes fail during deserialization
+- identifier resolve requests require `CanonicalRequestCredentials` plus an immutable exact-`NetworkId` local signing context, reject precomputed signing headers, sign the exact POST path and JSON body once, and validate exact policy ids and encrypted-input text before dispatch; identifier policy listing responses plus raw policy summary/page DTO deserialization validate exact policy ids, resolver public keys, page totals, list items, and duplicate object keys inside decoded policy parameter or ignored extension JSON, and both ToriiClient/raw resolve receipts require the current nested `payload`/`attestation` envelope, reject retired flat receipt fields, and validate exact payload identifiers, attestation signatures, canonical proof base64, execution/opening metadata, duplicate object keys, and positive canonical timestamp strings before callers trust Torii JSON responses; padded, whitespace-containing, control-character, malformed, noncanonical, zero-timestamp, unknown-extension, or mixed signed/proof receipt shapes fail during deserialization
 - identifier policy, contract instance inventory, and contract state response list
   DTOs snapshot assigned arrays and return detached arrays on access while
   preserving malformed null/missing list rejection in raw converters
@@ -261,7 +261,8 @@ sends the nonce-bearing body once without redirects or retries.
   `FindTriggers`, `FindAccountsWithAsset`, `FindPermissionsByAccountId`,
   `FindRolesByAccountId`, `FindBlocks`, `FindBlockHeaders`,
   `FindProofRecords`, and cursor `Continue(...)`); both builders require the
-  exact checksummed genesis-header network id and bind it
+  nominal `NetworkId` type (raw strings and retired chain aliases are not an
+  overload) and bind its exact genesis-header identity
   into every signature together with the authority, current Unix time, a
   non-zero bounded lifetime, and a fresh 32-byte operating-system random nonce;
   explicit offline replay contexts receive the same strict validation, and
@@ -367,7 +368,7 @@ sends the nonce-bearing body once without redirects or retries.
   collection mutations cannot drift the effective client serializer
 - faucet PoW solving validates `StartNonce`/`MaxAttempts` ranges before scrypt
   derivation so nonce enumeration cannot overflow mid-search
-- a managed faucet PoW solver for `scrypt-leading-zero-bits-v1`, plus `ToriiClient` helpers that can fetch the current puzzle and prepare or submit a faucet claim for a canonical I105 account id; account ids, puzzle algorithm labels, anchor/salt/nonce hex, positive anchor-age bounds, bounded scrypt work factors including parallelization and ROMix memory, and claim PoW field pairs are validated before hashing or HTTP dispatch
+- a managed faucet PoW solver for `scrypt-leading-zero-bits-v2`, plus `ToriiClient` helpers that can fetch the current puzzle and prepare or submit a faucet claim for a canonical I105 account id; puzzles carry the exact checksummed `NetworkId` and I105 chain discriminant, and the challenge binds the raw 32-byte network identity before the account and anchor; difficulty is mandatory and positive, while account ids, puzzle algorithm labels, anchor/salt/nonce hex, positive anchor-age bounds, bounded scrypt work factors including parallelization and ROMix memory, and mandatory claim PoW fields are validated before hashing or HTTP dispatch
 - `ToriiApiException` for non-success HTTP responses, preserving status code, request URI, and valid UTF-8 response bodies while redacting malformed UTF-8 bodies
 - native Ethereum and BSC mainnet SCCP helpers for execution-provider chain-id
   validation, inbound receipt/source-event evidence, outbound Groth16 calldata,
@@ -682,11 +683,17 @@ try
     var accounts = await client.Torii.GetAccountsAsync(limit: 5);
     var aliases = await client.Torii.LookupAliasesByAccountAsync(accounts.Items[0].Id);
     var faucetPuzzle = await client.Torii.GetAccountFaucetPuzzleAsync();
+    if (faucetPuzzle.NetworkId != networkId)
+    {
+        throw new InvalidOperationException(
+            $"Faucet puzzle targets {faucetPuzzle.NetworkId}, not configured network {networkId}.");
+    }
 
     Console.WriteLine($"ABI version: {capabilities.AbiVersion}");
     Console.WriteLine($"First page size: {accounts.Items.Count}");
     Console.WriteLine($"Alias count for first account: {aliases?.Total ?? 0}");
     Console.WriteLine($"Faucet puzzle difficulty: {faucetPuzzle.DifficultyBits}");
+    Console.WriteLine($"Faucet puzzle exact network: {faucetPuzzle.NetworkId}");
 
     // Transaction building is available through client.Ledger.
     //     var transaction = client.Ledger

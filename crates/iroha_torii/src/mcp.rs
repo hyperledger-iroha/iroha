@@ -538,12 +538,12 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(connect_session_create_tool());
     tools.push(connect_session_create_and_ticket_tool());
     tools.push(connect_session_delete_tool());
-    tools.push(connect_status_tool());
+    tools.push(connect_session_status_tool());
     tools.push(iroha_connect_ws_ticket_tool());
     tools.push(iroha_connect_session_create_tool());
     tools.push(iroha_connect_session_create_and_ticket_tool());
     tools.push(iroha_connect_session_delete_tool());
-    tools.push(iroha_connect_status_tool());
+    tools.push(iroha_connect_session_status_tool());
     tools.push(iroha_vpn_profile_tool());
     tools.push(iroha_vpn_quotes_create_tool());
     tools.push(iroha_vpn_sessions_create_tool());
@@ -560,26 +560,8 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_node_query_projection_shard_catalog_tool());
     tools.push(iroha_node_query_projection_checkpoint_tool());
     tools.push(iroha_time_now_tool());
-    tools.push(iroha_time_status_tool());
-    tools.push(iroha_sumeragi_commit_certificates_tool());
-    tools.push(iroha_sumeragi_validator_sets_list_tool());
-    tools.push(iroha_sumeragi_validator_sets_get_tool());
     tools.push(iroha_sumeragi_pacemaker_tool());
     tools.push(iroha_sumeragi_phases_tool());
-    tools.push(iroha_sumeragi_params_tool());
-    tools.push(iroha_sumeragi_status_tool());
-    tools.push(iroha_sumeragi_leader_tool());
-    tools.push(iroha_sumeragi_qc_tool());
-    tools.push(iroha_sumeragi_checkpoints_tool());
-    tools.push(iroha_sumeragi_consensus_keys_tool());
-    tools.push(iroha_sumeragi_bls_keys_tool());
-    tools.push(iroha_sumeragi_key_lifecycle_tool());
-    tools.push(iroha_sumeragi_telemetry_tool());
-    tools.push(iroha_sumeragi_commit_qc_get_tool());
-    tools.push(iroha_sumeragi_evidence_count_tool());
-    tools.push(iroha_sumeragi_evidence_list_tool());
-    tools.push(iroha_sumeragi_vrf_penalties_tool());
-    tools.push(iroha_sumeragi_vrf_epoch_tool());
     tools.push(iroha_da_ingest_tool());
     tools.push(iroha_da_proof_policies_tool());
     tools.push(iroha_da_proof_policy_snapshot_tool());
@@ -605,7 +587,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_bridge_finality_bundle_tool());
     tools.push(iroha_proofs_get_tool());
     tools.push(iroha_proofs_query_tool());
-    tools.push(iroha_proofs_retention_tool());
     tools.push(iroha_gov_contract_get_tool());
     tools.push(iroha_gov_proposals_deploy_contract_tool());
     tools.push(iroha_gov_proposals_get_tool());
@@ -870,9 +851,9 @@ fn is_manual_read_tool_name(name: &str) -> bool {
     matches!(
         name,
         "connect.ws.ticket"
-            | "connect.status"
+            | "connect.session.status"
             | "iroha.connect.ws.ticket"
-            | "iroha.connect.status"
+            | "iroha.connect.session.status"
             | "iroha.health"
             | "iroha.accounts.qr"
             | "iroha.accounts.transactions"
@@ -1129,8 +1110,8 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "connect.status" | "iroha.connect.status" => {
-            match dispatch_connect_status(&app, inbound_headers, &arguments).await {
+        "connect.session.status" | "iroha.connect.session.status" => {
+            match dispatch_connect_session_status(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -1247,36 +1228,6 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.time.status" => {
-            match dispatch_iroha_time_status(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.commit_certificates" => {
-            match dispatch_iroha_sumeragi_commit_certificates(&app, inbound_headers, &arguments)
-                .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.validator_sets.list" => {
-            match dispatch_iroha_sumeragi_validator_sets_list(&app, inbound_headers, &arguments)
-                .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.validator_sets.get" => {
-            match dispatch_iroha_sumeragi_validator_sets_get(&app, inbound_headers, &arguments)
-                .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
         "iroha.sumeragi.pacemaker" => {
             match dispatch_iroha_sumeragi_pacemaker(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
@@ -1285,90 +1236,6 @@ async fn handle_tools_call(
         }
         "iroha.sumeragi.phases" => {
             match dispatch_iroha_sumeragi_phases(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.params" => {
-            match dispatch_iroha_sumeragi_params(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.status" => {
-            match dispatch_iroha_sumeragi_status(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.leader" => {
-            match dispatch_iroha_sumeragi_leader(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.qc" => {
-            match dispatch_iroha_sumeragi_qc(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.checkpoints" => {
-            match dispatch_iroha_sumeragi_checkpoints(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.consensus_keys" => {
-            match dispatch_iroha_sumeragi_consensus_keys(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.bls_keys" => {
-            match dispatch_iroha_sumeragi_bls_keys(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.key_lifecycle" => {
-            match dispatch_iroha_sumeragi_key_lifecycle(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.telemetry" => {
-            match dispatch_iroha_sumeragi_telemetry(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.commit_qc.get" => {
-            match dispatch_iroha_sumeragi_commit_qc_get(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.evidence.count" => {
-            match dispatch_iroha_sumeragi_evidence_count(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.evidence.list" => {
-            match dispatch_iroha_sumeragi_evidence_list(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.vrf.penalties" => {
-            match dispatch_iroha_sumeragi_vrf_penalties(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.sumeragi.vrf.epoch" => {
-            match dispatch_iroha_sumeragi_vrf_epoch(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -1520,12 +1387,6 @@ async fn handle_tools_call(
         }
         "iroha.proofs.query" => {
             match dispatch_iroha_proofs_query(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.proofs.retention" => {
-            match dispatch_iroha_proofs_retention(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -3153,33 +3014,7 @@ async fn dispatch_connect_session_delete(
     .await
 }
 
-async fn dispatch_connect_status(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let mut path = String::from("/v1/connect/status");
-    if let Some(sid) = extract_optional_connect_sid_argument(arguments)? {
-        path.push_str("?sid=");
-        path.push_str(&urlencoding::encode(sid));
-    }
-    let extra_headers = connect_management_headers(arguments)?;
-    dispatch_route_with_extra_header_policy(
-        app,
-        inbound_headers,
-        Method::GET,
-        path.as_str(),
-        extra_headers.as_ref(),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        ExtraHeaderPolicy::ConnectManagement,
-    )
-    .await
-}
+include!("mcp/connect_status_tools.rs");
 
 async fn dispatch_iroha_vpn_profile(
     app: &SharedAppState,
@@ -3747,100 +3582,6 @@ async fn dispatch_iroha_time_now(
     .await
 }
 
-async fn dispatch_iroha_time_status(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/time/status",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_commit_certificates(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query(
-        "/v1/sumeragi/commit-certificates".to_owned(),
-        query.as_ref(),
-    )?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_validator_sets_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/validator-sets",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_validator_sets_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let height = extract_height_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("height".into(), Value::String(height));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/sumeragi/validator-sets/{height}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
 async fn dispatch_iroha_sumeragi_pacemaker(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3883,153 +3624,6 @@ async fn dispatch_iroha_sumeragi_phases(
     .await
 }
 
-async fn dispatch_iroha_sumeragi_params(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/params",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_status(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/status",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_leader(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/leader",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_qc(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/qc",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_checkpoints(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/checkpoints",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_consensus_keys(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/consensus-keys",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_bls_keys(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/bls-keys",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
 async fn dispatch_iroha_da_proof_policies(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4040,170 +3634,6 @@ async fn dispatch_iroha_da_proof_policies(
         inbound_headers,
         Method::GET,
         "/v1/da/proof-policies",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_key_lifecycle(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/key-lifecycle",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_telemetry(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/telemetry",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_commit_qc_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let block_hash = extract_block_hash_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("block_hash".into(), Value::String(block_hash));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/sumeragi/commit-qcs/{block_hash}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_evidence_count(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/sumeragi/evidence/count",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_evidence_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
-    let route = append_query("/v1/sumeragi/evidence".to_owned(), query.as_ref())?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_vrf_penalties(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let epoch = extract_epoch_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("epoch".into(), Value::String(epoch));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/sumeragi/vrf/penalties/{epoch}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_sumeragi_vrf_epoch(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let epoch = extract_epoch_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("epoch".into(), Value::String(epoch));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/sumeragi/vrf/epoch/{epoch}", Some(&path_value))?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -4789,27 +4219,6 @@ async fn dispatch_iroha_proofs_query(
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_proofs_retention(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        "/v1/proofs/retention",
-        arguments.get("headers"),
-        Vec::new(),
-        None,
         arguments
             .get("accept")
             .and_then(Value::as_str)
@@ -6837,6 +6246,20 @@ fn reject_unknown_arguments(
 }
 
 fn build_iso20022_payload_body(arguments: &Map) -> Result<(Vec<u8>, Option<String>), String> {
+    reject_unknown_arguments(
+        arguments,
+        &[
+            "body_base64",
+            "message_xml",
+            "xml",
+            "body",
+            "content_type",
+            "profile",
+            "operator_auth",
+            "accept",
+        ],
+        "ISO 20022 submission",
+    )?;
     let mut adapted = arguments.clone();
     if !adapted.contains_key("body_base64") && !adapted.contains_key("body") {
         if let Some(xml) = arguments
@@ -6864,30 +6287,64 @@ fn build_iso20022_payload_body(arguments: &Map) -> Result<(Vec<u8>, Option<Strin
     build_request_body(&adapted)
 }
 
-fn iso20022_profile_headers_argument(arguments: &Map) -> Result<Option<Value>, String> {
-    let mut headers = arguments
-        .get("headers")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    if let Some(raw_profile) = arguments.get("profile") {
-        let profile = raw_profile
-            .as_str()
-            .ok_or_else(|| "`profile` must be a string".to_owned())?
-            .trim();
-        if profile.is_empty() {
-            return Err("`profile` must not be empty".to_owned());
-        }
-        headers.insert(
-            "X-Iroha-Iso-Profile".to_owned(),
-            Value::String(profile.to_owned()),
-        );
+fn iso20022_operator_auth_headers(arguments: &Map) -> Result<Value, String> {
+    let auth = arguments
+        .get("operator_auth")
+        .ok_or_else(|| {
+            "`operator_auth` is required and must be signed for the exact inner ISO 20022 route"
+                .to_owned()
+        })?
+        .as_object()
+        .ok_or_else(|| "`operator_auth` must be an object".to_owned())?;
+    reject_unknown_arguments(
+        auth,
+        &["public_key", "timestamp_ms", "nonce", "signature"],
+        "ISO 20022 operator authentication",
+    )?;
+
+    let required_string = |name: &str| -> Result<String, String> {
+        auth.get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| format!("non-empty `operator_auth.{name}` is required"))
+    };
+    let timestamp_ms = auth
+        .get("timestamp_ms")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "unsigned integer `operator_auth.timestamp_ms` is required".to_owned())?;
+    let mut headers = Map::new();
+    headers.insert(
+        "X-Iroha-Operator-Public-Key".to_owned(),
+        Value::String(required_string("public_key")?),
+    );
+    headers.insert(
+        "X-Iroha-Operator-Timestamp-Ms".to_owned(),
+        Value::from(timestamp_ms),
+    );
+    headers.insert(
+        "X-Iroha-Operator-Nonce".to_owned(),
+        Value::String(required_string("nonce")?),
+    );
+    headers.insert(
+        "X-Iroha-Operator-Signature".to_owned(),
+        Value::String(required_string("signature")?),
+    );
+    Ok(Value::Object(headers))
+}
+
+fn iso20022_route_with_profile(base: &str, arguments: &Map) -> Result<String, String> {
+    let Some(raw_profile) = arguments.get("profile") else {
+        return Ok(base.to_owned());
+    };
+    let profile = raw_profile
+        .as_str()
+        .ok_or_else(|| "`profile` must be a string".to_owned())?
+        .trim();
+    if profile.is_empty() {
+        return Err("`profile` must not be empty".to_owned());
     }
-    if headers.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(Value::Object(headers)))
-    }
+    Ok(format!("{base}?profile={}", urlencoding::encode(profile)))
 }
 
 async fn dispatch_iroha_iso20022_pacs008_submit(
@@ -6896,13 +6353,14 @@ async fn dispatch_iroha_iso20022_pacs008_submit(
     arguments: &Map,
 ) -> Result<Value, String> {
     let (body, content_type) = build_iso20022_payload_body(arguments)?;
-    let headers = iso20022_profile_headers_argument(arguments)?;
+    let headers = iso20022_operator_auth_headers(arguments)?;
+    let route = iso20022_route_with_profile("/v1/iso20022/pacs008", arguments)?;
     dispatch_route(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/iso20022/pacs008",
-        headers.as_ref(),
+        &route,
+        Some(&headers),
         body,
         content_type,
         arguments
@@ -6919,13 +6377,14 @@ async fn dispatch_iroha_iso20022_pacs009_submit(
     arguments: &Map,
 ) -> Result<Value, String> {
     let (body, content_type) = build_iso20022_payload_body(arguments)?;
-    let headers = iso20022_profile_headers_argument(arguments)?;
+    let headers = iso20022_operator_auth_headers(arguments)?;
+    let route = iso20022_route_with_profile("/v1/iso20022/pacs009", arguments)?;
     dispatch_route(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/iso20022/pacs009",
-        headers.as_ref(),
+        &route,
+        Some(&headers),
         body,
         content_type,
         arguments
@@ -6943,13 +6402,14 @@ async fn dispatch_iroha_iso20022_lifecycle_submit(
     route: &str,
 ) -> Result<Value, String> {
     let (body, content_type) = build_iso20022_payload_body(arguments)?;
-    let headers = iso20022_profile_headers_argument(arguments)?;
+    let headers = iso20022_operator_auth_headers(arguments)?;
+    let route = iso20022_route_with_profile(route, arguments)?;
     dispatch_route(
         app,
         inbound_headers,
         Method::POST,
-        route,
-        headers.as_ref(),
+        &route,
+        Some(&headers),
         body,
         content_type,
         arguments
@@ -6965,17 +6425,30 @@ async fn dispatch_iroha_iso20022_status_get(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
+    reject_unknown_arguments(
+        arguments,
+        &[
+            "msg_id",
+            "message_id",
+            "id",
+            "path",
+            "operator_auth",
+            "accept",
+        ],
+        "ISO 20022 status request",
+    )?;
     let msg_id = extract_iso20022_message_id_argument(arguments)?;
     let mut path_args = Map::new();
     path_args.insert("msg_id".into(), Value::String(msg_id));
     let path_value = Value::Object(path_args);
     let route = fill_path_template("/v1/iso20022/messages/{msg_id}", Some(&path_value))?;
+    let headers = iso20022_operator_auth_headers(arguments)?;
     dispatch_route(
         app,
         inbound_headers,
         Method::GET,
         route.as_str(),
-        arguments.get("headers"),
+        Some(&headers),
         Vec::new(),
         None,
         arguments
@@ -7363,30 +6836,6 @@ fn extract_connect_sid_argument(arguments: &Map) -> Result<&str, String> {
             "`sid` is required (provide `sid`, `session_id`, `path.sid`, or `path.session_id`)"
                 .to_owned()
         })
-}
-
-fn extract_optional_connect_sid_argument(arguments: &Map) -> Result<Option<&str>, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(sid) = path.get("sid").and_then(Value::as_str)
-            && !sid.is_empty()
-        {
-            return Ok(Some(sid));
-        }
-        if let Some(sid) = path.get("session_id").and_then(Value::as_str)
-            && !sid.is_empty()
-        {
-            return Ok(Some(sid));
-        }
-    }
-
-    Ok(arguments
-        .get("sid")
-        .or_else(|| arguments.get("session_id"))
-        .and_then(Value::as_str)
-        .filter(|sid| !sid.is_empty()))
 }
 
 fn connect_management_headers(arguments: &Map) -> Result<Option<Value>, String> {
@@ -7912,21 +7361,6 @@ fn extract_view_argument(arguments: &Map) -> Result<String, String> {
         .ok_or_else(|| "`view` is required (provide `view` or `path.view`)".to_owned())
 }
 
-fn extract_epoch_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(epoch) = path.get("epoch").and_then(value_to_string) {
-            return Ok(epoch);
-        }
-    }
-    arguments
-        .get("epoch")
-        .and_then(value_to_string)
-        .ok_or_else(|| "`epoch` is required (provide `epoch` or `path.epoch`)".to_owned())
-}
-
 fn extract_entry_hash_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -8077,24 +7511,6 @@ fn extract_transaction_hash_argument(arguments: &Map) -> Result<String, String> 
         .map(str::to_owned)
         .ok_or_else(|| {
             "`hash` is required (provide `hash`, `transaction_hash`, `path.hash`, or `path.transaction_hash`)".to_owned()
-        })
-}
-
-fn extract_block_hash_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(block_hash) = path.get("block_hash").and_then(Value::as_str) {
-            return Ok(block_hash.to_owned());
-        }
-    }
-    arguments
-        .get("block_hash")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "`block_hash` is required (provide `block_hash` or `path.block_hash`)".to_owned()
         })
 }
 
@@ -9265,36 +8681,6 @@ fn connect_session_delete_tool() -> ToolSpec {
     }
 }
 
-fn connect_status_tool() -> ToolSpec {
-    ToolSpec {
-        name: "connect.status".to_owned(),
-        effect: manual_tool_effect_from_name("connect.status"),
-        description: "Get redacted aggregate Iroha Connect status, or token-gated per-session status when `sid` and `token_management` are provided.".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/connect/status".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "sid": { "type": "string" },
-                "session_id": {
-                    "type": "string",
-                    "description": "Alias for `sid`."
-                },
-                "token_management": {
-                    "type": "string",
-                    "description": "Management bearer token required for per-session status."
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
 fn iroha_connect_ws_ticket_tool() -> ToolSpec {
     let mut tool = connect_ws_ticket_tool();
     tool.name = "iroha.connect.ws.ticket".to_owned();
@@ -9320,13 +8706,6 @@ fn iroha_connect_session_delete_tool() -> ToolSpec {
     let mut tool = connect_session_delete_tool();
     tool.name = "iroha.connect.session.delete".to_owned();
     tool.description = "Alias for connect.session.delete.".to_owned();
-    tool
-}
-
-fn iroha_connect_status_tool() -> ToolSpec {
-    let mut tool = connect_status_tool();
-    tool.name = "iroha.connect.status".to_owned();
-    tool.description = "Alias for connect.status.".to_owned();
     tool
 }
 
@@ -9838,114 +9217,6 @@ fn iroha_time_now_tool() -> ToolSpec {
     }
 }
 
-fn iroha_time_status_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.time.status".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.time.status"),
-        description: "Get time synchronization status (`/v1/time/status`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/time/status".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_commit_certificates_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.commit_certificates".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.commit_certificates"),
-        description:
-            "List recent commit certificates (`/v1/sumeragi/commit-certificates`) with optional `from`/`limit` query shortcuts."
-                .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/commit-certificates".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "query": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
-                "from": { "type": "integer" },
-                "limit": { "type": "integer" },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_validator_sets_list_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.validator_sets.list".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.validator_sets.list"),
-        description: "List validator set snapshots (`/v1/sumeragi/validator-sets`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/validator-sets".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_validator_sets_get_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.validator_sets.get".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.validator_sets.get"),
-        description: "Fetch validator set snapshot by height (`/v1/sumeragi/validator-sets/{height}`; `height`/`block_height` shortcuts supported).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/validator-sets/{height}".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "height": {
-                    "type": "integer",
-                    "description": "Convenience shortcut for `path.height`."
-                },
-                "block_height": {
-                    "type": "integer",
-                    "description": "Alias for `height`."
-                },
-                "path": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["height"],
-                    "properties": {
-                        "height": { "type": "integer" }
-                    }
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
 fn iroha_sumeragi_pacemaker_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.pacemaker".to_owned(),
@@ -9978,348 +9249,6 @@ fn iroha_sumeragi_phases_tool() -> ToolSpec {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_params_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.params".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.params"),
-        description: "Fetch Sumeragi parameters (`/v1/sumeragi/params`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/params".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_status_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.status".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.status"),
-        description: "Fetch the exact reducer-owned Sumeragi v2 status (`/v1/sumeragi/status`)."
-            .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/status".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_leader_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.leader".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.leader"),
-        description: "Fetch current Sumeragi leader info (`/v1/sumeragi/leader`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/leader".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_qc_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.qc".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.qc"),
-        description: "Fetch latest Sumeragi quorum-certificate summary (`/v1/sumeragi/qc`)."
-            .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/qc".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_checkpoints_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.checkpoints".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.checkpoints"),
-        description: "Fetch Sumeragi checkpoint summary (`/v1/sumeragi/checkpoints`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/checkpoints".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_consensus_keys_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.consensus_keys".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.consensus_keys"),
-        description: "Fetch active Sumeragi consensus keys (`/v1/sumeragi/consensus-keys`)."
-            .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/consensus-keys".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_bls_keys_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.bls_keys".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.bls_keys"),
-        description: "Fetch Sumeragi BLS key roster (`/v1/sumeragi/bls-keys`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/bls-keys".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_key_lifecycle_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.key_lifecycle".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.key_lifecycle"),
-        description: "Fetch Sumeragi key lifecycle snapshots (`/v1/sumeragi/key-lifecycle`)."
-            .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/key-lifecycle".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_telemetry_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.telemetry".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.telemetry"),
-        description: "Fetch Sumeragi telemetry snapshot (`/v1/sumeragi/telemetry`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/telemetry".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_commit_qc_get_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.commit_qc.get".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.commit_qc.get"),
-        description:
-            "Fetch Sumeragi commit QC by block hash (`/v1/sumeragi/commit-qcs/{block_hash}`)."
-                .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/commit-qcs/{block_hash}".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "block_hash": {
-                    "type": "string",
-                    "description": "Block hash identifying the commit quorum certificate."
-                },
-                "path": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["block_hash"],
-                    "properties": {
-                        "block_hash": { "type": "string" }
-                    }
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_evidence_count_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.evidence.count".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.evidence.count"),
-        description: "Fetch Sumeragi evidence count (`/v1/sumeragi/evidence/count`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/evidence/count".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_evidence_list_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.evidence.list".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.evidence.list"),
-        description:
-            "List Sumeragi evidence entries (`/v1/sumeragi/evidence`) with optional query shortcuts."
-                .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/evidence".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "query": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_vrf_penalties_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.vrf.penalties".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.vrf.penalties"),
-        description: "Fetch VRF penalties for an epoch (`/v1/sumeragi/vrf/penalties/{epoch}`; `epoch` shortcut supported).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/vrf/penalties/{epoch}".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "epoch": {
-                    "type": "integer",
-                    "description": "Convenience shortcut for `path.epoch`."
-                },
-                "path": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["epoch"],
-                    "properties": {
-                        "epoch": { "type": "integer" }
-                    }
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_sumeragi_vrf_epoch_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.sumeragi.vrf.epoch".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.sumeragi.vrf.epoch"),
-        description: "Fetch VRF epoch snapshot (`/v1/sumeragi/vrf/epoch/{epoch}`; `epoch` shortcut supported).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/sumeragi/vrf/epoch/{epoch}".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "epoch": {
-                    "type": "integer",
-                    "description": "Convenience shortcut for `path.epoch`."
-                },
-                "path": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["epoch"],
-                    "properties": {
-                        "epoch": { "type": "integer" }
-                    }
-                },
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -11092,27 +10021,6 @@ fn iroha_proofs_query_tool() -> ToolSpec {
                     "additionalProperties": true,
                     "description": "Raw proof query payload."
                 },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_proofs_retention_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.proofs.retention".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.proofs.retention"),
-        description: "Fetch proof retention status (`/v1/proofs/retention`).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/proofs/retention".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
                 "headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
@@ -12574,7 +11482,7 @@ fn iroha_musubi_v1_tools(spec: &Value) -> impl Iterator<Item = ToolSpec> + '_ {
                 "type": "object",
                 "additionalProperties": false,
                 "x-iroha-mcp-strict-body": true,
-                "required": ["body"],
+                "required": ["body", "headers"],
                 "properties": {
                     "body": (body_schema),
                     "headers": {
@@ -13428,253 +12336,7 @@ fn iroha_rwas_query_tool() -> ToolSpec {
     }
 }
 
-fn iroha_iso20022_pacs008_submit_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.iso20022.pacs008.submit".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.iso20022.pacs008.submit"),
-        description:
-            "Submit an ISO 20022 pacs.008 payload (`message_xml`/`xml` shortcuts supported)."
-                .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/iso20022/pacs008".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "body_base64": {
-                    "type": "string",
-                    "description": "Base64/base64url encoded pacs.008 XML payload bytes."
-                },
-                "message_xml": {
-                    "type": "string",
-                    "description": "Raw pacs.008 XML payload shortcut (encoded to bytes internally)."
-                },
-                "xml": {
-                    "type": "string",
-                    "description": "Alias for `message_xml`."
-                },
-                "body": {
-                    "description": "Optional raw request body payload."
-                },
-                "content_type": {
-                    "type": "string",
-                    "description": "Optional content type override (defaults to application/xml when `message_xml`/`xml` is used)."
-                },
-                "profile": {
-                    "type": "string",
-                    "description": "Optional ISO bridge rail profile; sent as `X-Iroha-Iso-Profile`."
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_iso20022_pacs009_submit_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.iso20022.pacs009.submit".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.iso20022.pacs009.submit"),
-        description:
-            "Submit an ISO 20022 pacs.009 payload (`message_xml`/`xml` shortcuts supported)."
-                .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/iso20022/pacs009".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "body_base64": {
-                    "type": "string",
-                    "description": "Base64/base64url encoded pacs.009 XML payload bytes."
-                },
-                "message_xml": {
-                    "type": "string",
-                    "description": "Raw pacs.009 XML payload shortcut (encoded to bytes internally)."
-                },
-                "xml": {
-                    "type": "string",
-                    "description": "Alias for `message_xml`."
-                },
-                "body": {
-                    "description": "Optional raw request body payload."
-                },
-                "content_type": {
-                    "type": "string",
-                    "description": "Optional content type override (defaults to application/xml when `message_xml`/`xml` is used)."
-                },
-                "profile": {
-                    "type": "string",
-                    "description": "Optional ISO bridge rail profile; sent as `X-Iroha-Iso-Profile`."
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_iso20022_lifecycle_submit_tool(
-    name: &str,
-    message_type: &str,
-    path_template: &str,
-    description: &str,
-) -> ToolSpec {
-    let body_description = format!("Base64/base64url encoded {message_type} XML payload bytes.");
-    let xml_description =
-        format!("Raw {message_type} XML payload shortcut (encoded to bytes internally).");
-    ToolSpec {
-        name: name.to_owned(),
-        effect: manual_tool_effect_from_name(name),
-        description: description.to_owned(),
-        method: Method::POST,
-        path_template: path_template.to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "body_base64": {
-                    "type": "string",
-                    "description": body_description
-                },
-                "message_xml": {
-                    "type": "string",
-                    "description": xml_description
-                },
-                "xml": {
-                    "type": "string",
-                    "description": "Alias for `message_xml`."
-                },
-                "body": {
-                    "description": "Optional raw request body payload."
-                },
-                "content_type": {
-                    "type": "string",
-                    "description": "Optional content type override (defaults to application/xml when `message_xml`/`xml` is used)."
-                },
-                "profile": {
-                    "type": "string",
-                    "description": "Optional ISO bridge rail profile; sent as `X-Iroha-Iso-Profile`."
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_iso20022_pacs002_submit_tool() -> ToolSpec {
-    iroha_iso20022_lifecycle_submit_tool(
-        "iroha.iso20022.pacs002.submit",
-        "pacs.002",
-        "/v1/iso20022/pacs002",
-        "Submit an ISO 20022 pacs.002 lifecycle payload (`message_xml`/`xml` shortcuts supported).",
-    )
-}
-
-fn iroha_iso20022_pacs004_submit_tool() -> ToolSpec {
-    iroha_iso20022_lifecycle_submit_tool(
-        "iroha.iso20022.pacs004.submit",
-        "pacs.004",
-        "/v1/iso20022/pacs004",
-        "Submit an ISO 20022 pacs.004 lifecycle payload (`message_xml`/`xml` shortcuts supported).",
-    )
-}
-
-fn iroha_iso20022_camt056_submit_tool() -> ToolSpec {
-    iroha_iso20022_lifecycle_submit_tool(
-        "iroha.iso20022.camt056.submit",
-        "camt.056",
-        "/v1/iso20022/camt056",
-        "Submit an ISO 20022 camt.056 lifecycle payload (`message_xml`/`xml` shortcuts supported).",
-    )
-}
-
-fn iroha_iso20022_sese023_submit_tool() -> ToolSpec {
-    iroha_iso20022_lifecycle_submit_tool(
-        "iroha.iso20022.sese023.submit",
-        "sese.023",
-        "/v1/iso20022/sese023",
-        "Submit an ISO 20022 sese.023 settlement instruction payload (`message_xml`/`xml` shortcuts supported).",
-    )
-}
-
-fn iroha_iso20022_sese024_submit_tool() -> ToolSpec {
-    iroha_iso20022_lifecycle_submit_tool(
-        "iroha.iso20022.sese024.submit",
-        "sese.024",
-        "/v1/iso20022/sese024",
-        "Submit an ISO 20022 sese.024 settlement status payload (`message_xml`/`xml` shortcuts supported).",
-    )
-}
-
-fn iroha_iso20022_sese025_submit_tool() -> ToolSpec {
-    iroha_iso20022_lifecycle_submit_tool(
-        "iroha.iso20022.sese025.submit",
-        "sese.025",
-        "/v1/iso20022/sese025",
-        "Submit an ISO 20022 sese.025 settlement confirmation payload (`message_xml`/`xml` shortcuts supported).",
-    )
-}
-
-fn iroha_iso20022_colr012_submit_tool() -> ToolSpec {
-    iroha_iso20022_lifecycle_submit_tool(
-        "iroha.iso20022.colr012.submit",
-        "colr.012",
-        "/v1/iso20022/colr012",
-        "Submit an ISO 20022 colr.012 collateral substitution confirmation payload (`message_xml`/`xml` shortcuts supported).",
-    )
-}
-
-fn iroha_iso20022_status_get_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.iso20022.status.get".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.iso20022.status.get"),
-        description: "Fetch ISO 20022 bridge status by message id (`msg_id`/`message_id` shortcuts supported).".to_owned(),
-        method: Method::GET,
-        path_template: "/v1/iso20022/messages/{msg_id}".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "msg_id": {
-                    "type": "string",
-                    "description": "Convenience shortcut for `path.msg_id`."
-                },
-                "message_id": {
-                    "type": "string",
-                    "description": "Alias for `msg_id`."
-                },
-                "id": {
-                    "type": "string",
-                    "description": "Alias for `msg_id`."
-                },
-                "path": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["msg_id"],
-                    "properties": {
-                        "msg_id": { "type": "string" }
-                    }
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
+include!("mcp/iso20022_tools.rs");
 
 fn iroha_queries_submit_tool() -> ToolSpec {
     ToolSpec {
@@ -14167,6 +12829,7 @@ mod dispatch_security_tests;
 mod tests {
     include!("mcp/catalog_and_policy_tests.rs");
     include!("mcp/dispatch_and_argument_tests.rs");
+    include!("mcp/iso20022_operator_auth_tests.rs");
 
     include!("mcp/body_builder_tests.rs");
 }

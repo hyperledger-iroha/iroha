@@ -18,7 +18,7 @@ use httpmock::{
     Method::{DELETE, GET, POST},
     MockServer,
 };
-use iroha_crypto::{Hash, KeyPair};
+use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
@@ -55,6 +55,20 @@ use reqwest::{
 use tokio_tungstenite::tungstenite::http;
 
 use super::*;
+
+fn operator_test_client(base_url: impl AsRef<str>) -> ToriiClient {
+    let network_id = test_network_id();
+    let context = OperatorSigningContext::new(
+        network_id,
+        KeyPair::random_with_algorithm(Algorithm::Ed25519),
+    );
+    ToriiClient::builder(base_url)
+        .expect("client builder")
+        .with_network_id(network_id)
+        .with_operator_signing_context(context)
+        .build()
+        .expect("operator client")
+}
 
 fn handle_bind_result<T>(result: std::io::Result<T>, context: &str) -> Option<T> {
     match result {
@@ -727,7 +741,7 @@ async fn fetch_sumeragi_status_returns_unexpected_status_on_non_success() {
         then.status(500);
     });
 
-    let client = ToriiClient::new(server.url("/")).expect("client");
+    let client = operator_test_client(server.url("/"));
     let err = client
         .fetch_sumeragi_status()
         .await
@@ -752,7 +766,7 @@ async fn fetch_sumeragi_status_returns_decode_error_on_invalid_payload() {
         then.status(200).body(vec![0x10, 0x42]);
     });
 
-    let client = ToriiClient::new(server.url("/")).expect("client");
+    let client = operator_test_client(server.url("/"));
     let err = client
         .fetch_sumeragi_status()
         .await
@@ -768,6 +782,81 @@ async fn fetch_sumeragi_status_returns_decode_error_on_invalid_payload() {
         }
         other => panic!("expected Decode error, got {other:?}"),
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn sumeragi_operator_reads_require_context_before_dispatch() {
+    let Some(server) = try_start_mock_server() else {
+        return;
+    };
+    let status_mock = server.mock(|when, then| {
+        when.method(GET).path("/v1/sumeragi/status");
+        then.status(200);
+    });
+    let diagnostics_mock = server.mock(|when, then| {
+        when.method(GET).path("/v1/sumeragi/diagnostics");
+        then.status(200);
+    });
+    let client = ToriiClient::new(server.url("/")).expect("unsigned client");
+
+    let status_error = client
+        .fetch_sumeragi_status()
+        .await
+        .expect_err("status must require operator context");
+    let diagnostics_error = client
+        .fetch_sumeragi_diagnostics()
+        .await
+        .expect_err("diagnostics must require operator context");
+
+    assert!(matches!(status_error, ToriiError::SignedQueryContext(_)));
+    assert!(matches!(
+        diagnostics_error,
+        ToriiError::SignedQueryContext(_)
+    ));
+    assert_eq!(status_mock.calls(), 0);
+    assert_eq!(diagnostics_mock.calls(), 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn sumeragi_operator_read_rejects_announced_oversize_before_buffering() {
+    let Some(server) = try_start_mock_server() else {
+        return;
+    };
+    let oversized = (MAX_SUMERAGI_OPERATOR_RESPONSE_BYTES + 1).to_string();
+    let status_mock = server.mock(|when, then| {
+        when.method(GET).path("/v1/sumeragi/status");
+        then.status(200).header("content-length", oversized);
+    });
+    let client = operator_test_client(server.url("/"));
+
+    let error = client
+        .fetch_sumeragi_status()
+        .await
+        .expect_err("oversize response must be rejected before buffering");
+
+    assert!(matches!(&error, ToriiError::Decode(_)));
+    assert!(error.to_string().contains("4194304-byte bound"));
+    assert_eq!(status_mock.calls(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn sumeragi_operator_read_does_not_retry_transient_response() {
+    let Some(server) = try_start_mock_server() else {
+        return;
+    };
+    let status_mock = server.mock(|when, then| {
+        when.method(GET).path("/v1/sumeragi/status");
+        then.status(503);
+    });
+    let client = operator_test_client(server.url("/"));
+
+    let error = client
+        .fetch_sumeragi_status()
+        .await
+        .expect_err("transient status must be returned without retry");
+
+    assert!(matches!(error, ToriiError::UnexpectedStatus { .. }));
+    assert_eq!(status_mock.calls(), 1);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1561,65 +1650,8 @@ fn sample_sumeragi_status_wire() -> SumeragiV2Status {
     }
 }
 
-#[test]
-#[ignore]
-fn regenerate_block_wire_fixture() {
-    let wire = sample_block()
-        .canonical_wire()
-        .expect("canonical wire")
-        .into_vec();
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture_path = root.join("tests/fixtures/canonical_block_wire.bin");
-    if let Some(parent) = fixture_path.parent() {
-        fs::create_dir_all(parent).expect("create fixture dir");
-    }
-    fs::write(&fixture_path, &wire).expect("write fixture");
-}
-
-#[test]
-#[ignore]
-fn regenerate_time_event_message_fixture() {
-    let message = sample_time_event_message();
-    let (payload, flags) = norito::codec::encode_with_header_flags(&message);
-    let bytes = norito::core::frame_bare_with_header_flags::<EventMessage>(&payload, flags)
-        .expect("frame event message");
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture_path = root.join("tests/fixtures/canonical_event_message.bin");
-    if let Some(parent) = fixture_path.parent() {
-        fs::create_dir_all(parent).expect("create fixture dir");
-    }
-    fs::write(&fixture_path, &bytes).expect("write event fixture");
-}
-
-#[test]
-#[ignore]
-fn regenerate_pipeline_event_message_fixture() {
-    let message = sample_pipeline_event_message();
-    let (payload, flags) = norito::codec::encode_with_header_flags(&message);
-    let bytes = norito::core::frame_bare_with_header_flags::<EventMessage>(&payload, flags)
-        .expect("frame pipeline event message");
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture_path = root.join("tests/fixtures/canonical_pipeline_event_message.bin");
-    if let Some(parent) = fixture_path.parent() {
-        fs::create_dir_all(parent).expect("create fixture dir");
-    }
-    fs::write(&fixture_path, &bytes).expect("write pipeline event fixture");
-}
-
-#[test]
-#[ignore]
-fn regenerate_data_event_message_fixture() {
-    let message = sample_data_event_message();
-    let (payload, flags) = norito::codec::encode_with_header_flags(&message);
-    let bytes = norito::core::frame_bare_with_header_flags::<EventMessage>(&payload, flags)
-        .expect("frame data event message");
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture_path = root.join("tests/fixtures/canonical_data_event_message.bin");
-    if let Some(parent) = fixture_path.parent() {
-        fs::create_dir_all(parent).expect("create fixture dir");
-    }
-    fs::write(&fixture_path, &bytes).expect("write data event fixture");
-}
+#[path = "tests/canonical_fixture_owner.rs"]
+mod canonical_fixture_owner;
 
 #[tokio::test(flavor = "current_thread")]
 async fn block_stream_decodes_block_events() {
@@ -2338,7 +2370,7 @@ async fn managed_status_stream_emits_snapshots() {
             .body("queue_size 7\nsumeragi_tx_queue_depth 4");
     });
 
-    let client = ToriiClient::new(server.url("/")).expect("client");
+    let client = operator_test_client(server.url("/"));
     let handle = tokio::runtime::Handle::current();
     let stream =
         ManagedStatusStream::spawn(&handle, "status-peer", client, Duration::from_millis(10));
@@ -2378,7 +2410,7 @@ async fn managed_status_stream_reports_errors() {
         then.status(503);
     });
 
-    let client = ToriiClient::new(server.url("/")).expect("client");
+    let client = operator_test_client(server.url("/"));
     let handle = tokio::runtime::Handle::current();
     let stream =
         ManagedStatusStream::spawn(&handle, "status-peer", client, Duration::from_millis(10));
@@ -2429,7 +2461,7 @@ async fn managed_status_stream_reports_sumeragi_errors() {
         then.status(200).body("queue_size 3");
     });
 
-    let client = ToriiClient::new(server.url("/")).expect("client");
+    let client = operator_test_client(server.url("/"));
     let handle = tokio::runtime::Handle::current();
     let stream =
         ManagedStatusStream::spawn(&handle, "status-peer", client, Duration::from_millis(10));

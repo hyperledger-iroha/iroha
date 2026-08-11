@@ -529,7 +529,7 @@ pub struct RecordingResolverSourceV1<'a> {
 }
 
 impl<'a> RecordingResolverSourceV1<'a> {
-    /// Wrap one signer-free online registry reader.
+    /// Wrap one authenticated online registry reader.
     pub(super) fn new(inner: &'a RegistryReadClientV1) -> Self {
         Self {
             inner,

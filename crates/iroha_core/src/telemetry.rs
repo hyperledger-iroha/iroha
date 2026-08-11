@@ -3340,6 +3340,10 @@ impl StateTelemetry {
                 .with_label_values(&[domain_label.as_str(), action])
                 .inc();
             self.metrics
+                .kaigi_relay_manifest_updates_by_domain_total
+                .with_label_values(&[domain_label.as_str()])
+                .inc();
+            self.metrics
                 .kaigi_relay_manifest_hop_count
                 .with_label_values(&[domain_label.as_str()])
                 .observe(u64_to_f64(u64::from(hop_count)));
@@ -3354,6 +3358,10 @@ impl StateTelemetry {
             self.metrics
                 .kaigi_relay_failover_total
                 .with_label_values(&[domain_label.as_str(), call_label.as_str()])
+                .inc();
+            self.metrics
+                .kaigi_relay_failovers_by_domain_total
+                .with_label_values(&[domain_label.as_str()])
                 .inc();
             self.metrics
                 .kaigi_relay_failover_hop_count
@@ -3376,6 +3384,10 @@ impl StateTelemetry {
             self.metrics
                 .kaigi_relay_health_reports_total
                 .with_label_values(&[domain_label.as_str(), status_label])
+                .inc();
+            self.metrics
+                .kaigi_relay_health_reports_by_domain_total
+                .with_label_values(&[domain_label.as_str()])
                 .inc();
             self.metrics
                 .kaigi_relay_health_state
@@ -14912,35 +14924,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn multisig_direct_sign_rejection_metrics_recorded() {
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
-
-        record_social_rejection(&telemetry, "multisig_direct_sign");
-        assert_eq!(
-            metrics
-                .social_rejections_total
-                .with_label_values(&["multisig_direct_sign"])
-                .get(),
-            1
-        );
-        assert_eq!(metrics.multisig_direct_sign_reject_total.get(), 1);
-
-        record_social_rejection(&telemetry, "other_reason");
-        assert_eq!(
-            metrics
-                .social_rejections_total
-                .with_label_values(&["other_reason"])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics.multisig_direct_sign_reject_total.get(),
-            1,
-            "counter should not increment for unrelated social rejections"
-        );
-    }
+    include!("telemetry/kaigi_and_multisig_metric_tests.rs");
 
     #[test]
     fn sm_syscall_counters_respect_enablement() {

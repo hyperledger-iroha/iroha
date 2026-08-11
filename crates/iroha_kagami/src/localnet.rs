@@ -66,7 +66,8 @@ use iroha_executor_data_model::permission::{
     query::CanReadRestrictedDataspace,
 };
 use iroha_genesis::{
-    GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, init_instruction_registry,
+    GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, SIGNED_GENESIS_MAX_BYTES_V1,
+    init_instruction_registry, read_signed_genesis, validate_genesis_manifest_json,
 };
 use iroha_primitives::addr::{SocketAddr, SocketAddrHost};
 use iroha_primitives::json::Json;
@@ -4165,7 +4166,10 @@ fn write_genesis(context: GenesisWriteContext<'_>) -> Result<HashOf<BlockHeader>
     let genesis = manifest.clone().with_chain_discriminant(chain_discriminant);
     let _chain_discriminant = Some(ChainDiscriminantGuard::enter(chain_discriminant));
     let json = norito::json::to_json_pretty(&genesis)?;
+    validate_genesis_manifest_json(json.as_bytes())
+        .wrap_err("generated genesis.json exceeds fixed resource bounds")?;
     fs::write(json_path, json).wrap_err("failed to write genesis.json")?;
+    drop(genesis);
     // Sign the exact persisted manifest. Custom JSON parameter payloads can have a different
     // textual key order before and after the manifest's JSON round trip; signing the reloaded
     // form keeps genesis.json and genesis.signed.nrt semantically and canonically aligned.
@@ -4186,9 +4190,20 @@ fn write_genesis(context: GenesisWriteContext<'_>) -> Result<HashOf<BlockHeader>
     let mut bound_json =
         norito::json::to_json_pretty(&bound_manifest).wrap_err("encode bound genesis manifest")?;
     bound_json.push('\n');
+    validate_genesis_manifest_json(bound_json.as_bytes())
+        .wrap_err("bound genesis.json exceeds fixed resource bounds")?;
     fs::write(json_path, bound_json).wrap_err("write bound genesis.json")?;
+    drop(bound_manifest);
     let expected_hash = block.0.hash();
     let framed = block.0.encode_wire().wrap_err("frame genesis block")?;
+    drop(block);
+    if framed.len() > SIGNED_GENESIS_MAX_BYTES_V1 {
+        return Err(eyre!(
+            "generated signed genesis body is {} bytes, exceeding the {}-byte first-release limit",
+            framed.len(),
+            SIGNED_GENESIS_MAX_BYTES_V1
+        ));
+    }
     let mut file = BufWriter::new(File::create(signed_path)?);
     file.write_all(&framed)?;
     Ok(expected_hash)
@@ -4199,10 +4214,8 @@ fn write_and_validate_genesis_expected_hash(
     signed_path: &Path,
     expected_hash: HashOf<BlockHeader>,
 ) -> Result<()> {
-    let signed = fs::read(signed_path)
-        .wrap_err_with(|| format!("read signed genesis body {}", signed_path.display()))?;
-    let decoded = iroha_data_model::block::decode_framed_signed_block(&signed)
-        .wrap_err("decode the generated signed genesis body")?;
+    let decoded = read_signed_genesis(signed_path)
+        .wrap_err("read and decode the generated signed genesis body")?;
     if decoded.hash() != expected_hash {
         return Err(eyre!(
             "generated signed genesis body hashes to {}, expected {}",

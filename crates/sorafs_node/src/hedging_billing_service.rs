@@ -7261,33 +7261,32 @@ struct BillingSourceReceiptPreimageV1 {
 }
 
 #[derive(DeriveNoritoSerialize)]
-struct BillingEventReplayPreimageV1<'a> {
+struct BillingEventReplayPreimageV1 {
     network_id: NetworkId,
-    event: &'a HedgingBillingFinalizedEventV1,
+    event: HedgingBillingFinalizedEventV1,
 }
 
 fn source_receipt(
     network_id: NetworkId,
     event: &HedgingBillingFinalizedEventV1,
 ) -> Result<[u8; 32], HedgingBillingServiceError> {
-    hash_canonical(
-        SOURCE_RECEIPT_DOMAIN_V1,
-        &BillingSourceReceiptPreimageV1 {
-            network_id,
-            source: event.source,
-            source_id: event.source_id.clone(),
-        },
-    )
+    let preimage = BillingSourceReceiptPreimageV1 {
+        network_id,
+        source: event.source,
+        source_id: event.source_id.clone(),
+    };
+    hash_canonical(SOURCE_RECEIPT_DOMAIN_V1, &preimage)
 }
 
 fn event_replay_digest(
     network_id: NetworkId,
     event: &HedgingBillingFinalizedEventV1,
 ) -> Result<[u8; 32], HedgingBillingServiceError> {
-    hash_canonical(
-        EVENT_REPLAY_RECEIPT_DOMAIN_V1,
-        &BillingEventReplayPreimageV1 { network_id, event },
-    )
+    let preimage = BillingEventReplayPreimageV1 {
+        network_id,
+        event: event.clone(),
+    };
+    hash_canonical(EVENT_REPLAY_RECEIPT_DOMAIN_V1, &preimage)
 }
 
 fn signed_statement_digest(

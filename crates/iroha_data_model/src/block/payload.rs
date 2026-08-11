@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, collections::BTreeMap, fmt, vec::Vec};
 
-use iroha_crypto::{Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment};
+use iroha_crypto::{Hash, HashOf, MerkleError, MerkleProof, MerkleTree, MerkleTreeCommitment};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -321,6 +321,51 @@ impl SignedBlock {
         ExternalEntrypointIterator::new(self)
     }
 
+    /// Borrow one signed external transaction and return its canonical entrypoint hash.
+    ///
+    /// Authority-free commitments are not signed transactions and return `None`. The lookup is
+    /// constant-space and does not clone either the transaction or the complete entrypoint list.
+    #[inline]
+    pub fn external_signed_transaction_at(
+        &self,
+        index: usize,
+    ) -> Option<(HashOf<TransactionEntrypoint>, &SignedTransaction)> {
+        self.external_entrypoints_slice().map_or_else(
+            || {
+                let transaction = self.payload.transactions.get(index)?;
+                Some((transaction.hash_as_entrypoint(), transaction))
+            },
+            |entries| {
+                let entrypoint = entries.get(index)?;
+                let hash = entrypoint.hash();
+                let transaction = match entrypoint {
+                    TransactionEntrypoint::External(transaction) => transaction,
+                    TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+                    TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
+                        return None;
+                    }
+                };
+                Some((hash, transaction))
+            },
+        )
+    }
+
+    /// Borrow one signed external transaction by canonical entrypoint index.
+    ///
+    /// Unlike [`Self::external_signed_transaction_at`], this avoids hashing the entrypoint and is
+    /// useful to continue streaming an entrypoint after its hash has already been retained.
+    #[inline]
+    pub fn external_signed_transaction_ref_at(&self, index: usize) -> Option<&SignedTransaction> {
+        self.external_entrypoints_slice().map_or_else(
+            || self.payload.transactions.get(index),
+            |entries| match entries.get(index)? {
+                TransactionEntrypoint::External(transaction) => Some(transaction),
+                TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+            },
+        )
+    }
+
     /// Block transactions, the underlying vector
     #[inline]
     pub fn transactions_vec(&self) -> &Vec<SignedTransaction> {
@@ -533,6 +578,17 @@ impl SignedBlock {
             .and_then(|result| result.merkle.commitment())
     }
 
+    /// Validate the retained entrypoint Merkle cache against this block's entries.
+    ///
+    /// The validation walks the retained tree in place and does not rebuild an
+    /// entry-sized node vector.
+    pub fn validate_entrypoint_merkle_cache(&self) -> Result<(), MerkleError> {
+        let result = self.result.as_ref().ok_or_else(|| {
+            MerkleError::InvalidLayout("block transaction results are missing".to_owned())
+        })?;
+        result.merkle.validate_leaves(self.entrypoint_hashes())
+    }
+
     /// Merkle proofs for each transaction entrypoint (external and time-triggered) in execution order.
     /// Indices align with those of the entrypoints.
     pub fn entrypoint_proofs(
@@ -551,6 +607,12 @@ impl SignedBlock {
                 .get_proof(i)
                 .expect("bug: missing Merkle proof at valid index")
         })
+    }
+
+    /// Return the retained Merkle proof for one canonical entrypoint index.
+    #[inline]
+    pub fn entrypoint_proof(&self, index: u32) -> Option<MerkleProof<TransactionEntrypoint>> {
+        self.result.as_ref()?.merkle.get_proof(index)
     }
 
     /// Transaction entrypoints (external and time-triggered) in execution order.
@@ -581,6 +643,17 @@ impl SignedBlock {
             .and_then(|result| result.result_merkle.commitment())
     }
 
+    /// Validate the retained result Merkle cache against this block's results.
+    ///
+    /// The validation walks the retained tree in place and does not rebuild a
+    /// result-sized node vector.
+    pub fn validate_result_merkle_cache(&self) -> Result<(), MerkleError> {
+        let result = self.result.as_ref().ok_or_else(|| {
+            MerkleError::InvalidLayout("block transaction results are missing".to_owned())
+        })?;
+        result.result_merkle.validate_leaves(self.result_hashes())
+    }
+
     /// Merkle proofs for each transaction result in execution order.
     /// Indices align with those of the entrypoints.
     pub fn result_proofs(
@@ -599,6 +672,12 @@ impl SignedBlock {
                 .get_proof(i)
                 .expect("bug: missing Merkle proof at valid index")
         })
+    }
+
+    /// Return the retained Merkle proof for one canonical result index.
+    #[inline]
+    pub fn result_proof(&self, index: u32) -> Option<MerkleProof<TransactionResult>> {
+        self.result.as_ref()?.result_merkle.get_proof(index)
     }
 
     /// Actual transaction results (trigger sequence or rejection reason) in execution order.
@@ -682,35 +761,64 @@ impl SignedBlock {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ExternalTransactionSource<'a> {
+    Legacy(&'a [SignedTransaction]),
+    Entrypoints(&'a [TransactionEntrypoint]),
+}
+
 struct ExternalTransactionIterator<'a> {
-    transactions: Vec<&'a SignedTransaction>,
+    source: ExternalTransactionSource<'a>,
     front: usize,
     back: usize,
+    remaining: usize,
 }
 
 impl<'a> ExternalTransactionIterator<'a> {
     fn new(block: &'a SignedBlock) -> Self {
-        let transactions: Vec<&SignedTransaction> = block.external_entrypoints_slice().map_or_else(
-            || block.payload.transactions.iter().collect(),
+        let (source, len, remaining) = block.external_entrypoints_slice().map_or_else(
+            || {
+                let transactions = block.payload.transactions.as_slice();
+                (
+                    ExternalTransactionSource::Legacy(transactions),
+                    transactions.len(),
+                    transactions.len(),
+                )
+            },
             |entries| {
-                entries
+                let remaining = entries
                     .iter()
-                    .filter_map(|entry| match entry {
-                        TransactionEntrypoint::External(tx) => Some(tx),
-                        TransactionEntrypoint::SealedReveal(reveal) => {
-                            Some(reveal.signed_transaction())
-                        }
-                        TransactionEntrypoint::SealedCommitment(_)
-                        | TransactionEntrypoint::Time(_) => None,
+                    .filter(|entry| {
+                        matches!(
+                            entry,
+                            TransactionEntrypoint::External(_)
+                                | TransactionEntrypoint::SealedReveal(_)
+                        )
                     })
-                    .collect()
+                    .count();
+                (
+                    ExternalTransactionSource::Entrypoints(entries),
+                    entries.len(),
+                    remaining,
+                )
             },
         );
-        let len = transactions.len();
         Self {
-            transactions,
+            source,
             front: 0,
             back: len,
+            remaining,
+        }
+    }
+
+    fn transaction_at(&self, index: usize) -> Option<&'a SignedTransaction> {
+        match self.source {
+            ExternalTransactionSource::Legacy(transactions) => transactions.get(index),
+            ExternalTransactionSource::Entrypoints(entries) => match entries.get(index)? {
+                TransactionEntrypoint::External(transaction) => Some(transaction),
+                TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
+                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
+            },
         }
     }
 }
@@ -719,61 +827,85 @@ impl<'a> Iterator for ExternalTransactionIterator<'a> {
     type Item = &'a SignedTransaction;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.front >= self.back {
-            return None;
+        while self.front < self.back {
+            let idx = self.front;
+            self.front += 1;
+            if let Some(transaction) = self.transaction_at(idx) {
+                self.remaining -= 1;
+                return Some(transaction);
+            }
         }
-        let idx = self.front;
-        self.front += 1;
-        self.transactions.get(idx).copied()
+        None
     }
 }
 
 impl DoubleEndedIterator for ExternalTransactionIterator<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.front >= self.back {
-            return None;
+        while self.front < self.back {
+            self.back -= 1;
+            if let Some(transaction) = self.transaction_at(self.back) {
+                self.remaining -= 1;
+                return Some(transaction);
+            }
         }
-        self.back -= 1;
-        self.transactions.get(self.back).copied()
+        None
     }
 }
 
 impl ExactSizeIterator for ExternalTransactionIterator<'_> {
     fn len(&self) -> usize {
-        self.back.saturating_sub(self.front)
+        self.remaining
     }
 }
 
-struct ExternalEntrypointIterator {
-    entries: Vec<TransactionEntrypoint>,
+#[derive(Clone, Copy)]
+enum ExternalEntrypointSource<'a> {
+    Legacy(&'a [SignedTransaction]),
+    Entrypoints(&'a [TransactionEntrypoint]),
+}
+
+struct ExternalEntrypointIterator<'a> {
+    source: ExternalEntrypointSource<'a>,
     front: usize,
     back: usize,
 }
 
-impl ExternalEntrypointIterator {
-    fn new(block: &SignedBlock) -> Self {
-        let entries = block.external_entrypoints_slice().map_or_else(
+impl<'a> ExternalEntrypointIterator<'a> {
+    fn new(block: &'a SignedBlock) -> Self {
+        let (source, len) = block.external_entrypoints_slice().map_or_else(
             || {
-                block
-                    .payload
-                    .transactions
-                    .iter()
-                    .cloned()
-                    .map(TransactionEntrypoint::from)
-                    .collect()
+                let transactions = block.payload.transactions.as_slice();
+                (
+                    ExternalEntrypointSource::Legacy(transactions),
+                    transactions.len(),
+                )
             },
-            ToOwned::to_owned,
+            |entries| {
+                (
+                    ExternalEntrypointSource::Entrypoints(entries),
+                    entries.len(),
+                )
+            },
         );
-        let len = entries.len();
         Self {
-            entries,
+            source,
             front: 0,
             back: len,
         }
     }
+
+    fn entrypoint_at(&self, index: usize) -> Option<TransactionEntrypoint> {
+        match self.source {
+            ExternalEntrypointSource::Legacy(transactions) => transactions
+                .get(index)
+                .cloned()
+                .map(TransactionEntrypoint::from),
+            ExternalEntrypointSource::Entrypoints(entries) => entries.get(index).cloned(),
+        }
+    }
 }
 
-impl Iterator for ExternalEntrypointIterator {
+impl Iterator for ExternalEntrypointIterator<'_> {
     type Item = TransactionEntrypoint;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -782,79 +914,77 @@ impl Iterator for ExternalEntrypointIterator {
         }
         let idx = self.front;
         self.front += 1;
-        self.entries.get(idx).cloned()
+        self.entrypoint_at(idx)
     }
 }
 
-impl DoubleEndedIterator for ExternalEntrypointIterator {
+impl DoubleEndedIterator for ExternalEntrypointIterator<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.front >= self.back {
             return None;
         }
         self.back -= 1;
-        self.entries.get(self.back).cloned()
+        self.entrypoint_at(self.back)
     }
 }
 
-impl ExactSizeIterator for ExternalEntrypointIterator {
+impl ExactSizeIterator for ExternalEntrypointIterator<'_> {
     fn len(&self) -> usize {
         self.back.saturating_sub(self.front)
     }
 }
 
-struct EntrypointIterator {
-    entries: Vec<TransactionEntrypoint>,
-    front: usize,
-    back: usize,
+struct EntrypointIterator<'a> {
+    external: ExternalEntrypointIterator<'a>,
+    time_triggers: Option<std::slice::Iter<'a, TimeTriggerEntrypoint>>,
 }
 
-impl Iterator for EntrypointIterator {
+impl Iterator for EntrypointIterator<'_> {
     type Item = TransactionEntrypoint;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.front >= self.back {
-            return None;
+        if let Some(entrypoint) = self.external.next() {
+            return Some(entrypoint);
         }
-        let idx = self.front;
-        self.front += 1;
-        self.entries.get(idx).cloned()
+        self.time_triggers
+            .as_mut()?
+            .next()
+            .cloned()
+            .map(TransactionEntrypoint::from)
     }
 }
 
-impl DoubleEndedIterator for EntrypointIterator {
+impl DoubleEndedIterator for EntrypointIterator<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        if self.front >= self.back {
-            return None;
+        if let Some(entrypoint) = self
+            .time_triggers
+            .as_mut()
+            .and_then(|time_triggers| time_triggers.next_back())
+        {
+            return Some(TransactionEntrypoint::from(entrypoint.clone()));
         }
-        self.back -= 1;
-        self.entries.get(self.back).cloned()
+        self.external.next_back()
     }
 }
 
-impl ExactSizeIterator for EntrypointIterator {
+impl ExactSizeIterator for EntrypointIterator<'_> {
     fn len(&self) -> usize {
-        self.back.saturating_sub(self.front)
+        self.external.len()
+            + self
+                .time_triggers
+                .as_ref()
+                .map_or(0, ExactSizeIterator::len)
     }
 }
 
-impl EntrypointIterator {
-    fn new(block: &SignedBlock) -> Self {
-        let mut entries: Vec<TransactionEntrypoint> = block.external_entrypoints_cloned().collect();
-        if block.has_results() {
-            entries.extend(
-                block
-                    .result_ref()
-                    .time_triggers
-                    .iter()
-                    .cloned()
-                    .map(TransactionEntrypoint::from),
-            );
-        }
-        let len = entries.len();
+impl<'a> EntrypointIterator<'a> {
+    fn new(block: &'a SignedBlock) -> Self {
         Self {
-            entries,
-            front: 0,
-            back: len,
+            external: ExternalEntrypointIterator::new(block),
+            time_triggers: block
+                .result
+                .as_ref()
+                .map(|result| result.time_triggers.iter()),
         }
     }
 }

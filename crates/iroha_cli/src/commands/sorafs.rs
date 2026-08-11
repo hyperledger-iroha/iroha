@@ -58,7 +58,9 @@ use iroha_crypto::{
     soranet::{
         blinding::canonical_cache_key,
         certificate::CertificateValidationPhase,
-        directory::{GuardDirectorySnapshotV2, compute_snapshot_digest},
+        directory::{
+            GuardDirectorySnapshotV2, compute_snapshot_digest, read_guard_directory_snapshot_file,
+        },
         token::{AdmissionToken, MintError as AdmissionTokenMintError, compute_issuer_fingerprint},
     },
 };
@@ -5910,7 +5912,7 @@ fn load_guard_directory(
     expected_snapshot_digest_hex: &str,
     at_unix: i64,
 ) -> Result<RelayDirectory> {
-    let bytes = fs::read(path)
+    let bytes = read_guard_directory_snapshot_file(path)
         .wrap_err_with(|| format!("failed to read guard directory from `{}`", path.display()))?;
     let expected_digest = parse_snapshot_digest_hex(expected_snapshot_digest_hex)?;
     RelayDirectory::from_guard_directory_bytes_at(&bytes, expected_digest, at_unix).map_err(|err| {
@@ -12715,15 +12717,18 @@ impl Run for GuardDirectoryFetchArgs {
         for url in &self.url {
             match client.get(url).send() {
                 Ok(response) => match response.error_for_status() {
-                    Ok(success) => match success.bytes() {
-                        Ok(bytes) => {
-                            snapshot = Some(bytes.to_vec());
-                            break;
+                    Ok(mut success) => {
+                        let content_length = success.content_length();
+                        match read_guard_directory_http_body_bounded(&mut success, content_length) {
+                            Ok(bytes) => {
+                                snapshot = Some(bytes);
+                                break;
+                            }
+                            Err(err) => {
+                                errors.push(format!("{url}: failed to read body: {err}"));
+                            }
                         }
-                        Err(err) => {
-                            errors.push(format!("{url}: failed to read body: {err}"));
-                        }
-                    },
+                    }
                     Err(err) => {
                         errors.push(format!("{url}: HTTP error {err}"));
                     }
@@ -12754,6 +12759,54 @@ impl Run for GuardDirectoryFetchArgs {
     }
 }
 
+fn read_guard_directory_http_body_bounded<R: Read>(
+    reader: R,
+    content_length: Option<u64>,
+) -> io::Result<Vec<u8>> {
+    read_guard_directory_http_body_with_limit(
+        reader,
+        content_length,
+        iroha_crypto::soranet::directory::GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1,
+    )
+}
+
+fn read_guard_directory_http_body_with_limit<R: Read>(
+    mut reader: R,
+    content_length: Option<u64>,
+    max_bytes: usize,
+) -> io::Result<Vec<u8>> {
+    let max_bytes_u64 = u64::try_from(max_bytes).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "guard directory HTTP body limit cannot be represented as u64",
+        )
+    })?;
+    if content_length.is_some_and(|length| length > max_bytes_u64) {
+        return Err(guard_directory_http_body_too_large(max_bytes));
+    }
+
+    let capacity = content_length
+        .and_then(|length| usize::try_from(length).ok())
+        .unwrap_or(0)
+        .min(max_bytes);
+    let mut bytes = Vec::with_capacity(capacity);
+    reader
+        .by_ref()
+        .take(max_bytes_u64.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > max_bytes {
+        return Err(guard_directory_http_body_too_large(max_bytes));
+    }
+    Ok(bytes)
+}
+
+fn guard_directory_http_body_too_large(max_bytes: usize) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("guard directory HTTP body exceeds the {max_bytes}-byte first-release limit"),
+    )
+}
+
 #[derive(clap::Args, Debug)]
 pub struct GuardDirectoryVerifyArgs {
     /// Path to the guard directory snapshot to verify.
@@ -12766,7 +12819,7 @@ pub struct GuardDirectoryVerifyArgs {
 
 impl Run for GuardDirectoryVerifyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let bytes = fs::read(&self.path).wrap_err_with(|| {
+        let bytes = read_guard_directory_snapshot_file(&self.path).wrap_err_with(|| {
             format!(
                 "failed to read guard directory snapshot from `{}`",
                 self.path.display()
@@ -12788,7 +12841,7 @@ pub struct GuardDirectoryInspectArgs {
 
 impl Run for GuardDirectoryInspectArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let bytes = fs::read(&self.path).wrap_err_with(|| {
+        let bytes = read_guard_directory_snapshot_file(&self.path).wrap_err_with(|| {
             format!(
                 "failed to read guard directory snapshot from `{}`",
                 self.path.display()
@@ -20567,29 +20620,7 @@ mod tests {
         assert_eq!(directory.valid_until(), Some(1_734_086_400));
     }
 
-    #[test]
-    fn guard_directory_summary_reports_expected_counts() {
-        let bytes = sample_guard_directory_snapshot_bytes();
-        let summary = inspect_guard_directory_bytes(&bytes).expect("inspect directory");
-        assert_eq!(summary.version, 2);
-        assert_eq!(summary.authentication, "structural_inspection_only");
-        assert_eq!(
-            summary.snapshot_digest_hex,
-            hex::encode(compute_snapshot_digest(&bytes))
-        );
-        assert_eq!(summary.issuer_count, 1);
-        assert_eq!(summary.relay_count, 1);
-        assert_eq!(summary.entry_guards, 1);
-        assert_eq!(summary.entry_guards_pq, 1);
-        assert_eq!(summary.exit_relays, 0);
-        assert_eq!(summary.dual_signed_relays, 1);
-        let expected_hash = "ab".repeat(32);
-        assert_eq!(
-            summary.directory_hash_hex.as_deref(),
-            Some(expected_hash.as_str())
-        );
-        assert!(summary.entry_guard_pq_ratio > 0.99);
-    }
+    include!("sorafs_guard_directory_tests.rs");
 
     #[test]
     fn authenticated_directory_accepts_matching_snapshot_digest() {

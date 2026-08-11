@@ -3568,11 +3568,11 @@ pub mod query {
             &self,
             state_ro: &impl StateReadOnly,
         ) -> std::result::Result<Domain, QueryExecutionFail> {
-            state_ro
+            let domain = state_ro
                 .world()
                 .domain(self.domain_id())
-                .cloned()
-                .map_err(QueryExecutionFail::from)
+                .map_err(QueryExecutionFail::from)?;
+            crate::smartcontracts::isi::query::own_singular_query_value(domain)
         }
     }
 

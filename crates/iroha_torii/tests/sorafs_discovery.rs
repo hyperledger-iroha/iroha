@@ -69,7 +69,6 @@ use iroha_torii::{
     SorafsNativeTransactionSignerRoleV1, Torii, ToriiRuntimeDeps,
     sorafs::{
         AdmissionCheckError, AdmissionRegistry, AliasCachePolicyExt,
-        api::StorageStateResponseDto,
         discovery::{
             AdvertError, AdvertIngest, AdvertIngestResult, AdvertWarning, ProviderAdvertCache,
             ReplayCheckpointError,
@@ -126,24 +125,6 @@ impl ProviderAdvertCacheTestExt for ProviderAdvertCache {
 
 fn ingest_tests_enabled() -> bool {
     std::env::var("SORAFS_TORII_SKIP_INGEST_TESTS").map_or(true, |value| value != "1")
-}
-
-fn storage_temp_data_dir(temp_dir: &TempDir) -> PathBuf {
-    temp_dir
-        .path()
-        .canonicalize()
-        .expect("canonical storage temp dir")
-        .join("storage")
-}
-
-#[test]
-fn sorafs_storage_temp_data_dir_uses_canonical_parent() {
-    let temp_dir = tempdir().expect("storage temp dir");
-    let data_dir = storage_temp_data_dir(&temp_dir);
-    assert_eq!(
-        data_dir.parent().expect("storage path parent"),
-        temp_dir.path().canonicalize().expect("canonical temp dir")
-    );
 }
 
 fn range_capability_payload(span: u32, granularity: u32) -> Vec<u8> {
@@ -1975,11 +1956,7 @@ fn manifest_request_authority_fixture_uses_checked_ed25519_key_generation() {
     assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
 }
 
-fn manifest_request_fixture<F>(
-    network_id: NetworkId,
-    submitted_epoch: u64,
-    tweak_manifest: F,
-) -> ManifestRequestFixture
+fn manifest_request_fixture<F>(network_id: NetworkId, tweak_manifest: F) -> ManifestRequestFixture
 where
     F: FnOnce(&mut ManifestV1),
 {
@@ -2589,7 +2566,7 @@ async fn sorafs_capacity_route_enabled_when_storage_on() {
 }
 
 #[tokio::test]
-async fn retired_storage_ingest_route_is_not_mounted() {
+async fn retired_storage_ingest_is_not_mounted_and_local_inventory_requires_authentication() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     enable_storage_with_discovery_native_signers(&mut cfg);
     let temp_dir = tempdir().expect("storage temp dir");
@@ -2613,26 +2590,40 @@ async fn retired_storage_ingest_route_is_not_mounted() {
         .expect("retired ingest response");
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    let state_response = harness
+    for path in [
+        "/v1/sorafs/aliases",
+        "/v1/sorafs/replication",
+        "/v1/sorafs/storage/state",
+    ] {
+        let response = harness
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(path)
+                    .body(Body::empty())
+                    .expect("unsigned SoraFS inventory request"),
+            )
+            .await
+            .expect("unsigned SoraFS inventory response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+    }
+
+    let fetch_response = harness
         .app
         .clone()
         .oneshot(
             Request::builder()
-                .method("GET")
-                .uri("/v1/sorafs/storage/state")
-                .body(Body::empty())
-                .expect("storage state request"),
+                .method("POST")
+                .uri("/v1/sorafs/storage/fetch")
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("unsigned malformed storage fetch request"),
         )
         .await
-        .expect("storage state response");
-    let state_bytes = BodyExt::collect(state_response.into_body())
-        .await
-        .expect("collect storage state")
-        .to_bytes();
-    let state: StorageStateResponseDto =
-        json::from_slice(&state_bytes).expect("decode storage state");
-    assert_eq!(state.bytes_used, 0);
-    assert_eq!(state.provider_ingest_inflight, 0);
+        .expect("unsigned malformed storage fetch response");
+    assert_eq!(fetch_response.status(), StatusCode::UNAUTHORIZED);
 }
 
 fn pin_register_http_request(body: Vec<u8>, content_type: &'static str) -> Request<Body> {
@@ -2660,7 +2651,7 @@ async fn sorafs_pin_register_route_accepts_caller_signed_transaction() {
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
-    let fixture = manifest_request_fixture(harness.network_id, 7, |_| {});
+    let fixture = manifest_request_fixture(harness.network_id, |_| {});
     let mut next_height = 1;
     ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
 
@@ -2727,7 +2718,7 @@ async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
-    let fixture = manifest_request_fixture(harness.network_id, 8, |_| {});
+    let fixture = manifest_request_fixture(harness.network_id, |_| {});
     let mut next_height = 1;
     ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
 
@@ -2759,7 +2750,7 @@ async fn sorafs_pin_register_validates_signed_manifest_bytes() {
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
-    let fixture = manifest_request_fixture(harness.network_id, 9, |manifest| {
+    let fixture = manifest_request_fixture(harness.network_id, |manifest| {
         manifest.chunking.name = "bogus".into();
     });
 
@@ -2791,7 +2782,7 @@ async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
-    let fixture = manifest_request_fixture(harness.network_id, 6, |_| {});
+    let fixture = manifest_request_fixture(harness.network_id, |_| {});
     let legacy = norito::json!({
         "authority": (fixture.authority.account.to_string()),
         "private_key": "[redacted]",
@@ -2823,7 +2814,7 @@ async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
 
-    let fixture = manifest_request_fixture(harness.network_id, 6, |_| {});
+    let fixture = manifest_request_fixture(harness.network_id, |_| {});
     let two_instructions = TransactionBuilder::new(
         harness.network_id,
         fixture.authority.account.clone(),
@@ -2858,7 +2849,7 @@ async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             b"Sorafs discovery wrong-network fixture",
         )));
-    let wrong_network_fixture = manifest_request_fixture(wrong_network, 6, |_| {});
+    let wrong_network_fixture = manifest_request_fixture(wrong_network, |_| {});
     let response = harness
         .app
         .clone()
@@ -2871,7 +2862,7 @@ async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-    let fixture = manifest_request_fixture(harness.network_id, 6, |_| {});
+    let fixture = manifest_request_fixture(harness.network_id, |_| {});
     let tamper_key = checked_manifest_request_authority_fixture();
     let tampered = fixture
         .transaction
@@ -3818,4 +3809,5 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
     );
 }
 
+include!("sorafs_discovery/storage_path_fixture.rs");
 include!("sorafs_discovery/fixture_key_mismatch_test.rs");

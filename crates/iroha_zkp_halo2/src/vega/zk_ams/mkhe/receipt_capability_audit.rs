@@ -86,8 +86,9 @@ pub(super) struct ZkAmsMkheReceiptCapabilityAuditV1 {
     pub(super) galois_key_receipt_enforced: bool,
     /// Canonical RNS-Link bytes bind verifier-derived context and commitments.
     pub(super) rns_link_transport_bound: bool,
-    /// A sibling-private native receipt checks canonical packing, zero padding,
-    /// the exact 38-limb plaintext lift, and both state-owned RLWE equations.
+    /// Whether the sibling-private native opening path mints a sealed receipt
+    /// after checking canonical packing, the 38-limb lift, and both RLWE
+    /// equations. Explicitly unverified topology metadata does not satisfy this.
     pub(super) native_bgv_opening_receipt_sealed: bool,
     /// A terminal-local receipt checks the complete relaxed assignment and
     /// recomputes both Hyrax commitments from the materialized openings.
@@ -200,11 +201,11 @@ pub(super) fn zk_ams_mkhe_receipt_capability_audit_v1() -> ZkAmsMkheReceiptCapab
         // Canonical decoding is only structural.  It explicitly returns an
         // unverified envelope and cannot mint an algebraic receipt.
         rns_link_transport_bound: true,
-        // These are genuine in-process checks over state-owned witnesses. The
-        // native BGV openings are now consumed as one pointer-tied 43-opening
-        // set, but its result remains unverified metadata and does not turn
-        // producer-controlled wire responses into proof evidence.
-        native_bgv_opening_receipt_sealed: true,
+        // These are genuine in-process checks over state-owned witnesses, but
+        // the 43-opening path returns only statement-independent Unverified
+        // topology/count metadata. No token, capability, or sealed native-BGV
+        // opening receipt is minted.
+        native_bgv_opening_receipt_sealed: false,
         native_materialized_hyrax_receipt_sealed: true,
         terminal_prover_consumes_native_materialized_receipt: true,
         // The private schema and packed-state preflight now describe 89 public
@@ -495,6 +496,12 @@ mod tests {
 
     #[test]
     fn source_surface_guards_distinguish_receipts_from_bypasses() {
+        let production = include_str!("receipt_capability_audit.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production source prefix");
+        assert!(production.contains("native_bgv_opening_receipt_sealed: false"));
+        assert!(!production.contains("native_bgv_opening_receipt_sealed: true"));
         let _: MintCpkBindingV1 = mint_collective_secret_binding_from_verified_cpk_v1;
         let _: AggregateCpkWithoutReceiptV1 = aggregate_zk_ams_mkhe_collective_public_key_v1;
         let _: PrepareSecretFreePersistentDecryptionV1 =
@@ -518,7 +525,7 @@ mod tests {
         assert!(audit.cpk_relation_receipt_sealed);
         assert!(audit.cpk_party_state_admission_consumes_receipt);
         assert!(audit.rns_link_transport_bound);
-        assert!(audit.native_bgv_opening_receipt_sealed);
+        assert!(!audit.native_bgv_opening_receipt_sealed);
         assert!(audit.native_materialized_hyrax_receipt_sealed);
         assert!(audit.terminal_prover_consumes_native_materialized_receipt);
         assert!(!audit.rns_link_family_geometry_matches_native);

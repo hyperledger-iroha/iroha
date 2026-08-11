@@ -367,6 +367,13 @@ impl json::JsonSerialize for RamLfeBackend {
     fn json_serialize(&self, out: &mut String) {
         json::JsonSerialize::json_serialize(self.as_str(), out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(self.as_str(), out)
+    }
 }
 
 #[cfg(feature = "json")]

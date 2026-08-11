@@ -702,6 +702,8 @@ pub fn kagami_default_manifest_json(
 mod tests {
     use super::*;
 
+    mod replay_fixture_owner;
+
     #[test]
     fn default_data_uses_fixtures() {
         let data = MockToriiData::default();
@@ -720,23 +722,6 @@ mod tests {
                 ..
             })) if height == NonZeroU64::MIN
         ));
-    }
-
-    #[test]
-    #[ignore = "explicit fixture regeneration helper"]
-    fn regenerate_sumeragi_fixtures() {
-        let data = MockToriiData::default();
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/torii_replay");
-        fs::write(
-            root.join("sumeragi.json"),
-            json::to_vec_pretty(&data.sumeragi).expect("serialize status fixture"),
-        )
-        .expect("write status fixture");
-        fs::write(
-            root.join("sumeragi_diagnostics.json"),
-            json::to_vec_pretty(&data.sumeragi_diagnostics).expect("serialize diagnostics fixture"),
-        )
-        .expect("write diagnostics fixture");
     }
 
     #[test]

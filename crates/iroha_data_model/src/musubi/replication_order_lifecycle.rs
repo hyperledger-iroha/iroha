@@ -109,7 +109,10 @@ impl MusubiRetiredReplicationOrderLocationV1 {
 /// Lifecycle of one immutable replication-order/archive binding.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiReplicationOrderLocationLifecycleV1 {
     /// The order is bound to the archive before any location has been admitted.
     PreLocation,

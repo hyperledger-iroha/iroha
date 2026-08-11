@@ -1351,7 +1351,7 @@ fn terminal_rejected_or_expired_offline_operation_status(
             operation_id,
             kind,
             transaction_hash,
-            kagemusha_v4_rejection_detail(entry.rejection.as_ref()),
+            kagemusha_v4_cached_rejection_detail(entry.rejection.as_ref()),
         )
     })
 }
@@ -1672,9 +1672,17 @@ fn kagemusha_v4_committed_finality(
 }
 
 fn kagemusha_v4_rejection_detail(rejection: Option<&TransactionRejectionReason>) -> String {
-    canonical_offline_rejection_message(
-        rejection.map_or_else(|| "no rejection reason".to_owned(), ToString::to_string),
-    )
+    canonical_offline_rejection_message(rejection.map_or_else(
+        || "no rejection reason".to_owned(),
+        |reason| crate::pipeline_rejection_summary(reason).to_owned(),
+    ))
+}
+
+fn kagemusha_v4_cached_rejection_detail(rejection: Option<&&'static str>) -> String {
+    canonical_offline_rejection_message(rejection.map_or_else(
+        || "no rejection reason".to_owned(),
+        |message| (*message).to_owned(),
+    ))
 }
 
 fn canonical_offline_rejection_message(message: String) -> String {
@@ -4396,15 +4404,14 @@ mod tests {
         ));
         assert_eq!(
             kagemusha_v4_rejection_detail(Some(&rejection)),
-            rejection.to_string()
+            "Transaction validation failed."
         );
 
         let adversarial = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "attacker-controlled\nmessage".to_owned(),
         ));
         let message = kagemusha_v4_rejection_detail(Some(&adversarial));
-        assert_eq!(message, adversarial.to_string());
-        assert_eq!(message, "Validation failed");
+        assert_eq!(message, "Transaction validation failed.");
         assert!(!message.contains("attacker-controlled"));
         assert!(!message.contains('\n'));
         assert!(crate::utils::is_valid_error_message(&message));

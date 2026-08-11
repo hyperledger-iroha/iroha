@@ -88,6 +88,13 @@ mod model {
         fn write_json(&self, out: &mut String) {
             norito::json::FastJsonWrite::write_json(&self.0, out);
         }
+
+        fn write_json_to(
+            &self,
+            out: &mut dyn norito::json::JsonWriteSink,
+        ) -> Result<(), norito::json::BoundedJsonError> {
+            norito::json::FastJsonWrite::write_json_to(&self.0, out)
+        }
     }
 
     #[cfg(feature = "json")]
@@ -217,6 +224,13 @@ mod model {
     impl norito::json::FastJsonWrite for ChainId {
         fn write_json(&self, out: &mut String) {
             norito::json::JsonSerialize::json_serialize(self.as_str(), out);
+        }
+
+        fn write_json_to(
+            &self,
+            out: &mut dyn norito::json::JsonWriteSink,
+        ) -> Result<(), norito::json::BoundedJsonError> {
+            norito::json::write_json_string_to(self.as_str(), out)
         }
     }
 

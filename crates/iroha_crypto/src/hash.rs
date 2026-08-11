@@ -96,7 +96,7 @@ pub fn sha256_reader_bounded(
 
     let mut hasher = Sha256::new();
     let mut total = 0_u64;
-    let mut buffer = vec![0_u8; BUFFER_BYTES];
+    let mut buffer = [0_u8; BUFFER_BYTES];
     loop {
         let read = reader.read(&mut buffer)?;
         if read == 0 {
@@ -148,6 +148,22 @@ impl Hash {
         finalize_blake2b(hasher)
     }
 
+    /// Hash bytes emitted by a fallible streaming producer.
+    ///
+    /// The callback writes directly into the incremental hasher, so callers do
+    /// not need to materialize a response-sized concatenation buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns the callback's I/O error without producing a partial digest.
+    pub fn new_from_writer(
+        write: impl FnOnce(&mut dyn std::io::Write) -> std::io::Result<()>,
+    ) -> std::io::Result<Self> {
+        let mut writer = HashWriter::new();
+        write(&mut writer)?;
+        Ok(writer.finalize())
+    }
+
     /// Hash bytes from a reader without buffering the complete input.
     ///
     /// Reading stops with [`std::io::ErrorKind::InvalidData`] once the input
@@ -165,7 +181,7 @@ impl Hash {
 
         let mut writer = HashWriter::new();
         let mut total = 0_u64;
-        let mut buffer = vec![0_u8; BUFFER_BYTES];
+        let mut buffer = [0_u8; BUFFER_BYTES];
         loop {
             let read = std::io::Read::read(&mut reader, &mut buffer)?;
             if read == 0 {
@@ -262,6 +278,17 @@ impl FastJsonWrite for Hash {
         let body = hex::encode_upper(self.as_ref());
         let literal = literal::format("hash", &body);
         json::write_json_string(&literal, out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        // The canonical hash literal is fixed-width (32-byte body plus tag and
+        // checksum), so this scratch allocation cannot scale with a response.
+        let body = hex::encode_upper(self.as_ref());
+        let literal = literal::format("hash", &body);
+        json::write_json_string_to(&literal, out)
     }
 }
 
@@ -491,6 +518,13 @@ impl<T> FastJsonWrite for HashOf<T> {
     fn write_json(&self, out: &mut String) {
         self.0.write_json(out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.write_json_to(out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -669,6 +703,29 @@ mod tests {
             Hash::new_from_chunks(&[left, middle, right]),
             Hash::new(concatenated)
         );
+    }
+
+    #[test]
+    fn hash_new_from_writer_matches_chunks_and_propagates_errors() {
+        let chunks: [&[u8]; 3] = [b"iroha:", b"streamed:", b"hash"];
+        let streamed = Hash::new_from_writer(|writer| {
+            for chunk in chunks {
+                writer.write_all(chunk)?;
+            }
+            Ok(())
+        })
+        .expect("stream hash");
+        assert_eq!(streamed, Hash::new_from_chunks(&chunks));
+
+        let error = Hash::new_from_writer(|writer| {
+            writer.write_all(b"partial")?;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "producer failed",
+            ))
+        })
+        .expect_err("producer failure must be returned");
+        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe);
     }
 
     #[test]

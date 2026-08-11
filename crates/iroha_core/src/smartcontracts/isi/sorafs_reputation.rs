@@ -95,7 +95,10 @@ fn corrupt_state(message: impl Into<String>) -> InstructionExecutionError {
 }
 
 fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
-    QueryExecutionFail::Conversion(error.to_string())
+    match error {
+        InstructionExecutionError::Query(error) => error,
+        error => QueryExecutionFail::Conversion(error.to_string()),
+    }
 }
 
 fn encode_state<T: norito::core::NoritoSerialize>(
@@ -122,8 +125,20 @@ where
             "{label} state exceeds {STATE_MAX_BYTES} bytes"
         )));
     }
-    let value = decode_from_bytes_with_limits::<T>(bytes, STATE_LIMITS)
-        .map_err(|error| corrupt_state(format!("failed to decode {label}: {error}")))?;
+    let limits = crate::smartcontracts::isi::query::singular_query_decode_limits(
+        bytes.len(),
+        STATE_LIMITS,
+    )
+    .map_err(InstructionExecutionError::Query)?;
+    let value = decode_from_bytes_with_limits::<T>(bytes, limits).map_err(|error| {
+        if crate::smartcontracts::isi::query::singular_query_limits_active()
+            && error.is_decode_resource_limit()
+        {
+            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+        } else {
+            corrupt_state(format!("failed to decode {label}: {error}"))
+        }
+    })?;
     if encode_state(&value, label)? != bytes {
         return Err(corrupt_state(format!(
             "{label} state is not exact canonical Norito"
@@ -1653,14 +1668,27 @@ fn resolve_finalized_event(
             record.sequence
         )));
     }
-    Ok(ReputationJournalFinalizedEventV1 {
-        sequence: record.sequence,
-        block_height: record.target_block_height,
-        block_hash,
-        event_index: record.event_index,
-        recorded_at_unix_ms: record.recorded_at_unix_ms,
-        entry: record.entry.clone(),
-    })
+    crate::smartcontracts::isi::query::own_singular_query_struct::<
+        ReputationJournalFinalizedEventV1,
+        6,
+    >(
+        [
+            &record.sequence,
+            &record.target_block_height,
+            &block_hash,
+            &record.event_index,
+            &record.recorded_at_unix_ms,
+            &record.entry,
+        ],
+        || ReputationJournalFinalizedEventV1 {
+            sequence: record.sequence,
+            block_height: record.target_block_height,
+            block_hash,
+            event_index: record.event_index,
+            recorded_at_unix_ms: record.recorded_at_unix_ms,
+            entry: record.entry.clone(),
+        },
+    )
 }
 
 fn load_cursor_event(
@@ -1923,8 +1951,11 @@ fn query_event_page(
         return Err(QueryExecutionFail::Expired);
     }
 
-    let mut events = Vec::with_capacity(limit);
-    let payload_budget = REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1.saturating_sub(4 * 1_024);
+    let mut events = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
+    let page_bytes_limit = crate::smartcontracts::isi::query::singular_query_frame_limit(
+        REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+    );
+    let payload_budget = page_bytes_limit.saturating_sub(4 * 1_024);
     let mut encoded_event_bytes = 0usize;
     let mut sequence = start_sequence;
     while sequence <= head.last_sequence && events.len() < limit {
@@ -1938,13 +1969,11 @@ fn query_event_page(
         validate_event_successor(previous.as_ref(), &record).map_err(query_failure)?;
         validate_event_indexes(state_ro.world(), &record).map_err(query_failure)?;
         let resolved = resolve_finalized_event(state_ro, &record)?;
-        let resolved_bytes = norito::to_bytes(&resolved)
-            .map_err(|error| {
-                QueryExecutionFail::Conversion(format!(
-                    "failed to encode finalized reputation event: {error}"
-                ))
-            })?
-            .len();
+        let resolved_bytes = norito::core::encoded_frame_len(&resolved).map_err(|error| {
+            QueryExecutionFail::Conversion(format!(
+                "failed to size finalized reputation event: {error}"
+            ))
+        })?;
         let next_event_bytes =
             encoded_event_bytes
                 .checked_add(resolved_bytes)
@@ -1956,13 +1985,13 @@ fn query_event_page(
         if next_event_bytes > payload_budget {
             if events.is_empty() {
                 return Err(QueryExecutionFail::Conversion(format!(
-                    "one reputation event cannot fit within the {REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1}-byte page budget"
+                    "one reputation event cannot fit within the {page_bytes_limit}-byte page budget"
                 )));
             }
             break;
         }
         encoded_event_bytes = next_event_bytes;
-        events.push(resolved);
+        events.try_push(resolved)?;
         previous = Some(record);
         sequence = sequence.checked_add(1).ok_or_else(|| {
             QueryExecutionFail::Conversion("reputation journal sequence overflow".to_owned())
@@ -1977,22 +2006,20 @@ fn query_event_page(
     });
     let page = ReputationJournalFinalizedEventPageV1 {
         finalized_cursor,
-        events,
+        events: events.into_vec(),
         has_more,
         next_after,
     };
     page.validate_after(query.after)
         .map_err(|error| QueryExecutionFail::Conversion(error.to_string()))?;
-    let encoded_len = norito::to_bytes(&page)
-        .map_err(|error| {
-            QueryExecutionFail::Conversion(format!(
-                "failed to encode reputation event page: {error}"
-            ))
-        })?
-        .len();
-    if encoded_len > REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+    let encoded_len = norito::core::encoded_frame_len(&page).map_err(|error| {
+        QueryExecutionFail::Conversion(format!(
+            "failed to size reputation event page: {error}"
+        ))
+    })?;
+    if encoded_len > page_bytes_limit {
         return Err(QueryExecutionFail::Conversion(format!(
-            "reputation event page has {encoded_len} bytes; maximum is {REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1}"
+            "reputation event page has {encoded_len} bytes; maximum is {page_bytes_limit}"
         )));
     }
     Ok(page)

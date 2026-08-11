@@ -9,6 +9,34 @@ use tiny_keccak::keccakf;
 
 const KECCAK_256_RATE: usize = 136;
 
+fn clear_sensitive_bytes_v1(bytes: &mut [u8]) {
+    let bytes = core::hint::black_box(bytes);
+    bytes.fill(0);
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *bytes);
+}
+
+fn clear_sensitive_lanes_v1(lanes: &mut [u64]) {
+    let lanes = core::hint::black_box(lanes);
+    lanes.fill(0);
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *lanes);
+}
+
+fn clear_sensitive_usize_v1(value: &mut usize) {
+    let value = core::hint::black_box(value);
+    *value = 0;
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    let _ = core::hint::black_box(&mut *value);
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static KECCAK_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
 pub(super) struct Keccak256 {
     state: [u64; 25],
     pending: [u8; KECCAK_256_RATE],
@@ -56,16 +84,41 @@ impl Keccak256 {
     }
 
     pub(super) fn finalize(mut self) -> [u8; 32] {
+        let mut output = [0_u8; 32];
+        self.finalize_into(&mut output);
+        output
+    }
+
+    /// Finalize directly into caller-owned storage.
+    ///
+    /// The caller retains the owner so secret-derived users can keep the
+    /// sponge in a stable allocation from first absorption through explicit
+    /// drop. `Drop` optimizer-resistantly erases the state and pending rate
+    /// bytes on success, error, or unwind, while this method avoids an
+    /// intermediate returned digest array.
+    pub(super) fn finalize_into(&mut self, output: &mut [u8; 32]) {
         self.pending[self.pending_len] ^= 0x01;
         self.pending[KECCAK_256_RATE - 1] ^= 0x80;
         xor_rate_block(&mut self.state, &self.pending);
         keccakf(&mut self.state);
 
-        let mut output = [0_u8; 32];
-        for (destination, lane) in output.chunks_exact_mut(8).zip(self.state) {
-            destination.copy_from_slice(&lane.to_le_bytes());
+        for index in 0..output.len() {
+            output[index] = (self.state[index / 8] >> (8 * (index % 8))) as u8;
         }
-        output
+    }
+}
+
+impl Drop for Keccak256 {
+    fn drop(&mut self) {
+        clear_sensitive_lanes_v1(&mut self.state);
+        clear_sensitive_bytes_v1(&mut self.pending);
+        clear_sensitive_usize_v1(&mut self.pending_len);
+
+        #[cfg(test)]
+        if self.state == [0; 25] && self.pending == [0; KECCAK_256_RATE] && self.pending_len == 0 {
+            let _ =
+                KECCAK_ZEROIZED_DROPS_V1.try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
     }
 }
 
@@ -165,7 +218,14 @@ fn xor_rate_block(state: &mut [u64; 25], block: &[u8]) {
         .zip(block.chunks_exact(8))
         .take(KECCAK_256_RATE / 8)
     {
-        *lane ^= u64::from_le_bytes(bytes.try_into().expect("lane has eight bytes"));
+        *lane ^= u64::from(bytes[0])
+            | (u64::from(bytes[1]) << 8)
+            | (u64::from(bytes[2]) << 16)
+            | (u64::from(bytes[3]) << 24)
+            | (u64::from(bytes[4]) << 32)
+            | (u64::from(bytes[5]) << 40)
+            | (u64::from(bytes[6]) << 48)
+            | (u64::from(bytes[7]) << 56);
     }
 }
 
@@ -182,6 +242,16 @@ pub(super) fn shake256(input: &[u8], output_len: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reset_keccak_zeroized_drops_v1() {
+        let _ = KECCAK_ZEROIZED_DROPS_V1.try_with(|drops| drops.set(0));
+    }
+
+    fn keccak_zeroized_drops_v1() -> usize {
+        KECCAK_ZEROIZED_DROPS_V1
+            .try_with(std::cell::Cell::get)
+            .unwrap_or(usize::MAX)
+    }
 
     #[test]
     fn keccak256_and_shake256_match_independent_standard_vectors() {
@@ -257,5 +327,64 @@ mod tests {
             }
             assert_eq!(hash.finalize(), expected, "chunk_size={chunk_size}");
         }
+    }
+
+    #[test]
+    fn finalize_into_matches_finalize_and_zeroizes_on_success_and_unwind() {
+        let input = b"secret-derived nonce material crossing a rate boundary";
+        let expected = keccak256(input);
+
+        reset_keccak_zeroized_drops_v1();
+        let mut hash = Keccak256::new();
+        hash.update(input);
+        let mut output = [0_u8; 32];
+        hash.finalize_into(&mut output);
+        assert_eq!(output, expected);
+        assert_eq!(keccak_zeroized_drops_v1(), 0);
+        drop(hash);
+        assert_eq!(keccak_zeroized_drops_v1(), 1);
+
+        reset_keccak_zeroized_drops_v1();
+        {
+            let mut abandoned = Keccak256::new();
+            abandoned.update(input);
+        }
+        assert_eq!(keccak_zeroized_drops_v1(), 1);
+
+        reset_keccak_zeroized_drops_v1();
+        let unwind = std::panic::catch_unwind(|| {
+            let mut hash = Keccak256::new();
+            hash.update(input);
+            panic!("exercise Keccak zeroization during unwind");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(keccak_zeroized_drops_v1(), 1);
+
+        let source = include_str!("sponge.rs");
+        assert!(source.contains("pub(super) fn finalize_into(&mut self"));
+        assert!(source.contains("impl Drop for Keccak256"));
+        assert!(source.contains("clear_sensitive_lanes_v1(&mut self.state)"));
+        assert!(source.contains("clear_sensitive_bytes_v1(&mut self.pending)"));
+        assert!(source.contains("clear_sensitive_usize_v1(&mut self.pending_len)"));
+        let finalize_into = source
+            .split("pub(super) fn finalize_into")
+            .nth(1)
+            .expect("direct finalizer")
+            .split("impl Drop for Keccak256")
+            .next()
+            .expect("finalizer source slice");
+        assert!(finalize_into.contains("self.state[index / 8] >> (8 * (index % 8))"));
+        assert!(!finalize_into.contains(".copied()"));
+        assert!(!finalize_into.contains("to_le_bytes"));
+        let xor_rate = source
+            .split("fn xor_rate_block")
+            .nth(1)
+            .expect("rate-block decoder")
+            .split("pub(super) fn keccak256")
+            .next()
+            .expect("rate-block source slice");
+        assert!(xor_rate.contains("u64::from(bytes[7]) << 56"));
+        assert!(!xor_rate.contains("from_le_bytes"));
+        assert!(!xor_rate.contains("try_into"));
     }
 }

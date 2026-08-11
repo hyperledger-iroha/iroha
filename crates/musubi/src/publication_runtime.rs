@@ -1796,7 +1796,7 @@ impl<V> LoadedProductionPublicationRuntimeV1<V> {
         &self.bindings
     }
 
-    /// Clone the signer-free reader built from the same image as this runtime and signer.
+    /// Clone the authenticated reader built from the same image as this runtime and signer.
     pub(crate) fn registry_reader(&self) -> RegistryReadClientV1 {
         self.services.read.clone()
     }
@@ -1844,7 +1844,7 @@ where
 }
 
 /// Load a production runtime only when the selected platform configuration still matches the
-/// exact image used by the preceding signer-free resolution phase.
+/// exact image used by the preceding authenticated resolution phase.
 ///
 /// The bounded file is read before any signer or runtime configuration is parsed. Its anchored
 /// path and domain-separated digest are process-local provenance and are never returned in an
@@ -1888,7 +1888,7 @@ where
                     "MUSUBI_PUBLICATION_SIGNER_CONFIG_INVALID",
                 )
             })?;
-    let read = RegistryReadClientV1::load_from_config_bytes(config_bytes).map_err(|_| {
+    let read = signing.authenticated_reader().map_err(|_| {
         ProductionPublicationConfigurationErrorV1::new("MUSUBI_PUBLICATION_PUBLIC_CONFIG_INVALID")
     })?;
     if read.account_chain_discriminant() != signing.account_chain_discriminant() {
@@ -2113,7 +2113,7 @@ const fn invalid_publication_config() -> ProductionPublicationConfigurationError
 
 /// Read one exact bounded platform `client.toml` through a no-follow stable descriptor.
 ///
-/// This is shared by publication, signer-free registry reads, and prepared archive fetching so
+/// This is shared by publication, authenticated registry reads, and prepared archive fetching so
 /// all consumers preserve the same single-link and before/after identity checks. The reader is
 /// qualified on Unix; other targets return [`io::ErrorKind::Unsupported`] before path metadata or
 /// file contents are consulted.
@@ -2539,7 +2539,7 @@ mod tests {
             next_cursor: None,
             snapshot: registered_snapshot,
         };
-        let read = RegistryReadClientV1::new(torii_url, Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(torii_url, Duration::from_secs(2), 369)
             .expect("registry reader");
         let http = signing
             .publication_runtime_client(parsed.request_timeout)
@@ -2607,7 +2607,7 @@ mod tests {
             .validate()
             .expect("valid finalized archive page");
         let (url, server) = serve_archive_page_once(&fixture.page);
-        fixture.runtime.read = RegistryReadClientV1::new(url, Duration::from_secs(2), 369)
+        fixture.runtime.read = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 369)
             .expect("loopback registry reader");
         server
     }
@@ -3881,7 +3881,7 @@ mod tests {
         let path = temporary.path().join("client.toml");
         let (_signing, _publication) = write_client_config(&path, "");
         let (initial_reader, image) = RegistryReadClientV1::load_with_config_image(Some(&path))
-            .expect("load signer-free configuration image");
+            .expect("load authenticated configuration image");
         let provenance = image.provenance();
         drop(image);
 
@@ -3905,7 +3905,7 @@ mod tests {
         let path = temporary.path().join("client.toml");
         let (_signing, _publication) = write_client_config(&path, "");
         let (_, image) = RegistryReadClientV1::load_with_config_image(Some(&path))
-            .expect("load signer-free configuration image");
+            .expect("load authenticated configuration image");
         let provenance = image.provenance();
         drop(image);
 
@@ -3945,7 +3945,7 @@ mod tests {
         let path = temporary.path().join("client.toml");
         let (_signing, _publication) = write_client_config(&path, "");
         let (_, image) = RegistryReadClientV1::load_with_config_image(Some(&path))
-            .expect("load signer-free configuration image");
+            .expect("load authenticated configuration image");
         let provenance = image.provenance();
         drop(image);
 

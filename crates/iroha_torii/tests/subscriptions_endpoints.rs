@@ -46,7 +46,7 @@ use iroha_primitives::{
     json::Json as IrohaJson,
     numeric::{NumericSpec, Quantity},
 };
-use iroha_test_samples::{ALICE_ID, BOB_ID};
+use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, json_entry, json_object};
 use mv::storage::StorageReadOnly;
 use tower::ServiceExt as _;
@@ -274,6 +274,20 @@ async fn call_app(app: &axum::Router, mut request: Request<Body>) -> Response {
     app.clone().oneshot(request).await.expect("router responds")
 }
 
+fn signed_bob_mutation(uri: &str, body: &str) -> Request<Body> {
+    fixtures::app_signed_request(
+        &BOB_ID,
+        &BOB_KEYPAIR,
+        Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_owned()))
+            .expect("request"),
+        body.as_bytes(),
+    )
+}
+
 async fn response_json(resp: Response) -> norito::json::Value {
     let body = resp
         .into_body()
@@ -298,16 +312,8 @@ async fn subscription_mutation_routes_are_registered() {
         format!("/v1/subscriptions/{subscription_id}/usage"),
         format!("/v1/subscriptions/{subscription_id}/charge-now"),
     ] {
-        let resp = call_app(
-            &harness.app,
-            Request::builder()
-                .method("POST")
-                .uri(&uri)
-                .header(CONTENT_TYPE, "application/json")
-                .body(Body::from("{}"))
-                .expect("request"),
-        )
-        .await;
+        let body = "{}";
+        let resp = call_app(&harness.app, signed_bob_mutation(&uri, body)).await;
         assert!(
             !matches!(
                 resp.status(),
@@ -382,12 +388,10 @@ async fn subscription_resume_route_returns_exact_unsigned_draft_without_mutating
 
     let resume_resp = call_app(
         &harness.app,
-        Request::builder()
-            .method("POST")
-            .uri(format!("/v1/subscriptions/{subscription_id}/resume"))
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(body))
-            .expect("request"),
+        signed_bob_mutation(
+            &format!("/v1/subscriptions/{subscription_id}/resume"),
+            &body,
+        ),
     )
     .await;
     assert_eq!(resume_resp.status(), StatusCode::OK);
@@ -475,15 +479,50 @@ async fn subscription_action_route_rejects_legacy_private_key_payload() {
 
     let response = call_app(
         &harness.app,
-        Request::builder()
-            .method("POST")
-            .uri(format!("/v1/subscriptions/{subscription_id}/resume"))
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(body))
-            .expect("request"),
+        signed_bob_mutation(
+            &format!("/v1/subscriptions/{subscription_id}/resume"),
+            &body,
+        ),
     )
     .await;
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(harness.queue.queued_len(), 0);
+}
+
+#[tokio::test]
+async fn subscription_cancel_route_requires_exact_tagged_mode() {
+    let harness = build_subscription_harness(SubscriptionStatus::Paused);
+    let subscription_id = harness.subscription_id.to_string();
+    let uri = format!("/v1/subscriptions/{subscription_id}/cancel");
+
+    let legacy_body = norito::json::to_json(&json_object(vec![
+        json_entry("authority", BOB_ID.to_string()),
+        json_entry("cancel_mode", "immediate"),
+    ]))
+    .expect("serialize legacy cancel request");
+    let response = call_app(&harness.app, signed_bob_mutation(&uri, &legacy_body)).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let cancel_mode = json_object(vec![
+        json_entry("mode", "immediate"),
+        ("value".to_owned(), norito::json::Value::Null),
+    ]);
+    let body = norito::json::to_json(&json_object(vec![
+        json_entry("authority", BOB_ID.to_string()),
+        ("cancel_mode".to_owned(), cancel_mode),
+    ]))
+    .expect("serialize exact cancel request");
+    let response = call_app(&harness.app, signed_bob_mutation(&uri, &body)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = response_json(response).await;
+    assert_eq!(
+        response["details"]["cancel_mode"]["mode"].as_str(),
+        Some("immediate")
+    );
+    assert_eq!(
+        response["details"]["cancel_mode"]["value"],
+        norito::json::Value::Null
+    );
     assert_eq!(harness.queue.queued_len(), 0);
 }

@@ -33,6 +33,7 @@ on:
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "scripts/tests/check_sorafs_reference_sdk_fixtures_test.py"
       - "scripts/check_sf1_vectors.mjs"
+      - "scripts/tests/check_sf1_vectors.test.mjs"
       - "javascript/iroha_js/test/sorafsChunker.oneGib.test.js"
       - "Cargo.toml"
       - "Cargo.lock"

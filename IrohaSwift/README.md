@@ -634,6 +634,9 @@ Attachment upload/list/get/delete methods require
 `ToriiCanonicalRequestAuth` in both async and completion-handler forms. They
 sign the exact method, encoded path, body, and immutable genesis-derived
 `NetworkId` from `ToriiLocalSigningContext`, then reject redirects and replay.
+Identifier resolve/claim-receipt and RAM-LFE execute/receipt-verify methods use
+the same required authentication contract; claim receipt additionally requires
+the exact canonical I105 path account to equal `canonicalAuth.accountId`.
 
 ### Sora VPN native lease flow
 
@@ -911,6 +914,14 @@ if #available(iOS 15.0, macOS 12.0, *) {
 }
 ```
 
+The body-based `queryRwas` helper is account-authenticated. Configure the
+client with an immutable `ToriiLocalSigningContext` for the deployment's exact
+genesis `NetworkId`, then pass `ToriiCanonicalRequestAuth` per call or install
+it as `canonicalRequestAuth` on the client. The helper signs the final method,
+path, and encoded envelope locally and dispatches once without redirects.
+Missing auth, aliases, foreign-genesis signatures, and precomputed canonical
+headers fail closed.
+
 For local instruction composition, `RwaInstructionBuilders` and the matching
 `IrohaSDK` convenience methods now cover the dedicated RWA instruction family.
 The richer registration/merge/control-policy payloads stay as `NoritoJSON`
@@ -1117,10 +1128,17 @@ the application owns reconciliation and any later explicit submission.
 
 `ToriiClient` uses only the canonical direct Torii lifecycle:
 `GET /v1/offline/readiness`, `POST /v1/offline/top-up`,
-`POST /v1/offline/redeem`, and `GET /v1/offline/operations/{operation_id}`.
+`POST /v1/offline/redeem`, `GET /v1/offline/operations/{operation_id}`, and
+`POST /v1/offline/receiver-lineage`.
 Use `getOfflineCapability()`, `submitKagemushaTopUp`,
-`submitKagemushaRedeem`, and `getKagemushaOperationStatus(operationId:)`.
+`submitKagemushaRedeem`, `getKagemushaOperationStatus(operationId:)`, and
+`getKagemushaRecipientRegistrationLineage(query:canonicalAuth:)`.
 No selector-taking readiness alias is exposed.
+
+Receiver-lineage proof evaluation requires `ToriiLocalSigningContext` and a
+per-call `ToriiCanonicalRequestAuth`. Swift signs the exact genesis-derived
+`NetworkId`, POST target, and raw Norito selector body, rejects redirects, and
+never retries the nonce-bearing request.
 
 `ToriiOfflineStatus` is an asset-neutral protocol contract, not backend
 settlement readiness. Swift accepts only `mandatory: false`,
@@ -1503,6 +1521,30 @@ Pipeline submissions always use `/v1/pipeline/transactions` and
 retry signed bodies. A custom `ToriiTransactionSubmitting` implementation must provide the
 same one-shot contract.
 
+Node-local pipeline and clock reads use a separate operator context. Construct
+it once from the deployment's exact genesis `NetworkId` and operator signing
+key, then install it on `ToriiClient` (or `IrohaSDK`):
+
+```swift
+let operatorContext = try ToriiOperatorSigningContext(
+    networkId: networkId,
+    signingKey: operatorSigningKey
+)
+let operatorTorii = ToriiClient(
+    baseURL: toriiURL,
+    operatorSigningContext: operatorContext
+)
+let preflight = try await operatorTorii.getPipelinePreflight()
+let recovery = try await operatorTorii.getPipelineRecovery(height: 42)
+let clock = try await operatorTorii.getTimeStatus()
+```
+
+These helpers sign the exact `GET`, substituted path, query, and empty body,
+then dispatch once without redirects or retries. They reject bearer/API-token
+fallback and caller-supplied operator headers. Swift has no peer, policy, or
+proof-retention convenience method; use no invented SDK surface for those
+routes.
+
 ### Verifying key registry
 
 Interact with the Torii verifying-key endpoints to inspect and monitor Halo2 verifier metadata:
@@ -1786,7 +1828,12 @@ Task {
 }
 ```
 
-`ToriiClient` now exposes the Connect REST surface (`/v1/connect/status`, `/v1/connect/session`, `/v1/connect/app/*`) so you can create sessions, manage the app registry/policy/manifest, and build the WebSocket URL deterministically:
+`ToriiClient` exposes the Connect REST surface so apps can create sessions,
+manage their registry/policy/manifest, and inspect one session through
+`GET /v1/connect/status?sid=...` with its management token. The separate
+`getConnectStatus()` aggregate targets `/v1/connect/status/aggregate` and
+requires a `ToriiOperatorSigningContext`; never provision that node operator
+key to an app or wallet.
 
 ```swift
 let torii = ToriiClient(baseURL: URL(string: "https://torii.example")!)
@@ -1804,6 +1851,10 @@ let wsRequest = try ConnectClient.makeWebSocketRequest(baseURL: torii.baseURL,
                                                        token: session.tokenApp)
 let connect = ConnectClient(request: wsRequest)
 ```
+
+The request builder requires canonical unpadded base64url values for exactly
+32-byte SIDs and role tokens. It keeps the role token out of the URL and sends
+it only in the `Authorization` header.
 
 Wallet approval code can derive the relay binding with
 `ConnectCrypto.relayAuthHash(sessionID:relayToken:)` before signing the approval
@@ -2026,8 +2077,11 @@ For contributor setup and Torii mock ledger instructions, refer to
 
 ## Musubi V1 registry reads
 
-`MusubiToriiClientV1` is a signer-free, read-only client for the twelve typed
-`/v1/musubi/queries/*` POST routes. Its first-release-only models preserve
+`MusubiToriiClientV1` is an exact-network authenticated client for the twelve typed
+`/v1/musubi/queries/*` POST routes. Construction requires a `ToriiLocalSigningContext`, and every
+method requires canonical account signing material. Each exact raw body/path is signed with that
+context's `NetworkId`; requests use fresh one-shot authentication and never follow redirects. Its
+first-release-only models preserve
 structural package identities, immutable namespace bindings, canonical
 structured SemVer requirements, exact unsigned JSON integers, finalized cursors,
 one exact genesis-derived `NetworkId`, and the authoritative archive commitment. Decoding
@@ -2038,15 +2092,15 @@ streamed into a 32 MiB bounded collector; declared oversize and the first
 undeclared excess byte cancel the request before unbounded allocation.
 
 Swift, Kotlin, and Java exercise the Rust-owned contract in
-[`fixtures/musubi/sdk_v1.json`](../fixtures/musubi/sdk_v1.json). Authentication can
-be supplied through explicit transport headers, but the local read surface never
-loads a signer or stores credentials.
+[`fixtures/musubi/sdk_v1.json`](../fixtures/musubi/sdk_v1.json). Authentication headers are built
+only from each method's explicit canonical-auth value; caller-injected canonical or witness
+headers fail before dispatch.
 
-`search(_:)` posts to `/v1/musubi/queries/search` and returns a bounded,
+`search(_:canonicalAuth:)` posts to `/v1/musubi/queries/search` and returns a bounded,
 structurally ordered page with a search-specific finalized projection cursor;
 the discovery projection is never a resolver input.
 
-`findArchiveRetention(_:)` accepts a sorted, distinct, non-zero archive batch
+`findArchiveRetention(_:canonicalAuth:)` accepts a sorted, distinct, non-zero archive batch
 and verifies the response identity order plus the optional finalized-snapshot
 binding before returning cache-prune classifications.
 

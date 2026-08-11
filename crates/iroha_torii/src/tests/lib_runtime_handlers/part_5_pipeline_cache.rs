@@ -4,8 +4,12 @@
 fn pipeline_status_merge_prefers_committed_success_over_cached_rejection() {
     let now = Instant::now();
     let rejection = TransactionRejectionReason::Validation(ValidationFail::TooComplex);
-    let mut entry =
-        PipelineStatusEntry::at_time(PipelineStatusKind::Rejected, None, Some(rejection), now);
+    let mut entry = PipelineStatusEntry::at_time(
+        PipelineStatusKind::Rejected,
+        None,
+        Some(pipeline_rejection_summary(&rejection)),
+        now,
+    );
     entry.merge_from_event(PipelineStatusEntry::at_time(
         PipelineStatusKind::Committed,
         NonZeroU64::new(7),
@@ -146,6 +150,7 @@ fn pipeline_status_cache_live_counts_track_entries_and_pending_blocks() {
         PipelineStatusEntry::at_time(PipelineStatusKind::Approved, None, None, now),
     );
     assert_eq!(cache.entry_count.load(Ordering::Relaxed), 1);
+    assert_eq!(cache.entry_order.lock().len(), 1);
 
     cache.record_entry(
         hash_b,
@@ -181,12 +186,13 @@ fn pipeline_status_cache_live_counts_track_entries_and_pending_blocks() {
         },
     );
     assert_eq!(cache.pending_count.load(Ordering::Relaxed), 1);
+    assert_eq!(cache.pending_order.lock().len(), 1);
     assert!(cache.remove_pending_by_height(&height_a));
     assert_eq!(cache.pending_count.load(Ordering::Relaxed), 0);
 }
 
 #[test]
-fn pipeline_status_cache_keeps_refreshed_entry_when_stale_marker_prunes() {
+fn pipeline_status_cache_updates_do_not_accumulate_markers_or_extend_retention() {
     let cache = PipelineStatusCache::with_limits(10, Duration::from_secs(1));
     let (block, _) = make_signed_block(1, None);
     let tx_hash = block.external_transactions().next().expect("tx").hash();
@@ -202,10 +208,11 @@ fn pipeline_status_cache_keeps_refreshed_entry_when_stale_marker_prunes() {
         tx_hash,
         PipelineStatusEntry::at_time(PipelineStatusKind::Queued, None, None, now),
     );
+    assert_eq!(cache.entry_order.lock().len(), 1);
 
     cache.prune(now);
 
-    assert!(cache.lookup(&tx_hash).is_some());
+    assert!(cache.lookup(&tx_hash).is_none());
 }
 
 #[test]

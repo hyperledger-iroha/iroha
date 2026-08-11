@@ -3,8 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Instant;
 
-use iroha_crypto::PrivateKey;
-use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
+use iroha_crypto::{Algorithm, Hash, HashOf, PrivateKey, PublicKey, Signature};
 use iroha_data_model::merge::MergeSignerProof;
 use iroha_data_model::{
     NetworkId,
@@ -4585,7 +4584,8 @@ fn qc_signers(qc: &LaneBlockQcV1) -> Vec<PeerId> {
 
 #[cfg(test)]
 fn session_proposal_height(session: &LaneBlockSession) -> Option<u64> {
-    session.proposal
+    session
+        .proposal
         .as_ref()
         .map(|proposal| proposal.descriptor.proposal_height)
         .or_else(|| {
@@ -5659,7 +5659,7 @@ mod tests {
                 version: 1,
                 intent: LaneDrainIntentV1 {
                     version: 1,
-                    network_id: network_id(b"lane-drain-genesis"),
+                    network_id: crate::sumeragi::synthetic_network_id("lane-drain-genesis"),
                     lane_id: LaneId::new(7),
                     dataspace_id: DataSpaceId::new(9),
                     lane_incarnation: Hash::new(b"lane-drain-incarnation"),
@@ -6053,7 +6053,7 @@ mod tests {
 
         let mut forged_bodies = Vec::new();
         let mut forged = certificate.clone();
-        forged.body.intent.network_id = network_id(b"foreign-drain-genesis");
+        forged.body.intent.network_id = crate::sumeragi::synthetic_network_id("foreign");
         forged_bodies.push(forged);
         let mut forged = certificate.clone();
         forged.body.intent.lane_id = LaneId::new(8);

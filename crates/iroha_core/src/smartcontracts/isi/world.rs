@@ -935,6 +935,50 @@ pub mod isi {
             .map_err(|err| format!("verified lane relay JSON materialization failed: {err}"))
     }
 
+    fn decode_verified_lane_relay_record_state_for_query(
+        payload: &[u8],
+    ) -> Result<VerifiedLaneRelayRecord, iroha_data_model::query::error::QueryExecutionFail> {
+        use iroha_data_model::query::error::QueryExecutionFail;
+
+        let json_payload = verified_lane_relay_record_json_payload(payload)
+            .map_err(QueryExecutionFail::Conversion)?;
+        let elements = json_payload
+            .len()
+            .checked_mul(8)
+            .ok_or(QueryExecutionFail::CapacityLimit)?;
+        let protocol_limits = norito::DecodeLimits::new(
+            elements,
+            json_payload.len(),
+            elements,
+            usize::MAX,
+            norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
+        );
+        let limits = crate::smartcontracts::isi::query::singular_query_decode_limits(
+            json_payload.len(),
+            protocol_limits,
+        )?;
+        norito::with_decode_limits_scope(limits, || {
+            let json: Json = norito::decode_from_bytes(json_payload).map_err(|error| {
+                if error.is_decode_resource_limit() {
+                    QueryExecutionFail::CapacityLimit
+                } else {
+                    QueryExecutionFail::Conversion(format!(
+                        "verified lane relay JSON decode failed: {error}"
+                    ))
+                }
+            })?;
+            norito::json::from_slice(json.get().as_bytes()).map_err(|error| {
+                if error.is_decode_resource_limit() {
+                    QueryExecutionFail::CapacityLimit
+                } else {
+                    QueryExecutionFail::Conversion(format!(
+                        "verified lane relay JSON materialization failed: {error}"
+                    ))
+                }
+            })
+        })
+    }
+
     fn load_verified_lane_relay_record(
         state_ro: &impl StateReadOnly,
         relay_ref: &LaneRelayEnvelopeRef,
@@ -950,11 +994,7 @@ pub mod isi {
             .smart_contract_state()
             .get(&key)
             .ok_or(iroha_data_model::query::error::QueryExecutionFail::NotFound)?;
-        let record = decode_verified_lane_relay_record_state(payload).map_err(|err| {
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                "verified lane relay decode failed: {err}"
-            ))
-        })?;
+        let record = decode_verified_lane_relay_record_state_for_query(payload)?;
         if record.relay_ref != *relay_ref {
             return Err(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(
@@ -15602,8 +15642,8 @@ pub mod isi {
                 .world()
                 .contract_manifests()
                 .get(&self.code_hash)
-                .cloned()
                 .ok_or(iroha_data_model::query::error::QueryExecutionFail::NotFound)
+                .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
         }
     }
 
@@ -38956,11 +38996,12 @@ seiyaku GovernanceLifecycle {
         impl ValidSingularQuery for FindExecutorDataModel {
             #[metrics(+"find_executor_data_model")]
             fn execute(&self, state_ro: &impl StateReadOnly) -> Result<ExecutorDataModel, Error> {
-                let model = state_ro.world().executor_data_model().clone();
+                let model = state_ro.world().executor_data_model();
                 if model.permissions().is_empty() {
-                    return Ok(crate::executor::initial_executor_data_model_fallback());
+                    let fallback = crate::executor::initial_executor_data_model_fallback();
+                    return crate::smartcontracts::isi::query::own_singular_query_value(&fallback);
                 }
-                Ok(model)
+                crate::smartcontracts::isi::query::own_singular_query_value(model)
             }
         }
 
@@ -38979,14 +39020,14 @@ seiyaku GovernanceLifecycle {
         impl ValidSingularQuery for FindParameters {
             #[metrics(+"find_parameters")]
             fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Parameters, Error> {
-                let params = state_ro.world().parameters().clone();
+                let params = state_ro.world().parameters();
                 iroha_logger::debug!(
                     max_tx = params.block().max_transactions().get(),
                     sc_depth = params.smart_contract().execution_depth(),
                     exec_depth = params.executor().execution_depth(),
                     "serving FindParameters"
                 );
-                Ok(params)
+                crate::smartcontracts::isi::query::own_singular_query_value(params)
             }
         }
 
@@ -39000,8 +39041,8 @@ seiyaku GovernanceLifecycle {
                     .world()
                     .proofs()
                     .get(&self.id)
-                    .cloned()
                     .ok_or_else(|| Error::Conversion("ProofRecord not found".to_string()))
+                    .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
             }
         }
 
@@ -39016,10 +39057,10 @@ seiyaku GovernanceLifecycle {
                     .world()
                     .domain_endorsement_policies()
                     .get(&self.domain_id)
-                    .cloned()
                     .ok_or_else(|| {
                         Error::Conversion("Domain endorsement policy not found".to_string())
                     })
+                    .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
             }
         }
 
@@ -39029,8 +39070,8 @@ seiyaku GovernanceLifecycle {
                     .world()
                     .domain_committees()
                     .get(&self.committee_id)
-                    .cloned()
                     .ok_or_else(|| Error::Conversion("Domain committee not found".to_string()))
+                    .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
             }
         }
 
@@ -39041,8 +39082,8 @@ seiyaku GovernanceLifecycle {
                     .world()
                     .provider_owners()
                     .get(&self.provider_id)
-                    .cloned()
                     .ok_or_else(|| Error::Conversion("SoraFS provider owner not found".to_string()))
+                    .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
             }
         }
 
@@ -39055,8 +39096,8 @@ seiyaku GovernanceLifecycle {
                     .world()
                     .da_pin_intents_by_ticket()
                     .get(&self.storage_ticket)
-                    .cloned()
                     .ok_or_else(|| Error::Conversion("DA pin intent not found".to_string()))
+                    .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
             }
         }
 
@@ -39075,8 +39116,8 @@ seiyaku GovernanceLifecycle {
                     .world()
                     .da_pin_intents_by_ticket()
                     .get(&ticket)
-                    .cloned()
                     .ok_or_else(|| Error::Conversion("DA pin intent not found".to_string()))
+                    .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
             }
         }
 
@@ -39095,8 +39136,8 @@ seiyaku GovernanceLifecycle {
                     .world()
                     .da_pin_intents_by_ticket()
                     .get(&ticket)
-                    .cloned()
                     .ok_or_else(|| Error::Conversion("DA pin intent not found".to_string()))
+                    .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
             }
         }
 
@@ -39117,8 +39158,8 @@ seiyaku GovernanceLifecycle {
                     .world()
                     .da_pin_intents_by_ticket()
                     .get(&ticket)
-                    .cloned()
                     .ok_or_else(|| Error::Conversion("DA pin intent not found".to_string()))
+                    .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
             }
         }
 
@@ -39194,8 +39235,8 @@ seiyaku GovernanceLifecycle {
                     .world()
                     .fee_sponsor_programs()
                     .get(&self.id)
-                    .cloned()
                     .ok_or_else(|| Error::Conversion("FeeSponsorProgram not found".to_string()))
+                    .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
             }
         }
 
@@ -39212,6 +39253,25 @@ seiyaku GovernanceLifecycle {
                 .ok_or_else(|| {
                     Error::Conversion("FX corridor policy registry is not initialized".to_string())
                 })?;
+            if crate::smartcontracts::isi::query::singular_query_limits_active() {
+                let payload = parameter.payload().as_ref();
+                let limits = crate::smartcontracts::isi::query::singular_query_decode_limits(
+                    payload.len(),
+                    norito::canonical_decode_limits(payload.len()),
+                )?;
+                return norito::with_decode_limits_scope(limits, || {
+                    norito::json::from_str::<FxCorridorPolicyRegistry>(payload)
+                })
+                .map_err(|error| {
+                    if error.is_decode_resource_limit() {
+                        Error::CapacityLimit
+                    } else {
+                        Error::Conversion(format!(
+                            "FX corridor policy registry is malformed: {error}"
+                        ))
+                    }
+                });
+            }
             FxCorridorPolicyRegistry::from_custom_parameter(parameter)
                 .map_err(|error| {
                     Error::Conversion(format!("FX corridor policy registry is malformed: {error}"))
@@ -39240,15 +39300,14 @@ seiyaku GovernanceLifecycle {
                 &self,
                 state_ro: &impl StateReadOnly,
             ) -> Result<iroha_data_model::isi::settlement::FxCorridorPolicy, Error> {
-                load_fx_corridor_policy_registry(state_ro)?
-                    .get(&self.policy_id)
-                    .cloned()
-                    .ok_or_else(|| {
+                let registry = load_fx_corridor_policy_registry(state_ro)?;
+                registry.get(&self.policy_id).ok_or_else(|| {
                         Error::Conversion(format!(
                             "FX corridor policy `{}` was not found",
                             self.policy_id
                         ))
                     })
+                    .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
             }
         }
 
@@ -39257,17 +39316,16 @@ seiyaku GovernanceLifecycle {
                 &self,
                 state_ro: &impl StateReadOnly,
             ) -> Result<Vec<iroha_data_model::nexus::DomainEndorsementRecord>, Error> {
-                let hashes = state_ro
-                    .world()
+                let world = state_ro.world();
+                let hashes = world
                     .domain_endorsements_by_domain()
                     .get(&self.domain_id)
-                    .cloned()
+                    .map(Vec::as_slice)
                     .unwrap_or_default();
                 let records = hashes
-                    .into_iter()
-                    .filter_map(|h| state_ro.world().domain_endorsements().get(&h).cloned())
-                    .collect();
-                Ok(records)
+                    .iter()
+                    .filter_map(|hash| world.domain_endorsements().get(hash));
+                crate::smartcontracts::isi::query::own_singular_query_values(records)
             }
         }
 

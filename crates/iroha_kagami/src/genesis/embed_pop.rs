@@ -7,6 +7,7 @@ use std::{
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{WrapErr as _, eyre};
 use iroha_crypto::PublicKey;
+use iroha_genesis::{read_genesis_manifest_bytes, validate_genesis_manifest_json};
 
 use crate::{Outcome, RunArgs, tui};
 
@@ -27,9 +28,11 @@ pub struct Args {
 impl<T: std::io::Write> RunArgs<T> for Args {
     fn run(self, _writer: &mut std::io::BufWriter<T>) -> Outcome {
         tui::status("Embedding PoP entries into genesis manifest");
-        let bytes = fs::read(&self.manifest).wrap_err("read manifest")?;
+        let bytes = read_genesis_manifest_bytes(&self.manifest)
+            .wrap_err("read manifest under fixed resource bounds")?;
         let mut manifest: norito::json::Value =
             norito::json::from_slice(&bytes).wrap_err("parse genesis json")?;
+        drop(bytes);
         ensure_consensus_mode(&manifest)?;
 
         let mut pops: BTreeMap<PublicKey, Vec<u8>> = BTreeMap::new();
@@ -103,6 +106,8 @@ impl<T: std::io::Write> RunArgs<T> for Args {
         }
 
         let json = norito::json::to_json_pretty(&manifest).wrap_err("serialize genesis")?;
+        validate_genesis_manifest_json(json.as_bytes())
+            .wrap_err("generated genesis exceeds fixed resource bounds")?;
         fs::write(&self.out, json).wrap_err("write out")?;
         tui::success("Genesis manifest updated");
         Ok(())

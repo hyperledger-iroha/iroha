@@ -68,6 +68,8 @@ pub(crate) const EXPLORER_CURSOR_DEFAULT_LIMIT: u32 = 25;
 pub(crate) const EXPLORER_CURSOR_MAX_LIMIT: u32 = 100;
 /// Hard ceiling for candidate keys inspected by one Explorer cursor page.
 pub(crate) const EXPLORER_CURSOR_MAX_SCAN: usize = 512;
+/// Hard ceiling for records materialized by one history page.
+pub(crate) const EXPLORER_HISTORY_MAX_PER_PAGE: u64 = 100;
 
 const EXPLORER_CURSOR_MAGIC: [u8; 4] = *b"IXC1";
 const EXPLORER_CURSOR_FILTER_DOMAIN: &[u8] = b"iroha-explorer-filter-v1";
@@ -251,7 +253,7 @@ pub(crate) fn paginate<T>(
     page: u64,
     per_page: u64,
 ) -> (Vec<T>, ExplorerPaginationMeta) {
-    let per_page = per_page.max(1);
+    let per_page = normalize_history_per_page(per_page);
     let total_items = items.len() as u64;
     let total_pages = total_items.div_ceil(per_page);
     let start = (page.saturating_sub(1))
@@ -272,6 +274,13 @@ pub(crate) fn paginate<T>(
             total_items,
         },
     )
+}
+
+/// Clamp legacy page-number history reads to the first-release response bound.
+#[inline]
+#[must_use]
+pub(crate) const fn normalize_history_per_page(per_page: u64) -> u64 {
+    per_page.clamp(1, EXPLORER_HISTORY_MAX_PER_PAGE)
 }
 
 pub(crate) fn metadata_to_json(metadata: &Metadata) -> Value {
@@ -2479,6 +2488,16 @@ mod tests {
         assert_eq!(meta.per_page, 2);
         assert_eq!(meta.total_items, 5);
         assert_eq!(meta.total_pages, 3);
+    }
+
+    #[test]
+    fn paginate_caps_untrusted_page_size() {
+        let items = (0..150).collect::<Vec<_>>();
+        let (page, meta) = paginate(items, 1, u64::MAX);
+        assert_eq!(page.len(), EXPLORER_HISTORY_MAX_PER_PAGE as usize);
+        assert_eq!(meta.per_page, EXPLORER_HISTORY_MAX_PER_PAGE);
+        assert_eq!(meta.total_items, 150);
+        assert_eq!(meta.total_pages, 2);
     }
 
     #[test]

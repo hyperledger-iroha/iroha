@@ -8461,6 +8461,12 @@ pub struct Torii {
     pub query_max_inflight: NonZeroUsize,
     /// Maximum concurrent heavy query executions admitted by Torii.
     pub query_heavy_max_inflight: NonZeroUsize,
+    /// Aggregate bytes split between bounded signed-query ingress and complete fanout working sets.
+    /// Each of four ingress slots accounts five live variable representations
+    /// (decoded signed request, canonical frame, nested scope decode, scope frame,
+    /// and serializer scratch). The ingress frame receives a smaller derived share
+    /// after fixed metadata and overlapping phase reservations.
+    pub query_fanout_max_retained_bytes: Bytes<u64>,
     /// Maximum time a query waits for execution capacity before Torii rejects it.
     pub query_queue_timeout: Duration,
     /// Optional per-authority transaction submission rate (tokens/sec). None disables limiting.
@@ -8574,6 +8580,10 @@ pub struct Torii {
     pub zk_prover_scan_period_secs: u64,
     /// Retention TTL for background ZK prover reports (seconds).
     pub zk_prover_reports_ttl_secs: u64,
+    /// Maximum number of background ZK prover reports retained on disk.
+    pub zk_prover_reports_max_count: u64,
+    /// Maximum aggregate bytes retained by prover reports and summary shards.
+    pub zk_prover_reports_max_bytes: u64,
     /// Maximum number of attachments processed concurrently by the prover worker.
     pub zk_prover_max_inflight: usize,
     /// Maximum aggregate attachment bytes processed per scan cycle.
@@ -9018,10 +9028,6 @@ impl Default for ToriiPeerGeo {
 pub struct SoranetPrivacyIngest {
     /// Master enable switch for the `/v1/soranet/privacy/*` endpoints.
     pub enabled: bool,
-    /// Require a token header before accepting telemetry.
-    pub require_token: bool,
-    /// Accepted token values.
-    pub tokens: Vec<String>,
     /// Requests-per-second budget (None disables limiting).
     pub rate_per_sec: Option<NonZeroU32>,
     /// Burst capacity for the ingest limiter.
@@ -9034,8 +9040,6 @@ impl Default for SoranetPrivacyIngest {
     fn default() -> Self {
         Self {
             enabled: defaults::torii::soranet_privacy_ingest::ENABLED,
-            require_token: defaults::torii::soranet_privacy_ingest::REQUIRE_TOKEN,
-            tokens: defaults::torii::soranet_privacy_ingest::tokens(),
             rate_per_sec: defaults::torii::soranet_privacy_ingest::RATE_PER_SEC
                 .and_then(std::num::NonZeroU32::new),
             burst: defaults::torii::soranet_privacy_ingest::BURST
@@ -9057,73 +9061,9 @@ pub struct ToriiTransport {
     pub norito_rpc: NoritoRpcTransport,
 }
 
-/// HTTP/1 limits enforced before request middleware.
-#[derive(Debug, Clone, Copy)]
-pub struct ToriiHttpTransport {
-    /// Maximum accepted TCP connections retained by Torii.
-    pub max_connections: NonZeroUsize,
-    /// Maximum accepted TCP connections retained for one source IP.
-    pub max_connections_per_ip: NonZeroUsize,
-    /// Absolute deadline for reading one HTTP/1 request head.
-    pub header_read_timeout: Duration,
-    /// Maximum duration without socket write progress.
-    pub write_timeout: Duration,
-    /// Maximum number of HTTP/1 headers accepted in one request.
-    pub max_headers: NonZeroUsize,
-    /// Maximum HTTP/1 parser buffer, including the request head.
-    pub max_header_bytes: Bytes<u64>,
-}
+include!("actual/torii_http_transport.rs");
 
-impl Default for ToriiHttpTransport {
-    fn default() -> Self {
-        Self {
-            max_connections: defaults::torii::transport::http::MAX_CONNECTIONS,
-            max_connections_per_ip: defaults::torii::transport::http::MAX_CONNECTIONS_PER_IP,
-            header_read_timeout: Duration::from_millis(
-                defaults::torii::transport::http::HEADER_READ_TIMEOUT_MS,
-            ),
-            write_timeout: Duration::from_millis(
-                defaults::torii::transport::http::WRITE_TIMEOUT_MS,
-            ),
-            max_headers: defaults::torii::transport::http::MAX_HEADERS,
-            max_header_bytes: defaults::torii::transport::http::MAX_HEADER_BYTES,
-        }
-    }
-}
-
-/// Native MCP tool profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ToriiMcpProfile {
-    /// Read-only profile for AI agents (status/query/list/get style tools).
-    #[default]
-    ReadOnly,
-    /// Writer profile (includes non-operator mutating tools).
-    Writer,
-    /// Operator profile (includes operator-only routes when exposed).
-    Operator,
-}
-
-impl ToriiMcpProfile {
-    /// Parse a user-provided profile label.
-    pub fn parse(label: &str) -> Option<Self> {
-        match label.trim().to_ascii_lowercase().as_str() {
-            "read_only" | "readonly" | "read-only" => Some(Self::ReadOnly),
-            "writer" | "write" => Some(Self::Writer),
-            "operator" | "ops" => Some(Self::Operator),
-            _ => None,
-        }
-    }
-
-    /// Canonical label for configuration dumps.
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::ReadOnly => "read_only",
-            Self::Writer => "writer",
-            Self::Operator => "operator",
-        }
-    }
-}
+include!("actual/torii_mcp_profile.rs");
 
 /// Native MCP configuration exposed by Torii.
 #[derive(Debug, Clone)]
@@ -9405,8 +9345,8 @@ pub struct ToriiFaucet {
     pub asset_definition_id: String,
     /// Fixed quantity transferred by each accepted faucet claim.
     pub amount: Quantity,
-    /// Difficulty in leading zero bits for faucet proof-of-work (0 disables PoW).
-    pub pow_difficulty_bits: u8,
+    /// Non-zero difficulty in leading zero bits for faucet proof-of-work.
+    pub pow_difficulty_bits: NonZeroU8,
     /// Scrypt `log2(N)` cost parameter for faucet proof-of-work.
     pub pow_scrypt_log_n: u8,
     /// Scrypt block size parameter for faucet proof-of-work.
@@ -12293,7 +12233,7 @@ pub struct IsoBridge {
     pub store_dir: Option<PathBuf>,
     /// Age retention window for durable ISO records (seconds); zero disables age pruning.
     pub store_retention_secs: u64,
-    /// Maximum durable ISO records to retain; zero disables count pruning.
+    /// Maximum durable ISO records to retain (non-zero and bounded by the V1 hard limit).
     pub store_max_records: u64,
     /// Optional external audit export directory for manifest/notary preimages.
     pub audit_export_dir: Option<PathBuf>,

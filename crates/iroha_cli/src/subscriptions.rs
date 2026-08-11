@@ -12,7 +12,6 @@ use iroha::{
         SubscriptionUsageRequest,
     },
 };
-use iroha_crypto::PrivateKey;
 use iroha_primitives::numeric::Quantity;
 
 use crate::{Run, RunContext};
@@ -77,9 +76,6 @@ pub struct PlanCreateArgs {
     /// Authority account identifier (canonical I105 account literal).
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub authority: String,
-    /// Hex-encoded private key for signing.
-    #[arg(long, value_name = "HEX")]
-    pub private_key: String,
     /// Asset definition id where the plan metadata is stored.
     #[arg(long, value_name = "ASSET_DEF_ID")]
     pub plan_id: iroha::data_model::asset::AssetDefinitionId,
@@ -105,10 +101,8 @@ impl PlanCreateArgs {
         authority: AccountId,
         plan: iroha::data_model::subscription::SubscriptionPlan,
     ) -> Result<SubscriptionPlanCreateRequest> {
-        let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
         Ok(SubscriptionPlanCreateRequest {
             authority,
-            private_key: iroha::data_model::prelude::ExposedPrivateKey(private_key),
             plan_id: self.plan_id.clone(),
             plan,
         })
@@ -182,35 +176,35 @@ impl Run for SubscriptionCommand {
             SubscriptionCommand::Pause(args) => {
                 let client: Client = context.client_from_config();
                 let authority = resolve_account_id_arg(context, &args.authority, "--authority")?;
-                let request = args.to_request(authority)?;
+                let request = args.to_request(authority, false)?;
                 let response = client.pause_subscription(&args.subscription_id, &request)?;
                 context.print_data(&response)
             }
             SubscriptionCommand::Resume(args) => {
                 let client: Client = context.client_from_config();
                 let authority = resolve_account_id_arg(context, &args.authority, "--authority")?;
-                let request = args.to_request(authority)?;
+                let request = args.to_request(authority, false)?;
                 let response = client.resume_subscription(&args.subscription_id, &request)?;
                 context.print_data(&response)
             }
             SubscriptionCommand::Cancel(args) => {
                 let client: Client = context.client_from_config();
                 let authority = resolve_account_id_arg(context, &args.authority, "--authority")?;
-                let request = args.to_request(authority)?;
+                let request = args.to_request(authority, true)?;
                 let response = client.cancel_subscription(&args.subscription_id, &request)?;
                 context.print_data(&response)
             }
             SubscriptionCommand::Keep(args) => {
                 let client: Client = context.client_from_config();
                 let authority = resolve_account_id_arg(context, &args.authority, "--authority")?;
-                let request = args.to_request(authority)?;
+                let request = args.to_request(authority, false)?;
                 let response = client.keep_subscription(&args.subscription_id, &request)?;
                 context.print_data(&response)
             }
             SubscriptionCommand::ChargeNow(args) => {
                 let client: Client = context.client_from_config();
                 let authority = resolve_account_id_arg(context, &args.authority, "--authority")?;
-                let request = args.to_request(authority)?;
+                let request = args.to_request(authority, false)?;
                 let response = client.charge_subscription_now(&args.subscription_id, &request)?;
                 context.print_data(&response)
             }
@@ -224,9 +218,6 @@ pub struct SubscriptionCreateArgs {
     /// Authority account identifier (canonical I105 account literal).
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub authority: String,
-    /// Hex-encoded private key for signing.
-    #[arg(long, value_name = "HEX")]
-    pub private_key: String,
     /// Subscription NFT id to register.
     #[arg(long, value_name = "NFT_ID")]
     pub subscription_id: iroha::data_model::nft::NftId,
@@ -259,10 +250,8 @@ impl Run for SubscriptionCreateArgs {
 
 impl SubscriptionCreateArgs {
     fn to_request(&self, authority: AccountId) -> Result<SubscriptionCreateRequest> {
-        let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
         Ok(SubscriptionCreateRequest {
             authority,
-            private_key: iroha::data_model::prelude::ExposedPrivateKey(private_key),
             subscription_id: self.subscription_id.clone(),
             plan_id: self.plan_id.clone(),
             billing_trigger_id: self.billing_trigger_id.clone(),
@@ -347,9 +336,6 @@ pub struct SubscriptionActionArgs {
     /// Authority account identifier (canonical I105 account literal).
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub authority: String,
-    /// Hex-encoded private key for signing.
-    #[arg(long, value_name = "HEX")]
-    pub private_key: String,
     /// Optional charge time override in UTC milliseconds.
     #[arg(long)]
     pub charge_at_ms: Option<u64>,
@@ -359,15 +345,19 @@ pub struct SubscriptionActionArgs {
 }
 
 impl SubscriptionActionArgs {
-    fn to_request(&self, authority: AccountId) -> Result<SubscriptionActionRequest> {
-        let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
+    fn to_request(
+        &self,
+        authority: AccountId,
+        include_cancel_mode: bool,
+    ) -> Result<SubscriptionActionRequest> {
         Ok(SubscriptionActionRequest {
             authority,
-            private_key: iroha::data_model::prelude::ExposedPrivateKey(private_key),
             charge_at_ms: self.charge_at_ms,
-            cancel_mode: self
-                .cancel_at_period_end
-                .then_some(SubscriptionCancelMode::PeriodEnd),
+            cancel_mode: include_cancel_mode.then_some(if self.cancel_at_period_end {
+                SubscriptionCancelMode::PeriodEnd
+            } else {
+                SubscriptionCancelMode::Immediate
+            }),
         })
     }
 }
@@ -380,9 +370,6 @@ pub struct SubscriptionUsageArgs {
     /// Authority account identifier (canonical I105 account literal).
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub authority: String,
-    /// Hex-encoded private key for signing.
-    #[arg(long, value_name = "HEX")]
-    pub private_key: String,
     /// Usage counter key to update.
     #[arg(long)]
     pub unit_key: iroha::data_model::name::Name,
@@ -406,10 +393,8 @@ impl Run for SubscriptionUsageArgs {
 
 impl SubscriptionUsageArgs {
     fn to_request(&self, authority: AccountId) -> Result<SubscriptionUsageRequest> {
-        let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
         Ok(SubscriptionUsageRequest {
             authority,
-            private_key: iroha::data_model::prelude::ExposedPrivateKey(private_key),
             unit_key: self.unit_key.clone(),
             delta: self.delta.clone(),
             usage_trigger_id: self.usage_trigger_id.clone(),
@@ -442,7 +427,6 @@ mod tests {
         asset::AssetDefinitionId,
         name::Name,
         nft::NftId,
-        prelude::ExposedPrivateKey,
         subscription::{
             SubscriptionBillFor, SubscriptionBilling, SubscriptionCadence,
             SubscriptionFixedPeriodCadence, SubscriptionFixedPricing, SubscriptionPlan,
@@ -450,7 +434,7 @@ mod tests {
         },
         trigger::TriggerId,
     };
-    use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
+    use iroha_crypto::{Algorithm, KeyPair};
 
     struct DummyContext;
 
@@ -490,13 +474,6 @@ mod tests {
     fn sample_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair")
-    }
-
-    fn sample_private_key() -> (PrivateKey, String) {
-        let key_pair = sample_key_pair(1);
-        let private_key = key_pair.private_key().clone();
-        let private_key_str = ExposedPrivateKey(private_key.clone()).to_string();
-        (private_key, private_key_str)
     }
 
     fn sample_account_id(seed: u8) -> AccountId {
@@ -546,10 +523,8 @@ mod tests {
                 "usd".parse().unwrap(),
             );
         let plan = sample_plan(provider.clone(), asset_definition);
-        let (private_key, private_key_str) = sample_private_key();
         let args = PlanCreateArgs {
             authority: provider.to_string(),
-            private_key: private_key_str,
             plan_id: plan_id.clone(),
             plan_json: None,
         };
@@ -560,7 +535,6 @@ mod tests {
         assert_eq!(request.authority, provider);
         assert_eq!(request.plan_id, plan_id);
         assert_eq!(request.plan, plan);
-        assert_eq!(request.private_key, ExposedPrivateKey(private_key));
     }
 
     #[test]
@@ -590,10 +564,8 @@ mod tests {
             .expect("subscription id");
         let billing_trigger_id: TriggerId = "sub-1-bill".parse().expect("billing trigger");
         let usage_trigger_id: TriggerId = "sub-1-usage".parse().expect("usage trigger");
-        let (private_key, private_key_str) = sample_private_key();
         let args = SubscriptionCreateArgs {
             authority: subscriber.to_string(),
-            private_key: private_key_str,
             subscription_id: subscription_id.clone(),
             plan_id: plan_id.clone(),
             billing_trigger_id: Some(billing_trigger_id.clone()),
@@ -610,7 +582,6 @@ mod tests {
         assert_eq!(request.usage_trigger_id, Some(usage_trigger_id));
         assert_eq!(request.first_charge_ms, Some(1_700));
         assert_eq!(request.grant_usage_to_provider, Some(true));
-        assert_eq!(request.private_key, ExposedPrivateKey(private_key));
     }
 
     #[test]
@@ -638,19 +609,23 @@ mod tests {
         let subscription_id: NftId = "sub-1$subscriptions.universal"
             .parse()
             .expect("subscription id");
-        let (private_key, private_key_str) = sample_private_key();
         let args = SubscriptionActionArgs {
             subscription_id,
             authority: subscriber.to_string(),
-            private_key: private_key_str,
             charge_at_ms: Some(500),
             cancel_at_period_end: false,
         };
 
-        let request = args.to_request(subscriber.clone()).expect("request");
+        let request = args.to_request(subscriber.clone(), false).expect("request");
         assert_eq!(request.authority, subscriber);
         assert_eq!(request.charge_at_ms, Some(500));
-        assert_eq!(request.private_key, ExposedPrivateKey(private_key));
+        assert_eq!(request.cancel_mode, None);
+        assert_eq!(
+            args.to_request(request.authority, true)
+                .expect("cancel request")
+                .cancel_mode,
+            Some(SubscriptionCancelMode::Immediate)
+        );
     }
 
     #[test]
@@ -661,11 +636,9 @@ mod tests {
             .expect("subscription id");
         let unit_key: Name = "compute_ms".parse().expect("unit key");
         let usage_trigger_id: TriggerId = "usage-1".parse().expect("usage trigger");
-        let (private_key, private_key_str) = sample_private_key();
         let args = SubscriptionUsageArgs {
             subscription_id,
             authority: subscriber.to_string(),
-            private_key: private_key_str,
             unit_key: unit_key.clone(),
             delta: Quantity::from(4_u32),
             usage_trigger_id: Some(usage_trigger_id.clone()),
@@ -676,7 +649,6 @@ mod tests {
         assert_eq!(request.unit_key, unit_key);
         assert_eq!(request.delta, Quantity::from(4_u32));
         assert_eq!(request.usage_trigger_id, Some(usage_trigger_id));
-        assert_eq!(request.private_key, ExposedPrivateKey(private_key));
     }
 
     #[test]

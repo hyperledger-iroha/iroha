@@ -11,7 +11,12 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 
-/** Lightweight Torii client for confidential-asset query endpoints. */
+/**
+ * Exact-network Torii client for authenticated confidential-asset query endpoints.
+ *
+ * <p>Every request is signed over its POST method, resolved path, and exact JSON body, and is
+ * marked one-shot so transports cannot redirect or retry the signature.
+ */
 public final class ConfidentialAssetToriiClient {
   private static final String ZK_ROOTS_PATH = "/v1/zk/roots";
   private static final String ZK_MERKLE_PATH_PATH = "/v1/zk/merkle-path";
@@ -320,6 +325,7 @@ public final class ConfidentialAssetToriiClient {
       return this;
     }
 
+    /** Sets the exact local network identity used by canonical request signatures. */
     public Builder localSigningContext(final LocalSigningContext localSigningContext) {
       this.localSigningContext = Objects.requireNonNull(localSigningContext, "localSigningContext");
       return this;

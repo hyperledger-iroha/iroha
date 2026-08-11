@@ -706,7 +706,7 @@
     }
 
     #[tokio::test]
-    async fn alias_resolve_index_fanout_returns_single_match_from_reachable_dataspace() {
+    async fn alias_resolve_index_rejects_multiroute_before_reachable_source() {
         let authority_keypair = checked_torii_test_ed25519_keypair(
             0x0e,
             "derive alias resolve-index fanout authority fixture key",
@@ -731,38 +731,28 @@
             axum::body::Bytes::from(body),
         )
         .await
-        .expect("handler should succeed")
+        .expect("handler should return a fixed multi-route rejection")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("query_unsupported")
+        );
+        assert!(
             response
                 .headers()
                 .get("x-iroha-fanout-routes-attempted")
-                .and_then(|value| value.to_str().ok()),
-            Some("2")
+                .is_none(),
+            "the rejection must precede alias source execution"
         );
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-fanout-routes-succeeded")
-                .and_then(|value| value.to_str().ok()),
-            Some("1")
-        );
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let dto: routing::AliasResolveIndexResponseDto =
-            norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(dto.index, 0);
-        assert_eq!(dto.alias, "merchant@secondary");
-        assert_eq!(dto.account_id, authority.to_string());
-        assert_eq!(dto.source.as_deref(), Some("fanout"));
     }
 
     #[tokio::test]
-    async fn alias_resolve_index_fanout_returns_route_conflict_for_incompatible_bindings() {
+    async fn alias_resolve_index_rejects_multiroute_before_conflicting_sources() {
         let authority_keypair = checked_torii_test_ed25519_keypair(
             0x0f,
             "derive alias resolve-index route-conflict authority fixture key",
@@ -797,14 +787,14 @@
                 .headers()
                 .get("x-iroha-reject-code")
                 .and_then(|value| value.to_str().ok()),
-            Some("route_conflict")
+            Some("query_unsupported")
         );
-        assert_eq!(
+        assert!(
             response
                 .headers()
-                .get("x-iroha-fanout-routes-succeeded")
-                .and_then(|value| value.to_str().ok()),
-            Some("2")
+                .get("x-iroha-fanout-routes-attempted")
+                .is_none(),
+            "the rejection must precede conflicting source execution"
         );
     }
 
@@ -839,7 +829,7 @@
     }
 
     #[tokio::test]
-    async fn alias_resolve_index_returns_permission_denied_when_denied_routes_block_miss_fallback()
+    async fn alias_resolve_index_rejects_multiroute_before_permission_partition_or_fetch()
     {
         let authority_keypair = checked_torii_test_ed25519_keypair(
             0x21,
@@ -875,39 +865,25 @@
         .expect("handler should succeed")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         assert_eq!(
             response
                 .headers()
                 .get("x-iroha-reject-code")
                 .and_then(|value| value.to_str().ok()),
-            Some("permission_denied"),
+            Some("query_unsupported"),
         );
-        assert_eq!(
+        assert!(
             response
                 .headers()
-                .get("x-iroha-fanout-routes-denied")
-                .and_then(|value| value.to_str().ok()),
-            Some("1")
+                .get("x-iroha-fanout-routes-attempted")
+                .is_none(),
+            "the rejection must precede permission partitioning and route execution"
         );
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-fanout-routes-unavailable")
-                .and_then(|value| value.to_str().ok()),
-            Some("1")
-        );
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let payload =
-            norito::decode_from_bytes::<super::ErrorEnvelope>(&body).expect("decode error");
-        assert_eq!(payload.code, "permission_denied");
     }
 
     #[tokio::test]
-    async fn alias_resolve_index_returns_permission_denied_when_only_hidden_routes_can_resolve() {
+    async fn alias_resolve_index_rejects_multiroute_before_hidden_source_resolution() {
         let caller_keypair = checked_torii_test_ed25519_keypair(
             0x22,
             "derive alias resolve-index hidden-route caller fixture key",
@@ -946,28 +922,21 @@
         .expect("handler should succeed")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::CONFLICT);
         assert_eq!(
             response
                 .headers()
                 .get("x-iroha-reject-code")
                 .and_then(|value| value.to_str().ok()),
-            Some("permission_denied")
+            Some("query_unsupported")
         );
-        assert_eq!(
+        assert!(
             response
                 .headers()
-                .get("x-iroha-fanout-routes-denied")
-                .and_then(|value| value.to_str().ok()),
-            Some("1")
+                .get("x-iroha-fanout-routes-attempted")
+                .is_none(),
+            "the rejection must precede permission partitioning and hidden source execution"
         );
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let payload =
-            norito::decode_from_bytes::<super::ErrorEnvelope>(&body).expect("decode error");
-        assert_eq!(payload.code, "permission_denied");
     }
 
     #[test]

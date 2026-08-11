@@ -1966,8 +1966,27 @@ async fn torii_account_assets_read_routes_fan_out_across_all_dataspaces() {
 }
 
 #[cfg(feature = "app_api")]
+fn assert_fixed_generic_app_multiroute_rejection(response: &Response) {
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-iroha-reject-code")
+            .and_then(|value| value.to_str().ok()),
+        Some("query_unsupported")
+    );
+    assert!(
+        response
+            .headers()
+            .get("x-iroha-fanout-routes-attempted")
+            .is_none(),
+        "the rejection must precede local or remote source execution"
+    );
+}
+
+#[cfg(feature = "app_api")]
 #[tokio::test]
-async fn handler_account_assets_fanout_reports_merged_route_headers() {
+async fn handler_account_assets_rejects_multiroute_before_source_execution() {
     let authority = checked_torii_test_account_id(
         0xed,
         "derive account asset handler fanout authority fixture key",
@@ -1986,8 +2005,9 @@ async fn handler_account_assets_fanout_reports_merged_route_headers() {
     let uri: axum::http::Uri = format!("/v1/accounts/{authority}/assets")
         .parse()
         .expect("valid account assets uri");
+    let fanout_permits_before = app.query_fanout_inflight.available_permits();
     let response = super::handler_account_assets(
-        State(app),
+        State(app.clone()),
         axum::http::Method::GET,
         uri,
         HeaderMap::new(),
@@ -1999,17 +2019,11 @@ async fn handler_account_assets_fanout_reports_merged_route_headers() {
     .expect("account assets should execute")
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(
-        response.headers().get("x-iroha-route-lane-id").is_none(),
-        "account asset fanout should not expose a singular route lane",
-    );
-    assert!(
-        response
-            .headers()
-            .get("x-iroha-route-dataspace-id")
-            .is_none(),
-        "account asset fanout should not expose a singular dataspace",
+    assert_fixed_generic_app_multiroute_rejection(&response);
+    assert_eq!(
+        app.query_fanout_inflight.available_permits(),
+        fanout_permits_before,
+        "the rejection must precede shared fanout permit acquisition"
     );
 }
 
@@ -2353,7 +2367,7 @@ async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_mult
 }
 
 #[tokio::test]
-async fn handler_accounts_list_prefers_local_restricted_routes_on_private_ingress() {
+async fn handler_accounts_list_rejects_multiroute_before_source_execution() {
     let mut app = mk_app_state_for_tests();
     configure_private_ingress_routes_for_test(&mut app);
 
@@ -2367,19 +2381,11 @@ async fn handler_accounts_list_prefers_local_restricted_routes_on_private_ingres
     .expect("accounts list should execute")
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-routed-by")
-            .and_then(|value| value.to_str().ok()),
-        Some("local"),
-        "private ingress account listings should stay on the local restricted lane",
-    );
+    assert_fixed_generic_app_multiroute_rejection(&response);
 }
 
 #[tokio::test]
-async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
+async fn handler_account_assets_rejects_visible_multiroute_before_source_execution() {
     let authority = checked_torii_test_account_id(
         0xf6,
         "derive visible account assets fanout authority fixture key",
@@ -2403,30 +2409,11 @@ async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
     .expect("account assets should execute")
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-routed-by")
-            .and_then(|value| value.to_str().ok()),
-        Some("local"),
-        "account asset reads should still execute locally in unit tests",
-    );
-    assert!(
-        response.headers().get("x-iroha-route-lane-id").is_none(),
-        "visible dataspace fanout should not expose a singular route lane",
-    );
-    assert!(
-        response
-            .headers()
-            .get("x-iroha-route-dataspace-id")
-            .is_none(),
-        "visible dataspace fanout should not expose a singular dataspace",
-    );
+    assert_fixed_generic_app_multiroute_rejection(&response);
 }
 
 #[tokio::test]
-async fn handler_transactions_query_fan_outs_across_dataspaces() {
+async fn handler_transactions_query_rejects_multiroute_before_source_execution() {
     let mut app = mk_app_state_for_tests();
     configure_multiple_dataspace_routes_for_test(&mut app);
     assert!(
@@ -2457,19 +2444,7 @@ async fn handler_transactions_query_fan_outs_across_dataspaces() {
     .expect("transactions query should execute")
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-fanout-routes-attempted")
-            .and_then(|value| value.to_str().ok()),
-        Some("2"),
-        "global transaction queries must enter the read-fanout path",
-    );
-    assert!(
-        response.headers().get("x-iroha-route-lane-id").is_none(),
-        "transaction query fanout should not expose a singular route lane",
-    );
+    assert_fixed_generic_app_multiroute_rejection(&response);
 }
 
 #[cfg(feature = "app_api")]
@@ -2530,7 +2505,7 @@ async fn public_dataspace_upstream_serves_routed_account_assets() {
         Some("limit=500".to_owned()),
         Vec::new(),
     );
-    let response = execute_torii_read_for_route(&app, route, request).await;
+    let response = execute_torii_read_for_route(&app, route, request, None).await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -2553,7 +2528,7 @@ async fn public_dataspace_upstream_serves_routed_account_assets() {
 }
 
 #[tokio::test]
-async fn handler_account_get_fan_outs_across_global_dataspaces() {
+async fn handler_account_get_rejects_global_multiroute_before_source_execution() {
     let authority = checked_torii_test_account_id(
         0xf8,
         "derive global account get fanout authority fixture key",
@@ -2576,26 +2551,7 @@ async fn handler_account_get_fan_outs_across_global_dataspaces() {
     .await
     .expect("account get should execute");
 
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-routed-by")
-            .and_then(|value| value.to_str().ok()),
-        Some("local"),
-        "global account reads should still execute locally in unit tests",
-    );
-    assert!(
-        response.headers().get("x-iroha-route-lane-id").is_none(),
-        "global account fanout should not expose a singular route lane",
-    );
-    assert!(
-        response
-            .headers()
-            .get("x-iroha-route-dataspace-id")
-            .is_none(),
-        "global account fanout should not expose a singular dataspace",
-    );
+    assert_fixed_generic_app_multiroute_rejection(&response);
 }
 
 #[cfg(feature = "app_api")]
@@ -2802,7 +2758,7 @@ async fn handler_space_directory_manifests_executes_configured_dataspace_route_l
 
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn handler_explorer_account_detail_uses_target_account_routes_for_internal_reads() {
+async fn handler_explorer_account_detail_rejects_multiroute_before_source_execution() {
     let authority =
         checked_torii_test_account_id(0xfb, "derive explorer account detail authority fixture key");
     let restricted_dataspace = DataSpaceId::new(10);
@@ -2830,20 +2786,5 @@ async fn handler_explorer_account_detail_uses_target_account_routes_for_internal
     .expect("explorer account detail should execute")
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-routed-by")
-            .and_then(|value| value.to_str().ok()),
-        Some("local"),
-        "internal explorer account reads should use the routed target-account path",
-    );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("explorer account detail body");
-    let json: norito::json::Value =
-        norito::json::from_slice(&body).expect("explorer account detail json");
-    let authority_literal = authority.to_string();
-    assert_eq!(json["id"].as_str(), Some(authority_literal.as_str()));
+    assert_fixed_generic_app_multiroute_rejection(&response);
 }

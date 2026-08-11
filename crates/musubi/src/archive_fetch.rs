@@ -282,14 +282,14 @@ impl AuthenticatedSorafsArchiveTransportV1 for UnavailableSorafsArchiveTransport
 pub type ProductionSorafsArchiveTransportV1 =
     iroha::musubi_archive_fetch::AuthenticatedMusubiArchiveFetchClientV1;
 
-/// Parsed secret-free fetch configuration that defers tokens, DNS, and HTTP clients.
+/// Parsed secret-free fetch configuration that defers operator keys, DNS, and HTTP clients.
 pub type PreparedProductionSorafsArchiveTransportV1 =
     iroha::musubi_archive_fetch::PreparedMusubiArchiveFetchConfigV1;
 
 /// Parse the fetch subtree from the same bounded `client.toml` image used by registry reads.
 ///
 /// # Errors
-/// Returns a stable redacted configuration error without opening token files or contacting DNS.
+/// Returns a stable redacted configuration error without opening operator keys or contacting DNS.
 pub fn prepare_production_archive_transport_v1(
     config_path: &Path,
     config_bytes: &[u8],
@@ -304,18 +304,18 @@ pub fn prepare_production_archive_transport_v1(
 /// Materialize a prepared fetch configuration after the immutable cache reports a miss.
 ///
 /// # Errors
-/// Returns a stable redacted configuration error when runtime token, DNS, or client setup fails.
+/// Returns a stable redacted configuration error when operator-key, DNS, or client setup fails.
 pub fn build_production_archive_transport_v1(
     prepared: &PreparedProductionSorafsArchiveTransportV1,
 ) -> Result<ProductionSorafsArchiveTransportV1, ArchiveTransportErrorV1> {
     prepared.build_client().map_err(runtime_error)
 }
 
-/// Load the signer-free production archive transport from `client.toml`.
+/// Load the exact-network operator-authenticated production archive transport from `client.toml`.
 ///
-/// Only `[musubi.fetch]` is admitted. Account keys, identities, mutation
-/// credentials, environment variables, project manifests, and argv secrets are
-/// never parsed by this boundary.
+/// Only `[musubi.fetch]` is admitted. Account keys, account identities, mutation credentials,
+/// environment variables, project manifests, and argv secrets are never parsed by this boundary;
+/// the fetch network identity and provider-specific operator keys are mandatory.
 ///
 /// # Errors
 /// Returns a stable redacted configuration error.
@@ -430,7 +430,7 @@ impl fmt::Debug for MusubiArchiveFetchAdapterV1<'_> {
 }
 
 impl<'client> MusubiArchiveFetchAdapterV1<'client> {
-    /// Bind a signer-free finalized registry reader and an explicit user cache.
+    /// Bind an authenticated finalized registry reader and an explicit user cache.
     #[must_use]
     pub const fn new(registry: &'client RegistryReadClientV1, cache: &'client MusubiCache) -> Self {
         Self {
@@ -1362,14 +1362,14 @@ mod tests {
     fn fetch_adapter_records_the_expected_locked_deployment() {
         let temporary = tempfile::tempdir().expect("temporary cache root");
         let cache = MusubiCache::open(temporary.path()).expect("secure cache root");
-        let registry = RegistryReadClientV1::new(
+        let registry = RegistryReadClientV1::new_for_test(
             "https://registry.example/"
                 .parse()
                 .expect("public registry URL"),
             Duration::from_secs(1),
             753,
         )
-        .expect("signer-free registry client");
+        .expect("authenticated registry client");
         let expected = deployment_binding();
         let adapter = MusubiArchiveFetchAdapterV1::new(&registry, &cache)
             .with_expected_deployment(expected.network_id, expected.minimum_snapshot);
@@ -1414,14 +1414,14 @@ mod tests {
     fn exact_fetch_rejects_a_zero_archive_before_network_access() {
         let temporary = tempfile::tempdir().expect("temporary cache root");
         let cache = MusubiCache::open(temporary.path()).expect("secure cache root");
-        let registry = RegistryReadClientV1::new(
+        let registry = RegistryReadClientV1::new_for_test(
             "https://registry.example/"
                 .parse()
                 .expect("public registry URL"),
             Duration::from_secs(1),
             753,
         )
-        .expect("signer-free registry client");
+        .expect("authenticated registry client");
         let observer = CountingIntegrityObserver::default();
         let adapter =
             MusubiArchiveFetchAdapterV1::new(&registry, &cache).with_integrity_observer(&observer);

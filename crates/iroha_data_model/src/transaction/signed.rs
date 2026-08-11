@@ -379,6 +379,23 @@ mod model {
         pub(super) payload: TransactionPayload,
         /// Optional multisig signature bundle to include upon signing.
         pub(super) multisig_signatures: Option<MultisigSignatures>,
+        /// Whether this builder came from the explicit genesis-only constructor.
+        pub(super) construction: TransactionConstruction,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum TransactionConstruction {
+        Ordinary,
+        Genesis,
+    }
+
+    impl TransactionBuilder {
+        /// Validate the builder's construction-domain invariant before signing or export.
+        pub(super) fn validate_payload_state(
+            &self,
+        ) -> Result<(), super::TransactionSignatureError> {
+            super::TransactionBuilder::validate_payload(&self.payload, self.construction)
+        }
     }
 
     /// Initial execution step of a transaction, which may invoke data triggers.
@@ -685,6 +702,12 @@ pub enum TransactionSignatureError {
     /// A signable transaction payload omitted its signature-bound lifetime.
     #[error("transaction time_to_live_ms is required")]
     MissingTimeToLive,
+    /// An ordinary transaction draft used the genesis-only security domain.
+    #[error("genesis transaction domain is restricted to explicit genesis construction")]
+    GenesisDomainNotAllowed,
+    /// A genesis-only builder carried an ordinary network security domain.
+    #[error("explicit genesis construction requires the genesis transaction domain")]
+    GenesisDomainRequired,
     /// Collected multisig signatures do not satisfy the policy threshold.
     #[error("insufficient multisig weight: collected {collected}, required {required}")]
     InsufficientMultisigWeight {
@@ -2185,6 +2208,10 @@ impl TransactionBuilder {
         creation_time_ms: u64,
         fee_payment: FeePaymentIntent,
     ) -> Self {
+        let construction = match domain {
+            TransactionDomain::Network(_) => TransactionConstruction::Ordinary,
+            TransactionDomain::Genesis => TransactionConstruction::Genesis,
+        };
         Self {
             payload: TransactionPayload {
                 domain,
@@ -2204,6 +2231,7 @@ impl TransactionBuilder {
                 attachments: None,
             },
             multisig_signatures: None,
+            construction,
         }
     }
 
@@ -2271,47 +2299,9 @@ impl TransactionBuilder {
     }
 }
 
+include!("signed/builder_construction.rs");
+
 impl TransactionBuilder {
-    fn validate_payload(payload: &TransactionPayload) -> Result<(), TransactionSignatureError> {
-        if payload.time_to_live_ms.is_none() {
-            return Err(TransactionSignatureError::MissingTimeToLive);
-        }
-        payload
-            .validate_fee_payment_intent()
-            .map_err(|err| TransactionSignatureError::InvalidFeePaymentIntent(err.to_string()))
-    }
-
-    /// Reconstruct a transaction builder from one exact unsigned payload.
-    ///
-    /// The payload retains its signature-bound proof attachments. Only the
-    /// authorization-proof bundle starts empty.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the payload's fee intent or metadata violates the
-    /// canonical signature-bound fee policy.
-    pub fn from_payload(payload: TransactionPayload) -> Result<Self, TransactionSignatureError> {
-        Self::validate_payload(&payload)?;
-        Ok(Self {
-            payload,
-            multisig_signatures: None,
-        })
-    }
-
-    /// Consume the builder and return its exact unsigned payload.
-    ///
-    /// Proof attachments are part of the returned signature preimage.
-    /// Multisig authorization proofs remain outside it.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the payload's fee intent or metadata violates the
-    /// canonical signature-bound fee policy.
-    pub fn into_payload(self) -> Result<TransactionPayload, TransactionSignatureError> {
-        Self::validate_payload(&self.payload)?;
-        Ok(self.payload)
-    }
-
     /// Borrow the exact unsigned payload currently held by this builder.
     #[must_use]
     pub const fn payload(&self) -> &TransactionPayload {
@@ -2423,34 +2413,6 @@ impl TransactionBuilder {
         norito::codec::encode_adaptive(&self.payload)
     }
 
-    /// Reconstruct a transaction builder from an exact canonical payload archive.
-    ///
-    /// This is the inverse of [`Self::encode_payload`] for external-signature
-    /// workflows. Trailing bytes are rejected so callers cannot sign one payload
-    /// while later submitting a different envelope suffix.
-    ///
-    /// # Errors
-    ///
-    /// Returns a Norito error when `bytes` is malformed, non-canonical for the
-    /// default v1 layout, or contains trailing bytes.
-    pub fn decode_payload(bytes: &[u8]) -> Result<Self, norito::core::Error> {
-        let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        let (payload, used) = TransactionPayload::decode_from_slice(bytes)?;
-        if used != bytes.len() {
-            return Err(norito::core::Error::LengthMismatch);
-        }
-        let builder = Self {
-            payload,
-            multisig_signatures: None,
-        };
-        Self::validate_payload(&builder.payload)
-            .map_err(|error| norito::core::Error::Message(error.to_string()))?;
-        if builder.encode_payload() != bytes {
-            return Err(norito::core::Error::LengthMismatch);
-        }
-        Ok(builder)
-    }
-
     /// Return the canonical prehash signed by transaction signatures.
     #[must_use]
     pub fn payload_hash(&self) -> Hash {
@@ -2488,9 +2450,8 @@ impl TransactionBuilder {
         private_key: &iroha_crypto::PrivateKey,
     ) -> Result<SignedTransaction, TransactionSignatureError> {
         use iroha_crypto::PublicKey;
+        self.validate_payload_state()?;
         let payload = self.payload;
-
-        Self::validate_payload(&payload)?;
 
         let expected = payload
             .authority
@@ -2534,8 +2495,8 @@ impl TransactionBuilder {
         self,
         signers: impl IntoIterator<Item = &'a iroha_crypto::PrivateKey>,
     ) -> Result<SignedTransaction, TransactionSignatureError> {
+        self.validate_payload_state()?;
         let payload = self.payload;
-        Self::validate_payload(&payload)?;
         let mut bundle = self
             .multisig_signatures
             .unwrap_or_else(|| MultisigSignatures::new(Vec::new()));
@@ -5550,6 +5511,7 @@ mod tests {
             .expect("fallible sealed commitment signature verifies");
     }
 
+    include!("signed/genesis_domain_test.rs");
     include!("signed/result_json_test.rs");
 }
 

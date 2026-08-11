@@ -1414,8 +1414,8 @@ mod tests {
             .expect_err("malformed compact public key must not serialize to Norito");
 
         assert!(matches!(err, norito::core::Error::Message(_)));
-        assert!(norito::core::NoritoSerialize::encoded_len_hint(&compact).is_none());
-        assert!(norito::core::NoritoSerialize::encoded_len_exact(&compact).is_none());
+        assert!(norito::core::NoritoSerialize::encoded_len_hint(&compact).is_some());
+        assert!(norito::core::NoritoSerialize::encoded_len_exact(&compact).is_some());
     }
 
     #[test]
@@ -1546,8 +1546,8 @@ mod tests {
             .expect_err("malformed public key must not serialize to Norito");
 
         assert!(matches!(err, norito::core::Error::Message(_)));
-        assert!(norito::core::NoritoSerialize::encoded_len_hint(&malformed).is_none());
-        assert!(norito::core::NoritoSerialize::encoded_len_exact(&malformed).is_none());
+        assert!(norito::core::NoritoSerialize::encoded_len_hint(&malformed).is_some());
+        assert!(norito::core::NoritoSerialize::encoded_len_exact(&malformed).is_some());
     }
 
     #[test]

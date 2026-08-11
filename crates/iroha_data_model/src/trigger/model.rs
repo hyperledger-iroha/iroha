@@ -108,6 +108,44 @@ mod candidate {
         pub action: action::Action,
     }
 
+    struct BorrowedValue<'a, T>(&'a T);
+
+    impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize for BorrowedValue<'_, T> {
+        fn schema_hash() -> [u8; 16] {
+            T::schema_hash()
+        }
+
+        fn serialize(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<(), norito::core::Error> {
+            self.0.serialize(writer)
+        }
+
+        fn encoded_len_hint(&self) -> Option<usize> {
+            self.0.encoded_len_hint()
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            self.0.encoded_len_exact()
+        }
+    }
+
+    #[derive(norito::derive::NoritoSerialize)]
+    struct TriggerCandidateRef<'a> {
+        id: BorrowedValue<'a, TriggerId>,
+        action: BorrowedValue<'a, action::Action>,
+    }
+
+    impl<'a> From<&'a Trigger> for TriggerCandidateRef<'a> {
+        fn from(trigger: &'a Trigger) -> Self {
+            Self {
+                id: BorrowedValue(&trigger.id),
+                action: BorrowedValue(&trigger.action),
+            }
+        }
+    }
+
     impl TriggerCandidate {
         fn into_trigger(self) -> Trigger {
             Trigger {
@@ -130,11 +168,65 @@ mod candidate {
             &self,
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
-            let candidate = TriggerCandidate {
-                id: self.id.clone(),
-                action: self.action.clone(),
+            norito::core::NoritoSerialize::serialize(&TriggerCandidateRef::from(self), writer)
+        }
+
+        fn encoded_len_hint(&self) -> Option<usize> {
+            norito::core::NoritoSerialize::encoded_len_hint(&TriggerCandidateRef::from(self))
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            norito::core::NoritoSerialize::encoded_len_exact(&TriggerCandidateRef::from(self))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use iroha_crypto::{Algorithm, KeyPair};
+
+        use super::*;
+        use crate::{
+            account::AccountId,
+            events::time::{ExecutionTime, Schedule, TimeEventFilter},
+            transaction::IvmBytecode,
+            trigger::action::Repeats,
+        };
+
+        fn trigger_fixture() -> Trigger {
+            let key_pair = KeyPair::try_from_seed(vec![7; 32], Algorithm::Ed25519)
+                .expect("fixed trigger key seed is valid");
+            let authority = AccountId::new(key_pair.public_key().clone());
+            let action = action::Action::new(
+                Executable::Ivm(IvmBytecode::from_compiled(Vec::new())),
+                Repeats::Exactly(1),
+                authority,
+                TimeEventFilter::new(ExecutionTime::Schedule(Schedule::starting_at(
+                    std::time::Duration::from_millis(1),
+                ))),
+            )
+            .expect("trigger fixture is valid");
+            Trigger::new("bounded_trigger".parse().expect("valid trigger id"), action)
+        }
+
+        #[test]
+        fn borrowed_candidate_preserves_owned_candidate_payload() {
+            let trigger = trigger_fixture();
+            let owned = TriggerCandidate {
+                id: trigger.id.clone(),
+                action: trigger.action.clone(),
             };
-            norito::core::NoritoSerialize::serialize(&candidate, writer)
+            let borrowed = TriggerCandidateRef::from(&trigger);
+            let mut owned_bytes = Vec::new();
+            let mut borrowed_bytes = Vec::new();
+            norito::core::serialize_to_buffer(&owned, &mut owned_bytes)
+                .expect("serialize owned trigger candidate");
+            norito::core::serialize_to_buffer(&borrowed, &mut borrowed_bytes)
+                .expect("serialize borrowed trigger candidate");
+            assert_eq!(borrowed_bytes, owned_bytes);
+            assert_eq!(
+                norito::core::NoritoSerialize::encoded_len_exact(&borrowed),
+                Some(owned_bytes.len())
+            );
         }
     }
 }
@@ -943,6 +1035,41 @@ pub mod action {
             pub metadata: Metadata,
         }
 
+        struct BorrowedValue<'a, T>(&'a T);
+
+        impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize
+            for BorrowedValue<'_, T>
+        {
+            fn schema_hash() -> [u8; 16] {
+                T::schema_hash()
+            }
+
+            fn serialize(
+                &self,
+                writer: &mut norito::core::Encoder<'_>,
+            ) -> Result<(), norito::core::Error> {
+                self.0.serialize(writer)
+            }
+
+            fn encoded_len_hint(&self) -> Option<usize> {
+                self.0.encoded_len_hint()
+            }
+
+            fn encoded_len_exact(&self) -> Option<usize> {
+                self.0.encoded_len_exact()
+            }
+        }
+
+        #[derive(norito::derive::NoritoSerialize)]
+        struct ActionCandidateRef<'a> {
+            executable: BorrowedValue<'a, Executable>,
+            repeats: Repeats,
+            authority: BorrowedValue<'a, AccountId>,
+            filter: BorrowedValue<'a, EventFilterBox>,
+            retry_policy: Option<TimeTriggerRetryPolicy>,
+            metadata: BorrowedValue<'a, Metadata>,
+        }
+
         impl ActionCandidate {
             pub(super) fn validate(self) -> Result<Action, ActionValidationError> {
                 if matches!(self.filter, EventFilterBox::TriggerCompleted(_)) {
@@ -1005,15 +1132,90 @@ pub mod action {
                 &self,
                 writer: &mut norito::core::Encoder<'_>,
             ) -> Result<(), norito::core::Error> {
-                let candidate = ActionCandidate {
-                    executable: self.executable.clone(),
+                let candidate = ActionCandidateRef {
+                    executable: BorrowedValue(&self.executable),
                     repeats: self.repeats,
-                    authority: self.authority.clone(),
-                    filter: self.filter.clone(),
+                    authority: BorrowedValue(&self.authority),
+                    filter: BorrowedValue(&self.filter),
                     retry_policy: self.retry_policy,
-                    metadata: self.metadata.clone(),
+                    metadata: BorrowedValue(&self.metadata),
                 };
                 norito::core::NoritoSerialize::serialize(&candidate, writer)
+            }
+
+            fn encoded_len_hint(&self) -> Option<usize> {
+                norito::core::NoritoSerialize::encoded_len_hint(&ActionCandidateRef {
+                    executable: BorrowedValue(&self.executable),
+                    repeats: self.repeats,
+                    authority: BorrowedValue(&self.authority),
+                    filter: BorrowedValue(&self.filter),
+                    retry_policy: self.retry_policy,
+                    metadata: BorrowedValue(&self.metadata),
+                })
+            }
+
+            fn encoded_len_exact(&self) -> Option<usize> {
+                norito::core::NoritoSerialize::encoded_len_exact(&ActionCandidateRef {
+                    executable: BorrowedValue(&self.executable),
+                    repeats: self.repeats,
+                    authority: BorrowedValue(&self.authority),
+                    filter: BorrowedValue(&self.filter),
+                    retry_policy: self.retry_policy,
+                    metadata: BorrowedValue(&self.metadata),
+                })
+            }
+        }
+
+        #[cfg(test)]
+        mod tests {
+            use iroha_crypto::{Algorithm, KeyPair};
+
+            use super::*;
+            use crate::{
+                events::time::{ExecutionTime, Schedule, TimeEventFilter},
+                transaction::IvmBytecode,
+            };
+
+            #[test]
+            fn borrowed_candidate_preserves_owned_action_payload() {
+                let key_pair = KeyPair::try_from_seed(vec![11; 32], Algorithm::Ed25519)
+                    .expect("fixed action key seed is valid");
+                let action = Action::new(
+                    Executable::Ivm(IvmBytecode::from_compiled(Vec::new())),
+                    Repeats::Exactly(2),
+                    AccountId::new(key_pair.public_key().clone()),
+                    TimeEventFilter::new(ExecutionTime::Schedule(Schedule::starting_at(
+                        std::time::Duration::from_millis(1),
+                    ))),
+                )
+                .expect("action fixture is valid");
+                let owned = ActionCandidate {
+                    executable: action.executable.clone(),
+                    repeats: action.repeats,
+                    authority: action.authority.clone(),
+                    filter: action.filter.clone(),
+                    retry_policy: action.retry_policy,
+                    metadata: action.metadata.clone(),
+                };
+                let borrowed = ActionCandidateRef {
+                    executable: BorrowedValue(&action.executable),
+                    repeats: action.repeats,
+                    authority: BorrowedValue(&action.authority),
+                    filter: BorrowedValue(&action.filter),
+                    retry_policy: action.retry_policy,
+                    metadata: BorrowedValue(&action.metadata),
+                };
+                let mut owned_bytes = Vec::new();
+                let mut borrowed_bytes = Vec::new();
+                norito::core::serialize_to_buffer(&owned, &mut owned_bytes)
+                    .expect("serialize owned action candidate");
+                norito::core::serialize_to_buffer(&borrowed, &mut borrowed_bytes)
+                    .expect("serialize borrowed action candidate");
+                assert_eq!(borrowed_bytes, owned_bytes);
+                assert_eq!(
+                    norito::core::NoritoSerialize::encoded_len_exact(&borrowed),
+                    Some(owned_bytes.len())
+                );
             }
         }
     }

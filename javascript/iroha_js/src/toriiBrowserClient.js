@@ -14,7 +14,13 @@ import {
 } from "./norito.js";
 import { browserSignedTransactionHashHex } from "./transactionCodec.js";
 import { buildCanonicalJsonRequest } from "./canonicalRequest.js";
+import { rejectPrecomputedCanonicalHeaders } from "./applicationPostAuth.js";
 import { networkIdBytes } from "./networkId.js";
+import {
+  applyOperatorGetHeaders,
+  requireOperatorSigningContext,
+} from "./operatorRequest.browser.js";
+import { ensureCanonicalAccountId } from "./normalizers.js";
 import {
   normalizeKagemushaOperationId,
   normalizeKagemushaOperationReference,
@@ -83,6 +89,12 @@ const ACCOUNT_HISTORY_OPTION_KEYS = new Set([
   ...COUNTED_LIST_OPTION_KEYS,
   "assetId",
   "asset_id",
+]);
+const TRANSACTION_QUERY_OPTION_KEYS = new Set([
+  "limit", "offset", "filter", "sort", "fetch_size", "countMode", "count_mode",
+  "queryName", "query_name", "select", "assetId", "authority", "resultOk",
+  "sinceTimestampMs", "untilTimestampMs", "authAccountId", "sign", "timestampMs",
+  "nonce", "headers", "successStatuses", "signal",
 ]);
 const CONTRACT_ACTIVITY_OPTION_KEYS = new Set([
   ...COUNTED_LIST_OPTION_KEYS,
@@ -1421,6 +1433,12 @@ export class ToriiBrowserClient {
       configurable: false,
       enumerable: true,
     });
+    Object.defineProperty(this, "_operatorSigningContext", {
+      value: normalizedOptions.operatorSigningContext ?? null,
+      writable: false,
+      configurable: false,
+      enumerable: false,
+    });
   }
 
   getOfflineCapability(options = {}) {
@@ -1548,9 +1566,24 @@ export class ToriiBrowserClient {
         "Content-Type": "application/json",
       };
     }
+    const url = this._url(path, normalizedOptions.params);
+    if (normalizedOptions.operatorSigningContext !== undefined) {
+      if (method !== "GET" || init.body !== undefined) {
+        throw new TypeError("browser operator authentication only supports empty-body GETs");
+      }
+      await applyOperatorGetHeaders(
+        init.headers,
+        requireOperatorSigningContext(
+          normalizedOptions.operatorSigningContext,
+          `${method} ${path}`,
+        ),
+        url,
+      );
+      init.redirect = "error";
+    }
     let response;
     try {
-      response = await this.fetchImpl(this._url(path, normalizedOptions.params), init);
+      response = await this.fetchImpl(url, init);
     } finally {
       if (timeoutId !== undefined) {
         clearTimeout(timeoutId);
@@ -1678,6 +1711,16 @@ export class ToriiBrowserClient {
       successStatuses: opts.successStatuses ?? successStatuses,
       ...responseOptions,
     });
+  }
+
+  _canonicalQueryJson(path, options, body) {
+    const opts = requireSupportedOptions(options, `${path} query options`, TRANSACTION_QUERY_OPTION_KEYS);
+    const accountId = ensureCanonicalAccountId(opts.authAccountId, `${path} query options.authAccountId`);
+    if (accountId !== opts.authAccountId) {
+      throw new TypeError(`${path} query authAccountId must be an exact canonical I105 account id`);
+    }
+    rejectPrecomputedCanonicalHeaders({ ...this.defaultHeaders, ...(opts.headers ?? {}) });
+    return this._canonicalJson("POST", path, body, opts);
   }
 
   /** Submit exact locally signed version-1 transaction bytes to the pipeline. */
@@ -2066,28 +2109,17 @@ export class ToriiBrowserClient {
     );
   }
 
-  queryAccountTransactions(accountId, options = {}) {
-    const opts = requireObject(options, "queryAccountTransactions options");
-    return this._json("POST", `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}/transactions/query`, {
-      body: normalizeTransactionQueryEnvelope(opts, "queryAccountTransactions"),
-      signal: signalFrom(opts),
-    });
+  queryAccountTransactions(accountId, options) {
+    const path = `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}/transactions/query`;
+    return this._canonicalQueryJson(path, options, normalizeTransactionQueryEnvelope(options, "queryAccountTransactions"));
   }
 
-  queryTransactions(options = {}) {
-    const opts = requireObject(options, "queryTransactions options");
-    return this._json("POST", "/v1/transactions/query", {
-      body: normalizeTransactionQueryEnvelope(opts, "queryTransactions"),
-      signal: signalFrom(opts),
-    });
+  queryTransactions(options) {
+    return this._canonicalQueryJson("/v1/transactions/query", options, normalizeTransactionQueryEnvelope(options, "queryTransactions"));
   }
 
-  queryVisibleTransactions(options = {}) {
-    const opts = requireObject(options, "queryVisibleTransactions options");
-    return this._json("POST", "/v1/transactions/visible/query", {
-      body: normalizeTransactionQueryEnvelope(opts, "queryVisibleTransactions"),
-      signal: signalFrom(opts),
-    });
+  queryVisibleTransactions(options) {
+    return this._canonicalQueryJson("/v1/transactions/visible/query", options, normalizeTransactionQueryEnvelope(options, "queryVisibleTransactions"));
   }
 
   /** List committed contract-call activity using Torii's route-specific filters. */
@@ -2614,7 +2646,13 @@ export class ToriiBrowserClient {
 
   getSumeragiStatus(options = {}) {
     const opts = requireObject(options, "getSumeragiStatus options");
-    return this._json("GET", "/v1/sumeragi/status", { signal: signalFrom(opts) });
+    return this._json("GET", "/v1/sumeragi/status", {
+      signal: signalFrom(opts),
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiStatus",
+      ),
+    });
   }
 
   getSumeragiStatusTyped(options = {}) {
@@ -2622,6 +2660,10 @@ export class ToriiBrowserClient {
     return this._json("GET", "/v1/sumeragi/status", {
       headers: { Accept: "application/json" },
       signal: signalFrom(opts),
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiStatusTyped",
+      ),
       maximumBodyBytes: SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
       responseObserver: (response) => {
         requireExactJsonContentType(
@@ -2638,7 +2680,13 @@ export class ToriiBrowserClient {
 
   getSumeragiDiagnostics(options = {}) {
     const opts = requireObject(options, "getSumeragiDiagnostics options");
-    return this._json("GET", "/v1/sumeragi/diagnostics", { signal: signalFrom(opts) });
+    return this._json("GET", "/v1/sumeragi/diagnostics", {
+      signal: signalFrom(opts),
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiDiagnostics",
+      ),
+    });
   }
 
   getSumeragiDiagnosticsTyped(options = {}) {
@@ -2646,6 +2694,10 @@ export class ToriiBrowserClient {
     return this._json("GET", "/v1/sumeragi/diagnostics", {
       headers: { Accept: "application/json" },
       signal: signalFrom(opts),
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiDiagnosticsTyped",
+      ),
       maximumBodyBytes: SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
       responseObserver: (response) => {
         requireExactJsonContentType(
@@ -2662,24 +2714,46 @@ export class ToriiBrowserClient {
 
   getSumeragiTelemetry(options = {}) {
     const opts = requireObject(options, "getSumeragiTelemetry options");
-    return this._json("GET", "/v1/sumeragi/telemetry", { signal: signalFrom(opts) });
+    return this._json("GET", "/v1/sumeragi/telemetry", {
+      signal: signalFrom(opts),
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getSumeragiTelemetry",
+      ),
+    });
   }
 
   listKaigiRelays(options = {}) {
     const opts = requireObject(options, "listKaigiRelays options");
-    return this._json("GET", "/v1/kaigi/relays", { signal: signalFrom(opts) });
+    return this._json("GET", "/v1/kaigi/relays", {
+      signal: signalFrom(opts),
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "listKaigiRelays",
+      ),
+    });
   }
 
   getKaigiRelay(relayId, options = {}) {
     const opts = requireObject(options, "getKaigiRelay options");
     return this._json("GET", `/v1/kaigi/relays/${encodeURIComponent(requireNonEmptyString(relayId, "relayId"))}`, {
       signal: signalFrom(opts),
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getKaigiRelay",
+      ),
     });
   }
 
   getKaigiRelaysHealth(options = {}) {
     const opts = requireObject(options, "getKaigiRelaysHealth options");
-    return this._json("GET", "/v1/kaigi/relays/health", { signal: signalFrom(opts) });
+    return this._json("GET", "/v1/kaigi/relays/health", {
+      signal: signalFrom(opts),
+      operatorSigningContext: requireOperatorSigningContext(
+        this._operatorSigningContext,
+        "getKaigiRelaysHealth",
+      ),
+    });
   }
 
 }

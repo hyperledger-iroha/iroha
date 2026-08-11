@@ -451,7 +451,7 @@ def _render_connect_stateful_locations(
 ) -> list[str]:
     lines = [
         "  # IrohaConnect session tokens and MCP Connect tools are node-local; keep",
-        "  # session creation, management/status, and websocket authorization on one Torii process.",
+        "  # session creation, management/aggregate status, and websocket authorization on one Torii process.",
     ]
     for location in (
         _render_exact_proxy_location(
@@ -468,6 +468,12 @@ def _render_connect_stateful_locations(
         ),
         _render_exact_proxy_location(
             "/v1/connect/status",
+            connect_upstream,
+            host_expr=host_expr,
+            forwarded_host_expr=forwarded_host_expr,
+        ),
+        _render_exact_proxy_location(
+            "/v1/connect/status/aggregate",
             connect_upstream,
             host_expr=host_expr,
             forwarded_host_expr=forwarded_host_expr,

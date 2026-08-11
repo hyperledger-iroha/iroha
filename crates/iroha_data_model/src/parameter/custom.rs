@@ -158,6 +158,13 @@ impl JsonSerialize for CustomParameterId {
     fn json_serialize(&self, out: &mut String) {
         self.0.json_serialize(out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.json_serialize_to(out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -179,6 +186,20 @@ impl JsonSerialize for CustomParameter {
         out.push(':');
         self.payload.json_serialize(out);
         out.push('}');
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"id\":")?;
+        self.id.json_serialize_to(out)?;
+        out.push_str(",\"payload\":")?;
+        self.payload.json_serialize_to(out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 

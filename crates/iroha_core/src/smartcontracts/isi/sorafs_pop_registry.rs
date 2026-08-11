@@ -231,7 +231,17 @@ where
             invalid_parameter(message)
         });
     }
+    let limits = crate::smartcontracts::isi::query::singular_query_decode_limits(
+        bytes.len(),
+        limits,
+    )
+    .map_err(InstructionExecutionError::Query)?;
     decode_canonical_with_limits::<T>(bytes, limits).map_err(|error| {
+        if crate::smartcontracts::isi::query::singular_query_limits_active()
+            && error.is_decode_resource_limit()
+        {
+            return InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit);
+        }
         let message = if matches!(&error, norito::Error::NonCanonicalEncoding) {
             format!("{label} is not exact canonical Norito")
         } else {
@@ -1544,8 +1554,11 @@ impl Execute for PublishSorafsPopRevocationList {
     }
 }
 
-fn query_failure(error: impl core::fmt::Display) -> QueryExecutionFail {
-    QueryExecutionFail::Conversion(error.to_string())
+fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
+    match error {
+        InstructionExecutionError::Query(error) => error,
+        error => QueryExecutionFail::Conversion(error.to_string()),
+    }
 }
 
 impl ValidSingularQuery for FindSorafsPopIssuerPolicy {

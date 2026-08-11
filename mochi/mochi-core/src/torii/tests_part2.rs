@@ -29,7 +29,7 @@ async fn managed_status_stream_throttles_metrics_requests() {
             .body("queue_size 2\nsumeragi_tx_queue_depth 1");
     });
 
-    let client = ToriiClient::new(server.url("/")).expect("client");
+    let client = operator_test_client(server.url("/"));
     let handle = tokio::runtime::Handle::current();
     let options = StatusStreamOptions::new(Duration::from_millis(10))
         .with_metrics_poll_interval(Some(Duration::from_secs(60)));
@@ -100,7 +100,7 @@ async fn managed_status_stream_can_disable_metrics_polling() {
         then.status(200).body("queue_size 4");
     });
 
-    let client = ToriiClient::new(server.url("/")).expect("client");
+    let client = operator_test_client(server.url("/"));
     let handle = tokio::runtime::Handle::current();
     let options = StatusStreamOptions::new(Duration::from_millis(10))
         .with_metrics_poll_interval(Some(Duration::ZERO));
@@ -158,7 +158,7 @@ async fn managed_status_stream_reports_metrics_failures() {
         then.status(503);
     });
 
-    let client = ToriiClient::new(server.url("/")).expect("client");
+    let client = operator_test_client(server.url("/"));
     let handle = tokio::runtime::Handle::current();
     let stream =
         ManagedStatusStream::spawn(&handle, "status-peer", client, Duration::from_millis(10));
@@ -959,7 +959,7 @@ async fn fetch_sumeragi_status_decodes_payload() {
             .body(encoded.clone());
     });
 
-    let client = ToriiClient::new(server.url("/")).expect("client");
+    let client = operator_test_client(server.url("/"));
     let decoded = client
         .fetch_sumeragi_status()
         .await
@@ -989,7 +989,7 @@ async fn fetch_sumeragi_status_rejects_semantically_invalid_payload() {
             .body(encoded.clone());
     });
 
-    let client = ToriiClient::new(server.url("/")).expect("client");
+    let client = operator_test_client(server.url("/"));
     let err = client
         .fetch_sumeragi_status()
         .await
@@ -1009,7 +1009,7 @@ async fn fetch_sumeragi_status_reports_unexpected_status() {
         then.status(503);
     });
 
-    let client = ToriiClient::new(server.url("/")).expect("client");
+    let client = operator_test_client(server.url("/"));
     let err = client
         .fetch_sumeragi_status()
         .await

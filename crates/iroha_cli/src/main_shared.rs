@@ -19,6 +19,7 @@ mod jurisdiction;
 mod list_support;
 mod nexus;
 mod offline;
+mod operator_key;
 mod runtime;
 mod soracloud;
 mod space_directory;
@@ -407,6 +408,13 @@ struct Args {
     /// By default, `iroha` reads `client.toml`; runtime commands require it to be present and readable.
     #[arg(short, long, value_name("PATH"))]
     config: Option<PathBuf>,
+    /// Absolute path to an owner-only operator private-key file for operator reads.
+    ///
+    /// This runtime-only credential is never inferred from the account key, environment, or
+    /// client TOML. The selected node must allowlist its public key for the configured exact
+    /// NetworkId.
+    #[arg(long, value_name("ABSOLUTE_PATH"))]
+    operator_private_key_file: Option<PathBuf>,
     /// Print configuration details to stderr
     #[arg(short, long)]
     verbose: bool,
@@ -512,7 +520,15 @@ trait RunContext {
     fn println(&mut self, data: impl Display) -> Result<()>;
 
     fn client_from_config(&self) -> Client {
-        Client::new(self.config().clone())
+        let mut client = Client::new(self.config().clone());
+        if let Some(operator_key_pair) = self.operator_key_pair() {
+            client.set_operator_key_pair(operator_key_pair.clone());
+        }
+        client
+    }
+
+    fn operator_key_pair(&self) -> Option<&KeyPair> {
+        None
     }
 
     fn server_version(&self) -> Result<String> {
@@ -679,80 +695,7 @@ trait RunContext {
     }
 }
 
-struct PrintJsonContext<W, E> {
-    write: W,
-    err_write: E,
-    config: Config,
-    transaction_metadata: Option<Metadata>,
-    fee_payment: FeePaymentArgs,
-    input_instructions: bool,
-    output_instructions: bool,
-    output_format: CliOutputFormat,
-    i18n: Localizer,
-}
-
-impl<W: std::io::Write, E: std::io::Write> RunContext for PrintJsonContext<W, E> {
-    fn config(&self) -> &Config {
-        &self.config
-    }
-
-    fn transaction_metadata(&self) -> Option<&Metadata> {
-        self.transaction_metadata.as_ref()
-    }
-
-    fn transaction_fee_payment(&self) -> Result<FeePaymentIntent> {
-        self.fee_payment.selection()
-    }
-
-    fn input_instructions(&self) -> bool {
-        self.input_instructions
-    }
-
-    fn output_instructions(&self) -> bool {
-        self.output_instructions
-    }
-
-    fn i18n(&self) -> &Localizer {
-        &self.i18n
-    }
-
-    fn output_format(&self) -> CliOutputFormat {
-        self.output_format
-    }
-
-    /// Serialize and print data
-    ///
-    /// # Errors
-    ///
-    /// - if serialization fails
-    /// - if printing fails
-    fn print_data<T>(&mut self, data: &T) -> Result<()>
-    where
-        T: JsonSerialize + ?Sized,
-    {
-        let mut rendered = norito::json::to_json_pretty(data)
-            .map_err(|err| eyre!("failed to render JSON: {err}"))?;
-        if !rendered.ends_with('\n') {
-            rendered.push('\n');
-        }
-        self.write.write_all(rendered.as_bytes())?;
-        Ok(())
-    }
-
-    fn println(&mut self, data: impl Display) -> Result<()> {
-        if self.output_format == CliOutputFormat::Json {
-            writeln!(&mut self.err_write, "{data}")?;
-        } else {
-            writeln!(&mut self.write, "{data}")?;
-        }
-        Ok(())
-    }
-
-    fn println_data(&mut self, data: impl Display) -> Result<()> {
-        writeln!(&mut self.write, "{data}")?;
-        Ok(())
-    }
-}
+include!("print_json_context.rs");
 
 /// Runs command
 trait Run {
@@ -1370,11 +1313,23 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
         );
     }
 
+    let operator_key_pair = args
+        .operator_private_key_file
+        .as_deref()
+        .map(operator_key::load_operator_key_pair)
+        .transpose()
+        .map_err(|error| {
+            Report::new(MainError::Config)
+                .attach("failed to load runtime operator signing key")
+                .attach(error.to_string())
+        })?;
+
     let output_format = effective_output_format(&args);
     let mut context = PrintJsonContext {
         write: io::stdout(),
         err_write: io::stderr(),
         config,
+        operator_key_pair,
         transaction_metadata: None,
         fee_payment: args.fee_payment,
         input_instructions: args.input,
@@ -5980,7 +5935,7 @@ mod trigger {
         /// Last block height to scan. Defaults to the current committed height.
         #[arg(long)]
         pub to_height: Option<u64>,
-        /// Maximum number of recent blocks to scan when --from-height is omitted.
+        /// Hard cap on blocks scanned, including when --from-height is supplied.
         #[arg(long, default_value_t = 1_000)]
         pub scan_limit_blocks: u64,
         /// Deprecated compatibility flag; `list` is historical and does not wait.
@@ -8898,6 +8853,7 @@ mod tests {
             write: Vec::new(),
             err_write: Vec::new(),
             config: fallback_config(),
+            operator_key_pair: None,
             transaction_metadata: None,
             fee_payment: FeePaymentArgs::default(),
             input_instructions: false,
@@ -8905,6 +8861,43 @@ mod tests {
             output_format,
             i18n: Localizer::new(Bundle::Cli, Language::English),
         }
+    }
+
+    #[test]
+    fn operator_private_key_file_is_an_explicit_global_runtime_option() {
+        let args = Args::try_parse_from([
+            "iroha",
+            "--operator-private-key-file",
+            "/run/secrets/iroha/operator.key",
+            "ops",
+            "sumeragi",
+            "status",
+        ])
+        .expect("parse explicit operator credential path");
+        assert_eq!(
+            args.operator_private_key_file.as_deref(),
+            Some(Path::new("/run/secrets/iroha/operator.key"))
+        );
+
+        let args = Args::try_parse_from(["iroha", "ops", "sumeragi", "status"])
+            .expect("operator credential remains optional for non-operator commands");
+        assert!(args.operator_private_key_file.is_none());
+    }
+
+    #[test]
+    fn run_context_installs_only_the_explicit_operator_key() {
+        let mut context = test_context(CliOutputFormat::Json);
+        assert!(context.client_from_config().operator_key_pair.is_none());
+
+        let operator_key_pair = fixture_key_pair(0x71);
+        context.operator_key_pair = Some(operator_key_pair.clone());
+        let client = context.client_from_config();
+        assert_eq!(
+            client.operator_key_pair.as_ref().map(KeyPair::public_key),
+            Some(operator_key_pair.public_key())
+        );
+        assert_eq!(client.network_id, context.config.network_id);
+        assert_ne!(client.key_pair.public_key(), operator_key_pair.public_key());
     }
 
     fn account_with_seed(domain_literal: &str, seed: u8) -> AccountId {

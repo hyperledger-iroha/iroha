@@ -98,6 +98,7 @@ from scripts.tests.sorafs_rollout_gate_contract_inventory import (
     runner_inventory_constant_fields,
 )
 from scripts.tests.sorafs_rollout_gate_source_support import (
+    docs_with_literal,
     function_source,
     governance_service_source,
     governance_source,
@@ -2249,15 +2250,7 @@ def test_sorafs_soranet_orchestrator_has_no_masque_bypass_path() -> None:
 
 def test_sorafs_chunker_fixture_export_has_no_unsigned_bypass() -> None:
     exporter = read(SORAFS_CHUNKER_EXPORT_VECTORS_RS)
-    canonical_docs = [
-        *sorted((DOCS_SOURCE_DIR / "sorafs").rglob("*.md")),
-        *sorted(DOCS_SOURCE_DIR.glob("sorafs_*.md")),
-    ]
-    docs_with_unsigned_escape = [
-        str(path.relative_to(REPO_ROOT))
-        for path in canonical_docs
-        if "--allow-unsigned" in read(path)
-    ]
+    docs_with_unsigned_escape = docs_with_literal(DOCS_SOURCE_DIR, "--allow-unsigned")
 
     for stale in (
         "--allow-unsigned",
@@ -2270,16 +2263,20 @@ def test_sorafs_chunker_fixture_export_has_no_unsigned_bypass() -> None:
     ):
         assert stale not in exporter
 
-    assert "manifest_signatures.json missing; provide --signing-key" in exporter
+    assert (
+        "manifest_signatures.json missing; provide explicit signing-key authority"
+        in exporter
+    )
     assert "ensure_signed(root, &manifest_digest)?" in exporter
     assert "unsigned_regeneration_without_signatures_is_rejected" in exporter
     assert "existing_manifest_signatures_reject_empty_signature_set" in exporter
     assert "rejects unsigned output in every mode" in read(
         DOCS_SOURCE_DIR / "sorafs" / "chunker_conformance.md"
     )
-    assert "--signing-key=<ed25519-private-key-hex>" in read(
-        DOCS_SOURCE_DIR / "sorafs" / "chunker_conformance.md"
-    )
+    conformance = read(DOCS_SOURCE_DIR / "sorafs" / "chunker_conformance.md")
+    assert "--staging-root \"$sf1_stage\"" in conformance
+    assert "--signing-key-file /absolute/private/council-signing-key.hex" in conformance
+    assert "--signature-out" not in conformance
     assert docs_with_unsigned_escape == []
 
 

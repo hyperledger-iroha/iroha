@@ -15,7 +15,11 @@ use iroha_data_model::{
 
 use crate::{
     query::store::LiveQueryStoreHandle,
-    smartcontracts::isi::query::{QueryLimits, ValidQueryRequest},
+    smartcontracts::isi::query::{
+        OrdinaryQueryExecutionLimits, OrdinaryQueryMemoryAdmission, OrdinaryQueryMemoryLease,
+        QueryExecutionBudget, QueryLimits, ValidQueryRequest, ensure_ordinary_response_admitted,
+        ensure_ordinary_stored_revalidation_admitted,
+    },
     state::{State, StateReadOnly},
 };
 
@@ -37,6 +41,34 @@ pub enum CursorMode {
     Stored,
 }
 
+/// Ordinary-query response paired with its move-only server memory lease.
+///
+/// Torii must keep the lease alive through bounded encoding and the final
+/// response or proxy body. If a stored cursor was created, the live-query
+/// store independently owns the split retained-state reservation.
+#[derive(Debug)]
+pub struct ServerOwnedQueryResponse {
+    response: QueryResponse,
+    memory_lease: OrdinaryQueryMemoryLease,
+}
+
+fn drop_response_cursor(live_query_store: &LiveQueryStoreHandle, response: &QueryResponse) {
+    if let QueryResponse::Iterable(output) = response
+        && let Some(cursor) = &output.continue_cursor
+    {
+        live_query_store.drop_query(&cursor.query);
+    }
+}
+
+impl ServerOwnedQueryResponse {
+    /// Separate the response from the lease that must cover its remaining
+    /// encoding, proxy, and slow-body lifetime.
+    #[must_use]
+    pub fn into_parts(self) -> (QueryResponse, OrdinaryQueryMemoryLease) {
+        (self.response, self.memory_lease)
+    }
+}
+
 fn revalidate_stored_continuation(
     live_query_store: &LiveQueryStoreHandle,
     authority: &AccountId,
@@ -47,9 +79,24 @@ fn revalidate_stored_continuation(
     let QueryRequest::Continue(cursor) = request else {
         return Ok(());
     };
-    let original = live_query_store
-        .revalidation_request(cursor, authority)
-        .map_err(SnapshotQueryError::Execution)?;
+    let original = if let Some(ordinary) = limits.ordinary_execution_limits() {
+        live_query_store
+            .ordinary_revalidation_request_bounded(
+                cursor,
+                authority,
+                ordinary.max_revalidation_archive_bytes(),
+                ordinary.revalidation_decode_limits(),
+            )
+            .map_err(SnapshotQueryError::Execution)?
+    } else {
+        live_query_store
+            .revalidation_request(cursor, authority)
+            .map_err(SnapshotQueryError::Execution)?
+    };
+    if let Some(ordinary) = limits.ordinary_execution_limits() {
+        ensure_ordinary_stored_revalidation_admitted(&original, limits, ordinary)
+            .map_err(SnapshotQueryError::Execution)?;
+    }
     ValidQueryRequest::validate_for_client_parts(original, authority, state_ro, limits)
         .map_err(SnapshotQueryError::Validation)?;
     Ok(())
@@ -158,6 +205,7 @@ pub fn run_on_snapshot_with_mode_arc(
         limits,
         None,
         false,
+        None,
     )
 }
 
@@ -189,7 +237,146 @@ pub fn run_on_snapshot_with_mode_arc_and_start_budget(
         limits,
         stored_start_budget,
         true,
+        None,
     )
+}
+
+/// Execute an Arc-backed query in a server-owned ephemeral lane under an
+/// explicit deterministic work budget.
+///
+/// This entry point never accepts continuations and never inserts an iterator
+/// into the live-query store. Canonical fanout behavior remains opt-in through
+/// [`QueryLimits::with_canonical_output_limits`].
+///
+/// # Errors
+/// Returns a validation error if the request is invalid or tries to continue a
+/// cursor, or an execution error if it exceeds its work/output limits.
+pub fn run_on_snapshot_ephemeral_with_budget_arc(
+    state: &Arc<State>,
+    live_query_store: &LiveQueryStoreHandle,
+    authority: &AccountId,
+    request: QueryRequest,
+    limits: QueryLimits,
+    budget: QueryExecutionBudget,
+) -> Result<QueryResponse, SnapshotQueryError> {
+    run_on_snapshot_with_mode_arc_inner(
+        state,
+        live_query_store,
+        authority,
+        request,
+        CursorMode::Ephemeral,
+        limits,
+        None,
+        false,
+        Some(budget),
+    )
+}
+
+/// Execute one ordinary Torii query under a server-owned weighted memory
+/// reservation.
+///
+/// A stored Start reservation contains execution/response headroom `P` plus a
+/// cursor-retention charge `R`. Cursor insertion atomically splits `R` into the
+/// live-query store. A Continue reservation contains only fresh headroom `P`;
+/// the store validates and retains the pre-existing `R` before this function
+/// mutates the cursor. No store guard crosses an asynchronous capacity wait:
+/// Torii obtains this reservation before entering the blocking worker.
+///
+/// # Errors
+/// Returns a validation error for cursor-mode misuse, or an execution error
+/// when admission, query execution, cursor retention, or response preflight
+/// exceeds the server-owned limits.
+#[allow(clippy::too_many_arguments)]
+pub fn run_on_snapshot_with_server_owned_memory_arc(
+    state: &Arc<State>,
+    live_query_store: &LiveQueryStoreHandle,
+    authority: &AccountId,
+    request: QueryRequest,
+    mode: CursorMode,
+    limits: QueryLimits,
+    stored_start_budget: Option<u64>,
+    ordinary_limits: OrdinaryQueryExecutionLimits,
+    memory_lease: OrdinaryQueryMemoryLease,
+) -> Result<ServerOwnedQueryResponse, SnapshotQueryError> {
+    let limits = limits.with_ordinary_execution_limits(ordinary_limits);
+    let current_cursor_policy = limits
+        .ordinary_cursor_policy(memory_lease.pool_generation())
+        .expect("ordinary limits were attached above");
+    if let QueryRequest::Continue(cursor) = &request {
+        if mode != CursorMode::Stored {
+            return Err(SnapshotQueryError::Validation(
+                ValidationFail::NotPermitted(
+                    "cursor continuation requires stored cursor mode".to_owned(),
+                ),
+            ));
+        }
+        // This validates opaque query ID, authority, exact cursor position,
+        // completed revalidation binding, and the retained cursor lease. The
+        // DashMap read guard is dropped before execution begins.
+        let binding = live_query_store
+            .ordinary_cursor_binding(cursor, authority)
+            .map_err(SnapshotQueryError::Execution)?;
+        if !binding.is_compatible_with(current_cursor_policy) {
+            return Err(SnapshotQueryError::Execution(
+                iroha_data_model::query::error::QueryExecutionFail::Expired,
+            ));
+        }
+    }
+
+    let cursor_retained_bytes =
+        if mode == CursorMode::Stored && matches!(&request, QueryRequest::Start(_)) {
+            ordinary_limits.max_cursor_retained_bytes()
+        } else {
+            0
+        };
+    let required_reservation = ordinary_limits
+        .execution_headroom_bytes()
+        .checked_add(cursor_retained_bytes)
+        .ok_or(SnapshotQueryError::Execution(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        ))?;
+    if memory_lease.reserved_bytes() < required_reservation {
+        return Err(SnapshotQueryError::Execution(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        ));
+    }
+
+    let cursor_policy = (cursor_retained_bytes != 0).then_some(current_cursor_policy);
+    let admission =
+        OrdinaryQueryMemoryAdmission::new(memory_lease, cursor_retained_bytes, cursor_policy)
+            .map_err(SnapshotQueryError::Execution)?;
+    let scoped_store = live_query_store.with_ordinary_memory_admission(admission.clone());
+    let response = run_on_snapshot_with_mode_arc_inner(
+        state,
+        &scoped_store,
+        authority,
+        request,
+        mode,
+        limits,
+        stored_start_budget,
+        true,
+        Some(ordinary_limits.execution_budget()),
+    )?;
+    if let Err(error) = ensure_ordinary_response_admitted(&response, ordinary_limits) {
+        drop_response_cursor(&scoped_store, &response);
+        return Err(SnapshotQueryError::Execution(error));
+    }
+
+    let has_cursor = matches!(
+        &response,
+        QueryResponse::Iterable(output) if output.continue_cursor.is_some()
+    );
+    let memory_lease = match admission.take_response_lease(!has_cursor) {
+        Ok(lease) => lease,
+        Err(error) => {
+            drop_response_cursor(&scoped_store, &response);
+            return Err(SnapshotQueryError::Execution(error));
+        }
+    };
+    Ok(ServerOwnedQueryResponse {
+        response,
+        memory_lease,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -202,7 +389,13 @@ fn run_on_snapshot_with_mode_arc_inner(
     limits: QueryLimits,
     stored_start_budget: Option<u64>,
     validate_start_budget: bool,
+    execution_budget: Option<QueryExecutionBudget>,
 ) -> Result<QueryResponse, SnapshotQueryError> {
+    let limits = if execution_budget.is_some() {
+        limits.with_server_memory_budget()
+    } else {
+        limits
+    };
     let view = state.query_view();
 
     if matches!(mode, CursorMode::Ephemeral) && matches!(request, QueryRequest::Continue(_)) {
@@ -249,7 +442,8 @@ fn run_on_snapshot_with_mode_arc_inner(
     let telemetry_start = Instant::now();
     let response = match mode {
         CursorMode::Ephemeral => validated
-            .execute_ephemeral(live_query_store, &view, authority)
+            .execute_ephemeral_with_stats(live_query_store, &view, authority, execution_budget)
+            .map(|(response, _)| response)
             .map_err(SnapshotQueryError::Execution)?,
         CursorMode::Stored => validated
             .execute_with_replay_state_and_start_budget(
@@ -303,17 +497,141 @@ pub fn run_on_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    };
+
+    use iroha_data_model::{
+        permission::Permission,
+        query::{
+            dsl::SelectorTuple,
+            parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        },
+    };
+    use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use mv::storage::StorageReadOnly;
+    use nonzero_ext::nonzero;
 
     use super::*;
     use crate::{
         kura::Kura,
-        query::store::LiveQueryStore,
-        smartcontracts::Execute,
+        query::{cursor::ErasedQueryIterator, store::LiveQueryStore},
+        smartcontracts::{
+            Execute,
+            isi::query::{
+                OrdinaryQueryMemoryAdmission, OrdinaryQueryMemoryLease,
+                OrdinaryQueryMemoryReservation,
+            },
+        },
         state::{State, World},
     };
+
+    #[derive(Debug)]
+    struct TestMemoryReservation {
+        bytes: u64,
+        pool_generation: u64,
+        released: Arc<AtomicU64>,
+    }
+
+    impl Drop for TestMemoryReservation {
+        fn drop(&mut self) {
+            self.released.fetch_add(self.bytes, Ordering::SeqCst);
+        }
+    }
+
+    impl OrdinaryQueryMemoryReservation for TestMemoryReservation {
+        fn reserved_bytes(&self) -> u64 {
+            self.bytes
+        }
+
+        fn pool_generation(&self) -> u64 {
+            self.pool_generation
+        }
+
+        fn split_off(&mut self, bytes: u64) -> Option<Box<dyn OrdinaryQueryMemoryReservation>> {
+            if bytes == 0 || bytes > self.bytes {
+                return None;
+            }
+            self.bytes -= bytes;
+            Some(Box::new(Self {
+                bytes,
+                pool_generation: self.pool_generation,
+                released: Arc::clone(&self.released),
+            }))
+        }
+    }
+
+    #[test]
+    fn post_execution_failure_drops_cursor_retention_once() {
+        let released = Arc::new(AtomicU64::new(0));
+        let ordinary_limits = OrdinaryQueryExecutionLimits::try_new(
+            3,
+            QueryExecutionBudget::from_weighted_limit(64 * 1_024, 1, 1),
+            16,
+            64 * 1_024,
+            crate::smartcontracts::isi::query::ORDINARY_NAME_ID_SOURCE_BYTES,
+            16 * 1_024,
+            16,
+            16 * crate::smartcontracts::isi::query::ORDINARY_NAME_ID_SOURCE_BYTES,
+            32 * 1_024,
+            4 * 1_024,
+            norito::DecodeLimits::new(64, 4 * 1_024, 256, 16 * 1_024, 16),
+        )
+        .expect("test ordinary geometry");
+        let cursor_retained_bytes = ordinary_limits.max_cursor_retained_bytes();
+        let total = ordinary_limits
+            .execution_headroom_bytes()
+            .checked_add(cursor_retained_bytes)
+            .expect("test reservation");
+        let query_limits = QueryLimits::new(16)
+            .with_count_mode(crate::smartcontracts::isi::query::QueryCountMode::Bounded)
+            .with_ordinary_execution_limits(ordinary_limits);
+        let policy = query_limits
+            .ordinary_cursor_policy(9)
+            .expect("ordinary cursor policy");
+        let admission = OrdinaryQueryMemoryAdmission::new(
+            OrdinaryQueryMemoryLease::new(TestMemoryReservation {
+                bytes: total,
+                pool_generation: 9,
+                released: Arc::clone(&released),
+            }),
+            cursor_retained_bytes,
+            Some(policy),
+        )
+        .expect("memory admission");
+        let store = LiveQueryStore::start_test();
+        let scoped = store.with_ordinary_memory_admission(admission.clone());
+        let iter = ErasedQueryIterator::new(
+            (0..2).map(|index| Permission::new(format!("permission-{index}"), Json::from(false))),
+            SelectorTuple::default(),
+            nonzero!(1_u64),
+        );
+        let output = scoped
+            .handle_iter_start(iter, &ALICE_ID, None)
+            .expect("cursor start");
+        let cursor = output.continue_cursor.clone().expect("stored continuation");
+        scoped
+            .bind_revalidation_request(&cursor, &ALICE_ID, vec![0xaa])
+            .expect("bind archive");
+        let response = QueryResponse::Iterable(output);
+
+        drop_response_cursor(&scoped, &response);
+        assert_eq!(released.load(Ordering::SeqCst), cursor_retained_bytes);
+        assert!(matches!(
+            scoped.handle_iter_continue(cursor.clone(), &ALICE_ID),
+            Err(iroha_data_model::query::error::QueryExecutionFail::Expired)
+        ));
+        drop_response_cursor(&scoped, &response);
+        assert_eq!(released.load(Ordering::SeqCst), cursor_retained_bytes);
+
+        let response_lease = admission
+            .take_response_lease(false)
+            .expect("response headroom");
+        drop(response_lease);
+        assert_eq!(released.load(Ordering::SeqCst), total);
+    }
 
     fn alice_account() -> Account {
         Account::new(ALICE_ID.clone()).build(&ALICE_ID)
@@ -400,6 +718,8 @@ mod tests {
         let (_out, _rem, cursor) = batch.into_parts();
         assert!(cursor.is_none());
     }
+
+    include!("canonical_topk_tests.rs");
 
     #[tokio::test]
     async fn snapshot_sorted_asset_definitions_returns_first_batch_without_cursor() {

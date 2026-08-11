@@ -58,6 +58,8 @@ pub mod error {
         Json,
         /// Norito (de)serialization issue
         NoritoCodec(String),
+        /// Norito decoding exceeded a caller-provided resource ceiling.
+        NoritoResourceLimit,
         /// Problem with parsing integers
         ParseInt,
         /// Input version unsupported
@@ -77,6 +79,9 @@ pub mod error {
 
     impl From<norito::Error> for Error {
         fn from(x: norito::Error) -> Self {
+            if x.is_decode_resource_limit() {
+                return Self::NoritoResourceLimit;
+            }
             use std::string::ToString as _;
             Self::NoritoCodec(x.to_string())
         }
@@ -102,6 +107,9 @@ pub mod error {
                 #[cfg(feature = "json")]
                 Self::Json => "JSON (de)serialization issue".to_owned(),
                 Self::NoritoCodec(x) => format!("Norito (de)serialization issue: {x}"),
+                Self::NoritoResourceLimit => {
+                    "Norito decoding exceeded its resource limit".to_owned()
+                }
                 Self::ParseInt => "Issue with parsing integers".to_owned(),
                 Self::UnsupportedVersion(v) => {
                     format!("Input version {} is unsupported", v.version)
@@ -110,6 +118,14 @@ pub mod error {
             };
 
             write!(f, "{msg}")
+        }
+    }
+
+    impl Error {
+        /// Return whether decoding stopped at a caller-provided resource ceiling.
+        #[must_use]
+        pub const fn is_decode_resource_limit(&self) -> bool {
+            matches!(self, Self::NoritoResourceLimit)
         }
     }
 
@@ -434,5 +450,16 @@ mod tests {
         };
         assert_eq!(version.version, 9);
         assert_eq!(version.raw, RawVersioned::NoritoBytes(b"raw".to_vec()));
+    }
+
+    #[test]
+    fn norito_resource_limit_survives_version_error_conversion() {
+        let error = crate::error::Error::from(norito::Error::TotalAllocationExceeded {
+            attempted: 2,
+            limit: 1,
+        });
+
+        assert!(error.is_decode_resource_limit());
+        assert!(matches!(error, crate::error::Error::NoritoResourceLimit));
     }
 }

@@ -1295,11 +1295,16 @@ pub mod query {
     impl ValidSingularQuery for FindTriggerById {
         #[metrics(+"find_trigger_by_id")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Trigger, Error> {
-            state_ro
+            let trigger = state_ro
                 .world()
                 .triggers()
-                .trigger_by_id(self.trigger_id())
-                .ok_or_else(|| Error::Find(FindError::Trigger(self.trigger_id().clone())))
+                .trigger_by_id_bounded(self.trigger_id())?
+                .ok_or_else(|| Error::Find(FindError::Trigger(self.trigger_id().clone())))?;
+            crate::smartcontracts::isi::query::singular_query_ensure_value_fits(
+                &trigger,
+                usize::MAX,
+            )?;
+            Ok(trigger)
         }
     }
 }

@@ -291,6 +291,13 @@ impl NoritoJsonSerialize for Algorithm {
         let value = self.as_static_str().to_string();
         NoritoJsonSerialize::json_serialize(&value, out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(self.as_static_str(), out)
+    }
 }
 
 #[cfg(not(feature = "ffi_import"))]

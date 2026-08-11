@@ -16,7 +16,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
-use iroha_crypto::PublicKey;
+use iroha_crypto::{KeyPair, PublicKey};
 use iroha_data_model::{
     account::{Account, AccountAddressErrorCode, AccountId},
     asset::AssetDefinition,
@@ -1081,16 +1081,19 @@ async fn repo_agreements_query_filter_rejects_local8_literal() {
 
 #[tokio::test]
 async fn kaigi_relay_detail_accepts_encoded_segments() {
-    let app = test_router();
+    let (app, operator_key_pair) = test_router_with_operator_key();
     for literal in accepted_account_segments() {
+        let request = Request::builder()
+            .uri(format!("/v1/kaigi/relays/{literal}"))
+            .body(Body::empty())
+            .unwrap();
         let resp = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/kaigi/relays/{literal}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(fixtures::operator_signed_request(
+                &operator_key_pair,
+                request,
+                &[],
+            ))
             .await
             .unwrap();
         assert!(
@@ -1106,16 +1109,19 @@ async fn kaigi_relay_detail_accepts_encoded_segments() {
 
 #[tokio::test]
 async fn kaigi_relay_detail_rejects_invalid_segment() {
-    let app = test_router();
+    let (app, operator_key_pair) = test_router_with_operator_key();
     let literal = "sorainvalid";
+    let request = Request::builder()
+        .uri(format!("/v1/kaigi/relays/{literal}"))
+        .body(Body::empty())
+        .unwrap();
     let resp = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/kaigi/relays/{literal}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(fixtures::operator_signed_request(
+            &operator_key_pair,
+            request,
+            &[],
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1123,7 +1129,7 @@ async fn kaigi_relay_detail_rejects_invalid_segment() {
 
 #[tokio::test]
 async fn kaigi_relay_detail_invalid_segment_increments_metric() {
-    let (app, metrics) = test_router_with_metrics();
+    let (app, metrics, operator_key_pair) = build_test_router();
     let literal = "sorainvalid";
     let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
@@ -1133,14 +1139,17 @@ async fn kaigi_relay_detail_invalid_segment_increments_metric() {
         .with_label_values(&[KAIGI_RELAY_DETAIL_CTX, reason]);
     let before = counter.get();
 
+    let request = Request::builder()
+        .uri(format!("/v1/kaigi/relays/{literal}"))
+        .body(Body::empty())
+        .unwrap();
     let resp = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/kaigi/relays/{literal}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(fixtures::operator_signed_request(
+            &operator_key_pair,
+            request,
+            &[],
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1149,7 +1158,7 @@ async fn kaigi_relay_detail_invalid_segment_increments_metric() {
 
 #[tokio::test]
 async fn kaigi_relay_detail_local8_segment_increments_invalid_metric() {
-    let (app, metrics) = test_router_with_metrics();
+    let (app, metrics, operator_key_pair) = build_test_router();
     let literal = "sn1short";
     let reason = AccountId::parse_encoded(literal)
         .expect_err("literal must fail to parse")
@@ -1159,14 +1168,17 @@ async fn kaigi_relay_detail_local8_segment_increments_invalid_metric() {
         .with_label_values(&[KAIGI_RELAY_DETAIL_CTX, reason]);
     let invalid_before = invalid_counter.get();
 
+    let request = Request::builder()
+        .uri(format!("/v1/kaigi/relays/{literal}"))
+        .body(Body::empty())
+        .unwrap();
     let resp = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/kaigi/relays/{literal}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(fixtures::operator_signed_request(
+            &operator_key_pair,
+            request,
+            &[],
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1344,10 +1356,16 @@ fn test_router() -> Router {
 }
 
 fn test_router_with_metrics() -> (Router, Arc<Metrics>) {
-    build_test_router()
+    let (router, metrics, _operator_key_pair) = build_test_router();
+    (router, metrics)
 }
 
-fn build_test_router() -> (Router, Arc<Metrics>) {
+fn test_router_with_operator_key() -> (Router, KeyPair) {
+    let (router, _metrics, operator_key_pair) = build_test_router();
+    (router, operator_key_pair)
+}
+
+fn build_test_router() -> (Router, Arc<Metrics>, KeyPair) {
     use iroha_data_model::Registrable;
 
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -1397,7 +1415,8 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
         )
         .0
     };
-    let da_receipt_signer = cfg.common.key_pair.clone();
+    let operator_key_pair = cfg.common.key_pair.clone();
+    let da_receipt_signer = operator_key_pair.clone();
     #[cfg(feature = "telemetry")]
     let torii = Torii::new(
         iroha_data_model::ChainId::from("test-chain"),
@@ -1429,7 +1448,7 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
         iroha_torii::OnlinePeersProvider::new(peers_rx),
     );
 
-    (torii.api_router_for_tests(), metrics)
+    (torii.api_router_for_tests(), metrics, operator_key_pair)
 }
 
 fn account_segments() -> (String, String) {

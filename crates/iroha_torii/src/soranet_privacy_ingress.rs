@@ -13,6 +13,7 @@ use axum::{
 };
 use iroha_torii_shared::ErrorEnvelope;
 
+use crate::operator_signatures::AuthenticatedOperatorPublicKey;
 #[cfg(feature = "telemetry")]
 use crate::{
     Error, NoritoJson,
@@ -22,10 +23,10 @@ use crate::{SharedAppState, limits, utils};
 
 /// Maximum encoded body accepted by either SoraNet privacy ingest route.
 pub(crate) const SORANET_PRIVACY_INGEST_MAX_BODY_BYTES: usize = 128 * 1024;
-const SORANET_PRIVACY_TOKEN_HEADER: &str = "x-soranet-privacy-token";
+const RETIRED_SORANET_PRIVACY_TOKEN_HEADERS: [&str; 2] = ["x-soranet-privacy-token", "x-api-token"];
 
 #[derive(Clone)]
-/// Route-local state for the configured collector credential middleware.
+/// Route-local state for the signed collector's secondary admission guard.
 pub(crate) struct SoranetPrivacyCollectorAuthState {
     /// Shared Torii configuration, limiter, and telemetry handles.
     pub(crate) app: SharedAppState,
@@ -35,13 +36,6 @@ pub(crate) struct SoranetPrivacyCollectorAuthState {
 
 #[derive(Clone, Copy, Debug)]
 struct VerifiedSoranetPrivacyCollector;
-
-fn privacy_token(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(SORANET_PRIVACY_TOKEN_HEADER)
-        .or_else(|| headers.get("x-api-token"))
-        .and_then(|value| value.to_str().ok())
-}
 
 fn privacy_reject(status: StatusCode, code: &'static str, message: impl Into<String>) -> Response {
     let payload = ErrorEnvelope::new(code, message.into());
@@ -53,6 +47,7 @@ async fn enforce_soranet_privacy_ingest(
     headers: &HeaderMap,
     remote: Option<IpAddr>,
     endpoint: &'static str,
+    operator: &AuthenticatedOperatorPublicKey,
 ) -> Result<(), Response> {
     let ingest_cfg = &app.soranet_privacy_ingest;
     #[cfg(not(feature = "telemetry"))]
@@ -83,36 +78,22 @@ async fn enforce_soranet_privacy_ingest(
         ));
     }
 
-    let token = privacy_token(headers);
-    if ingest_cfg.require_token {
-        let Some(token_value) = token else {
-            #[cfg(feature = "telemetry")]
-            app.telemetry
-                .record_soranet_privacy_ingest_reject(endpoint, "missing_token")
-                .await;
-            return Err(privacy_reject(
-                StatusCode::UNAUTHORIZED,
-                "soranet_privacy_token_required",
-                "missing SoraNet privacy token",
-            ));
-        };
-        if !app.soranet_privacy_tokens.contains(token_value) {
-            #[cfg(feature = "telemetry")]
-            app.telemetry
-                .record_soranet_privacy_ingest_reject(endpoint, "invalid_token")
-                .await;
-            return Err(privacy_reject(
-                StatusCode::UNAUTHORIZED,
-                "soranet_privacy_token_invalid",
-                "token not authorised for SoraNet privacy ingest",
-            ));
-        }
+    if RETIRED_SORANET_PRIVACY_TOKEN_HEADERS
+        .iter()
+        .any(|name| headers.contains_key(*name))
+    {
+        #[cfg(feature = "telemetry")]
+        app.telemetry
+            .record_soranet_privacy_ingest_reject(endpoint, "retired_token")
+            .await;
+        return Err(privacy_reject(
+            StatusCode::BAD_REQUEST,
+            "soranet_privacy_token_retired",
+            "bearer collector credentials are retired; use an exact operator request signature",
+        ));
     }
 
-    let rate_key = token
-        .map(ToOwned::to_owned)
-        .or_else(|| remote.map(|ip| ip.to_string()))
-        .unwrap_or_else(|| "anonymous".to_owned());
+    let rate_key = operator.0.to_string();
     let enforce_rate = ingest_cfg.rate_per_sec.is_some();
     if !limits::allow_conditionally(&app.soranet_privacy_rate_limiter, &rate_key, enforce_rate)
         .await
@@ -141,8 +122,25 @@ pub(crate) async fn enforce_soranet_privacy_collector_authentication(
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .map(|connect| connect.0.ip());
-    if let Err(response) =
-        enforce_soranet_privacy_ingest(&state.app, request.headers(), remote, state.endpoint).await
+    let Some(operator) = request
+        .extensions()
+        .get::<AuthenticatedOperatorPublicKey>()
+        .cloned()
+    else {
+        return privacy_reject(
+            StatusCode::UNAUTHORIZED,
+            "soranet_privacy_operator_signature_required",
+            "missing authenticated operator request signature",
+        );
+    };
+    if let Err(response) = enforce_soranet_privacy_ingest(
+        &state.app,
+        request.headers(),
+        remote,
+        state.endpoint,
+        &operator,
+    )
+    .await
     {
         return response;
     }
@@ -182,10 +180,11 @@ pub(crate) async fn test_handler_post_soranet_privacy_event_with_ingress(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
+    Extension(operator): Extension<AuthenticatedOperatorPublicKey>,
     request: NoritoJson<RecordSoranetPrivacyEventDto>,
 ) -> Result<Response, Error> {
     if let Err(response) =
-        enforce_soranet_privacy_ingest(&app, &headers, Some(remote.ip()), "event").await
+        enforce_soranet_privacy_ingest(&app, &headers, Some(remote.ip()), "event", &operator).await
     {
         return Ok(response);
     }
@@ -203,10 +202,11 @@ pub(crate) async fn test_handler_post_soranet_privacy_share_with_ingress(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
     ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
+    Extension(operator): Extension<AuthenticatedOperatorPublicKey>,
     request: NoritoJson<RecordSoranetPrivacyShareDto>,
 ) -> Result<Response, Error> {
     if let Err(response) =
-        enforce_soranet_privacy_ingest(&app, &headers, Some(remote.ip()), "share").await
+        enforce_soranet_privacy_ingest(&app, &headers, Some(remote.ip()), "share", &operator).await
     {
         return Ok(response);
     }

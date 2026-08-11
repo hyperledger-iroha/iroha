@@ -1,10 +1,9 @@
 //! Dump every instruction from a Norito-framed genesis block.
 
-use std::{env, fs};
+use std::{env, path::Path};
 
 use eyre::{Result, eyre};
 use iroha_data_model::{
-    block::decode_framed_signed_block,
     isi::{
         GrantBox, TransferBox, asset_alias::SetAssetDefinitionAlias, mint_burn::MintBox,
         register::RegisterBox,
@@ -17,8 +16,7 @@ fn main() -> Result<()> {
     let path = env::args()
         .nth(1)
         .ok_or_else(|| eyre!("usage: genesis_dump <genesis.nrt>"))?;
-    let bytes = fs::read(&path)?;
-    let block = decode_framed_signed_block(&bytes)?;
+    let block = iroha_genesis::read_signed_genesis(Path::new(&path))?;
 
     println!(
         "tx_count={} result_count={}",

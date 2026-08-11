@@ -130,6 +130,13 @@ mod gar_json_impl {
         fn write_json(&self, out: &mut String) {
             JsonSerialize::json_serialize(self.as_str(), out);
         }
+
+        fn write_json_to(
+            &self,
+            out: &mut dyn norito::json::JsonWriteSink,
+        ) -> Result<(), norito::json::BoundedJsonError> {
+            norito::json::write_json_string_to(self.as_str(), out)
+        }
     }
 
     impl JsonDeserialize for GarModerationAction {

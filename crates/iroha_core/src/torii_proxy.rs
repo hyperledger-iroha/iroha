@@ -13,6 +13,32 @@ use norito::codec::{Decode, Encode};
 
 /// Schema version for Torii proxy requests with generation-bound durable admission.
 pub const TORII_PROXY_REQUEST_VERSION_V5: u16 = 5;
+/// Maximum inner body admitted by a first-release Torii proxy request.
+pub const TORII_PROXY_REQUEST_MAX_INNER_BODY_BYTES_V1: usize = 64_000_000;
+/// Source-coupled allowance for the signed proxy request envelope.
+pub const TORII_PROXY_REQUEST_FRAME_OVERHEAD_BYTES_V1: usize = 8 * 1024 * 1024;
+/// Maximum encoded `ToriiProxyRequestV5`/HTTP body before relay framing.
+pub const TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1: usize =
+    TORII_PROXY_REQUEST_MAX_INNER_BODY_BYTES_V1 + TORII_PROXY_REQUEST_FRAME_OVERHEAD_BYTES_V1;
+/// Maximum enum/length framing around one proxy request or response inside `NetworkMessage`.
+pub const TORII_PROXY_NETWORK_MESSAGE_OVERHEAD_BYTES_V1: usize = 64 * 1024;
+/// Maximum P2P relay framing above the bounded `NetworkMessage` carrier.
+pub const TORII_PROXY_REQUEST_RELAY_OVERHEAD_BYTES_V1: usize = 1024 * 1024;
+/// Maximum complete encoded first-release Torii proxy frame admitted from P2P.
+pub const TORII_PROXY_REQUEST_MAX_FRAME_BYTES_V1: usize =
+    TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1 + TORII_PROXY_REQUEST_RELAY_OVERHEAD_BYTES_V1;
+/// Maximum cumulative allocation while decoding one first-release proxy request.
+pub const TORII_PROXY_REQUEST_MAX_DECODE_ALLOCATED_BYTES_V1: usize =
+    TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1;
+/// Maximum encoded proxy-response body plus its bounded HTTP header envelope.
+pub const TORII_PROXY_RESPONSE_MAX_ENCODED_BYTES_V1: usize =
+    TORII_PROXY_REQUEST_MAX_INNER_BODY_BYTES_V1 + TORII_PROXY_REQUEST_FRAME_OVERHEAD_BYTES_V1;
+/// Maximum complete first-release proxy-response frame admitted from P2P.
+pub const TORII_PROXY_RESPONSE_MAX_FRAME_BYTES_V1: usize =
+    TORII_PROXY_RESPONSE_MAX_ENCODED_BYTES_V1 + TORII_PROXY_REQUEST_RELAY_OVERHEAD_BYTES_V1;
+/// Maximum cumulative allocation while decoding one first-release proxy response.
+pub const TORII_PROXY_RESPONSE_MAX_DECODE_ALLOCATED_BYTES_V1: usize =
+    TORII_PROXY_RESPONSE_MAX_ENCODED_BYTES_V1;
 /// Schema version for peer-to-peer Torii proxy responses.
 pub const TORII_PROXY_RESPONSE_VERSION_V1: u16 = 1;
 /// Maximum participant routes admitted in one Native AMX routing-plan hint.

@@ -1,5 +1,35 @@
 // Transaction batch and pipeline status/recovery handlers.
 
+fn accept_transaction_metadata(
+    err: &iroha_core::tx::AcceptTransactionFail,
+) -> (&'static str, String) {
+    match err {
+        iroha_core::tx::AcceptTransactionFail::SignatureVerification(fail) => {
+            let detail = if fail.detail.is_empty() {
+                fail.code().summary().to_owned()
+            } else {
+                fail.detail.clone()
+            };
+            (
+                fail.code().as_str(),
+                format!("failed to accept transaction: {detail}"),
+            )
+        }
+        iroha_core::tx::AcceptTransactionFail::NetworkTimeUnhealthy { .. } => (
+            "PRTRY:NTS_UNHEALTHY",
+            format!("failed to accept transaction: {err}"),
+        ),
+        iroha_core::tx::AcceptTransactionFail::TransactionLimit(limit) => (
+            "transaction_rejected",
+            format!("failed to accept transaction: {}", limit.reason),
+        ),
+        _ => (
+            "transaction_rejected",
+            format!("failed to accept transaction: {err}"),
+        ),
+    }
+}
+
 fn transaction_batch_submission_response(accepted_count: usize) -> Response {
     let mut response = Response::new(Body::empty());
     *response.status_mut() = StatusCode::ACCEPTED;
@@ -255,7 +285,7 @@ async fn handler_proof_retention_status(
     };
     let enforce =
         !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets);
-    check_proof_access(
+    check_operator_proof_access(
         &app,
         &headers,
         Some(remote_ip),
@@ -264,10 +294,8 @@ async fn handler_proof_retention_status(
         enforce,
     )
     .await?;
-    Ok(crate::utils::respond_with_format(
-        routing::handle_proof_retention_status(app.state.clone()),
-        format,
-    ))
+    let status = routing::handle_proof_retention_status(app.state.clone())?;
+    Ok(crate::utils::respond_with_format(status, format))
 }
 
 /// Debug endpoint exposing the current AXT proof cache state per dataspace.
@@ -299,31 +327,120 @@ async fn handler_axt_proof_cache_status(
 
 async fn handler_pipeline_recovery(
     State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(height): AxPath<u64>,
-) -> Result<impl IntoResponse, Error> {
-    app.kura.read_pipeline_metadata(height).map_or_else(
-        || {
-            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            )))
-        },
-        |sidecar| match norito::json::to_json_pretty(&sidecar.to_json_value()) {
-            Ok(serialized) => {
-                let body = axum::body::Body::from(serialized);
-                Ok::<_, Error>(
-                    axum::http::Response::builder()
-                        .status(axum::http::StatusCode::OK)
-                        .header(axum::http::header::CONTENT_TYPE, "application/json")
-                        .body(body)
-                        .unwrap(),
-                )
-            }
-            Err(err) => Err(Error::SerializationFailure {
-                context: "pipeline_recovery_sidecar",
-                source: Box::new(err),
-            }),
-        },
+) -> Result<Response, Error> {
+    check_operator_rate_limit(
+        &app,
+        &headers,
+        Some(remote.ip()),
+        "v1/pipeline/recovery",
+        true,
     )
+    .await?;
+    let admission = acquire_query_admission(&app, true).await?;
+    let kura = Arc::clone(&app.kura);
+    let (result, _admission) = tokio::task::spawn_blocking(move || {
+        // Keep both general-query and heavy-work permits in the physical worker.
+        // Cancelling the HTTP future cannot release capacity while Kura reads,
+        // JSON projection, or encoding still consume memory.
+        let result = build_pipeline_recovery_response(&kura, height);
+        (result, admission)
+    })
+    .await
+    .map_err(|error| Error::AppServiceUnavailable {
+        code: "pipeline_recovery_worker_failed",
+        message: error.to_string(),
+    })?;
+    let serialized = result?;
+    Ok(axum::http::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(serialized))
+        .expect("static pipeline recovery response is valid"))
+}
+
+/// Maximum canonical source size for one persisted recovery sidecar.
+const PIPELINE_RECOVERY_SOURCE_MAX_BYTES: usize =
+    iroha_data_model::merge::MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES;
+/// Hard transport ceiling for the compact JSON rendering of a recovery sidecar.
+///
+/// The canonical source is independently limited to one MiB before persistence.
+/// Eight times that source ceiling leaves conservative room for JSON escaping
+/// and structure while keeping the response allocation finite.
+const PIPELINE_RECOVERY_MAX_RESPONSE_BYTES: usize = PIPELINE_RECOVERY_SOURCE_MAX_BYTES * 8;
+
+fn build_pipeline_recovery_response(kura: &Kura, height: u64) -> Result<String, Error> {
+    let sidecar = kura.read_pipeline_metadata(height).ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))
+    })?;
+    let serialized = norito::json::to_json(&sidecar.to_json_value()).map_err(|source| {
+        Error::SerializationFailure {
+            context: "pipeline_recovery_sidecar",
+            source: Box::new(source),
+        }
+    })?;
+    bounded_pipeline_recovery_json(serialized)
+}
+
+fn bounded_pipeline_recovery_json(serialized: String) -> Result<String, Error> {
+    if serialized.len() > PIPELINE_RECOVERY_MAX_RESPONSE_BYTES {
+        return Err(Error::AppServiceUnavailable {
+            code: "pipeline_recovery_response_too_large",
+            message: format!(
+                "encoded pipeline recovery sidecar exceeds the {PIPELINE_RECOVERY_MAX_RESPONSE_BYTES}-byte response budget"
+            ),
+        });
+    }
+    Ok(serialized)
+}
+
+#[cfg(test)]
+mod pipeline_recovery_response_bounds_tests {
+    use super::*;
+
+    #[test]
+    fn pipeline_recovery_handler_retains_bounded_physical_work_admission() {
+        let source = include_str!("lib_pipeline_handlers.rs");
+        let handler = source
+            .split_once("async fn handler_pipeline_recovery(")
+            .and_then(|(_, tail)| tail.split_once("async fn handler_pipeline_preflight("))
+            .map(|(handler, _)| handler)
+            .expect("locate pipeline recovery handler source");
+
+        assert!(handler.contains("check_operator_rate_limit("));
+        assert!(!handler.contains("validate_api_token("));
+        assert!(handler.contains("acquire_query_admission(&app, true)"));
+        assert!(handler.contains("tokio::task::spawn_blocking"));
+        assert!(handler.contains("(result, admission)"));
+    }
+
+    #[test]
+    fn pipeline_recovery_json_rejects_response_larger_than_protocol_budget() {
+        let oversized = "x".repeat(PIPELINE_RECOVERY_MAX_RESPONSE_BYTES + 1);
+        let error = bounded_pipeline_recovery_json(oversized)
+            .expect_err("response over the recovery transport budget must be rejected");
+        match error {
+            Error::AppServiceUnavailable { code, .. } => {
+                assert_eq!(code, "pipeline_recovery_response_too_large");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pipeline_recovery_json_accepts_response_at_protocol_budget() {
+        let exact = "x".repeat(PIPELINE_RECOVERY_MAX_RESPONSE_BYTES);
+        assert_eq!(
+            bounded_pipeline_recovery_json(exact)
+                .expect("response at the recovery transport budget must be accepted")
+                .len(),
+            PIPELINE_RECOVERY_MAX_RESPONSE_BYTES
+        );
+    }
 }
 
 async fn handler_pipeline_preflight(
@@ -336,12 +453,12 @@ async fn handler_pipeline_preflight(
         Ok(format) => format,
         Err(resp) => return Ok(resp),
     };
-    check_access_with_rate_limiter(
+    check_operator_rate_limit(
         &app,
         &headers,
         Some(remote.ip()),
         "v1/pipeline/preflight",
-        &app.rate_limiter,
+        true,
     )
     .await?;
     Ok(crate::utils::respond_with_format(
@@ -670,16 +787,22 @@ fn encode_fastpq_recovery_batch(
     reconstructed: bool,
     artifact_bytes: &mut usize,
 ) -> Result<(String, bool), Error> {
-    let bytes = norito::to_bytes(batch).map_err(|source| Error::SerializationFailure {
-        context: "pipeline_recovery_fastpq_batch",
-        source: Box::new(source),
-    })?;
-    if bytes.len() > PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES {
-        return Err(fastpq_recovery_capacity_error(format!(
-            "FASTPQ batch exceeds the {} byte per-batch budget",
-            PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES
-        )));
-    }
+    let bytes =
+        match norito::core::to_bytes_bounded(batch, PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES) {
+            Ok(bytes) => bytes,
+            Err(norito::core::BoundedEncodeError::FrameTooLarge { .. }) => {
+                return Err(fastpq_recovery_capacity_error(format!(
+                    "FASTPQ batch exceeds the {} byte per-batch budget",
+                    PIPELINE_FASTPQ_RECOVERY_MAX_BATCH_BYTES
+                )));
+            }
+            Err(source) => {
+                return Err(Error::SerializationFailure {
+                    context: "pipeline_recovery_fastpq_batch",
+                    source: Box::new(source),
+                });
+            }
+        };
     charge_fastpq_recovery_artifact_bytes(artifact_bytes, bytes.len())?;
     Ok((
         base64::engine::general_purpose::STANDARD.encode(bytes),
@@ -815,16 +938,19 @@ fn trigger_completion_record_from_parts(
     }
 }
 
-fn reconstruct_trigger_completion_records(
+fn visit_reconstructed_trigger_completion_records<F>(
     block: &iroha_data_model::block::SignedBlock,
     block_height: u64,
-) -> Vec<TriggerCompletionRecord> {
-    let mut records = Vec::new();
+    visit: &mut F,
+) -> bool
+where
+    F: FnMut(TriggerCompletionRecord) -> bool,
+{
     for (entrypoint_index, entrypoint, result) in block.entrypoint_results() {
         let execution_hash = entrypoint.hash().to_string();
         if let TransactionEntrypoint::Time(time_entrypoint) = &entrypoint {
-            match &result.0 {
-                Ok(_) => records.push(trigger_completion_record_from_parts(
+            let record = match &result.0 {
+                Ok(_) => trigger_completion_record_from_parts(
                     block_height,
                     entrypoint_index,
                     time_entrypoint.id.to_string(),
@@ -833,8 +959,8 @@ fn reconstruct_trigger_completion_records(
                     "Success",
                     None,
                     "reconstructed_result",
-                )),
-                Err(reason) => records.push(trigger_completion_record_from_parts(
+                ),
+                Err(reason) => trigger_completion_record_from_parts(
                     block_height,
                     entrypoint_index,
                     time_entrypoint.id.to_string(),
@@ -843,7 +969,10 @@ fn reconstruct_trigger_completion_records(
                     "Failure",
                     Some(reason.to_string()),
                     "reconstructed_result",
-                )),
+                ),
+            };
+            if !visit(record) {
+                return false;
             }
         }
 
@@ -858,7 +987,7 @@ fn reconstruct_trigger_completion_records(
         for (offset, step) in sequence.iter().enumerate() {
             let step_index =
                 first_data_step.saturating_add(u32::try_from(offset).unwrap_or(u32::MAX));
-            records.push(trigger_completion_record_from_parts(
+            let record = trigger_completion_record_from_parts(
                 block_height,
                 entrypoint_index,
                 step.id.to_string(),
@@ -867,10 +996,13 @@ fn reconstruct_trigger_completion_records(
                 "Success",
                 None,
                 "reconstructed_result",
-            ));
+            );
+            if !visit(record) {
+                return false;
+            }
         }
     }
-    records
+    true
 }
 
 fn trigger_completion_record_matches(
@@ -892,49 +1024,47 @@ fn trigger_completion_record_matches(
     outcome.matches(&record.completion.outcome)
 }
 
-fn trigger_completion_records_for_block(
+fn visit_trigger_completion_records_for_block<F>(
     block: &iroha_data_model::block::SignedBlock,
     block_height: u64,
     include_reconstructed: bool,
     entrypoint_hash: Option<&str>,
-) -> Vec<TriggerCompletionRecord> {
-    let persisted = block
-        .trigger_completions()
-        .unwrap_or_default()
-        .iter()
-        .map(|event| {
-            trigger_completion_record_from_event(block, block_height, event, "block_result")
-        })
-        .collect::<Vec<_>>();
-    if !include_reconstructed {
-        return persisted;
+    mut visit: F,
+) -> bool
+where
+    F: FnMut(TriggerCompletionRecord) -> bool,
+{
+    let persisted = block.trigger_completions().unwrap_or_default();
+    let reconstruct = include_reconstructed
+        && (persisted.is_empty()
+            || entrypoint_hash.is_some_and(|entrypoint_hash| {
+                !persisted
+                    .iter()
+                    .any(|event| event.trigger_execution_hash().to_string() == entrypoint_hash)
+            }));
+    if reconstruct {
+        return visit_reconstructed_trigger_completion_records(block, block_height, &mut visit);
     }
-    if persisted.is_empty() {
-        return reconstruct_trigger_completion_records(block, block_height);
-    }
-    if let Some(entrypoint_hash) = entrypoint_hash
-        && !persisted
-            .iter()
-            .any(|record| record.completion.trigger_execution_hash == entrypoint_hash)
-    {
-        return reconstruct_trigger_completion_records(block, block_height);
-    }
-    persisted
+
+    persisted.iter().all(|event| {
+        visit(trigger_completion_record_from_event(
+            block,
+            block_height,
+            event,
+            "block_result",
+        ))
+    })
 }
 
 fn trigger_completion_from_height(query: &TriggerCompletionQuery, requested_to: u64) -> u64 {
-    query.from_height.map_or_else(
-        || {
-            let scan_limit = query
-                .scan_limit_blocks
-                .unwrap_or(TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS)
-                .clamp(1, TRIGGER_COMPLETION_MAX_SCAN_BLOCKS);
-            requested_to
-                .saturating_sub(scan_limit.saturating_sub(1))
-                .max(1)
-        },
-        |from_height| from_height.max(1),
-    )
+    let scan_limit = query
+        .scan_limit_blocks
+        .unwrap_or(TRIGGER_COMPLETION_DEFAULT_SCAN_BLOCKS)
+        .clamp(1, TRIGGER_COMPLETION_MAX_SCAN_BLOCKS);
+    let bounded_from = requested_to
+        .saturating_sub(scan_limit.saturating_sub(1))
+        .max(1);
+    query.from_height.unwrap_or(1).max(1).max(bounded_from)
 }
 
 fn trigger_completion_query_response(
@@ -983,31 +1113,35 @@ fn trigger_completion_query_response(
         let Some(block) = app.kura.get_block(height_usize) else {
             continue;
         };
-        for record in trigger_completion_records_for_block(
+        let mut reached_limit = false;
+        visit_trigger_completion_records_for_block(
             block.as_ref(),
             height,
             include_reconstructed,
             query.entrypoint_hash.as_deref(),
-        ) {
-            if !trigger_completion_record_matches(
-                &record,
-                query.id.as_deref(),
-                query.entrypoint_hash.as_deref(),
-                outcome,
-            ) {
-                continue;
-            }
-            completions.push(record);
-            if u64::try_from(completions.len()).unwrap_or(u64::MAX) >= limit {
-                return Ok(TriggerCompletionListResponse {
-                    latest_height,
-                    from_height,
-                    to_height: requested_to,
-                    scanned_blocks,
-                    limit,
-                    completions,
-                });
-            }
+            |record| {
+                if !trigger_completion_record_matches(
+                    &record,
+                    query.id.as_deref(),
+                    query.entrypoint_hash.as_deref(),
+                    outcome,
+                ) {
+                    return true;
+                }
+                completions.push(record);
+                reached_limit = u64::try_from(completions.len()).unwrap_or(u64::MAX) >= limit;
+                !reached_limit
+            },
+        );
+        if reached_limit {
+            return Ok(TriggerCompletionListResponse {
+                latest_height,
+                from_height,
+                to_height: requested_to,
+                scanned_blocks,
+                limit,
+                completions,
+            });
         }
     }
 
@@ -1171,7 +1305,10 @@ fn pipeline_status_from_state(
         }
         let (kind, rejection) = match &result.0 {
             Ok(_) => (PipelineStatusKind::Applied, None),
-            Err(reason) => (PipelineStatusKind::Rejected, Some(reason.clone())),
+            Err(reason) => (
+                PipelineStatusKind::Rejected,
+                Some(pipeline_rejection_summary(reason)),
+            ),
         };
         return Ok(Some(PipelineStatusEntry::fresh(
             kind,
@@ -1212,7 +1349,10 @@ fn pipeline_status_from_state(
         })?;
     let (kind, rejection) = match &transaction.result().0 {
         Ok(_) => (PipelineStatusKind::Applied, None),
-        Err(reason) => (PipelineStatusKind::Rejected, Some(reason.clone())),
+        Err(reason) => (
+            PipelineStatusKind::Rejected,
+            Some(pipeline_rejection_summary(reason)),
+        ),
     };
     Ok(Some(PipelineStatusEntry::fresh(
         kind,
@@ -1559,6 +1699,7 @@ fn pipeline_status_payload_is_authoritative_hint(
 #[cfg(feature = "app_api")]
 async fn pipeline_status_hinted_global_response(
     response: Response,
+    max_response_bytes: usize,
 ) -> Result<Option<Response>, Response> {
     if should_skip_singleton_routed_query_route_error(&response) {
         return Ok(None);
@@ -1568,7 +1709,7 @@ async fn pipeline_status_hinted_global_response(
     }
 
     let (parts, body) = response.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
+    let bytes = axum::body::to_bytes(body, max_response_bytes.max(1))
         .await
         .map_err(|error| {
             torii_proxy_error_response(
@@ -1637,7 +1778,9 @@ async fn handler_pipeline_transaction_status(
                 Vec::new(),
             )
             .await;
-            match pipeline_status_hinted_global_response(hinted).await {
+            match pipeline_status_hinted_global_response(hinted, app.torii_proxy_max_response_bytes)
+                .await
+            {
                 Ok(Some(hinted)) => return Ok(hinted),
                 Ok(None) => {}
                 Err(response) => return Ok(response),
@@ -1808,30 +1951,9 @@ async fn handler_policy(
     let queue_len = app.queue.active_len() as u64;
     let token_required = app.require_api_token;
 
-    if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
-        return Ok(build_policy_body(
-            app.require_api_token,
-            &app.fee_policy,
-            queue_len,
-            app.high_load_tx_threshold,
-            app.high_load_stream_tx_threshold,
-            app.high_load_subscription_tx_threshold,
-            token_required,
-        ));
-    }
-
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote.ip()),
-        "v1/policy",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
+    let enforce_rate =
+        !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets);
+    check_operator_rate_limit(&app, &headers, Some(remote.ip()), "v1/policy", enforce_rate).await?;
 
     Ok(build_policy_body(
         app.require_api_token,

@@ -12,7 +12,7 @@ use super::DataSpaceId;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{asset::AssetDefinitionId, name::Name};
 #[cfg(feature = "json")]
-use norito::json::{self, Map, Value};
+use norito::json::{self, JsonSerialize, Map, Value};
 
 /// Universal account identifier shared across all dataspaces.
 ///
@@ -271,6 +271,143 @@ impl json::JsonSerialize for AssetPermissionManifest {
         let value = manifest_to_json_value(self);
         value.json_serialize(out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"activation_epoch\":")?;
+        self.activation_epoch.json_serialize_to(out)?;
+        out.push_str(",\"dataspace\":")?;
+        self.dataspace.as_u64().json_serialize_to(out)?;
+        out.push_str(",\"entries\":[")?;
+        for (index, entry) in self.entries.iter().enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            entry_json_serialize_to(entry, out)?;
+        }
+        out.push(']')?;
+        if let Some(expiry_epoch) = self.expiry_epoch {
+            out.push_str(",\"expiry_epoch\":")?;
+            expiry_epoch.json_serialize_to(out)?;
+        }
+        out.push_str(",\"issued_ms\":")?;
+        self.issued_ms.json_serialize_to(out)?;
+        out.push_str(",\"uaid\":")?;
+        json::write_json_string_to(&self.uaid.to_string(), out)?;
+        out.push_str(",\"version\":")?;
+        u64::from(u16::from(self.version)).json_serialize_to(out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
+}
+
+#[cfg(feature = "json")]
+fn entry_json_serialize_to(
+    entry: &ManifestEntry,
+    out: &mut dyn json::JsonWriteSink,
+) -> Result<(), json::BoundedJsonError> {
+    // `manifest_to_json_value` uses BTreeMap objects. Keep the same sorted key
+    // order without constructing an owned response-sized Value graph.
+    out.begin_container()?;
+    out.push_str("{\"effect\":")?;
+    effect_json_serialize_to(&entry.effect, out)?;
+    if let Some(notes) = &entry.notes {
+        out.push_str(",\"notes\":")?;
+        json::write_json_string_to(notes, out)?;
+    }
+    out.push_str(",\"scope\":")?;
+    scope_json_serialize_to(&entry.scope, out)?;
+    out.push('}')?;
+    out.end_container();
+    Ok(())
+}
+
+#[cfg(feature = "json")]
+fn scope_json_serialize_to(
+    scope: &CapabilityScope,
+    out: &mut dyn json::JsonWriteSink,
+) -> Result<(), json::BoundedJsonError> {
+    out.begin_container()?;
+    out.push('{')?;
+    let mut has_field = false;
+    if let Some(asset) = &scope.asset {
+        out.push_str("\"asset\":")?;
+        json::write_json_string_to(&asset.to_string(), out)?;
+        has_field = true;
+    }
+    if let Some(dataspace) = scope.dataspace {
+        if has_field {
+            out.push(',')?;
+        }
+        out.push_str("\"dataspace\":")?;
+        dataspace.as_u64().json_serialize_to(out)?;
+        has_field = true;
+    }
+    if let Some(method) = &scope.method {
+        if has_field {
+            out.push(',')?;
+        }
+        out.push_str("\"method\":")?;
+        json::write_json_string_to(&method.to_string(), out)?;
+        has_field = true;
+    }
+    if let Some(program) = &scope.program {
+        if has_field {
+            out.push(',')?;
+        }
+        out.push_str("\"program\":")?;
+        json::write_json_string_to(&program.to_string(), out)?;
+        has_field = true;
+    }
+    if let Some(role) = scope.role {
+        if has_field {
+            out.push(',')?;
+        }
+        out.push_str("\"role\":")?;
+        json::write_json_string_to(role_label(role), out)?;
+    }
+    out.push('}')?;
+    out.end_container();
+    Ok(())
+}
+
+#[cfg(feature = "json")]
+fn effect_json_serialize_to(
+    effect: &ManifestEffect,
+    out: &mut dyn json::JsonWriteSink,
+) -> Result<(), json::BoundedJsonError> {
+    out.begin_container()?;
+    match effect {
+        ManifestEffect::Allow(allowance) => {
+            out.push_str("{\"Allow\":{")?;
+            out.begin_container()?;
+            if let Some(max_amount) = &allowance.max_amount {
+                out.push_str("\"max_amount\":")?;
+                json::write_json_string_to(&max_amount.to_string(), out)?;
+                out.push(',')?;
+            }
+            out.push_str("\"window\":")?;
+            json::write_json_string_to(window_label(allowance.window), out)?;
+            out.push_str("}}")?;
+            out.end_container();
+        }
+        ManifestEffect::Deny(directive) => {
+            out.push_str("{\"Deny\":{")?;
+            out.begin_container()?;
+            if let Some(reason) = &directive.reason {
+                out.push_str("\"reason\":")?;
+                json::write_json_string_to(reason, out)?;
+            }
+            out.push_str("}}")?;
+            out.end_container();
+        }
+    }
+    out.end_container();
+    Ok(())
 }
 
 #[cfg(feature = "json")]

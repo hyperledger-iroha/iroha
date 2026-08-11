@@ -32,16 +32,16 @@ public sealed class SignedQueryBuilder
     private ulong? dataspaceId;
     private ulong? dataspaceOwnerId;
 
-    public SignedQueryBuilder(string authorityAccountId, string networkId)
+    public SignedQueryBuilder(string authorityAccountId, NetworkId networkId)
     {
         AuthorityAccountId = NormalizeAccountId(authorityAccountId, nameof(authorityAccountId));
-        networkIdBytes = SignedQueryRequestContext.DecodeNetworkId(networkId, nameof(networkId));
-        NetworkId = networkId;
+        NetworkId = networkId ?? throw new ArgumentNullException(nameof(networkId));
+        networkIdBytes = NetworkId.ToBytes();
     }
 
     public string AuthorityAccountId { get; }
 
-    public string NetworkId { get; }
+    public NetworkId NetworkId { get; }
 
     public SignedQueryBuilder FindExecutorDataModel()
     {

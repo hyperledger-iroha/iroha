@@ -2064,7 +2064,7 @@ mod app_api_integration_tests {
     }
 
     #[tokio::test]
-    async fn asset_holders_query_aggregate_hydrates_projection_store_from_remote_provider() {
+    async fn asset_holders_query_aggregate_requires_capability_for_remote_projection_hydration() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         use axum::{
@@ -2187,33 +2187,57 @@ mod app_api_integration_tests {
         });
 
         let (app, _storage_dir) = app_state_with_projection_provider_fixture(&fixture);
-        let parsed = run_asset_holder_alias_aggregate_query(Some(app.clone()), state.clone()).await;
-        assert_eq!(
-            parsed["query_source"].as_str(),
-            Some("projection_da_hydrated")
-        );
+        let invoke = || {
+            handle_v1_asset_holders_query_with_app(
+                Some(app.clone()),
+                state.clone(),
+                axum::extract::Path("pkr#paynet".to_owned()),
+                crate::utils::extractors::NoritoJson(asset_holder_alias_aggregate_query()),
+                MaybeTelemetry::for_tests(),
+            )
+        };
+        let error = match invoke().await {
+            Err(error) => error,
+            Ok(_) => panic!("unsigned remote projection hydration must remain disabled"),
+        };
+        match error {
+            Error::AppServiceUnavailable { code, message } => {
+                assert_eq!(code, "projection_archive_unavailable");
+                assert!(message.contains(crate::sorafs::api::REMOTE_HYDRATION_CAPABILITY_REQUIRED));
+            }
+            other => panic!("unexpected remote hydration error: {other:?}"),
+        }
         assert_eq!(
             manifest_requests.load(Ordering::SeqCst),
-            published.len(),
-            "first aggregate query should fetch every missing shard manifest once",
+            1,
+            "the first missing shard manifest may be verified before capability rejection",
         );
         assert_eq!(
             fetch_requests.load(Ordering::SeqCst),
-            published.len(),
-            "first aggregate query should fetch every missing shard payload once",
+            0,
+            "the retired unsigned legacy payload route must not be called",
         );
 
-        let cached = run_asset_holder_alias_aggregate_query(Some(app), state).await;
-        assert_eq!(cached["query_source"].as_str(), Some("projection_da_cache"));
+        let second_error = match invoke().await {
+            Err(error) => error,
+            Ok(_) => panic!("capability rejection must not create a projection cache entry"),
+        };
+        assert!(matches!(
+            second_error,
+            Error::AppServiceUnavailable {
+                code: "projection_archive_unavailable",
+                ..
+            }
+        ));
         assert_eq!(
             manifest_requests.load(Ordering::SeqCst),
-            published.len(),
-            "second aggregate query should reuse the hydrated local cache",
+            2,
+            "a rejected remote payload must not populate the local cache",
         );
         assert_eq!(
             fetch_requests.load(Ordering::SeqCst),
-            published.len(),
-            "second aggregate query should reuse the hydrated local cache",
+            0,
+            "retries must remain fail-closed before legacy payload fetch",
         );
 
         remote_server.abort();

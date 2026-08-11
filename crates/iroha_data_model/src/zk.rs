@@ -179,6 +179,13 @@ impl norito::json::JsonSerialize for BackendTag {
     fn json_serialize(&self, out: &mut String) {
         norito::json::write_json_string(self.canonical_label(), out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.canonical_label(), out)
+    }
 }
 
 #[cfg(feature = "json")]

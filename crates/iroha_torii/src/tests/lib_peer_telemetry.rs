@@ -77,4 +77,36 @@ mod peer_telemetry_tests {
             "configured URLs should override peer-derived telemetry targets"
         );
     }
+
+    #[test]
+    fn peer_response_snapshot_uses_a_deterministic_connection_ceiling() {
+        let peers = (1_u8..=3)
+            .map(|seed| {
+                Peer::new(
+                    format!("127.0.0.1:{}", 13_337 + u16::from(seed))
+                        .parse()
+                        .expect("valid socket address"),
+                    checked_torii_test_ed25519_keypair(
+                        seed,
+                        "derive bounded peer response fixture key",
+                    )
+                    .public_key()
+                    .clone(),
+                )
+            })
+            .collect::<HashSet<_>>();
+        let (_tx, rx) = watch::channel(peers.clone());
+        let provider = OnlinePeersProvider::new_with_response_limit(rx, 2);
+
+        let mut expected = peers.into_iter().collect::<Vec<_>>();
+        expected.sort();
+        expected.truncate(2);
+
+        let mut actual = provider
+            .bounded_response_snapshot()
+            .into_iter()
+            .collect::<Vec<_>>();
+        actual.sort();
+        assert_eq!(actual, expected);
+    }
 }

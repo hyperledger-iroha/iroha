@@ -12,7 +12,10 @@ use std::{
 use hex::{FromHexError, encode as hex_encode};
 use iroha_crypto::soranet::{
     certificate::{CertificateError, CertificateValidationPhase, RelayCertificateBundleV2},
-    directory::{GuardDirectoryRelayEntryV2, GuardDirectorySnapshotV2, decode_validation_phase},
+    directory::{
+        GuardDirectoryRelayEntryV2, GuardDirectorySnapshotV2, decode_validation_phase,
+        read_guard_directory_snapshot_file,
+    },
 };
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
@@ -182,10 +185,11 @@ pub fn load_guard_entry_at(
     at_unix: i64,
 ) -> Result<GuardDirectoryEntry, GuardDirectoryError> {
     let path = config.snapshot_path().to_path_buf();
-    let data = fs::read(&path).map_err(|source| GuardDirectoryError::Io {
-        path: path.clone(),
-        source,
-    })?;
+    let data =
+        read_guard_directory_snapshot_file(&path).map_err(|source| GuardDirectoryError::Io {
+            path: path.clone(),
+            source,
+        })?;
     let expected_digest = config.expected_snapshot_digest().map_err(|source| {
         GuardDirectoryError::InvalidExpectedSnapshotDigest {
             path: path.clone(),
@@ -590,8 +594,9 @@ mod tests {
             RelayRolesV2,
         },
         directory::{
-            GUARD_DIRECTORY_VERSION_V2, GuardDirectoryIssuerV1, GuardDirectoryRelayEntryV2,
-            compute_issuer_fingerprint, compute_snapshot_digest, encode_validation_phase,
+            GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1, GUARD_DIRECTORY_VERSION_V2,
+            GuardDirectoryIssuerV1, GuardDirectoryRelayEntryV2, compute_issuer_fingerprint,
+            compute_snapshot_digest, encode_validation_phase,
         },
         handshake::HandshakeSuite,
     };
@@ -626,6 +631,35 @@ mod tests {
             fixture.descriptor_commit
         );
         assert_eq!(entry.snapshot_valid_until_unix, fixture.valid_until_unix);
+    }
+
+    #[test]
+    fn load_guard_entry_rejects_oversized_snapshot_before_decode() {
+        let fixture = snapshot_fixture();
+        fixture
+            ._temp
+            .as_file()
+            .set_len(
+                u64::try_from(GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1)
+                    .expect("fixed snapshot limit fits u64")
+                    + 1,
+            )
+            .expect("extend oversized sparse snapshot");
+
+        let error = load_guard_entry_at(
+            &fixture.config,
+            &fixture.relay_id,
+            &fixture.descriptor_commit,
+            fixture.at_unix,
+        )
+        .expect_err("oversized snapshot must fail in the file loader");
+        match error {
+            GuardDirectoryError::Io { source, .. } => {
+                assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+                assert!(source.to_string().contains("first-release limit"));
+            }
+            other => panic!("expected bounded file-read error, got {other:?}"),
+        }
     }
 
     #[test]

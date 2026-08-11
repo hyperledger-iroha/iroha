@@ -146,7 +146,8 @@ Parameters (current defaults)
 
 Interfaces
 - Torii: `GET /v1/time/now` → `{ now, offset_ms, confidence_ms }`
-         `GET /v1/time/status` → peer statistics and recent offsets (for ops)
+         `GET /v1/time/status` → peer statistics and recent offsets
+         (operator-only; fresh exact-network request signature required)
 - Sumeragi: NTS provides timers/timeouts using `t_net`. Consensus validity
   never consults NTS.
 - Consensus rules: TTL is height‑based; time‑based trigger validity is checked

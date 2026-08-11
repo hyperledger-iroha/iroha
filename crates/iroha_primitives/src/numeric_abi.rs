@@ -377,6 +377,13 @@ impl FastJsonWrite for IntValueV1 {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.0.to_string(), out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(&self.0.to_string(), out)
+    }
 }
 
 impl JsonDeserialize for IntValueV1 {
@@ -405,6 +412,13 @@ impl FastJsonWrite for DecimalValueV1 {
     fn write_json(&self, out: &mut String) {
         self.0.write_json(out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.write_json_to(out)
+    }
 }
 
 impl JsonDeserialize for DecimalValueV1 {
@@ -420,6 +434,13 @@ impl JsonDeserialize for DecimalValueV1 {
 impl FastJsonWrite for QuantityValueV1 {
     fn write_json(&self, out: &mut String) {
         self.0.write_json(out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.write_json_to(out)
     }
 }
 

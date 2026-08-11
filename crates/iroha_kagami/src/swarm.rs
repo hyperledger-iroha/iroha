@@ -27,7 +27,10 @@ use iroha_data_model::{
     prelude::AccountId,
     transaction::Executable,
 };
-use iroha_genesis::RawGenesisTransaction;
+use iroha_genesis::{
+    GENESIS_MANIFEST_JSON_MAX_BYTES_V1, RawGenesisTransaction, SIGNED_GENESIS_MAX_BYTES_V1,
+    ValidatedGenesisBundle,
+};
 use iroha_swarm::{
     PeerOverride, PreparedBuildLine, PreparedGenesisArtifacts, PreparedRuntimeFile,
     PreparedSecretFile, PreparedValidator,
@@ -163,14 +166,6 @@ struct PreparedBundle {
     expected_hash: PathBuf,
 }
 
-struct ValidatedGenesis {
-    block: iroha_data_model::block::SignedBlock,
-    canonical_wire: Vec<u8>,
-    public_key: PublicKey,
-    expected_hash: HashOf<BlockHeader>,
-    validator_pops: BTreeMap<PublicKey, Vec<u8>>,
-}
-
 struct AdmittedPreparedValidator {
     config: actual::Root,
     table: toml::Table,
@@ -211,7 +206,7 @@ fn validate_prepared_genesis(
     public_key_path: &Path,
     expected_hash_path: &Path,
     manifest: &RawGenesisTransaction,
-) -> color_eyre::Result<ValidatedGenesis> {
+) -> color_eyre::Result<ValidatedGenesisBundle> {
     let public_record = read_exact_record(public_key_path, "genesis public-key")?;
     let public_key = public_record
         .parse::<PublicKey>()
@@ -230,11 +225,10 @@ fn validate_prepared_genesis(
         "prepared genesis expected-hash record is not canonical lowercase marked hex"
     );
 
-    const MAX_SIGNED_GENESIS_BYTES: u64 = 512 * 1024 * 1024;
     let signed = read_runtime_file_bounded(
         signed_block,
         "signed genesis body",
-        MAX_SIGNED_GENESIS_BYTES,
+        u64::try_from(SIGNED_GENESIS_MAX_BYTES_V1).expect("signed-genesis limit fits u64"),
     )?;
     ensure!(
         !signed.is_empty(),
@@ -248,16 +242,11 @@ fn validate_prepared_genesis(
         expected_hash,
     )
     .wrap_err("independently validate prepared genesis bundle")?;
+    drop(signed);
     iroha_core::validate_genesis_block(validated.block(), &AccountId::new(public_key.clone()))
         .map_err(|error| eyre!("prepared genesis failed full core validation: {error}"))?;
 
-    Ok(ValidatedGenesis {
-        block: validated.block().clone(),
-        canonical_wire: validated.canonical_wire().to_vec(),
-        public_key: validated.public_key().clone(),
-        expected_hash: validated.expected_hash(),
-        validator_pops: validated.validator_pops().clone(),
-    })
+    Ok(validated)
 }
 
 fn signed_genesis_consensus_metadata(
@@ -717,9 +706,15 @@ fn read_runtime_file_bounded(
         before.len(),
         max_bytes
     );
-    let mut raw = Vec::with_capacity(usize::try_from(before.len()).unwrap_or(0));
+    let capacity = usize::try_from(before.len()).map_err(|_| {
+        eyre!(
+            "prepared {label} {} length cannot be addressed on this platform",
+            path.display()
+        )
+    })?;
+    let mut raw = Vec::with_capacity(capacity.saturating_add(1));
     Read::by_ref(&mut file)
-        .take(max_bytes.saturating_add(1))
+        .take(before.len().saturating_add(1))
         .read_to_end(&mut raw)
         .wrap_err_with(|| format!("read prepared {label} {}", path.display()))?;
     ensure!(
@@ -2587,7 +2582,7 @@ fn load_prepared_bundle(
         &expected_hash_path,
         manifest,
     )?;
-    let signed_metadata = signed_genesis_consensus_metadata(&validated.block)?;
+    let signed_metadata = signed_genesis_consensus_metadata(validated.block())?;
     let config_paths = prepared_peer_config_paths(config_dir, count)?;
 
     let mut chain = None;
@@ -2625,16 +2620,16 @@ fn load_prepared_bundle(
         );
         validate_prepared_network_projection(&config, path)?;
         ensure!(
-            config.genesis.public_key == validated.public_key,
+            &config.genesis.public_key == validated.public_key(),
             "prepared validator config {} has a different genesis verifier key",
             path.display()
         );
         ensure!(
-            config.genesis.expected_hash == validated.expected_hash,
+            config.genesis.expected_hash == validated.expected_hash(),
             "prepared validator config {} has genesis hash {}, expected {}",
             path.display(),
             config.genesis.expected_hash,
-            validated.expected_hash
+            validated.expected_hash()
         );
         let configured_genesis = config.genesis.file.as_ref().ok_or_else(|| {
             eyre!(
@@ -2664,7 +2659,7 @@ fn load_prepared_bundle(
 
         let trusted = config.common.trusted_peers.value();
         ensure!(
-            trusted.pops == validated.validator_pops,
+            &trusted.pops == validated.validator_pops(),
             "prepared validator config {} PoP roster differs from signed genesis",
             path.display()
         );
@@ -2675,7 +2670,7 @@ fn load_prepared_bundle(
         ensure!(
             trusted_keys
                 == validated
-                    .validator_pops
+                    .validator_pops()
                     .keys()
                     .cloned()
                     .collect::<BTreeSet<_>>(),
@@ -2715,7 +2710,7 @@ fn load_prepared_bundle(
             path.display()
         );
         let pop = validated
-            .validator_pops
+            .validator_pops()
             .get(&validator_key)
             .cloned()
             .ok_or_else(|| {
@@ -2750,7 +2745,7 @@ fn load_prepared_bundle(
     ensure!(
         validator_keys
             == validated
-                .validator_pops
+                .validator_pops()
                 .keys()
                 .cloned()
                 .collect::<BTreeSet<_>>(),
@@ -2758,8 +2753,8 @@ fn load_prepared_bundle(
     );
     let chain = chain.expect("non-empty prepared bundle has a chain id");
     iroha_core::validate_genesis_block(
-        &validated.block,
-        &AccountId::new(validated.public_key.clone()),
+        validated.block(),
+        &AccountId::new(validated.public_key().clone()),
     )
     .map_err(|error| eyre!("prepared signed genesis failed full validation: {error}"))?;
 
@@ -2854,7 +2849,7 @@ fn load_prepared_bundle(
         } else {
             let context = crate::genesis::staged_signed_sumeragi_v2_context_hashes(
                 manifest,
-                &validated.block,
+                validated.block(),
                 &effective_config,
             )
             .wrap_err_with(|| {
@@ -2901,16 +2896,16 @@ fn load_prepared_bundle(
         projection_root,
         "genesis",
         "genesis.signed.nrt",
-        &validated.canonical_wire,
+        validated.canonical_wire(),
     )?;
-    let public_key_record = format!("{}\n", validated.public_key);
+    let public_key_record = format!("{}\n", validated.public_key());
     let runtime_public_key = materialize_container_readable_file(
         projection_root,
         "genesis-key",
         crate::localnet::GENESIS_PUBLIC_KEY_FILE,
         public_key_record.as_bytes(),
     )?;
-    let expected_hash_record = format!("{}\n", validated.expected_hash);
+    let expected_hash_record = format!("{}\n", validated.expected_hash());
     let runtime_expected_hash = materialize_container_readable_file(
         projection_root,
         "genesis-hash",
@@ -2946,19 +2941,20 @@ impl<T: Write> RunArgs<T> for Args {
 
         let build_line = build_line_from_env();
         let genesis_path = args.config_dir.join("genesis.json");
-        const MAX_GENESIS_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
         let manifest_raw = read_runtime_file_bounded(
             &genesis_path,
             "genesis manifest",
-            MAX_GENESIS_MANIFEST_BYTES,
+            u64::try_from(GENESIS_MANIFEST_JSON_MAX_BYTES_V1)
+                .expect("genesis-manifest limit fits u64"),
         )?;
-        let manifest: RawGenesisTransaction = norito::json::from_slice(&manifest_raw)
-            .wrap_err_with(|| {
+        let manifest =
+            RawGenesisTransaction::from_json_slice(&manifest_raw).wrap_err_with(|| {
                 eyre!(
                     "failed to parse genesis manifest at {}",
                     genesis_path.display()
                 )
             })?;
+        drop(manifest_raw);
         let manifest_mode = manifest.consensus_mode();
         validate_consensus_mode_for_line(build_line, manifest_mode, ConsensusPolicy::Any)?;
         if matches!(manifest_mode, SumeragiConsensusMode::Npos) {
@@ -3642,7 +3638,7 @@ mod tests {
         let validated =
             validate_prepared_genesis(&signed_path, &public_path, &hash_path, &manifest)
                 .expect("validate prepared genesis fixture");
-        let metadata = signed_genesis_consensus_metadata(&validated.block)
+        let metadata = signed_genesis_consensus_metadata(validated.block())
             .expect("prepared fixture has consensus metadata");
         let parsed = parse_prepared_peer_config(&config_dir.join("peer0.toml"))
             .expect("parse prepared peer0 fixture");

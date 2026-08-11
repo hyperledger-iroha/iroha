@@ -2070,7 +2070,11 @@ fn autonomous_retirement_payload(
     participant_dataspace_id: DataSpaceId,
     participant_incarnation: Hash,
     producer: &KeyPair,
-) -> (Hash, u64, crate::lane_consensus::LaneExecutablePayloadV1) {
+) -> (
+    iroha_data_model::NetworkId,
+    u64,
+    crate::lane_consensus::LaneExecutablePayloadV1,
+) {
     autonomous_retirement_payload_for_routes(
         LaneId::SINGLE,
         DataSpaceId::new(7),
@@ -2091,7 +2095,11 @@ fn autonomous_retirement_payload_for_routes(
     participant_dataspace_id: DataSpaceId,
     participant_incarnation: Hash,
     producer: &KeyPair,
-) -> (Hash, u64, crate::lane_consensus::LaneExecutablePayloadV1) {
+) -> (
+    iroha_data_model::NetworkId,
+    u64,
+    crate::lane_consensus::LaneExecutablePayloadV1,
+) {
     let network_id = crate::sumeragi::synthetic_network_id("geometry-retirement-autonomous");
     let transaction = TransactionBuilder::new(
         network_id,
@@ -2126,7 +2134,6 @@ fn autonomous_retirement_payload_for_routes(
         Hash::from(entrypoint_hash),
         producer,
     );
-    let network_id = *network_id;
     let epoch = 9;
     let receipt = geometry_native_amx_receipt(
         network_id,

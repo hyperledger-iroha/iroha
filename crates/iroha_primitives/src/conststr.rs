@@ -242,6 +242,13 @@ impl JsonSerialize for ConstString {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(self.as_ref(), out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(self.as_ref(), out)
+    }
 }
 
 impl JsonDeserialize for ConstString {

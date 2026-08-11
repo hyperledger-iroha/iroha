@@ -84,6 +84,48 @@ fn http_client() -> Client {
         .expect("http client should build")
 }
 
+fn kaigi_operator_http_client() -> Client {
+    Client::builder()
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("Kaigi operator HTTP client should build")
+}
+
+async fn kaigi_operator_get(
+    http: &Client,
+    client: &iroha::client::Client,
+    target: &str,
+) -> Result<reqwest::Response> {
+    let url = client.torii_url.join(target)?;
+    let mut canonical_target = url.path().to_owned();
+    if let Some(query) = url.query() {
+        canonical_target.push('?');
+        canonical_target.push_str(query);
+    }
+    let uri: iroha_torii::Uri = canonical_target
+        .parse()
+        .wrap_err("parse exact Kaigi operator target")?;
+    let operator_key_pair = client
+        .operator_key_pair
+        .as_ref()
+        .ok_or_else(|| eyre!("test-network client is missing its operator key"))?;
+    let headers = iroha_torii::operator_signed_request_headers(
+        operator_key_pair,
+        &client.network_id,
+        &iroha_torii::Method::GET,
+        &uri,
+        &[],
+    )?;
+    Ok(http
+        .get(url)
+        .headers(headers)
+        .header("Accept", "application/json")
+        .send()
+        .await?)
+}
+
 fn checked_random_account_id() -> AccountId {
     AccountId::new(
         KeyPair::try_random()
@@ -2011,15 +2053,9 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     };
 
     let client = network.client();
-    let http = http_client();
-    let base = &client.torii_url;
+    let http = kaigi_operator_http_client();
 
-    let summary_url = base.join("/v1/kaigi/relays")?;
-    let summary_resp = http
-        .get(summary_url)
-        .header("Accept", "application/json")
-        .send()
-        .await?;
+    let summary_resp = kaigi_operator_get(&http, &client, "/v1/kaigi/relays").await?;
     assert!(
         summary_resp.status().is_success(),
         "kaigi relay summary should succeed, got {}",
@@ -2046,12 +2082,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         seed.relay_i105
     );
 
-    let i105_summary_url = base.join("/v1/kaigi/relays")?;
-    let i105_resp = http
-        .get(i105_summary_url)
-        .header("Accept", "application/json")
-        .send()
-        .await?;
+    let i105_resp = kaigi_operator_get(&http, &client, "/v1/kaigi/relays").await?;
     assert!(
         i105_resp.status().is_success(),
         "I105 kaigi relay summary should succeed, got {}",
@@ -2078,12 +2109,8 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     );
 
     let legacy_relay_literal = dotted_i105_bob_literal();
-    let detail_url = base.join(&format!("/v1/kaigi/relays/{legacy_relay_literal}"))?;
-    let detail_resp = http
-        .get(detail_url)
-        .header("Accept", "application/json")
-        .send()
-        .await?;
+    let detail_target = format!("/v1/kaigi/relays/{legacy_relay_literal}");
+    let detail_resp = kaigi_operator_get(&http, &client, &detail_target).await?;
     assert_eq!(
         detail_resp.status(),
         reqwest::StatusCode::BAD_REQUEST,
@@ -2100,12 +2127,8 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         "response body should mention {reason}, got {body}"
     );
 
-    let formatted_detail_url = base.join(&format!("/v1/kaigi/relays/{}", seed.relay_i105))?;
-    let formatted_resp = http
-        .get(formatted_detail_url)
-        .header("Accept", "application/json")
-        .send()
-        .await?;
+    let formatted_detail_target = format!("/v1/kaigi/relays/{}", seed.relay_i105);
+    let formatted_resp = kaigi_operator_get(&http, &client, &formatted_detail_target).await?;
     assert!(
         formatted_resp.status().is_success(),
         "kaigi relay detail with canonical I105 should succeed, got {}",

@@ -1036,6 +1036,99 @@ pub(crate) fn visit_committed_transactions(
     Ok(true)
 }
 
+/// Visit committed transactions without materializing the complete ledger history.
+///
+/// `max_carrier_projection_work` is checked independently for each compact carrier before its
+/// full merge sidecar is resolved. The visitor can stop as soon as its bounded page or heap is
+/// complete; sparse and non-matching history therefore does not consume a global retention
+/// budget merely because the chain is old.
+///
+/// # Errors
+///
+/// Returns [`QueryExecutionFail::GasBudgetExceeded`] before resolving a carrier whose declared
+/// projection exceeds `max_carrier_projection_work`, or propagates durable carrier/sidecar
+/// validation failures.
+pub fn visit_committed_transactions_bounded(
+    state_ro: &impl StateReadOnly,
+    filter: CompoundPredicate<CommittedTransaction>,
+    max_carrier_projection_work: u64,
+    mut visitor: impl FnMut(CommittedTransaction, bool) -> Result<ControlFlow<()>, QueryExecutionFail>,
+) -> Result<bool, QueryExecutionFail> {
+    if max_carrier_projection_work == 0
+        || max_carrier_projection_work > iroha_data_model::query::parameters::MAX_FETCH_SIZE.get()
+    {
+        return Err(QueryExecutionFail::FetchSizeTooBig);
+    }
+    visit_committed_transactions(
+        state_ro,
+        &filter,
+        TransactionHistoryAnchor::capture(state_ro),
+        None,
+        |work| {
+            if work > max_carrier_projection_work {
+                return Err(QueryExecutionFail::GasBudgetExceeded);
+            }
+            Ok(())
+        },
+        |transaction, matches, _| visitor(transaction, matches),
+    )
+}
+
+/// Collect a small committed-transaction snapshot within explicit retention bounds.
+///
+/// Carrier work is bounded independently before sidecar resolution. Transactions are visited
+/// newest first and only predicate matches are retained. The function rejects a result set that
+/// exceeds `max_projected_transactions` instead of returning a silently truncated snapshot, and
+/// charges canonical retained bytes before every push.
+///
+/// # Errors
+///
+/// Returns [`QueryExecutionFail::GasBudgetExceeded`] before resolving an oversized carrier or
+/// retaining bytes beyond `max_retained_bytes`, [`QueryExecutionFail::FetchSizeTooBig`] when the
+/// matched result set exceeds the canonical fetch ceiling, or propagates durable validation
+/// failures.
+pub fn committed_transactions_bounded_snapshot(
+    state_ro: &impl StateReadOnly,
+    filter: CompoundPredicate<CommittedTransaction>,
+    max_projected_transactions: u64,
+    max_retained_bytes: u64,
+) -> Result<Vec<CommittedTransaction>, QueryExecutionFail> {
+    if max_projected_transactions == 0 || max_retained_bytes == 0 {
+        return Err(QueryExecutionFail::GasBudgetExceeded);
+    }
+    if max_projected_transactions > iroha_data_model::query::parameters::MAX_FETCH_SIZE.get() {
+        return Err(QueryExecutionFail::FetchSizeTooBig);
+    }
+    let capacity = usize::try_from(max_projected_transactions).unwrap_or(usize::MAX);
+    let mut retained_bytes = 0_u64;
+    let mut transactions = Vec::new();
+    transactions
+        .try_reserve_exact(capacity)
+        .map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+    visit_committed_transactions_bounded(
+        state_ro,
+        filter,
+        max_projected_transactions,
+        |transaction, matches| {
+            if matches {
+                if transactions.len() == capacity {
+                    return Err(QueryExecutionFail::FetchSizeTooBig);
+                }
+                let transaction_bytes =
+                    u64::try_from(norito::codec::Encode::encoded_len(&transaction))
+                        .unwrap_or(u64::MAX);
+                retained_bytes = retained_bytes
+                    .checked_add(transaction_bytes)
+                    .filter(|bytes| *bytes <= max_retained_bytes)
+                    .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                transactions.push(transaction);
+            }
+            Ok(ControlFlow::Continue(()))
+        },
+    )?;
+    Ok(transactions)
+}
+
 /// Materialize complete canonical transaction history in newest-first order.
 ///
 /// This includes transactions executed by globally ordered certified merge
@@ -1767,6 +1860,54 @@ pub(crate) mod tests {
                 .as_ref()
                 .is_some_and(|inclusion| inclusion.version == 1)
         }));
+    }
+
+    #[test]
+    fn bounded_transaction_snapshot_rejects_count_and_byte_amplification() {
+        let fixture = merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+
+        assert_eq!(
+            committed_transactions_bounded_snapshot(
+                &state_view,
+                CompoundPredicate::PASS,
+                1,
+                u64::MAX,
+            )
+            .expect_err("declared carrier work must be charged before projection"),
+            QueryExecutionFail::GasBudgetExceeded
+        );
+        assert_eq!(
+            committed_transactions_bounded_snapshot(
+                &state_view,
+                CompoundPredicate::PASS,
+                iroha_data_model::query::parameters::MAX_FETCH_SIZE.get(),
+                1,
+            )
+            .expect_err("retained canonical bytes must be bounded"),
+            QueryExecutionFail::GasBudgetExceeded
+        );
+    }
+
+    #[test]
+    fn bounded_transaction_visitor_does_not_charge_chain_age_as_retained_memory() {
+        let fixture = merge_query_fixture();
+        let state_view = fixture.sandbox.state.view();
+        let false_filter = CompoundPredicate::<CommittedTransaction>::build(|prototype| {
+            prototype.equals("field_that_does_not_exist", true)
+        });
+        let mut visited = 0_usize;
+
+        let exhausted =
+            visit_committed_transactions_bounded(&state_view, false_filter, 2, |_, matches| {
+                assert!(!matches);
+                visited = visited.saturating_add(1);
+                Ok(ControlFlow::Continue(()))
+            })
+            .expect("each carrier fits independently within the projection bound");
+
+        assert!(exhausted);
+        assert!(visited > 2, "the scan crossed multiple bounded carriers");
     }
 
     #[test]

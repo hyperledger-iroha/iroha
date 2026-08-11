@@ -39,7 +39,9 @@ use iroha_data_model::{
     permission::Permission,
     proof::{VerifyingKeyId, VerifyingKeyRecord},
 };
-use iroha_genesis::RawGenesisTransaction;
+use iroha_genesis::{
+    GENESIS_MANIFEST_JSON_MAX_BYTES_V1, RawGenesisTransaction, validate_genesis_manifest_json,
+};
 use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::json::Value as JsonValue;
 
@@ -608,11 +610,14 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
     iroha_genesis::init_instruction_registry();
     let genesis_bytes = super::read_external_bounded(
         &args.genesis,
-        64 * 1024 * 1024,
+        GENESIS_MANIFEST_JSON_MAX_BYTES_V1,
         "fresh Taira genesis manifest",
     )?;
+    validate_genesis_manifest_json(&genesis_bytes)
+        .wrap_err("fresh Taira genesis manifest exceeds fixed resource bounds")?;
     let mut genesis_value: JsonValue = norito::json::from_slice(&genesis_bytes)
         .wrap_err("failed to decode fresh Taira genesis JSON")?;
+    drop(genesis_bytes);
     migrate_legacy_taira_asset_to_digital_shekel(&mut genesis_value)?;
     let genesis: RawGenesisTransaction = norito::json::value::from_value(genesis_value)
         .wrap_err("failed to decode migrated Taira genesis manifest")?;
@@ -829,6 +834,8 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
     let output_genesis = output_genesis.with_consensus_meta();
     let output_json = norito::json::to_json_pretty(&output_genesis)
         .wrap_err("failed to encode Taira base genesis")?;
+    validate_genesis_manifest_json(output_json.as_bytes())
+        .wrap_err("generated Taira base genesis exceeds fixed resource bounds")?;
     publish_new_durable_file(writer, &args.output, output_json.as_bytes())?;
 
     let report = TairaBaseGenesisReport {

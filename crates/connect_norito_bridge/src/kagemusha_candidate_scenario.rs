@@ -101,6 +101,19 @@ fn metadata_identity(metadata: &fs::Metadata) -> (u64, u64, u32, u64, u32, u64, 
     )
 }
 
+fn read_at_most(reader: &mut impl Read, maximum: u64, bytes: &mut Vec<u8>) -> Result<(), String> {
+    Read::by_ref(reader)
+        .take(maximum.saturating_add(1))
+        .read_to_end(bytes)
+        .map_err(|error| format!("failed to read bounded input: {error}"))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > maximum {
+        return Err(format!(
+            "input grew beyond its {maximum}-byte bound while reading"
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn read_private_regular(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
     if !path.is_absolute() {
         return Err(format!("input path must be absolute: {}", path.display()));
@@ -133,8 +146,8 @@ pub(super) fn read_private_regular(path: &Path, maximum: u64) -> Result<Vec<u8>,
     let capacity = usize::try_from(opened.size())
         .map_err(|_| format!("input is too large for this host: {}", path.display()))?;
     let mut bytes = Zeroizing::new(Vec::with_capacity(capacity));
-    file.read_to_end(&mut bytes)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    read_at_most(&mut file, maximum, &mut bytes)
+        .map_err(|error| format!("{error}: {}", path.display()))?;
     let after_open = file
         .metadata()
         .map_err(|error| format!("failed to reinspect open {}: {error}", path.display()))?;
@@ -147,6 +160,21 @@ pub(super) fn read_private_regular(path: &Path, maximum: u64) -> Result<Vec<u8>,
         return Err(format!("input changed while read: {}", path.display()));
     }
     Ok(std::mem::take(&mut *bytes))
+}
+
+#[cfg(test)]
+mod bounded_read_tests {
+    use std::io::Cursor;
+
+    use super::read_at_most;
+
+    #[test]
+    fn reader_cannot_append_beyond_the_admitted_size() {
+        let mut reader = Cursor::new(vec![0xA5; 9]);
+        let mut bytes = Vec::new();
+        assert!(read_at_most(&mut reader, 8, &mut bytes).is_err());
+        assert_eq!(bytes.len(), 9, "only the one-byte overflow probe is read");
+    }
 }
 
 pub(super) fn load_scenario(directory: &Path) -> Result<ScenarioPayloads, String> {

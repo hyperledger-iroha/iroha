@@ -273,78 +273,7 @@ impl ProviderIngestFinalizedArchiveBoundsV1 {
     }
 }
 
-/// Exact finalized identity of one archived committed view.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize)]
-pub struct ProviderIngestFinalizedArchiveKeyV1 {
-    /// Exact genesis-derived network containing the committed state.
-    pub network_id: NetworkId,
-    /// One-based finalized block height.
-    pub height: u64,
-    /// Exact finalized block hash.
-    pub block_hash: [u8; 32],
-    /// Exact result-bearing block creation time.
-    pub finalized_at_unix_ms: u64,
-}
-
-impl ProviderIngestFinalizedArchiveKeyV1 {
-    /// Construct one validated exact key.
-    ///
-    /// # Errors
-    ///
-    /// Rejects an unmarked network identity, zero height/hash/time, or the
-    /// reserved maximum timestamp.
-    pub fn try_new(
-        network_id: NetworkId,
-        height: u64,
-        block_hash: [u8; 32],
-        finalized_at_unix_ms: u64,
-    ) -> Result<Self, ProviderIngestFinalizedArchiveErrorV1> {
-        let key = Self {
-            network_id,
-            height,
-            block_hash,
-            finalized_at_unix_ms,
-        };
-        key.validate()?;
-        Ok(key)
-    }
-
-    /// Validate this exact finalized identity.
-    ///
-    /// # Errors
-    ///
-    /// Returns a stable key-validation failure.
-    pub fn validate(&self) -> Result<(), ProviderIngestFinalizedArchiveErrorV1> {
-        if self.network_id.as_bytes()[31] & 1 != 1 {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
-                reason: "network id must be an exact genesis-derived identity",
-            });
-        }
-        if self.height == 0 {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
-                reason: "finalized height must be one-based",
-            });
-        }
-        if self.block_hash == [0; 32] {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
-                reason: "finalized block hash must be non-zero",
-            });
-        }
-        if self.finalized_at_unix_ms == 0 || self.finalized_at_unix_ms == u64::MAX {
-            return Err(ProviderIngestFinalizedArchiveErrorV1::InvalidKey {
-                reason: "finalized block time must be a canonical non-zero timestamp",
-            });
-        }
-        Ok(())
-    }
-
-    fn finalized_anchor(&self) -> ProviderIngestFinalizedAnchorV1 {
-        ProviderIngestFinalizedAnchorV1 {
-            height: self.height,
-            block_hash: self.block_hash,
-        }
-    }
-}
+include!("provider_ingest_finalized/archive_key.rs");
 
 /// One exact provider-scoped replication order at a finalized anchor.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -552,7 +481,9 @@ pub struct ProviderIngestFinalizedArchiveAssignmentV1 {
 }
 
 /// Context-bound exclusive cursor for provider-indexed archive pages.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+)]
 pub struct ProviderIngestFinalizedArchiveCursorV1 {
     /// Exact finalized key whose immutable snapshot is being paged.
     pub key: ProviderIngestFinalizedArchiveKeyV1,
@@ -592,7 +523,7 @@ pub enum ProviderIngestFinalizedArchiveInsertOutcomeV1 {
 ///
 /// The finality-artifact hash is supplied by the commit-owned caller and is
 /// reauthenticated against Kura before any prefix is removed.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveRetentionFenceV1 {
     key: ProviderIngestFinalizedArchiveKeyV1,
     kura_finality_artifact_hash: [u8; 32],
@@ -1042,7 +973,7 @@ pub trait ProviderIngestFinalizedArchiveRetentionAuthorityV1: Send + Sync + fmt:
 }
 
 /// Result of installing one authenticated virtual-base checkpoint.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub struct ProviderIngestFinalizedArchiveCompactionOutcomeV1 {
     retention_floor: ProviderIngestFinalizedArchiveKeyV1,
@@ -1085,7 +1016,7 @@ impl ProviderIngestFinalizedArchiveCompactionOutcomeV1 {
 }
 
 /// Exact archive coverage qualified against one authenticated Kura boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub struct ProviderIngestFinalizedArchiveQualificationV1 {
     activation_floor: ProviderIngestFinalizedArchiveKeyV1,
@@ -1128,7 +1059,7 @@ impl ProviderIngestFinalizedArchiveQualificationV1 {
 }
 
 /// Outcome of exact startup or recovery reconciliation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub struct ProviderIngestFinalizedArchiveReconcileOutcomeV1 {
     insertion: ProviderIngestFinalizedArchiveInsertOutcomeV1,

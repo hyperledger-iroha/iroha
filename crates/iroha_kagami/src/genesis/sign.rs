@@ -34,7 +34,10 @@ use iroha_data_model::{
     parameter::system::SumeragiConsensusMode,
     prelude::*,
 };
-use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
+use iroha_genesis::{
+    GenesisBlock, GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction,
+    SIGNED_GENESIS_MAX_BYTES_V1, validate_genesis_manifest_json,
+};
 use iroha_primitives::time::TimeSource;
 use zeroize::Zeroize as _;
 
@@ -1159,20 +1162,33 @@ impl<T: Write> RunArgs<T> for Args {
             self.creation_time_ms,
         )?;
 
-        let framed = genesis_block
-            .0
-            .encode_wire()
-            .wrap_err("frame genesis block with Norito header")?;
         let bound_manifest_json = self
             .bound_manifest_out
             .as_ref()
             .map(|_| {
-                norito::json::to_vec_pretty(&bound_manifest)
-                    .wrap_err("encode config-bound genesis manifest")
+                let json = norito::json::to_vec_pretty(&bound_manifest)
+                    .wrap_err("encode config-bound genesis manifest")?;
+                validate_genesis_manifest_json(&json)
+                    .wrap_err("config-bound genesis manifest exceeds fixed resource bounds")?;
+                Ok::<_, color_eyre::eyre::Report>(json)
             })
             .transpose()?;
+        drop(bound_manifest);
 
         let genesis_expected_hash = genesis_block.0.hash();
+        let framed = genesis_block
+            .0
+            .encode_wire()
+            .wrap_err("frame genesis block with Norito header")?;
+        drop(genesis_block);
+        if framed.len() > SIGNED_GENESIS_MAX_BYTES_V1 {
+            return Err(eyre!(
+                "signed genesis body is {} bytes, exceeding the {}-byte first-release limit",
+                framed.len(),
+                SIGNED_GENESIS_MAX_BYTES_V1
+            ));
+        }
+
         eprintln!("Genesis public key: {}", genesis_key_pair.public_key());
         eprintln!("Genesis expected hash: {genesis_expected_hash}");
 

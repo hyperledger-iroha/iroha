@@ -24,8 +24,9 @@ Any SIMD acceleration must produce identical boundaries and digests.
 
 ## Fixture Bundle
 
-`cargo run --locked -p sorafs_chunker --features dev-tools --bin export_vectors` regenerates the
-fixtures and emits the following files under `fixtures/sorafs_chunker/`:
+`export_vectors --write` regenerates the fixtures in a private external stage,
+validates the complete signed tree, and only then publishes the following
+checked-in files:
 
 - `sf1_profile_v1.{json,rs,ts,go}` — canonical chunk boundaries for Rust,
   TypeScript, and Go consumers. Each file advertises the canonical handle as the
@@ -42,16 +43,20 @@ fixtures and emits the following files under `fixtures/sorafs_chunker/`:
 ### Signing Policy
 
 Fixture regeneration **must** include a valid council signature. The generator
-rejects unsigned output in every mode; use `--signing-key` to create or append a
-council signature, or keep the existing verified `manifest_signatures.json`
-unchanged. Signature envelopes are append-only and deduplicated per signer.
+rejects unsigned output in every mode. An unchanged manifest reuses and verifies
+the checked-in signature envelope inside the private stage; a changed manifest
+requires an explicit private signing-key file before any checked-in path can be
+published. `--check` performs the same staging and validation without publishing.
 
 To add a council signature:
 
 ```bash
+sf1_stage="$(mktemp -d "${TMPDIR:-/tmp}/iroha-sf1.XXXXXX")"
+sf1_stage="$(cd -- "$sf1_stage" && pwd -P)"
+chmod 700 "$sf1_stage"
 cargo run --locked -p sorafs_chunker --features dev-tools --bin export_vectors \
-  --signing-key=<ed25519-private-key-hex> \
-  --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
+  -- --write --staging-root "$sf1_stage" \
+  --signing-key-file /absolute/private/council-signing-key.hex
 ```
 
 ## Verification
@@ -62,9 +67,10 @@ this script in nightly workflows and before submitting fixture changes.
 
 Manual verification steps:
 
-1. Run `cargo test -p sorafs_chunker`.
-2. Invoke `ci/check_sorafs_fixtures.sh` locally.
-3. Confirm `git status -- fixtures/sorafs_chunker` is clean.
+1. Run `node scripts/check_sf1_vectors.mjs`.
+2. Run `cargo test -p sorafs_chunker`.
+3. Invoke `ci/check_sorafs_fixtures.sh` locally.
+4. Confirm `git status -- fixtures/sorafs_chunker fuzz/sorafs_chunker` is clean.
 
 ## Upgrade Playbook
 

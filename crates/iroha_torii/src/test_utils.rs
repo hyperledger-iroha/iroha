@@ -821,6 +821,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             query_burst_per_authority: None,
             query_max_inflight: defaults::torii::QUERY_MAX_INFLIGHT,
             query_heavy_max_inflight: defaults::torii::QUERY_HEAVY_MAX_INFLIGHT,
+            query_fanout_max_retained_bytes:
+                defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES,
             query_queue_timeout: Duration::from_millis(defaults::torii::QUERY_QUEUE_TIMEOUT_MS),
             tx_rate_per_authority_per_sec: None,
             tx_burst_per_authority: None,
@@ -963,6 +965,10 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             zk_prover_enabled: false,
             zk_prover_scan_period_secs: 30,
             zk_prover_reports_ttl_secs: 7 * 24 * 60 * 60,
+            zk_prover_reports_max_count:
+                iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT,
+            zk_prover_reports_max_bytes:
+                iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_BYTES,
             zk_prover_max_inflight: defaults::torii::ZK_PROVER_MAX_INFLIGHT,
             zk_prover_max_scan_bytes: defaults::torii::ZK_PROVER_MAX_SCAN_BYTES,
             zk_prover_max_scan_millis: defaults::torii::ZK_PROVER_MAX_SCAN_MILLIS,

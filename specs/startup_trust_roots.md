@@ -46,6 +46,31 @@ present in Kura. `genesis.expected_hash` remains required in both cases. Empty
 storage with only an expected hash fails because Iroha never fetches the
 missing body from another peer.
 
+The daemon and production genesis tooling treat every local trust-root body as
+untrusted input before parsing. The signed genesis artifact is limited to 64
+MiB and decoded under explicit sequence, aggregate-allocation, and nesting
+budgets; the optional JSON genesis
+manifest is limited to 16 MiB and preflighted before tree construction at
+262,144 lexical values/keys/containers, 1 MiB per string, and depth 64. A
+`--config-blake3` configuration is a single
+flattened TOML source and therefore has the same 1 MiB source ceiling as the
+ordinary configuration loader. All three paths use a bounded max-plus-one read
+from a stable direct regular file and reject final-component symlinks/reparse
+points, size changes, and inode substitution. Producers must split oversized
+application setup into post-genesis governance or transaction flows instead of
+raising these first-release startup memory ceilings. Each compiled IVM program
+referenced by the source manifest is likewise read through the stable bounded
+reader and may not exceed the V1 transaction bytecode ceiling (4 MiB). The
+executor and all IVM trigger programs in one expanded manifest are additionally
+limited to 64 MiB in aggregate, so a manifest cannot multiply the per-program
+allowance into unbounded retained bytecode.
+
+Kagami applies the same limits when signing, validating, embedding PoPs,
+preparing Docker bundles, and round-tripping generated localnets. Its normalized
+JSON view is emitted incrementally per instruction so expanded diagnostics do
+not require a second complete JSON tree or simultaneous compact and pretty
+renderings in memory.
+
 Generated Docker swarms are validator-only. Signing happens before deployment;
 the genesis private key, source manifest, executor inputs, and client
 credentials are never mounted into a runtime service. Normal `kagami docker`

@@ -546,7 +546,7 @@ pub fn authenticate_v2_snapshot_startup(
     let record = payload.record().clone();
     let block_hashes = payload.block_hashes().to_vec();
     if state.authenticated_snapshot_v2_bootstrap() != Some(&record)
-        || state.committed_block_hashes_snapshot() != block_hashes
+        || !state.committed_block_hashes_match(&block_hashes)
     {
         return Err(snapshot_bootstrap_error(
             "outer snapshot authentication payload differs from the verified live State",
@@ -687,27 +687,15 @@ fn authenticate_snapshot_hash_vector(
     kura: &Kura,
     state: &State,
 ) -> Result<(), V2StartupReplayError> {
-    let state_hashes = state.committed_block_hashes_snapshot();
-    if state_hashes.len() != state.committed_height() {
-        return Err(snapshot_bootstrap_error(format!(
-            "restored WSV block-hash vector length {} differs from committed height {}",
-            state_hashes.len(),
-            state.committed_height()
-        )));
-    }
+    let state_height = state.committed_height();
     let durable_height = kura.exact_durable_blocks_count()?;
-    if state_hashes.len() > durable_height {
+    if state_height > durable_height {
         return Err(snapshot_bootstrap_error(format!(
             "restored WSV block-hash vector length {} exceeds Kura height {}",
-            state_hashes.len(),
-            durable_height
+            state_height, durable_height
         )));
     }
-    for (index, state_hash) in state_hashes.into_iter().enumerate() {
-        let height = index
-            .checked_add(1)
-            .and_then(NonZeroUsize::new)
-            .expect("enumerated block height is non-zero");
+    state.try_for_each_committed_block_hash(|height, state_hash| {
         let kura_hash = kura.get_durable_block_hash(height).ok_or_else(|| {
             snapshot_bootstrap_error(format!(
                 "Kura block-hash vector is missing restored WSV height {}",
@@ -720,7 +708,8 @@ fn authenticate_snapshot_hash_vector(
                 height.get()
             )));
         }
-    }
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -1474,9 +1463,7 @@ fn verify_state_kura_prefix(
         return Ok(());
     };
     let state_hash = state
-        .committed_block_hashes_snapshot()
-        .last()
-        .copied()
+        .committed_block_hash_at_height(state_height)
         .ok_or(V2RecoveryError::MissingStateTip(state_height))?;
     let kura_hash = kura
         .get_durable_block_hash(nonzero_height)
@@ -1503,7 +1490,7 @@ pub(crate) fn build_verified_successor(
     let parent_height = parent_artifact.height;
     let predecessor = DurableV2PredecessorIdentity::authenticate(parent_artifact, parent_receipt)?;
     let state_height = u64::try_from(state.committed_height())?;
-    let state_block_hash = state.committed_block_hashes_snapshot().last().copied();
+    let state_block_hash = state.committed_block_hash_at_height(state_height);
     if state_height != parent_height || state_block_hash != Some(predecessor.block_hash) {
         return Err(V2RecoveryError::FinalizedStatePredecessorMismatch {
             expected_height: parent_height,

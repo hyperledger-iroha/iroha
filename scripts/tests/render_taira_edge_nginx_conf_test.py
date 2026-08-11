@@ -180,6 +180,7 @@ def test_render_edge_nginx_conf_includes_all_public_routes() -> None:
             "location = /v1/connect/session",
             "location ^~ /v1/connect/session/",
             "location = /v1/connect/status",
+            "location = /v1/connect/status/aggregate",
             "location = /v1/connect/ws",
             "location = /v1/mcp",
         ):

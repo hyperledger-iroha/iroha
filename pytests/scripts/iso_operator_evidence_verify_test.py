@@ -23,64 +23,14 @@ EVIDENCE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 sys.modules[SPEC.name] = EVIDENCE
 SPEC.loader.exec_module(EVIDENCE)
-
-
-def digest_summary(body):
-    body.pop(EVIDENCE.SUMMARY_DIGEST_FIELD, None)
-    body[EVIDENCE.SUMMARY_DIGEST_FIELD] = EVIDENCE.sha256_hex(
-        EVIDENCE._canonical_json_bytes(body)
-    )
-    return body
-
-
-def digest_receipt_summary(body):
-    body.pop(EVIDENCE.SUMMARY_DIGEST_FIELD, None)
-    body[EVIDENCE.SUMMARY_DIGEST_FIELD] = EVIDENCE.sha256_hex(
-        EVIDENCE._canonical_json_bytes(body)
-    )
-    return body
-
-
-def write_json(path, body):
-    path.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return path
-
-
-def canary_receipt_path(kind, offset, name=None):
-    receipt_dir = (
-        "/ops/iso/notary-receipts"
-        if kind == "iso-audit-notary"
-        else "/ops/iso/rail-receipts"
-    )
-    return f"{receipt_dir}/{name or f'{kind}.{offset}.receipt.json'}"
-
-
-def receipt_summary_ok(
-    *,
-    receipt_kind,
-    verified_receipts,
-    allow_failed,
-    allow_insecure_http,
-    allow_default_profile,
-    require_source_files,
-    receipts,
-):
-    return (
-        set(receipt_kind) == EVIDENCE.REQUIRED_RECEIPT_KINDS
-        and verified_receipts == len(receipts)
-        and len(receipts) > 0
-        and not allow_failed
-        and not allow_insecure_http
-        and not allow_default_profile
-        and require_source_files
-        and all(receipt.get("ok") is True for receipt in receipts)
-        and not any(receipt.get("endpoint_requires_insecure_http") for receipt in receipts)
-        and not any(
-            receipt.get("receipt_kind") == "iso-rail-gateway"
-            and receipt.get("profile") is None
-            for receipt in receipts
-        )
-    )
+from pytests.scripts.iso_operator_evidence_verify_test_support import (
+    TEST_NETWORK_ID,
+    canary_receipt_path,
+    digest_receipt_summary,
+    digest_summary,
+    receipt_summary_ok,
+    write_json,
+)
 
 
 def receipt_stdout(
@@ -249,8 +199,10 @@ def rail_command():
         "https://torii.local-bank.bank",
         "--receipt-dir",
         "/ops/iso/rail-receipts",
-        "--bearer-token-file",
-        "<runtime-token-file>",
+        "--operator-private-key-file",
+        "<runtime-private-key-file>",
+        "--network-id",
+        TEST_NETWORK_ID,
     ]
 
 
@@ -627,7 +579,9 @@ def write_https_receipt_dirs(root, *, default_profile=False):
     if rc != 0:
         raise AssertionError(stderr)
     rail_receipt = next((inbox / "receipts").glob("*.receipt.json"))
-    rail_endpoint = "https://torii.local-bank.bank/v1/iso20022/pacs002"
+    rail_endpoint = "https://torii.local-bank.bank/v1/iso20022/pacs002" + (
+        "" if default_profile else "?profile=swift-cbpr-plus"
+    )
     receipt_test.rewrite_receipt(
         rail_receipt,
         lambda body: body.update(
@@ -7212,7 +7166,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             (
                 "rail",
                 "endpoint_url",
-                "https://rail.swift-cbpr-plus.operator-canary.bank/v1/iso20022",
+                "https://rail.swift-cbpr-plus.operator-canary.bank/v1/iso20022?profile=swift-cbpr-plus",
             ),
         )
         for kind, field, endpoint in cases:
@@ -9756,60 +9710,60 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "stages[2].command has --receipt-dir without a value",
                 )
             )
-            bearer_token_flag_value = valid_canary_summary()
-            bearer_token_flag_value["stages"][0]["command"][9] = "--receipt-dir"
-            bearer_token_flag_value.pop("summary_sha256")
+            operator_key_flag_value = valid_canary_summary()
+            operator_key_flag_value["stages"][0]["command"][9] = "--receipt-dir"
+            operator_key_flag_value.pop("summary_sha256")
             cases.append(
                 (
-                    digest_summary(bearer_token_flag_value),
+                    digest_summary(operator_key_flag_value),
                     [],
-                    "stages[0] has --bearer-token-file without a value",
+                    "stages[0] has --operator-private-key-file without a value",
                 )
             )
-            bearer_token_leading_dash_value = valid_canary_summary()
-            bearer_token_leading_dash_value["stages"][0]["command"][9] = "-receipt-dir"
-            bearer_token_leading_dash_value.pop("summary_sha256")
+            operator_key_leading_dash_value = valid_canary_summary()
+            operator_key_leading_dash_value["stages"][0]["command"][9] = "-receipt-dir"
+            operator_key_leading_dash_value.pop("summary_sha256")
             cases.append(
                 (
-                    digest_summary(bearer_token_leading_dash_value),
+                    digest_summary(operator_key_leading_dash_value),
                     [],
-                    "stages[0] has --bearer-token-file without a value",
+                    "stages[0] has --operator-private-key-file without a value",
                 )
             )
-            bearer_token_equals_flag_value = valid_canary_summary()
-            command = bearer_token_equals_flag_value["stages"][0]["command"]
+            operator_key_equals_flag_value = valid_canary_summary()
+            command = operator_key_equals_flag_value["stages"][0]["command"]
             del command[8:10]
-            command.insert(8, "--bearer-token-file=--receipt-dir")
-            bearer_token_equals_flag_value.pop("summary_sha256")
+            command.insert(8, "--operator-private-key-file=--receipt-dir")
+            operator_key_equals_flag_value.pop("summary_sha256")
             cases.append(
                 (
-                    digest_summary(bearer_token_equals_flag_value),
+                    digest_summary(operator_key_equals_flag_value),
                     [],
-                    "stages[0] has --bearer-token-file without a value",
+                    "stages[0] has --operator-private-key-file without a value",
                 )
             )
-            bearer_token_leading_dash_equals = valid_canary_summary()
-            command = bearer_token_leading_dash_equals["stages"][0]["command"]
+            operator_key_leading_dash_equals = valid_canary_summary()
+            command = operator_key_leading_dash_equals["stages"][0]["command"]
             del command[8:10]
-            command.insert(8, "--bearer-token-file=-receipt-dir")
-            bearer_token_leading_dash_equals.pop("summary_sha256")
+            command.insert(8, "--operator-private-key-file=-receipt-dir")
+            operator_key_leading_dash_equals.pop("summary_sha256")
             cases.append(
                 (
-                    digest_summary(bearer_token_leading_dash_equals),
+                    digest_summary(operator_key_leading_dash_equals),
                     [],
-                    "stages[0] has --bearer-token-file without a value",
+                    "stages[0] has --operator-private-key-file without a value",
                 )
             )
-            bearer_token_empty_equals = valid_canary_summary()
-            command = bearer_token_empty_equals["stages"][0]["command"]
+            operator_key_empty_equals = valid_canary_summary()
+            command = operator_key_empty_equals["stages"][0]["command"]
             del command[8:10]
-            command.insert(8, "--bearer-token-file=")
-            bearer_token_empty_equals.pop("summary_sha256")
+            command.insert(8, "--operator-private-key-file=")
+            operator_key_empty_equals.pop("summary_sha256")
             cases.append(
                 (
-                    digest_summary(bearer_token_empty_equals),
+                    digest_summary(operator_key_empty_equals),
                     [],
-                    "stages[0] has --bearer-token-file without a value",
+                    "stages[0] has --operator-private-key-file without a value",
                 )
             )
             for body, extra_args, message in cases:
@@ -10034,7 +9988,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 (
                     digest_summary(rail_message_non_xml),
                     [],
-                    "stages[0].command[11] must point to a .xml file",
+                    "stages[0].command[13] must point to a .xml file",
                 ),
                 (
                     digest_summary(notary_export_dash),
@@ -10069,7 +10023,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 (
                     digest_summary(planned_rail_fixture_message),
                     ["--allow-plan-only"],
-                    "planned_stages[0].command[11] must not point to checked-in ISO XML fixtures",
+                    "planned_stages[0].command[13] must not point to checked-in ISO XML fixtures",
                 ),
                 (
                     digest_summary(planned_notary_fixture_export),
@@ -11008,23 +10962,35 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn("command", stderr)
 
-    def test_unredacted_bearer_token_path_and_secret_preview_are_rejected(self):
+    def test_unredacted_operator_private_key_path_and_secret_preview_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             trust_path = write_trust_summary(root)
             cases = []
             unredacted = valid_canary_summary()
-            token_index = unredacted["stages"][0]["command"].index("--bearer-token-file") + 1
-            unredacted["stages"][0]["command"][token_index] = "/ops/secrets/torii.bearer"
+            token_index = unredacted["stages"][0]["command"].index(
+                "--operator-private-key-file"
+            ) + 1
+            unredacted["stages"][0]["command"][token_index] = "/ops/secrets/operator.key"
             unredacted.pop("summary_sha256")
-            cases.append((digest_summary(unredacted), "unredacted bearer-token file path"))
+            cases.append(
+                (digest_summary(unredacted), "unredacted operator-private-key file path")
+            )
             unredacted_equals = valid_canary_summary()
             command = unredacted_equals["stages"][0]["command"]
-            token_index = command.index("--bearer-token-file")
+            token_index = command.index("--operator-private-key-file")
             del command[token_index : token_index + 2]
-            command.insert(token_index, "--bearer-token-file=/ops/secrets/torii.bearer")
+            command.insert(
+                token_index,
+                "--operator-private-key-file=/ops/secrets/operator.key",
+            )
             unredacted_equals.pop("summary_sha256")
-            cases.append((digest_summary(unredacted_equals), "unredacted bearer-token file path"))
+            cases.append(
+                (
+                    digest_summary(unredacted_equals),
+                    "unredacted operator-private-key file path",
+                )
+            )
             preview = valid_canary_summary()
             preview["stages"][1]["stderr_preview"] = "Authorization: Bearer live-token"
             preview.pop("summary_sha256")
@@ -12238,7 +12204,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     lambda body: body["stages"][0]["command"].extend(
                         ["--message", f"{fixture_root}/rail-inbox/payment.xml"]
                     ),
-                    "stages[0].command[11] must not point to checked-in ISO XML fixtures",
+                    "stages[0].command[13] must not point to checked-in ISO XML fixtures",
                 ),
                 (
                     "rail-receipt-dir",

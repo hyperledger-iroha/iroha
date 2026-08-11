@@ -1,15 +1,10 @@
-//! Signer-free public Musubi query helpers.
+//! Exact-network authenticated public Musubi query helpers.
 
 use std::time::Duration;
 
+use super::{APPLICATION_JSON, Client};
+use crate::http::{Method as HttpMethod, RequestBuilder as _, StatusCode};
 use eyre::{Result, WrapErr as _, eyre};
-use url::Url;
-
-use super::APPLICATION_JSON;
-use crate::{
-    http::{Method as HttpMethod, StatusCode},
-    http_default::DefaultRequestBuilder,
-};
 
 // Exact-release JSON repeats the bounded dependency vector in the authoritative home record and
 // the universal resolver row. Byte-budgeted resolver pages share this Musubi-specific ceiling,
@@ -17,7 +12,7 @@ use crate::{
 pub(super) const MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES: usize =
     iroha_data_model::musubi::MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES_V1;
 
-/// First-release public Musubi query endpoint selected without constructing a signer.
+/// First-release authenticated public Musubi query endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublicMusubiQueryPathV1 {
     /// Fetch one exact structural package record.
@@ -65,7 +60,7 @@ impl PublicMusubiQueryPathV1 {
     }
 }
 
-/// Result of a signer-free public Musubi query.
+/// Result of an authenticated public Musubi query.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PublicMusubiQueryResultV1<T> {
     /// The exact record or finalized page was returned and decoded.
@@ -76,18 +71,17 @@ pub enum PublicMusubiQueryResultV1<T> {
     StaleCursor,
 }
 
-/// Execute one bounded public Musubi V1 query without loading an account or key pair.
+/// Execute one bounded public Musubi V1 query with the client's exact-network account signer.
 ///
 /// This function deliberately accepts only the fixed typed-query route inventory. It
-/// never attaches configured headers, canonical account authentication, or signing
-/// material. Callers that need to mutate state must construct [`super::Client`] separately.
+/// signs the exact POST path and raw JSON body with fresh timestamp/nonce headers. The shared
+/// blocking transport is redirect-free and retry-free, so the authenticated body is one-shot.
 ///
 /// # Errors
-/// Returns an error when the base URL is unsuitable for a public request, request or
-/// response JSON is invalid, transport fails, or Torii returns any status other than
-/// success, not-found, or stale-cursor.
+/// Returns an error when the client or base URL is unsuitable, request signing or JSON fails,
+/// transport fails, or Torii returns any status other than success, not-found, or stale-cursor.
 pub fn post_public_musubi_query_v1<Q, R>(
-    torii_url: &Url,
+    client: &Client,
     path: PublicMusubiQueryPathV1,
     query: &Q,
     timeout: Duration,
@@ -96,37 +90,45 @@ where
     Q: norito::json::JsonSerialize + ?Sized,
     R: norito::json::JsonDeserialize,
 {
-    if !matches!(torii_url.scheme(), "http" | "https")
-        || !torii_url.username().is_empty()
-        || torii_url.password().is_some()
+    if !matches!(client.torii_url.scheme(), "http" | "https")
+        || !client.torii_url.username().is_empty()
+        || client.torii_url.password().is_some()
+        || client.account.controller.single_signatory() != Some(client.key_pair.public_key())
+        || client
+            .headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("X-Iroha-Witness"))
     {
-        return Err(eyre!("invalid public Musubi Torii URL"));
+        return Err(eyre!("invalid authenticated Musubi client"));
     }
-    let url = torii_url
+    let url = client
+        .torii_url
         .join(path.path())
-        .wrap_err("failed to build public Musubi query URL")?;
-    let body = norito::json::to_vec(query).wrap_err("failed to encode public Musubi query")?;
-    let mut builder = DefaultRequestBuilder::new(HttpMethod::POST, url)
+        .wrap_err("failed to build authenticated Musubi query URL")?;
+    let body =
+        norito::json::to_vec(query).wrap_err("failed to encode authenticated Musubi query")?;
+    let mut builder = client
+        .account_signed_request(HttpMethod::POST, url, body)
+        .wrap_err("failed to sign authenticated Musubi query")?
         .header("Content-Type", APPLICATION_JSON)
         .header("Accept", APPLICATION_JSON)
-        .max_response_bytes(MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES)
-        .body(body);
+        .max_response_bytes(MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES);
     if timeout != Duration::ZERO {
         builder = builder.timeout(timeout);
     }
     let response = builder
         .build()
-        .wrap_err("failed to build public Musubi query")?
+        .wrap_err("failed to build authenticated Musubi query")?
         .send()
-        .wrap_err("public Musubi query transport failed")?;
+        .wrap_err("authenticated Musubi query transport failed")?;
     match response.status() {
         StatusCode::OK => norito::json::from_slice(response.body())
             .map(PublicMusubiQueryResultV1::Found)
-            .wrap_err("public Musubi query response was invalid"),
+            .wrap_err("authenticated Musubi query response was invalid"),
         StatusCode::NOT_FOUND => Ok(PublicMusubiQueryResultV1::NotFound),
         StatusCode::GONE => Ok(PublicMusubiQueryResultV1::StaleCursor),
         status => Err(eyre!(
-            "public Musubi query failed with HTTP status {}",
+            "authenticated Musubi query failed with HTTP status {}",
             status.as_u16()
         )),
     }

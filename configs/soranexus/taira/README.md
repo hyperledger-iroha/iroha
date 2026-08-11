@@ -247,11 +247,12 @@ into multi-second stalls.
   content-hashed in both modes because they are small and operator-editable.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
   checks used by the Taira Codex rollout, with wire-revision-4 reducer health read
-  from `/v1/sumeragi/status` and an optional signed write canary for final
-  public cutover. It verifies ordinary node/consensus health, the common `is`
-  and `is2` dataspace catalog, and universal ABI-21 `cash_handoff_v1`
-  discovery. It never treats an asset, application proof release, or device UI
-  state as a validator admission condition.
+  from an exact-NetworkId operator-signed `/v1/sumeragi/status` request and an
+  optional signed write canary for final public cutover. It verifies ordinary
+  node/consensus health, the common `is` and `is2` dataspace catalog, and
+  universal ABI-21 `cash_handoff_v1` discovery. It never treats an asset,
+  application proof release, or device UI state as a validator admission
+  condition.
 - `check_sorafs_rollout.sh`: public SoraFS surface + signed capacity-declaration
   canary that catches stale validators still missing the capacity/order ISI
   dispatch table.
@@ -1156,7 +1157,7 @@ allowlisting:
 1. Render a per-validator config with the node's own `public_address` and
    `torii_public_address`, then start `iroha3d` against the published seed peers.
 2. Wait for the node to sync and confirm lane mode:
-   - `iroha app nexus lane-report --summary`
+   - `iroha --operator-private-key-file /run/secrets/taira-operator-private-key app nexus lane-report --summary`
    - `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq .`
 3. Fund the candidate account with `xor#universal`.
 4. Register the validator on the public lane with its live peer identity:
@@ -1168,7 +1169,8 @@ allowlisting:
    - `iroha app nexus public-lane validators --lane 0 --summary`
    - `iroha app nexus public-lane stake --lane 0 --validator <i105-account-id> --summary`
    - `curl -sS "${PUBLIC_TORII_ROOT}/v1/nexus/public-lanes/0/validators" | jq .`
-   - `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/validator-sets" | jq .`
+   - run the operator-authenticated rollout gate below; it also validates
+     `/v1/sumeragi/validator-sets` against the live consensus roster
 
 ## Public endpoints
 
@@ -1331,10 +1333,32 @@ user-local MCP servers with the exact public root under test.
 
 For final public rollout, do not stop at MCP discovery. Run the repo smoke with
 the public endpoint, the exact full 40-character deployment git SHA, all four
-direct validator roots, and a runtime-only canary signer config. Define the
-non-optional fleet arguments once:
+direct validator roots, a runtime-only canary signer config, and an allow-listed
+runtime-only operator key bound to the exact genesis `NetworkId`. The operator
+private-key file must be an absolute, singly linked regular file with mode
+`0600`; the rollout scripts generate a fresh empty-body GET signature for the
+final path and query and never use token fallback, redirects, or retries. Define
+the operator inputs and non-optional fleet arguments once:
 
 ```bash
+export OPERATOR_NETWORK_ID='hash:<exact-genesis-network-id>'
+export OPERATOR_PRIVATE_KEY_FILE='/run/secrets/taira-operator-private-key'
+operator_get() {
+  local url="$1"
+  shift
+  local header_output
+  local -a header_args=()
+  header_output="$(python3 scripts/operator_http_headers.py \
+    --network-id "${OPERATOR_NETWORK_ID}" \
+    --private-key-file "${OPERATOR_PRIVATE_KEY_FILE}" \
+    --method GET --url "${url}")" || return
+  while IFS= read -r header; do
+    header_args+=(--header "${header}")
+  done <<<"${header_output}"
+  [[ ${#header_args[@]} -eq 8 ]] || return 1
+  curl --fail --silent --show-error --max-redirs 0 --retry 0 \
+    "$@" "${header_args[@]}" "${url}"
+}
 TAIRA_VALIDATOR_ARGS=(
   --validator-root validator-1=https://taira-validator-1.sora.org
   --validator-root validator-2=https://taira-validator-2.sora.org
@@ -1458,7 +1482,7 @@ Before long public writes such as Soracloud releases or large SoraFS publishes:
 - confirm that `/status` counters advance and use `/v1/sumeragi/status` for
   detailed finality and queue health:
   - `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq '{build_git_sha: .build.git_commit_sha, blocks, queue_size, peers, teu_dataspace_backlog}'`
-  - `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{protocol_version, node_fingerprint, build_fingerprint, config_fingerprint, height_context_id, height, view, phase: .phase.phase, leader, locked_prepare_qc, highest_prepare_qc, last_timeout_certificate, body_state: .body_state.state, pending_persistence_id, mode: .height_context.mode.mode, epoch: .height_context.epoch, validator_count: .height_context.validator_count, quorum: .height_context.quorum, last_committed_height, last_committed_subject, commit_qc_height: .last_commit_qc.certificate.round.height, commit_qc_signers: .last_commit_qc.signer_count, commit_qc_min_signers: .last_commit_qc.min_signers, commit_qc_signed_power: .last_commit_qc.signed_power, commit_qc_total_power: .last_commit_qc.total_power, view_change_install_total: .operator.view_change_install_total, busy_deferral_total: .operator.busy_deferral_total, tx_queue_depth: .operator.tx_queue.queued_transactions, tx_queue_capacity: .operator.tx_queue.capacity, saturated_by_count: .operator.tx_queue.saturated_by_count, saturated_by_age: .operator.tx_queue.saturated_by_age, oldest_queued_age_ms: .operator.tx_queue.oldest_queued_age_ms, lane_block_sessions: (.lane_block_sessions | length)}'`
+  - `operator_get "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{protocol_version, node_fingerprint, build_fingerprint, config_fingerprint, height_context_id, height, view, phase: .phase.phase, leader, locked_prepare_qc, highest_prepare_qc, last_timeout_certificate, body_state: .body_state.state, pending_persistence_id, mode: .height_context.mode.mode, epoch: .height_context.epoch, validator_count: .height_context.validator_count, quorum: .height_context.quorum, last_committed_height, last_committed_subject, commit_qc_height: .last_commit_qc.certificate.round.height, commit_qc_signers: .last_commit_qc.signer_count, commit_qc_min_signers: .last_commit_qc.min_signers, commit_qc_signed_power: .last_commit_qc.signed_power, commit_qc_total_power: .last_commit_qc.total_power, view_change_install_total: .operator.view_change_install_total, busy_deferral_total: .operator.busy_deferral_total, tx_queue_depth: .operator.tx_queue.queued_transactions, tx_queue_capacity: .operator.tx_queue.capacity, saturated_by_count: .operator.tx_queue.saturated_by_count, saturated_by_age: .operator.tx_queue.saturated_by_age, oldest_queued_age_ms: .operator.tx_queue.oldest_queued_age_ms, lane_block_sessions: (.lane_block_sessions | length)}'`
 - verify the signer you intend to use still exists on the current Taira chain
   and still has a positive fee-asset balance
 - for Soracloud mutations specifically, also verify that the signer still
@@ -1814,9 +1838,11 @@ From `../iroha2-block-explorer-web`:
     parity checks pass. The validator-specific hostnames remain available for
     consensus diagnostics.
   - keep the dedicated `location = /v1/mcp` blocks pinned to the same Torii
-    upstream as `/v1/connect/session`, `/v1/connect/status`, and
-    `/v1/connect/ws`. MCP exposes Connect session creation and management
-    tools, and Connect tokens/state are process-local at creation time.
+    upstream as `/v1/connect/session`, management-token session status at
+    `/v1/connect/status`, operator-signed aggregate status at
+    `/v1/connect/status/aggregate`, and `/v1/connect/ws`. MCP exposes Connect
+    session creation and management tools, and Connect tokens/state are
+    process-local at creation time.
   - keep the `proxy_next_upstream ... non_idempotent` retry policy on shared
     public locations only. Do not add upstream failover to the pinned
     Connect/MCP locations until Connect session state is shared across
@@ -1916,7 +1942,7 @@ From `../iroha2-block-explorer-web`:
    - before DNS propagates or before the SAN cert is refreshed, you can still
      validate local SNI routing on the edge host with `curl --resolve` plus
      `-k`, for example:
-     `curl -sk --resolve taira-validator-1.sora.org:443:127.0.0.1 https://taira-validator-1.sora.org/v1/sumeragi/status | jq '.height, .last_committed_height, .last_commit_qc.certificate.round.height'`
+     `operator_get https://taira-validator-1.sora.org/v1/sumeragi/status --insecure --resolve taira-validator-1.sora.org:443:127.0.0.1 | jq '.height, .last_committed_height, .last_commit_qc.certificate.round.height'`
      `curl -sk --resolve taira-validator-1.sora.org:443:127.0.0.1 https://taira-validator-1.sora.org/status | jq '.blocks'`
    - if a client network intercepts or blocks `sora.net`, HTTP may be replaced
      before nginx and HTTPS may reset during the TLS ClientHello. This is stale
@@ -1954,7 +1980,7 @@ From `../iroha2-block-explorer-web`:
    - verify native counters and detailed Sumeragi health before trusting public
      writes:
      `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq '{build_git_sha: .build.git_commit_sha, blocks, queue_size, peers, teu_dataspace_backlog}'`
-     `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{protocol_version, node_fingerprint, build_fingerprint, config_fingerprint, height_context_id, height, view, phase: .phase.phase, leader, locked_prepare_qc, highest_prepare_qc, last_timeout_certificate, body_state: .body_state.state, pending_persistence_id, mode: .height_context.mode.mode, epoch: .height_context.epoch, validator_count: .height_context.validator_count, quorum: .height_context.quorum, last_committed_height, last_committed_subject, commit_qc_height: .last_commit_qc.certificate.round.height, commit_qc_signers: .last_commit_qc.signer_count, commit_qc_min_signers: .last_commit_qc.min_signers, commit_qc_signed_power: .last_commit_qc.signed_power, commit_qc_total_power: .last_commit_qc.total_power, tx_queue_depth: .operator.tx_queue.queued_transactions, tx_queue_capacity: .operator.tx_queue.capacity, saturated_by_count: .operator.tx_queue.saturated_by_count, saturated_by_age: .operator.tx_queue.saturated_by_age, view_change_install_total: .operator.view_change_install_total, busy_deferral_total: .operator.busy_deferral_total}'`
+     `operator_get "${PUBLIC_TORII_ROOT}/v1/sumeragi/status" | jq '{protocol_version, node_fingerprint, build_fingerprint, config_fingerprint, height_context_id, height, view, phase: .phase.phase, leader, locked_prepare_qc, highest_prepare_qc, last_timeout_certificate, body_state: .body_state.state, pending_persistence_id, mode: .height_context.mode.mode, epoch: .height_context.epoch, validator_count: .height_context.validator_count, quorum: .height_context.quorum, last_committed_height, last_committed_subject, commit_qc_height: .last_commit_qc.certificate.round.height, commit_qc_signers: .last_commit_qc.signer_count, commit_qc_min_signers: .last_commit_qc.min_signers, commit_qc_signed_power: .last_commit_qc.signed_power, commit_qc_total_power: .last_commit_qc.total_power, tx_queue_depth: .operator.tx_queue.queued_transactions, tx_queue_capacity: .operator.tx_queue.capacity, saturated_by_count: .operator.tx_queue.saturated_by_count, saturated_by_age: .operator.tx_queue.saturated_by_age, view_change_install_total: .operator.view_change_install_total, busy_deferral_total: .operator.busy_deferral_total}'`
    - remember that `/status.peers` is the queried node's current remote-peer
      count, not the validator-set size; use
      `/v1/sumeragi/status` `height_context.validator_count` and
@@ -2021,10 +2047,18 @@ For the local `dist/taira-localnet` deployment, use:
      fee-program lifecycle delegation. The bootstrap creates, funds, and
      activates `{DPN_SPONSOR_ACCOUNT_ID}/default`; ownership is enforced and a
      different unfederated account fails closed.
-3. Verify the relay endpoints and explorer page:
-   - `curl -sk https://taira.sora.org/v1/kaigi/relays | jq .`
-   - `curl -sk https://taira.sora.org/v1/kaigi/relays/health | jq .`
-   - open `https://taira-explorer.sora.org/kaigi/relays`
+3. Verify the relay endpoints:
+   - the bootstrap prints list and health responses through the maintained
+     Python SDK using `peer0.toml` as a runtime-only operator key source and
+     `client.toml` as the exact `NetworkId` source;
+   - for another deployment, construct the Python or JavaScript client with an
+     immutable runtime `OperatorSigningContext` and call the typed Kaigi list
+     and health helpers. Unsigned curl, API tokens, redirected requests, and
+     precomputed operator headers now fail closed;
+   - do not place a validator/operator private key in browser Explorer config.
+     The Explorer Kaigi page requires a separately deployed server-side signed
+     diagnostic adapter before it can consume these operator-only snapshots;
+     otherwise a `401` is the expected result.
 
 The script is intentionally localnet-specific:
 

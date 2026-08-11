@@ -314,6 +314,13 @@ macro_rules! define_hash32_newtype {
             fn json_serialize(&self, out: &mut String) {
                 json::write_json_string(&self.to_hex(), out);
             }
+
+            fn json_serialize_to(
+                &self,
+                out: &mut dyn json::JsonWriteSink,
+            ) -> Result<(), json::BoundedJsonError> {
+                json::write_json_string_to(&self.to_hex(), out)
+            }
         }
 
         #[cfg(feature = "json")]
@@ -388,6 +395,13 @@ impl fmt::Display for AbiVersion {
 impl JsonSerialize for AbiVersion {
     fn json_serialize(&self, out: &mut String) {
         json::JsonSerialize::json_serialize(&self.0, out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.json_serialize_to(out)
     }
 }
 
@@ -653,6 +667,13 @@ impl JsonSerialize for ProposalId {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(&hex::encode(self.0), out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(&hex::encode(self.0), out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -824,6 +845,13 @@ impl JsonSerialize for EnactmentSignatureScheme {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(self.as_str(), out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(self.as_str(), out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -913,6 +941,22 @@ impl json::JsonSerialize for ParliamentBody {
             ParliamentBody::FmaCommittee => "fma-committee",
         };
         json::write_json_string(label, out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        let label = match self {
+            ParliamentBody::RulesCommittee => "rules-committee",
+            ParliamentBody::AgendaCouncil => "agenda-council",
+            ParliamentBody::InterestPanel => "interest-panel",
+            ParliamentBody::ReviewPanel => "review-panel",
+            ParliamentBody::PolicyJury => "policy-jury",
+            ParliamentBody::OversightCommittee => "oversight-committee",
+            ParliamentBody::FmaCommittee => "fma-committee",
+        };
+        json::write_json_string_to(label, out)
     }
 }
 

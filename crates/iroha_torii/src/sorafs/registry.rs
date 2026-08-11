@@ -51,6 +51,8 @@ use crate::sorafs::capability_name;
 const METADATA_STATUS_TIMESTAMP_KEY: &str = "sorafs_status_timestamp_unix";
 const METADATA_GOVERNANCE_REFS_KEY: &str = "sorafs_governance_refs";
 const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
+const REPLICATION_ORDER_PAGE_MAX_ITEMS_V1: usize = 500;
+const ALIAS_PAGE_MAX_ITEMS_V1: usize = 500;
 const REPLICATION_ORDER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     sorafs_manifest::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES,
     REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1,
@@ -687,6 +689,7 @@ fn metadata_to_json(metadata: &Metadata) -> Result<Value, json::Error> {
 }
 
 /// Pin registry snapshot containing manifests, aliases, and replication orders.
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub(crate) struct PinRegistrySnapshot {
     pub(crate) manifests: Vec<RegistryManifest>,
@@ -697,7 +700,37 @@ pub(crate) struct PinRegistrySnapshot {
     successor_by_predecessor: HashMap<String, SuccessorIndex>,
 }
 
+/// Bounded replication-order projection decoded after filtering and pagination.
+#[derive(Debug, Clone)]
+pub(crate) struct ReplicationOrderPage {
+    /// Exact number of raw records matching the requested filters.
+    pub(crate) total_count: usize,
+    /// At most the requested bounded page of decoded records.
+    pub(crate) orders: Vec<RegistryReplicationOrder>,
+}
+
+/// One bounded alias page projected without materializing the full pin registry.
+#[derive(Debug, Clone)]
+pub(crate) struct AliasPage {
+    /// Exact number of aliases matching the requested filters.
+    pub(crate) total_count: usize,
+    /// At most the requested bounded page of aliases and their required presentation context.
+    pub(crate) entries: Vec<AliasPageEntry>,
+}
+
+/// Presentation inputs for one alias in a bounded page.
+#[derive(Debug, Clone)]
+pub(crate) struct AliasPageEntry {
+    /// Bounded alias projection returned to the caller.
+    pub(crate) alias: RegistryAlias,
+    /// Governance references required to derive presentation for this alias.
+    pub(crate) governance: GovernanceSummary,
+    /// Deterministically selected successor lineage for this alias manifest.
+    pub(crate) lineage: ManifestLineageSummary,
+}
+
 /// Aggregated metrics extracted from a [`PinRegistrySnapshot`].
+#[cfg(test)]
 #[derive(Debug, Default, Clone)]
 pub(crate) struct PinRegistryMetricsSummary {
     pub(crate) manifests_pending: u64,
@@ -713,6 +746,7 @@ pub(crate) struct PinRegistryMetricsSummary {
     pub(crate) deadline_slack_epochs: Vec<f64>,
 }
 
+#[cfg(test)]
 impl PinRegistryMetricsSummary {
     /// Build a summary from the supplied snapshot.
     #[must_use]
@@ -770,6 +804,7 @@ impl PinRegistryMetricsSummary {
     }
 }
 
+#[cfg(test)]
 impl PinRegistrySnapshot {
     pub(crate) fn manifest_by_digest(&self, digest_hex: &str) -> Option<&RegistryManifest> {
         self.manifest_by_digest
@@ -1016,17 +1051,20 @@ pub(crate) fn optional_rfc3339(unix: Option<u64>) -> Option<String> {
     unix.and_then(unix_to_rfc3339_string)
 }
 
+#[cfg(test)]
 struct SuccessorSelection<'a> {
     best: Option<&'a RegistryManifest>,
     has_fork: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg(test)]
 struct SuccessorIndex {
     best: usize,
     count: usize,
 }
 
+#[cfg(test)]
 fn successor_is_better(candidate: &RegistryManifest, current: &RegistryManifest) -> bool {
     match (&candidate.status, &current.status) {
         (
@@ -1199,6 +1237,7 @@ impl GovernanceRefKind {
     }
 }
 
+#[cfg(test)]
 fn lineage_successor_from(manifest: &RegistryManifest) -> LineageSuccessor {
     LineageSuccessor {
         digest_hex: manifest.digest_hex.clone(),
@@ -1304,6 +1343,11 @@ pub(crate) fn lineage_to_json(lineage: &ManifestLineageSummary) -> Value {
 /// Errors raised while preparing pin registry projections.
 #[derive(Debug, Error)]
 pub(crate) enum PinRegistryError {
+    #[error("alias {alias_label} references missing manifest {digest_hex}")]
+    MissingAliasManifest {
+        alias_label: String,
+        digest_hex: String,
+    },
     #[error("failed to serialize manifest metadata for {digest_hex}: {source}")]
     SerializeManifestMetadata {
         digest_hex: String,
@@ -1336,6 +1380,7 @@ pub(crate) enum PinRegistryError {
 }
 
 /// Collect the current pin registry snapshot (manifests, aliases, and replication orders).
+#[cfg(test)]
 pub(crate) fn collect_pin_registry(
     world: &WorldView<'_>,
 ) -> Result<PinRegistrySnapshot, PinRegistryError> {
@@ -1398,6 +1443,321 @@ pub(crate) fn collect_pin_registry(
     })
 }
 
+#[derive(Debug, Clone)]
+struct LineageCandidate {
+    digest: ManifestDigest,
+    status: ManifestStatusProjection,
+    submitted_epoch: u64,
+    status_timestamp_unix: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct LineageSelection {
+    best: Option<LineageCandidate>,
+    count: usize,
+}
+
+struct LineageState {
+    successor_of_hex: Option<String>,
+    current_digest: ManifestDigest,
+    head: ManifestDigest,
+    depth: u32,
+    approved_successor: Option<LineageSuccessor>,
+    immediate_successor: Option<LineageSuccessor>,
+    anomalies: Vec<String>,
+    visited: HashSet<ManifestDigest>,
+    finished: bool,
+}
+
+fn manifest_status_projection(status: PinStatus) -> ManifestStatusProjection {
+    match status {
+        PinStatus::Pending => ManifestStatusProjection::Pending,
+        PinStatus::Approved(epoch) => ManifestStatusProjection::Approved { epoch },
+        PinStatus::Retired(epoch) => ManifestStatusProjection::Retired { epoch },
+    }
+}
+
+fn lineage_candidate_is_better(candidate: &LineageCandidate, current: &LineageCandidate) -> bool {
+    match (&candidate.status, &current.status) {
+        (
+            ManifestStatusProjection::Approved {
+                epoch: candidate_epoch,
+            },
+            ManifestStatusProjection::Approved {
+                epoch: current_epoch,
+            },
+        ) => {
+            candidate_epoch > current_epoch
+                || (candidate_epoch == current_epoch && candidate.digest > current.digest)
+        }
+        (ManifestStatusProjection::Approved { .. }, _) => true,
+        (_, ManifestStatusProjection::Approved { .. }) => false,
+        _ => {
+            candidate.submitted_epoch > current.submitted_epoch
+                || (candidate.submitted_epoch == current.submitted_epoch
+                    && candidate.digest > current.digest)
+        }
+    }
+}
+
+fn lineage_successor_from_candidate(candidate: &LineageCandidate) -> LineageSuccessor {
+    LineageSuccessor {
+        digest_hex: candidate.digest.as_bytes().encode_hex::<String>(),
+        status: candidate.status.clone(),
+        approved_epoch: candidate.status.approved_epoch(),
+        status_timestamp_unix: candidate.status_timestamp_unix,
+    }
+}
+
+fn collect_manifest_lineages(
+    world: &WorldView<'_>,
+    digests: &[ManifestDigest],
+) -> Vec<ManifestLineageSummary> {
+    let mut states = digests
+        .iter()
+        .map(|digest| {
+            let manifest = world.pin_manifests().get(digest);
+            let mut visited = HashSet::with_capacity(MAX_LINEAGE_DEPTH.saturating_add(1));
+            visited.insert(*digest);
+            LineageState {
+                successor_of_hex: manifest.and_then(|record| {
+                    record
+                        .successor_of
+                        .as_ref()
+                        .map(|predecessor| predecessor.as_bytes().encode_hex::<String>())
+                }),
+                current_digest: *digest,
+                head: *digest,
+                depth: 0,
+                approved_successor: None,
+                immediate_successor: None,
+                anomalies: manifest
+                    .is_none()
+                    .then(|| vec!["ManifestMissing".to_owned()])
+                    .unwrap_or_default(),
+                visited,
+                finished: manifest.is_none(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // Resolve every selected alias in one registry scan per lineage hop. This keeps both memory
+    // and scan count independent of `page_size * registry_size` while preserving the established
+    // deterministic fork selection.
+    for hop in 1..=MAX_LINEAGE_DEPTH.saturating_add(1) {
+        let mut active = HashMap::<ManifestDigest, Vec<usize>>::new();
+        for (index, state) in states.iter().enumerate() {
+            if !state.finished {
+                active.entry(state.current_digest).or_default().push(index);
+            }
+        }
+        if active.is_empty() {
+            break;
+        }
+
+        let mut selections = vec![LineageSelection::default(); states.len()];
+        for (digest, record) in world.pin_manifests().iter() {
+            let Some(predecessor) = record.successor_of.as_ref() else {
+                continue;
+            };
+            let Some(indices) = active.get(predecessor) else {
+                continue;
+            };
+            let candidate = LineageCandidate {
+                digest: *digest,
+                status: manifest_status_projection(record.status),
+                submitted_epoch: record.submitted_epoch,
+                status_timestamp_unix: metadata_timestamp_hint(
+                    &record.metadata,
+                    METADATA_STATUS_TIMESTAMP_KEY,
+                ),
+            };
+            for index in indices {
+                let selection = &mut selections[*index];
+                selection.count = selection.count.saturating_add(1);
+                let replace = match selection.best.as_ref() {
+                    None => true,
+                    Some(current) => lineage_candidate_is_better(&candidate, current),
+                };
+                if replace {
+                    selection.best = Some(candidate.clone());
+                }
+            }
+        }
+
+        for (index, state) in states.iter_mut().enumerate() {
+            if state.finished {
+                continue;
+            }
+            let selection = &mut selections[index];
+            if selection.count > 1 {
+                state.anomalies.push("SuccessorForkResolved".to_owned());
+            }
+            let Some(next) = selection.best.take() else {
+                state.finished = true;
+                continue;
+            };
+            if hop > MAX_LINEAGE_DEPTH {
+                state.anomalies.push("LineageDepthExceeded".to_owned());
+                state.finished = true;
+                continue;
+            }
+            if !state.visited.insert(next.digest) {
+                state.anomalies.push("LineageCycleDetected".to_owned());
+                state.finished = true;
+                continue;
+            }
+
+            let successor = lineage_successor_from_candidate(&next);
+            if state.immediate_successor.is_none() {
+                state.immediate_successor = Some(successor.clone());
+            }
+            if state.approved_successor.is_none()
+                && matches!(&next.status, ManifestStatusProjection::Approved { .. })
+            {
+                state.approved_successor = Some(successor);
+            }
+            state.depth = state.depth.saturating_add(1);
+            state.head = next.digest;
+            state.current_digest = next.digest;
+        }
+    }
+
+    states
+        .into_iter()
+        .map(|state| ManifestLineageSummary {
+            successor_of_hex: state.successor_of_hex,
+            head_hex: state.head.as_bytes().encode_hex::<String>(),
+            depth_to_head: state.depth,
+            approved_successor: state.approved_successor,
+            immediate_successor: state.immediate_successor,
+            anomalies: state.anomalies,
+        })
+        .collect()
+}
+
+/// Collect one alias page without decoding or retaining the complete pin registry.
+///
+/// The canonical alias store is already ordered by `(namespace, name)`, which is the same order
+/// as the public `namespace/name` label. Filters and the exact count are evaluated on typed records;
+/// only the selected page's aliases and manifests are projected. Lineage traversal retains at most
+/// the protocol's fixed 64-hop path and scans successors without building a registry-wide index.
+pub(crate) fn collect_alias_page(
+    world: &WorldView<'_>,
+    offset: usize,
+    limit: usize,
+    namespace_filter: Option<&str>,
+    digest_filter: Option<&str>,
+) -> Result<AliasPage, PinRegistryError> {
+    let digest_filter = match digest_filter {
+        None => None,
+        Some(encoded) => {
+            if encoded.len() != 64 {
+                return Ok(AliasPage {
+                    total_count: 0,
+                    entries: Vec::new(),
+                });
+            }
+            let mut bytes = [0_u8; 32];
+            if hex::decode_to_slice(encoded, &mut bytes).is_err() {
+                return Ok(AliasPage {
+                    total_count: 0,
+                    entries: Vec::new(),
+                });
+            }
+            Some(ManifestDigest::new(bytes))
+        }
+    };
+
+    let limit = limit.min(ALIAS_PAGE_MAX_ITEMS_V1);
+    let mut total_count = 0_usize;
+    let mut selected = Vec::with_capacity(limit);
+    for (alias_id, alias_record) in world.manifest_aliases().iter() {
+        if namespace_filter
+            .is_some_and(|namespace| !alias_id.namespace.eq_ignore_ascii_case(namespace))
+            || digest_filter.is_some_and(|digest| alias_record.manifest != digest)
+        {
+            continue;
+        }
+
+        let position = total_count;
+        total_count = total_count.saturating_add(1);
+        if position < offset || selected.len() >= limit {
+            continue;
+        }
+
+        let alias = RegistryAlias::from_store(alias_id, alias_record);
+        let digest_hex = alias_record.manifest.as_bytes().encode_hex::<String>();
+        let manifest_record = world
+            .pin_manifests()
+            .get(&alias_record.manifest)
+            .ok_or_else(|| PinRegistryError::MissingAliasManifest {
+                alias_label: alias.alias_label().to_owned(),
+                digest_hex: digest_hex.clone(),
+            })?;
+        let governance = GovernanceSummary::from_references(governance_refs_from_metadata(
+            &manifest_record.metadata,
+            &digest_hex,
+        ));
+        selected.push((alias, governance, alias_record.manifest));
+    }
+
+    let selected_digests = selected
+        .iter()
+        .map(|(_, _, digest)| *digest)
+        .collect::<Vec<_>>();
+    let lineages = collect_manifest_lineages(world, &selected_digests);
+    let entries = selected
+        .into_iter()
+        .zip(lineages)
+        .map(|((alias, governance, _), lineage)| AliasPageEntry {
+            alias,
+            governance,
+            lineage,
+        })
+        .collect();
+
+    Ok(AliasPage {
+        total_count,
+        entries,
+    })
+}
+
+/// Collect one replication-order page without decoding the full registry.
+///
+/// Status and digest filters are evaluated on the stored typed record. Only
+/// matching records inside the requested page are decoded and projected, so a
+/// small response cannot allocate work proportional to every canonical order
+/// payload retained by the ledger.
+pub(crate) fn collect_replication_order_page<F>(
+    world: &WorldView<'_>,
+    offset: usize,
+    limit: usize,
+    mut matches: F,
+) -> Result<ReplicationOrderPage, PinRegistryError>
+where
+    F: FnMut(&ReplicationOrderRecord) -> bool,
+{
+    let limit = limit.min(REPLICATION_ORDER_PAGE_MAX_ITEMS_V1);
+    let mut total_count = 0_usize;
+    let mut orders = Vec::with_capacity(limit);
+    for (order_id, record) in world.replication_orders().iter() {
+        if !matches(record) {
+            continue;
+        }
+        let position = total_count;
+        total_count = total_count.saturating_add(1);
+        if position < offset || orders.len() >= limit {
+            continue;
+        }
+        orders.push(RegistryReplicationOrder::from_store(order_id, record)?);
+    }
+    Ok(ReplicationOrderPage {
+        total_count,
+        orders,
+    })
+}
+
 impl RegistryManifest {
     fn from_store(
         digest: &ManifestDigest,
@@ -1432,11 +1792,7 @@ impl RegistryManifest {
             proof_b64: BASE64_STD.encode(&binding.proof),
         });
 
-        let status = match record.status {
-            PinStatus::Pending => ManifestStatusProjection::Pending,
-            PinStatus::Approved(epoch) => ManifestStatusProjection::Approved { epoch },
-            PinStatus::Retired(epoch) => ManifestStatusProjection::Retired { epoch },
-        };
+        let status = manifest_status_projection(record.status);
         let successor_of_hex = record
             .successor_of
             .as_ref()
@@ -1474,25 +1830,7 @@ impl RegistryManifest {
     }
 
     pub(crate) fn governance_summary(&self) -> GovernanceSummary {
-        let mut revoked = None;
-        let mut frozen = None;
-        let mut rotated = None;
-
-        for reference in &self.governance_refs {
-            match reference.kind {
-                GovernanceRefKind::RevokeManifest => revoked = Some(reference.clone()),
-                GovernanceRefKind::FreezeAlias => frozen = Some(reference.clone()),
-                GovernanceRefKind::AliasRotate => rotated = Some(reference.clone()),
-                GovernanceRefKind::UnfreezeAlias | GovernanceRefKind::Other(_) => {}
-            }
-        }
-
-        GovernanceSummary {
-            references: self.governance_refs.clone(),
-            revoked,
-            frozen,
-            rotated,
-        }
+        GovernanceSummary::from_references(self.governance_refs.clone())
     }
 
     pub(crate) fn status_label(&self) -> &'static str {
@@ -1559,6 +1897,30 @@ impl RegistryManifest {
                 .unwrap_or(Value::Null),
         );
         Ok(Value::Object(map))
+    }
+}
+
+impl GovernanceSummary {
+    fn from_references(references: Vec<GovernanceReference>) -> Self {
+        let mut revoked = None;
+        let mut frozen = None;
+        let mut rotated = None;
+
+        for reference in &references {
+            match reference.kind {
+                GovernanceRefKind::RevokeManifest => revoked = Some(reference.clone()),
+                GovernanceRefKind::FreezeAlias => frozen = Some(reference.clone()),
+                GovernanceRefKind::AliasRotate => rotated = Some(reference.clone()),
+                GovernanceRefKind::UnfreezeAlias | GovernanceRefKind::Other(_) => {}
+            }
+        }
+
+        Self {
+            references,
+            revoked,
+            frozen,
+            rotated,
+        }
     }
 }
 
@@ -1635,10 +1997,6 @@ impl RegistryAlias {
 
     pub(crate) fn alias_label(&self) -> &str {
         &self.alias_label
-    }
-
-    pub(crate) fn namespace(&self) -> &str {
-        &self.namespace
     }
 
     pub(crate) fn manifest_digest_hex(&self) -> &str {

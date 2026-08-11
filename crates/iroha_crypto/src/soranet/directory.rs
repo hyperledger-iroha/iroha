@@ -5,16 +5,22 @@
 use std::{
     collections::{HashMap, HashSet},
     convert::TryFrom,
+    fs,
+    io::{self, Read as _},
+    path::Path,
 };
 
 use blake3::Hasher as Blake3Hasher;
-use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
+use norito::{
+    DecodeLimits, NoritoDeserialize, NoritoSerialize, decode_from_bytes_with_limits, to_bytes,
+};
 use soranet_pq::MlDsaSuite;
 
 use crate::{
     signature::ed25519::{Ed25519Sha512, PublicKey as Ed25519PublicKey},
     soranet::certificate::{
         CertificateValidationPhase, RelayCertificateBundleV2, RelayCertificateV2,
+        SRC_V2_MAX_BUNDLE_BYTES,
     },
 };
 
@@ -25,6 +31,202 @@ type IssuersByFingerprint<'a> = HashMap<[u8; 32], (Ed25519PublicKey, &'a [u8])>;
 
 /// Schema version used by `GuardDirectorySnapshotV2`.
 pub const GUARD_DIRECTORY_VERSION_V2: u8 = 2;
+/// Maximum encoded size of one first-release guard-directory snapshot.
+pub const GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1: usize = 5 * 1024 * 1024;
+/// Maximum number of governance issuers in one first-release snapshot.
+pub const GUARD_DIRECTORY_MAX_ISSUERS_V1: usize = 16;
+/// Maximum number of relay entries in one first-release snapshot.
+pub const GUARD_DIRECTORY_MAX_RELAYS_V1: usize = 64;
+/// Maximum byte length of an issuer's ML-DSA-65 public key.
+pub const GUARD_DIRECTORY_ISSUER_MLDSA65_MAX_BYTES_V1: usize = 1_952;
+/// Maximum byte length of one embedded relay certificate bundle.
+pub const GUARD_DIRECTORY_RELAY_CERTIFICATE_MAX_BYTES_V1: usize = SRC_V2_MAX_BUNDLE_BYTES;
+
+const GUARD_DIRECTORY_DECODE_MAX_ALLOCATED_BYTES_V1: usize =
+    2 * GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1;
+const GUARD_DIRECTORY_DECODE_MAX_NESTING_DEPTH_V1: usize = 16;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const GUARD_DIRECTORY_O_NOFOLLOW_FLAG: i32 = 0x2000_0000;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const GUARD_DIRECTORY_O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
+#[cfg(any(
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+))]
+const GUARD_DIRECTORY_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "dragonfly"
+    ))
+))]
+compile_error!(
+    "guard-directory file loading requires a defined no-follow open flag on this Unix target"
+);
+
+const fn guard_directory_decode_limits_v1() -> DecodeLimits {
+    DecodeLimits::new(
+        GUARD_DIRECTORY_RELAY_CERTIFICATE_MAX_BYTES_V1,
+        GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1,
+        GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1,
+        GUARD_DIRECTORY_DECODE_MAX_ALLOCATED_BYTES_V1,
+        GUARD_DIRECTORY_DECODE_MAX_NESTING_DEPTH_V1,
+    )
+}
+
+/// Read one guard-directory snapshot from a stable, direct regular file.
+///
+/// The final path component is opened without following symbolic links or
+/// Windows reparse points. File identity, type, and length must remain stable
+/// across a read capped at one byte beyond
+/// [`GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1`].
+///
+/// # Errors
+/// Returns an I/O error if the path cannot be opened safely, is not a direct
+/// regular file, changes while being read, or exceeds the first-release limit.
+pub fn read_guard_directory_snapshot_file(path: &Path) -> io::Result<Vec<u8>> {
+    let max_bytes = u64::try_from(GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1)
+        .expect("fixed guard-directory snapshot limit fits u64");
+    let named_before = fs::symlink_metadata(path)?;
+    if guard_directory_metadata_is_link(&named_before) || !named_before.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "guard directory snapshot must be a direct regular file",
+        ));
+    }
+    if named_before.len() > max_bytes {
+        return Err(guard_directory_snapshot_too_large());
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        options.custom_flags(GUARD_DIRECTORY_O_NOFOLLOW_FLAG);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut file = options.open(path)?;
+    let opened_before = file.metadata()?;
+    if guard_directory_metadata_is_link(&opened_before)
+        || !opened_before.is_file()
+        || !guard_directory_metadata_identifies_same_file(&named_before, &opened_before)
+        || opened_before.len() > max_bytes
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "guard directory snapshot changed identity or type while opening",
+        ));
+    }
+
+    let capacity = usize::try_from(opened_before.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "guard directory snapshot length cannot be addressed on this platform",
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    file.by_ref()
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1 {
+        return Err(guard_directory_snapshot_too_large());
+    }
+
+    let opened_after = file.metadata()?;
+    let named_after = fs::symlink_metadata(path)?;
+    let observed_bytes = u64::try_from(bytes.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "guard directory snapshot byte count cannot be represented as u64",
+        )
+    })?;
+    if guard_directory_metadata_is_link(&named_after)
+        || !named_after.is_file()
+        || !guard_directory_metadata_identifies_same_file(&opened_before, &opened_after)
+        || !guard_directory_metadata_identifies_same_file(&opened_after, &named_after)
+        || opened_before.len() != opened_after.len()
+        || opened_after.len() != named_after.len()
+        || opened_after.len() != observed_bytes
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "guard directory snapshot changed while it was being read",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn guard_directory_snapshot_too_large() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "guard directory snapshot exceeds the {GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1}-byte first-release limit"
+        ),
+    )
+}
+
+fn guard_directory_metadata_is_link(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+#[cfg(unix)]
+fn guard_directory_metadata_identifies_same_file(
+    left: &fs::Metadata,
+    right: &fs::Metadata,
+) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(windows)]
+fn guard_directory_metadata_identifies_same_file(
+    left: &fs::Metadata,
+    right: &fs::Metadata,
+) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+
+    left.volume_serial_number().is_some()
+        && left.file_index().is_some()
+        && left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn guard_directory_metadata_identifies_same_file(
+    _left: &fs::Metadata,
+    _right: &fs::Metadata,
+) -> bool {
+    false
+}
 
 /// Norito-encoded guard directory snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -53,9 +255,13 @@ impl GuardDirectorySnapshotV2 {
     /// Encode the snapshot to Norito bytes.
     ///
     /// # Errors
-    /// Returns an error if serialization fails.
+    /// Returns an error if a first-release resource bound is exceeded or
+    /// serialization fails.
     pub fn to_bytes(&self) -> Result<Vec<u8>, norito::Error> {
-        to_bytes(self)
+        self.validate_resource_bounds()?;
+        let bytes = to_bytes(self)?;
+        validate_snapshot_encoded_len(bytes.len())?;
+        Ok(bytes)
     }
 
     /// Decode and inspect a snapshot without establishing external trust or freshness.
@@ -68,7 +274,7 @@ impl GuardDirectorySnapshotV2 {
     /// # Errors
     /// Returns an error if decoding or intrinsic validation fails.
     pub fn inspect_bytes(bytes: &[u8]) -> Result<Self, norito::Error> {
-        let snapshot: Self = decode_from_bytes(bytes)?;
+        let snapshot = Self::decode_bounded(bytes)?;
         snapshot.validate(None, false)?;
         Ok(snapshot)
     }
@@ -89,17 +295,78 @@ impl GuardDirectorySnapshotV2 {
         expected_snapshot_digest: [u8; 32],
         at_unix: i64,
     ) -> Result<Self, norito::Error> {
-        let actual = compute_snapshot_digest(bytes);
-        if actual != expected_snapshot_digest {
-            return Err(norito::Error::Message(format!(
-                "guard directory snapshot digest mismatch (expected {}, got {})",
-                hex::encode(expected_snapshot_digest),
-                hex::encode(actual)
-            )));
-        }
-        let snapshot: Self = decode_from_bytes(bytes)?;
+        validate_snapshot_digest(bytes, expected_snapshot_digest)?;
+        let snapshot = Self::decode_bounded(bytes)?;
         snapshot.validate(Some(at_unix), true)?;
         Ok(snapshot)
+    }
+
+    /// Authenticate a snapshot and retain one validated relay bundle while
+    /// streaming validation across the bounded relay set.
+    ///
+    /// This avoids decoding every certificate a second time when a caller needs
+    /// one exact relay after authenticating the complete directory.
+    ///
+    /// # Errors
+    /// Returns an error when the artifact digest differs, a first-release
+    /// resource bound or validation rule is violated, or `relay_id` is absent.
+    pub fn authenticate_relay_bytes_at(
+        bytes: &[u8],
+        expected_snapshot_digest: [u8; 32],
+        relay_id: [u8; 32],
+        at_unix: i64,
+    ) -> Result<AuthenticatedGuardDirectoryRelayV2, norito::Error> {
+        validate_snapshot_digest(bytes, expected_snapshot_digest)?;
+        let snapshot = Self::decode_bounded(bytes)?;
+        let relay = snapshot
+            .validate_and_select_relay(Some(at_unix), true, Some(relay_id))?
+            .ok_or_else(|| {
+                norito::Error::Message(format!(
+                    "relay {} is absent from the authenticated guard directory",
+                    hex::encode(relay_id)
+                ))
+            })?;
+        Ok(AuthenticatedGuardDirectoryRelayV2 {
+            snapshot_valid_until_unix: snapshot.valid_until_unix,
+            relay,
+        })
+    }
+
+    fn decode_bounded(bytes: &[u8]) -> Result<Self, norito::Error> {
+        validate_snapshot_encoded_len(bytes.len())?;
+        decode_from_bytes_with_limits(bytes, guard_directory_decode_limits_v1())
+    }
+
+    fn validate_resource_bounds(&self) -> Result<(), norito::Error> {
+        if self.issuers.len() > GUARD_DIRECTORY_MAX_ISSUERS_V1 {
+            return Err(norito::Error::Message(format!(
+                "guard directory snapshot issuer count {} exceeds first-release maximum {GUARD_DIRECTORY_MAX_ISSUERS_V1}",
+                self.issuers.len()
+            )));
+        }
+        if self.relays.len() > GUARD_DIRECTORY_MAX_RELAYS_V1 {
+            return Err(norito::Error::Message(format!(
+                "guard directory snapshot relay count {} exceeds first-release maximum {GUARD_DIRECTORY_MAX_RELAYS_V1}",
+                self.relays.len()
+            )));
+        }
+        for issuer in &self.issuers {
+            if issuer.mldsa65_public.len() > GUARD_DIRECTORY_ISSUER_MLDSA65_MAX_BYTES_V1 {
+                return Err(norito::Error::Message(format!(
+                    "guard directory issuer ML-DSA-65 public key length {} exceeds first-release maximum {GUARD_DIRECTORY_ISSUER_MLDSA65_MAX_BYTES_V1}",
+                    issuer.mldsa65_public.len()
+                )));
+            }
+        }
+        for relay in &self.relays {
+            if relay.certificate.len() > GUARD_DIRECTORY_RELAY_CERTIFICATE_MAX_BYTES_V1 {
+                return Err(norito::Error::Message(format!(
+                    "guard directory relay certificate bundle length {} exceeds first-release maximum {GUARD_DIRECTORY_RELAY_CERTIFICATE_MAX_BYTES_V1}",
+                    relay.certificate.len()
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn validate(
@@ -107,6 +374,17 @@ impl GuardDirectorySnapshotV2 {
         at_unix: Option<i64>,
         require_first_release_policy: bool,
     ) -> Result<(), norito::Error> {
+        self.validate_and_select_relay(at_unix, require_first_release_policy, None)
+            .map(drop)
+    }
+
+    fn validate_and_select_relay(
+        &self,
+        at_unix: Option<i64>,
+        require_first_release_policy: bool,
+        target_relay_id: Option<[u8; 32]>,
+    ) -> Result<Option<RelayCertificateBundleV2>, norito::Error> {
+        self.validate_resource_bounds()?;
         let validation_phase = self.validate_header()?;
         if require_first_release_policy
             && validation_phase != CertificateValidationPhase::Phase3RequireDual
@@ -120,7 +398,12 @@ impl GuardDirectorySnapshotV2 {
             self.validate_at(at_unix)?;
         }
         let issuers_by_fingerprint = self.validate_issuers(validation_phase)?;
-        self.validate_relays(validation_phase, &issuers_by_fingerprint, at_unix)
+        self.validate_relays(
+            validation_phase,
+            &issuers_by_fingerprint,
+            at_unix,
+            target_relay_id,
+        )
     }
 
     fn validate_header(&self) -> Result<CertificateValidationPhase, norito::Error> {
@@ -236,13 +519,15 @@ impl GuardDirectorySnapshotV2 {
         validation_phase: CertificateValidationPhase,
         issuers_by_fingerprint: &IssuersByFingerprint<'_>,
         at_unix: Option<i64>,
-    ) -> Result<(), norito::Error> {
+        target_relay_id: Option<[u8; 32]>,
+    ) -> Result<Option<RelayCertificateBundleV2>, norito::Error> {
         if self.relays.is_empty() {
             return Err(norito::Error::Message(
                 "guard directory snapshot must contain at least one relay".to_string(),
             ));
         }
         let mut relay_ids = HashSet::with_capacity(self.relays.len());
+        let mut selected = None;
         for relay in &self.relays {
             let bundle =
                 RelayCertificateBundleV2::from_cbor(&relay.certificate).map_err(|err| {
@@ -279,8 +564,11 @@ impl GuardDirectorySnapshotV2 {
                     "guard directory relay certificate signature verification failed: {err}"
                 ))
             })?;
+            if Some(bundle.certificate.relay_id) == target_relay_id {
+                selected = Some(bundle);
+            }
         }
-        Ok(())
+        Ok(selected)
     }
 
     fn validate_relay_certificate_window(
@@ -306,6 +594,40 @@ impl GuardDirectorySnapshotV2 {
         }
         Ok(())
     }
+}
+
+/// One relay retained from a fully authenticated guard-directory snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticatedGuardDirectoryRelayV2 {
+    /// Exclusive upper bound of the authenticated snapshot validity window.
+    pub snapshot_valid_until_unix: i64,
+    /// Exact validated relay bundle selected by relay identity.
+    pub relay: RelayCertificateBundleV2,
+}
+
+fn validate_snapshot_encoded_len(len: usize) -> Result<(), norito::Error> {
+    if len > GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1 {
+        return Err(norito::Error::Message(format!(
+            "guard directory snapshot length {len} exceeds first-release maximum {GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_snapshot_digest(
+    bytes: &[u8],
+    expected_snapshot_digest: [u8; 32],
+) -> Result<(), norito::Error> {
+    validate_snapshot_encoded_len(bytes.len())?;
+    let actual = compute_snapshot_digest(bytes);
+    if actual != expected_snapshot_digest {
+        return Err(norito::Error::Message(format!(
+            "guard directory snapshot digest mismatch (expected {}, got {})",
+            hex::encode(expected_snapshot_digest),
+            hex::encode(actual)
+        )));
+    }
+    Ok(())
 }
 
 /// Compute the domain-separated digest that authenticates exact snapshot bytes.
@@ -731,6 +1053,188 @@ mod tests {
         let bytes = snapshot.to_bytes().expect("serialize");
         let decoded = GuardDirectorySnapshotV2::inspect_bytes(&bytes).expect("deserialize");
         assert_eq!(snapshot, decoded);
+    }
+
+    #[test]
+    fn snapshot_file_reader_accepts_regular_file_and_rejects_oversize() {
+        let temporary = tempfile::tempdir().expect("create guard-directory test root");
+        let path = temporary.path().join("guard-directory.norito");
+        let expected = b"bounded guard directory";
+        fs::write(&path, expected).expect("write bounded regular file");
+
+        assert_eq!(
+            read_guard_directory_snapshot_file(&path).expect("read bounded regular file"),
+            expected
+        );
+
+        fs::File::create(&path)
+            .expect("recreate oversized sparse file")
+            .set_len(
+                u64::try_from(GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1)
+                    .expect("fixed snapshot limit fits u64")
+                    + 1,
+            )
+            .expect("extend oversized sparse file");
+        let error = read_guard_directory_snapshot_file(&path)
+            .expect_err("oversized guard directory must fail before reading");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("first-release limit"));
+    }
+
+    #[test]
+    fn snapshot_file_reader_rejects_non_regular_path() {
+        let temporary = tempfile::tempdir().expect("create guard-directory test root");
+        let error = read_guard_directory_snapshot_file(temporary.path())
+            .expect_err("directory path must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("direct regular file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_file_reader_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().expect("create guard-directory test root");
+        let target = temporary.path().join("target.norito");
+        let link = temporary.path().join("guard-directory.norito");
+        fs::write(&target, b"guard directory").expect("write target");
+        symlink(&target, &link).expect("create symlink fixture");
+
+        let error = read_guard_directory_snapshot_file(&link)
+            .expect_err("symlinked guard directory must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("direct regular file"));
+    }
+
+    #[test]
+    fn snapshot_wire_length_fails_before_decode() {
+        let oversized = vec![0_u8; GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1 + 1];
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&oversized)
+            .expect_err("oversized snapshot bytes must fail closed");
+        assert!(
+            err.to_string().contains("snapshot length"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn snapshot_producer_enforces_issuer_and_relay_counts() {
+        let mut issuers = sample_snapshot();
+        issuers.issuers = vec![issuers.issuers[0].clone(); GUARD_DIRECTORY_MAX_ISSUERS_V1 + 1];
+        let issuer_err = issuers
+            .to_bytes()
+            .expect_err("producer must reject too many issuers");
+        assert!(issuer_err.to_string().contains("issuer count"));
+
+        let mut relays = sample_snapshot();
+        relays.relays = vec![relays.relays[0].clone(); GUARD_DIRECTORY_MAX_RELAYS_V1 + 1];
+        let relay_err = relays
+            .to_bytes()
+            .expect_err("producer must reject too many relays");
+        assert!(relay_err.to_string().contains("relay count"));
+    }
+
+    #[test]
+    fn snapshot_producer_accepts_first_release_resource_boundaries() {
+        let mut snapshot = sample_snapshot();
+        snapshot.issuers = vec![snapshot.issuers[0].clone(); GUARD_DIRECTORY_MAX_ISSUERS_V1];
+        snapshot.relays[0].certificate = vec![0_u8; GUARD_DIRECTORY_RELAY_CERTIFICATE_MAX_BYTES_V1];
+        snapshot.relays = vec![snapshot.relays[0].clone(); GUARD_DIRECTORY_MAX_RELAYS_V1];
+
+        let bytes = snapshot
+            .to_bytes()
+            .expect("all exact first-release resource boundaries must encode");
+        assert!(bytes.len() <= GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1);
+    }
+
+    #[test]
+    fn snapshot_consumer_enforces_entry_counts_after_bounded_decode() {
+        let mut issuers = sample_snapshot();
+        issuers.issuers = vec![issuers.issuers[0].clone(); GUARD_DIRECTORY_MAX_ISSUERS_V1 + 1];
+        let bytes = norito::to_bytes(&issuers).expect("encode out-of-policy issuer fixture");
+        let issuer_err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
+            .expect_err("consumer must reject too many issuers");
+        assert!(issuer_err.to_string().contains("issuer count"));
+
+        let mut snapshot = sample_snapshot();
+        snapshot.relays = vec![snapshot.relays[0].clone(); GUARD_DIRECTORY_MAX_RELAYS_V1 + 1];
+        let bytes = norito::to_bytes(&snapshot).expect("encode out-of-policy wire fixture");
+
+        let err = GuardDirectorySnapshotV2::inspect_bytes(&bytes)
+            .expect_err("consumer must reject too many relays");
+        assert!(err.to_string().contains("relay count"));
+    }
+
+    #[test]
+    fn snapshot_producer_enforces_per_entry_byte_bounds() {
+        let mut issuer = sample_snapshot();
+        issuer.issuers[0].mldsa65_public =
+            vec![0_u8; GUARD_DIRECTORY_ISSUER_MLDSA65_MAX_BYTES_V1 + 1];
+        let issuer_err = issuer
+            .to_bytes()
+            .expect_err("producer must reject oversized issuer material");
+        assert!(issuer_err.to_string().contains("public key length"));
+
+        let mut relay = sample_snapshot();
+        relay.relays[0].certificate =
+            vec![0_u8; GUARD_DIRECTORY_RELAY_CERTIFICATE_MAX_BYTES_V1 + 1];
+        let relay_err = relay
+            .to_bytes()
+            .expect_err("producer must reject oversized relay bundle");
+        assert!(relay_err.to_string().contains("certificate bundle length"));
+    }
+
+    #[test]
+    fn snapshot_consumer_enforces_per_entry_byte_bounds() {
+        let mut issuer = sample_snapshot();
+        issuer.issuers[0].mldsa65_public =
+            vec![0_u8; GUARD_DIRECTORY_ISSUER_MLDSA65_MAX_BYTES_V1 + 1];
+        let issuer_bytes =
+            norito::to_bytes(&issuer).expect("encode out-of-policy issuer byte fixture");
+        let issuer_err = GuardDirectorySnapshotV2::inspect_bytes(&issuer_bytes)
+            .expect_err("consumer must reject oversized issuer material");
+        assert!(issuer_err.to_string().contains("public key length"));
+
+        let mut relay = sample_snapshot();
+        relay.relays[0].certificate =
+            vec![0_u8; GUARD_DIRECTORY_RELAY_CERTIFICATE_MAX_BYTES_V1 + 1];
+        let relay_bytes =
+            norito::to_bytes(&relay).expect("encode out-of-policy relay byte fixture");
+        GuardDirectorySnapshotV2::inspect_bytes(&relay_bytes)
+            .expect_err("consumer decode budget must reject oversized relay bundle");
+    }
+
+    #[test]
+    fn authenticated_relay_selection_returns_exact_validated_bundle() {
+        let snapshot = sample_snapshot();
+        let expected = RelayCertificateBundleV2::from_cbor(&snapshot.relays[0].certificate)
+            .expect("sample relay bundle decodes");
+        let relay_id = expected.certificate.relay_id;
+        let bytes = snapshot.to_bytes().expect("serialize snapshot");
+        let digest = compute_snapshot_digest(&bytes);
+
+        let selected = GuardDirectorySnapshotV2::authenticate_relay_bytes_at(
+            &bytes,
+            digest,
+            relay_id,
+            snapshot.valid_after_unix,
+        )
+        .expect("exact relay is selected during authentication");
+        assert_eq!(
+            selected.snapshot_valid_until_unix,
+            snapshot.valid_until_unix
+        );
+        assert_eq!(selected.relay, expected);
+
+        let err = GuardDirectorySnapshotV2::authenticate_relay_bytes_at(
+            &bytes,
+            digest,
+            [0xFF; 32],
+            snapshot.valid_after_unix,
+        )
+        .expect_err("unknown relay identity must fail closed");
+        assert!(err.to_string().contains("absent"));
     }
 
     #[test]

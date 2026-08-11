@@ -226,12 +226,7 @@ fn validate_prover_inputs(
         &relaxed_instance.public_inputs,
         &relaxed_witness.error,
     )?;
-    shape.validate_relaxed_assignment(
-        &regular_witness.values,
-        Scalar::one(),
-        &regular_instance.public_inputs,
-        &vec![Scalar::zero(); shape.constraint_count()],
-    )?;
+    shape.validate_strict_assignment(&regular_witness.values, &regular_instance.public_inputs)?;
 
     if key.commit(&relaxed_witness.values, &relaxed_witness.witness_blindings)?
         != relaxed_instance.witness_commitment
@@ -280,41 +275,14 @@ fn compute_cross_term(
     regular_instance: &Instance,
     regular_witness: &Witness,
 ) -> Result<Vec<Scalar>, NifsError> {
-    let mut combined_assignment = Vec::with_capacity(shape.columns());
-    combined_assignment.extend(
-        relaxed_witness
-            .values
-            .iter()
-            .copied()
-            .zip(regular_witness.values.iter().copied())
-            .map(|(left, right)| left + right),
-    );
-    let effective_relaxation = relaxed_instance.relaxation + Scalar::one();
-    combined_assignment.push(effective_relaxation);
-    combined_assignment.extend(
-        relaxed_instance
-            .public_inputs
-            .iter()
-            .copied()
-            .zip(regular_instance.public_inputs.iter().copied())
-            .map(|(left, right)| left + right),
-    );
-    if combined_assignment.len() != shape.columns() {
-        return Err(NifsError::InvalidDimension);
-    }
-    let products = shape.multiply(&combined_assignment)?;
-    Ok(products
-        .a
-        .into_iter()
-        .zip(products.b)
-        .zip(
-            products
-                .c
-                .into_iter()
-                .zip(relaxed_witness.error.iter().copied()),
-        )
-        .map(|((a, b), (c, error))| a * b - effective_relaxation * c - error)
-        .collect())
+    Ok(shape.derive_fold_cross_term(
+        &relaxed_witness.values,
+        relaxed_instance.relaxation,
+        &relaxed_instance.public_inputs,
+        &relaxed_witness.error,
+        &regular_witness.values,
+        &regular_instance.public_inputs,
+    )?)
 }
 
 fn fold_public_instances(
@@ -462,6 +430,19 @@ mod tests {
             regular_instance,
             regular_witness,
         )
+    }
+
+    #[test]
+    fn nova_cross_term_streams_rows_without_full_matrix_products() {
+        let source = include_str!("nifs.rs");
+        let implementation = source
+            .split("fn compute_cross_term(")
+            .nth(1)
+            .and_then(|tail| tail.split("fn fold_public_instances(").next())
+            .expect("Nova cross-term implementation");
+        assert!(implementation.contains("derive_fold_cross_term"));
+        assert!(!implementation.contains("combined_assignment"));
+        assert!(!implementation.contains("shape.multiply"));
     }
 
     #[test]

@@ -8,7 +8,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
     error::Error as StdError,
     fmt, fs, io,
-    io::Write as _,
+    io::{Read as _, Write as _},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock, RwLock,
@@ -67,6 +67,7 @@ use norito::{
     },
     to_bytes,
 };
+use soranet_pq::MlKemSuite;
 use thiserror::Error;
 use tokio::sync::broadcast;
 
@@ -649,6 +650,27 @@ const KAIGI_STREAM_SUBDIR: &str = "kaigi-stream";
 
 const SNAPSHOT_VERSION: u8 = 1;
 const SNAPSHOT_AAD: &[u8] = b"iroha.streaming.snapshot.v1";
+/// First-release ceiling across viewer and publisher entries in one snapshot.
+const SNAPSHOT_MAX_ENTRIES_V1: usize = 4_096;
+/// First-release ceiling for one canonical decrypted snapshot.
+const SNAPSHOT_MAX_PLAINTEXT_BYTES_V1: usize = 16 * 1024 * 1024;
+/// ChaCha20-Poly1305 easy envelopes prefix a 12-byte nonce and append a 16-byte tag.
+const SNAPSHOT_AEAD_OVERHEAD_BYTES_V1: usize = 12 + 16;
+/// First-release ceiling for one encrypted snapshot file.
+const SNAPSHOT_MAX_CIPHERTEXT_BYTES_V1: usize =
+    SNAPSHOT_MAX_PLAINTEXT_BYTES_V1 + SNAPSHOT_AEAD_OVERHEAD_BYTES_V1;
+/// A snapshot can retain at most one local and one remote key from the largest v1 ML-KEM suite.
+const SNAPSHOT_MAX_KEM_PUBLIC_KEY_BYTES_V1: usize = MlKemSuite::MlKem1024.public_key_len();
+/// Group content keys are fixed-width inputs to streaming CEK derivation.
+const SNAPSHOT_GROUP_CONTENT_KEY_BYTES_V1: usize = 32;
+/// Decode budget applied before Norito allocates any snapshot-owned sequence.
+const SNAPSHOT_DECODE_LIMITS_V1: norito_core::DecodeLimits = norito_core::DecodeLimits::new(
+    SNAPSHOT_MAX_ENTRIES_V1,
+    SNAPSHOT_MAX_PLAINTEXT_BYTES_V1,
+    SNAPSHOT_MAX_PLAINTEXT_BYTES_V1,
+    SNAPSHOT_MAX_PLAINTEXT_BYTES_V1 * 4,
+    32,
+);
 
 #[cfg(feature = "quic")]
 const FEATURE_PRIVACY_REQUIRED: u32 = 1 << 10;
@@ -983,6 +1005,14 @@ pub enum StreamingProcessError {
     /// No key material configured for this handle.
     #[error("streaming key material not configured")]
     MissingKeyMaterial,
+    /// A snapshot source or restore stream exceeded the first-release session ceiling.
+    #[error("streaming snapshot entry limit exceeded (attempted {attempted}, limit {limit})")]
+    SnapshotEntryLimitExceeded {
+        /// One-based entry count that crossed the ceiling.
+        attempted: usize,
+        /// Maximum entries accepted by snapshot version 1.
+        limit: usize,
+    },
 }
 
 /// Classification of audio/video sync violations.
@@ -1051,6 +1081,16 @@ pub enum StreamingSnapshotError {
     UnsupportedVersion {
         /// Version value encountered on disk.
         found: u8,
+    },
+    /// A snapshot resource exceeded its first-release protocol ceiling.
+    #[error("streaming snapshot {resource} exceeds limit (observed {observed}, limit {limit})")]
+    ResourceLimitExceeded {
+        /// Resource whose size crossed the ceiling.
+        resource: &'static str,
+        /// Observed byte or element count.
+        observed: u64,
+        /// Maximum byte or element count accepted by snapshot version 1.
+        limit: u64,
     },
     /// Session restoration failed due to handshake invariants.
     #[error(transparent)]
@@ -2645,6 +2685,13 @@ impl StreamingHandle {
             .map_err(|_| StreamingProcessError::StatePoisoned)?;
         for (peer, session) in guard.iter() {
             if let Some(snapshot) = session.snapshot_state() {
+                let attempted = entries.len().saturating_add(1);
+                if attempted > SNAPSHOT_MAX_ENTRIES_V1 {
+                    return Err(StreamingProcessError::SnapshotEntryLimitExceeded {
+                        attempted,
+                        limit: SNAPSHOT_MAX_ENTRIES_V1,
+                    });
+                }
                 entries.push(StreamingSnapshotEntry {
                     role,
                     peer: peer.clone(),
@@ -2748,12 +2795,24 @@ impl StreamingHandle {
             version: SNAPSHOT_VERSION,
             entries: snapshots,
         };
+        validate_snapshot_file_bounds(&file)?;
         let plaintext = norito_core::to_bytes(&file).map_err(StreamingSnapshotError::Codec)?;
+        ensure_snapshot_resource_limit(
+            "plaintext bytes",
+            plaintext.len(),
+            SNAPSHOT_MAX_PLAINTEXT_BYTES_V1,
+        )?;
         let encryptor = self
             .snapshot_encryptor
             .as_ref()
             .ok_or(StreamingSnapshotError::MissingEncryptionKey)?;
-        let bytes = encryptor.encrypt_easy(SNAPSHOT_AAD, &plaintext)?;
+        let mut bytes = Vec::new();
+        encryptor.encrypt_easy_into(SNAPSHOT_AAD, plaintext.as_slice(), &mut bytes)?;
+        ensure_snapshot_resource_limit(
+            "ciphertext bytes",
+            bytes.len(),
+            SNAPSHOT_MAX_CIPHERTEXT_BYTES_V1,
+        )?;
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -2818,50 +2877,45 @@ impl StreamingHandle {
     ) -> Result<(), StreamingSnapshotError> {
         let path = path.as_ref();
         let tmp_path = snapshot_temp_path(path);
-        let tmp_bytes = read_snapshot_bytes(&tmp_path)?;
-        let main_bytes = read_snapshot_bytes(path)?;
-        if tmp_bytes.is_none() && main_bytes.is_none() {
-            return Ok(());
-        }
-        let encryptor = self
-            .snapshot_encryptor
-            .as_ref()
-            .ok_or(StreamingSnapshotError::MissingEncryptionKey)?;
         let mut tmp_error = None;
-        let mut selected = None;
-        let mut used_tmp = false;
 
-        if let Some(bytes) = tmp_bytes.as_deref() {
-            match decode_snapshot_bytes(bytes, encryptor) {
-                Ok(file) => {
-                    used_tmp = true;
-                    selected = Some(file);
-                }
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        path = %tmp_path.display(),
-                        "streaming snapshot temp file is not usable"
-                    );
-                    tmp_error = Some(err);
+        match read_snapshot_bytes(&tmp_path) {
+            Ok(Some(bytes)) => {
+                let encryptor = self
+                    .snapshot_encryptor
+                    .as_ref()
+                    .ok_or(StreamingSnapshotError::MissingEncryptionKey)?;
+                match decode_snapshot_bytes(bytes, encryptor) {
+                    Ok(file) => {
+                        warn!(
+                            path = %tmp_path.display(),
+                            "streaming snapshot temp file detected; promoting"
+                        );
+                        promote_snapshot_temp(&tmp_path, path);
+                        self.restore_snapshots(file.entries)?;
+                        return Ok(());
+                    }
+                    Err(err) => tmp_error = Some(err),
                 }
             }
+            Ok(None) => {}
+            Err(err) => tmp_error = Some(err),
         }
 
-        if selected.is_none() {
-            if let Some(bytes) = main_bytes.as_deref() {
-                selected = Some(decode_snapshot_bytes(bytes, encryptor)?);
-            }
+        if let Some(err) = tmp_error.as_ref() {
+            warn!(
+                ?err,
+                path = %tmp_path.display(),
+                "streaming snapshot temp file is not usable"
+            );
         }
 
-        if let Some(file) = selected {
-            if used_tmp {
-                warn!(
-                    path = %tmp_path.display(),
-                    "streaming snapshot temp file detected; promoting"
-                );
-                promote_snapshot_temp(&tmp_path, path);
-            }
+        if let Some(bytes) = read_snapshot_bytes(path)? {
+            let encryptor = self
+                .snapshot_encryptor
+                .as_ref()
+                .ok_or(StreamingSnapshotError::MissingEncryptionKey)?;
+            let file = decode_snapshot_bytes(bytes, encryptor)?;
             self.restore_snapshots(file.entries)?;
             return Ok(());
         }
@@ -2882,7 +2936,14 @@ impl StreamingHandle {
     where
         I: IntoIterator<Item = StreamingSnapshotEntry>,
     {
-        for entry in entries {
+        for (index, entry) in entries.into_iter().enumerate() {
+            let attempted = index.saturating_add(1);
+            if attempted > SNAPSHOT_MAX_ENTRIES_V1 {
+                return Err(StreamingProcessError::SnapshotEntryLimitExceeded {
+                    attempted,
+                    limit: SNAPSHOT_MAX_ENTRIES_V1,
+                });
+            }
             let map = self.map_for_role(entry.role);
             let mut guard = map
                 .write()
@@ -3179,26 +3240,207 @@ fn snapshot_temp_path(path: &Path) -> PathBuf {
     path.with_added_extension("tmp")
 }
 
-fn read_snapshot_bytes(path: &Path) -> Result<Option<Vec<u8>>, StreamingSnapshotError> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(StreamingSnapshotError::Io(err)),
+fn snapshot_resource_limit_error(
+    resource: &'static str,
+    observed: u64,
+    limit: usize,
+) -> StreamingSnapshotError {
+    StreamingSnapshotError::ResourceLimitExceeded {
+        resource,
+        observed,
+        limit: u64::try_from(limit).unwrap_or(u64::MAX),
     }
 }
 
+fn ensure_snapshot_resource_limit(
+    resource: &'static str,
+    observed: usize,
+    limit: usize,
+) -> Result<(), StreamingSnapshotError> {
+    if observed > limit {
+        return Err(snapshot_resource_limit_error(
+            resource,
+            u64::try_from(observed).unwrap_or(u64::MAX),
+            limit,
+        ));
+    }
+    Ok(())
+}
+
+fn validate_snapshot_file_bounds(
+    file: &StreamingSnapshotFile,
+) -> Result<(), StreamingSnapshotError> {
+    ensure_snapshot_resource_limit("entries", file.entries.len(), SNAPSHOT_MAX_ENTRIES_V1)?;
+    for entry in &file.entries {
+        if let Some(gck) = entry.snapshot.latest_gck.as_ref() {
+            ensure_snapshot_resource_limit(
+                "group content key bytes",
+                gck.len(),
+                SNAPSHOT_GROUP_CONTENT_KEY_BYTES_V1,
+            )?;
+        }
+        if let Some(public_key) = entry.snapshot.kyber_remote_public.as_ref() {
+            ensure_snapshot_resource_limit(
+                "remote ML-KEM public key bytes",
+                public_key.len(),
+                SNAPSHOT_MAX_KEM_PUBLIC_KEY_BYTES_V1,
+            )?;
+        }
+        if let Some(public_key) = entry.snapshot.kyber_local_public.as_ref() {
+            ensure_snapshot_resource_limit(
+                "local ML-KEM public key bytes",
+                public_key.len(),
+                SNAPSHOT_MAX_KEM_PUBLIC_KEY_BYTES_V1,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn read_snapshot_bytes(path: &Path) -> Result<Option<Vec<u8>>, StreamingSnapshotError> {
+    read_snapshot_bytes_with_limit(path, SNAPSHOT_MAX_CIPHERTEXT_BYTES_V1)
+}
+
+fn read_snapshot_bytes_with_limit(
+    path: &Path,
+    max_bytes: usize,
+) -> Result<Option<Vec<u8>>, StreamingSnapshotError> {
+    let path_before = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    if path_before.file_type().is_symlink() || !path_before.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "streaming snapshot must be a direct regular file",
+        )
+        .into());
+    }
+    let max_bytes_u64 = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+    if path_before.len() > max_bytes_u64 {
+        return Err(snapshot_resource_limit_error(
+            "ciphertext bytes",
+            path_before.len(),
+            max_bytes,
+        ));
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut file = options.open(path)?;
+    let opened_before = file.metadata()?;
+    if !snapshot_file_metadata_unchanged(&path_before, &opened_before) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "streaming snapshot identity changed while opening",
+        )
+        .into());
+    }
+
+    let capacity = usize::try_from(opened_before.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "streaming snapshot length does not fit in memory",
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    io::Read::by_ref(&mut file)
+        .take(max_bytes_u64.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > max_bytes {
+        return Err(snapshot_resource_limit_error(
+            "ciphertext bytes",
+            u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            max_bytes,
+        ));
+    }
+
+    let opened_after = file.metadata()?;
+    let path_after = fs::symlink_metadata(path)?;
+    if path_after.file_type().is_symlink()
+        || !path_after.is_file()
+        || !snapshot_file_metadata_unchanged(&opened_before, &opened_after)
+        || !snapshot_file_metadata_unchanged(&opened_before, &path_after)
+        || opened_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "streaming snapshot changed while reading",
+        )
+        .into());
+    }
+    Ok(Some(bytes))
+}
+
 fn decode_snapshot_bytes(
-    bytes: &[u8],
+    mut bytes: Vec<u8>,
     encryptor: &SymmetricEncryptor<ChaCha20Poly1305>,
 ) -> Result<StreamingSnapshotFile, StreamingSnapshotError> {
-    let plaintext = encryptor.decrypt_easy(SNAPSHOT_AAD, bytes)?;
-    let file = decode_snapshot_plaintext(&plaintext)?;
+    ensure_snapshot_resource_limit(
+        "ciphertext bytes",
+        bytes.len(),
+        SNAPSHOT_MAX_CIPHERTEXT_BYTES_V1,
+    )?;
+    let plaintext = encryptor.decrypt_easy_in_place(SNAPSHOT_AAD, bytes.as_mut_slice())?;
+    ensure_snapshot_resource_limit(
+        "plaintext bytes",
+        plaintext.len(),
+        SNAPSHOT_MAX_PLAINTEXT_BYTES_V1,
+    )?;
+    let file = decode_snapshot_plaintext(plaintext)?;
     if file.version != SNAPSHOT_VERSION {
         return Err(StreamingSnapshotError::UnsupportedVersion {
             found: file.version,
         });
     }
     Ok(file)
+}
+
+#[cfg(unix)]
+fn snapshot_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.is_file()
+        && right.is_file()
+        && left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(windows)]
+fn snapshot_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+
+    left.is_file()
+        && right.is_file()
+        && left.volume_serial_number().is_some()
+        && left.file_index().is_some()
+        && left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
+        && left.file_size() == right.file_size()
+        && left.last_write_time() == right.last_write_time()
+        && left.creation_time() == right.creation_time()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn snapshot_file_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
 }
 
 fn promote_snapshot_temp(tmp_path: &Path, main_path: &Path) {
@@ -3251,16 +3493,24 @@ fn promote_snapshot_temp(tmp_path: &Path, main_path: &Path) {
 fn decode_snapshot_plaintext(
     plaintext: &[u8],
 ) -> Result<StreamingSnapshotFile, StreamingSnapshotError> {
+    ensure_snapshot_resource_limit(
+        "plaintext bytes",
+        plaintext.len(),
+        SNAPSHOT_MAX_PLAINTEXT_BYTES_V1,
+    )?;
     if plaintext.len() < norito_core::Header::SIZE || !plaintext.starts_with(&norito_core::MAGIC) {
         return Err(StreamingSnapshotError::Codec(NoritoError::LengthMismatch));
     }
     let align = norito_core::archived_payload_align::<StreamingSnapshotFile>();
     let aligned = align_slice(plaintext, align, norito_core::Header::SIZE)?;
-    norito_core::from_bytes_view(aligned.as_slice())
-        .and_then(|view| {
+    let file = norito_core::with_decode_limits(SNAPSHOT_DECODE_LIMITS_V1, || {
+        norito_core::from_bytes_view(aligned.as_slice()).and_then(|view| {
             view.decode_exact_with(norito_core::decode_field_canonical::<StreamingSnapshotFile>)
         })
-        .map_err(StreamingSnapshotError::Codec)
+    })
+    .map_err(StreamingSnapshotError::Codec)?;
+    validate_snapshot_file_bounds(&file)?;
+    Ok(file)
 }
 
 fn sync_dir(path: &Path) -> io::Result<()> {
@@ -3502,6 +3752,52 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_reader_enforces_exact_byte_boundary() {
+        const TEST_LIMIT: usize = 64;
+        let dir = tempdir().expect("create temp dir");
+        let path = dir.path().join("snapshot.norito");
+        let exact = vec![0xA5; TEST_LIMIT];
+        fs::write(&path, &exact).expect("write exact-boundary fixture");
+
+        let bytes = read_snapshot_bytes_with_limit(&path, TEST_LIMIT)
+            .expect("read exact-boundary snapshot")
+            .expect("snapshot exists");
+        assert_eq!(bytes, exact);
+
+        fs::write(&path, vec![0x5A; TEST_LIMIT + 1]).expect("write oversized fixture");
+        let err = read_snapshot_bytes_with_limit(&path, TEST_LIMIT)
+            .expect_err("max plus one must be rejected");
+        assert!(matches!(
+            err,
+            StreamingSnapshotError::ResourceLimitExceeded {
+                resource: "ciphertext bytes",
+                observed: 65,
+                limit: 64,
+            }
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_reader_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempdir().expect("create temp dir");
+        let target = dir.path().join("target.norito");
+        let link = dir.path().join("snapshot.norito");
+        fs::write(&target, [0x11; 8]).expect("write target");
+        symlink(&target, &link).expect("create symlink");
+
+        let err = read_snapshot_bytes_with_limit(&link, 64)
+            .expect_err("snapshot symlinks must be rejected");
+        assert!(matches!(
+            err,
+            StreamingSnapshotError::Io(ref source)
+                if source.kind() == io::ErrorKind::InvalidData
+        ));
+    }
+
+    #[test]
     fn file_names_append_tmp_extension() {
         let provisioner = FilesystemSoranetProvisioner::new(PathBuf::from("/tmp/spool"), 0);
         let update = PrivacyRouteUpdate {
@@ -3558,6 +3854,33 @@ mod tests {
             max_segment_datagram_size: 1_200,
             fec_feedback_interval_ms: 250,
             privacy_bucket_granularity: PrivacyBucketGranularity::StandardV1,
+        }
+    }
+
+    fn sample_snapshot_entry(port: u16) -> StreamingSnapshotEntry {
+        let key_pair = checked_random_keypair();
+        let peer = make_peer(&key_pair, port);
+        StreamingSnapshotEntry {
+            role: CapabilityRole::Viewer,
+            peer: peer.id().clone(),
+            snapshot: StreamingSessionSnapshot {
+                role: CapabilityRole::Viewer,
+                session_id: hash_with(0x91),
+                key_counter: 1,
+                suite: EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x92)),
+                kem_suite_id: 1,
+                sts_root: hash_with(0x93),
+                latest_gck: None,
+                last_content_key_id: None,
+                last_content_key_valid_from: None,
+                cadence: None,
+                transport_capabilities: None,
+                negotiated_capabilities: None,
+                kyber_remote_public: None,
+                kyber_remote_fingerprint: None,
+                kyber_local_public: None,
+                kyber_local_fingerprint: None,
+            },
         }
     }
 
@@ -6582,350 +6905,5 @@ mod tests {
         ));
     }
 
-    #[cfg(feature = "quic")]
-    #[test]
-    fn publisher_rejects_missing_bundle_acceleration_support() {
-        use norito::streaming::{AudioCapability, CapabilityReport, Resolution};
-
-        let mut handle = StreamingHandle::new();
-        let mut codec = actual::StreamingCodec::from_defaults();
-        codec.entropy_mode = EntropyMode::RansBundled;
-        codec.bundle_width = 2;
-        codec.bundle_accel = actual::BundleAcceleration::CpuSimd;
-        codec.rans_tables_path = repo_rans_tables_path();
-        handle
-            .apply_codec_config(&codec)
-            .expect("bundle tables should load");
-
-        let report = CapabilityReport {
-            stream_id: hash_with(0xDE),
-            endpoint_role: CapabilityRole::Viewer,
-            protocol_version: 1,
-            max_resolution: Resolution::R720p,
-            hdr_supported: false,
-            capture_hdr: false,
-            neural_bundles: Vec::new(),
-            audio_caps: AudioCapability {
-                sample_rates: vec![48_000],
-                ambisonics: false,
-                max_channels: 2,
-            },
-            feature_bits: CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED),
-            max_datagram_size: 900,
-            dplpmtud: false,
-        };
-        let resolution = sample_resolution();
-        let err = handle
-            .build_capability_ack(&report, resolution)
-            .expect_err("publisher should reject viewers lacking bundle acceleration support");
-        assert!(matches!(
-            err,
-            StreamingProcessError::BundledAccelerationUnsupported { .. }
-        ));
-    }
-
-    #[test]
-    fn snapshot_decode_tolerates_misaligned_plaintext() {
-        let key_pair = checked_random_keypair();
-        let peer = make_peer(&key_pair, 16001);
-        let resolution = sample_resolution();
-        let snapshot = StreamingSessionSnapshot {
-            role: CapabilityRole::Viewer,
-            session_id: hash_with(0x99),
-            key_counter: 3,
-            suite: EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x42)),
-            kem_suite_id: 1, // ML-KEM-768 default for streaming snapshots.
-            sts_root: hash_with(0x11),
-            latest_gck: Some(vec![0xAA, 0xBB, 0xCC]),
-            last_content_key_id: Some(7),
-            last_content_key_valid_from: Some(1_702_000_000),
-            cadence: Some(SessionCadenceSnapshot {
-                started_at_ms: 1_701_000_000,
-                total_payload_bytes: 4_096,
-            }),
-            transport_capabilities: Some(TransportCapabilityResolutionSnapshot::from(&resolution)),
-            negotiated_capabilities: Some(CapabilityFlags::from_bits(0b101)),
-            kyber_remote_public: Some(vec![0x55, 0x66, 0x77]),
-            kyber_remote_fingerprint: Some(hash_with(0x22)),
-            kyber_local_public: None,
-            kyber_local_fingerprint: None,
-        };
-        let entry = StreamingSnapshotEntry {
-            role: CapabilityRole::Viewer,
-            peer: peer.id().clone(),
-            snapshot,
-        };
-        let file = StreamingSnapshotFile {
-            version: SNAPSHOT_VERSION,
-            entries: vec![entry],
-        };
-        let plaintext = norito_core::to_bytes(&file).expect("canonical snapshot encode");
-        let decoded =
-            super::decode_snapshot_plaintext(&plaintext).expect("aligned decode succeeds");
-        assert_eq!(decoded, file);
-
-        let align = norito_core::archived_payload_align::<StreamingSnapshotFile>();
-        assert!(align > 1, "expected archived snapshot alignment > 1");
-        let mut envelope = vec![0u8; align - 1 + plaintext.len()];
-        envelope[align - 1..align - 1 + plaintext.len()].copy_from_slice(&plaintext);
-        let misaligned_slice = &envelope[align - 1..align - 1 + plaintext.len()];
-        assert_eq!(misaligned_slice, plaintext.as_slice());
-        assert_ne!(
-            (misaligned_slice.as_ptr() as usize) % align,
-            0,
-            "test failed to craft a misaligned view"
-        );
-        let decoded =
-            super::decode_snapshot_plaintext(misaligned_slice).expect("misaligned decode succeeds");
-        assert_eq!(decoded, file);
-    }
-
-    #[test]
-    fn snapshot_persist_roundtrip() {
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let snapshot_path = dir.path().join("sessions.norito");
-
-        let publisher_keys = checked_random_ed25519_keypair();
-        let viewer_keys = checked_random_keypair();
-        let publisher_peer = make_peer(&publisher_keys, 17001);
-        let viewer_peer = make_peer(&viewer_keys, 17002);
-        let session_id = hash_with(0x55);
-        let suite = EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x66));
-        let resolution = sample_resolution();
-
-        let material = StreamingKeyMaterial::new(publisher_keys.clone())
-            .expect("publisher material requires ed25519");
-        let publisher_key = snapshot_session_key(&material);
-        let publisher_handle = StreamingHandle::with_key_material(material.clone())
-            .with_snapshot_path(snapshot_path.clone())
-            .with_snapshot_encryption_key(&publisher_key)
-            .expect("configure snapshot encryption key");
-        let viewer_key = snapshot_session_key(&material);
-        let viewer_handle = StreamingHandle::new()
-            .with_snapshot_encryption_key(&viewer_key)
-            .expect("configure viewer snapshot encryption key");
-
-        let publisher_update = publisher_handle
-            .build_key_update(
-                &viewer_peer,
-                CapabilityRole::Publisher,
-                &KeyUpdateSpec {
-                    session_id,
-                    suite: &suite,
-                    protocol_version: 1,
-                    key_counter: 1,
-                },
-                publisher_keys.private_key(),
-            )
-            .expect("publisher key update");
-
-        let publisher_frame = ControlFrame::KeyUpdate(publisher_update.clone());
-        viewer_handle
-            .process_control_frame(&publisher_peer, &publisher_frame)
-            .expect("viewer processes key update");
-
-        let viewer_update = viewer_handle
-            .build_key_update(
-                &publisher_peer,
-                CapabilityRole::Viewer,
-                &KeyUpdateSpec {
-                    session_id,
-                    suite: &suite,
-                    protocol_version: 1,
-                    key_counter: 2,
-                },
-                viewer_keys.private_key(),
-            )
-            .expect("viewer key update");
-
-        let viewer_frame = ControlFrame::KeyUpdate(viewer_update);
-        publisher_handle
-            .process_control_frame(&viewer_peer, &viewer_frame)
-            .expect("publisher processes viewer key update");
-
-        publisher_handle
-            .record_transport_capabilities(&viewer_peer, CapabilityRole::Publisher, resolution)
-            .expect("publisher records capabilities");
-        viewer_handle
-            .record_transport_capabilities(&publisher_peer, CapabilityRole::Viewer, resolution)
-            .expect("viewer records capabilities");
-        let negotiated =
-            CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED | 0b101);
-        publisher_handle
-            .record_negotiated_capabilities(&viewer_peer, CapabilityRole::Publisher, negotiated)
-            .expect("publisher records features");
-        viewer_handle
-            .record_negotiated_capabilities(&publisher_peer, CapabilityRole::Viewer, negotiated)
-            .expect("viewer records features");
-
-        publisher_handle
-            .persist_snapshots()
-            .expect("persist streaming snapshots");
-        assert!(snapshot_path.exists(), "snapshot file should exist");
-
-        let restored_key = snapshot_session_key(&material);
-        let restored_handle = StreamingHandle::with_key_material(material)
-            .with_snapshot_path(snapshot_path.clone())
-            .with_snapshot_encryption_key(&restored_key)
-            .expect("configure restored snapshot encryption key");
-        restored_handle
-            .load_snapshots_from_path(&snapshot_path)
-            .expect("load streaming snapshots");
-        assert!(
-            restored_handle.transport_keys(viewer_peer.id()).is_some(),
-            "restored handle should retain transport keys"
-        );
-        assert_eq!(
-            restored_handle.transport_capabilities_hash(viewer_peer.id()),
-            Some(resolution.capabilities_hash()),
-            "restored handle retains transport capability hash"
-        );
-    }
-
-    #[test]
-    fn snapshot_load_promotes_temp_file() {
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let snapshot_path = dir.path().join("sessions.norito");
-
-        let publisher_keys = checked_random_ed25519_keypair();
-        let viewer_keys = checked_random_keypair();
-        let publisher_peer = make_peer(&publisher_keys, 18001);
-        let viewer_peer = make_peer(&viewer_keys, 18002);
-        let session_id = hash_with(0x5A);
-        let suite = EncryptionSuite::X25519ChaCha20Poly1305(hash_with(0x6B));
-        let resolution = sample_resolution();
-
-        let material = StreamingKeyMaterial::new(publisher_keys.clone())
-            .expect("publisher material requires ed25519");
-        let publisher_key = snapshot_session_key(&material);
-        let publisher_handle = StreamingHandle::with_key_material(material.clone())
-            .with_snapshot_path(snapshot_path.clone())
-            .with_snapshot_encryption_key(&publisher_key)
-            .expect("configure snapshot encryption key");
-        let viewer_key = snapshot_session_key(&material);
-        let viewer_handle = StreamingHandle::new()
-            .with_snapshot_encryption_key(&viewer_key)
-            .expect("configure viewer snapshot encryption key");
-
-        let publisher_update = publisher_handle
-            .build_key_update(
-                &viewer_peer,
-                CapabilityRole::Publisher,
-                &KeyUpdateSpec {
-                    session_id,
-                    suite: &suite,
-                    protocol_version: 1,
-                    key_counter: 1,
-                },
-                publisher_keys.private_key(),
-            )
-            .expect("publisher key update");
-        let publisher_frame = ControlFrame::KeyUpdate(publisher_update);
-        viewer_handle
-            .process_control_frame(&publisher_peer, &publisher_frame)
-            .expect("viewer processes key update");
-
-        let viewer_update = viewer_handle
-            .build_key_update(
-                &publisher_peer,
-                CapabilityRole::Viewer,
-                &KeyUpdateSpec {
-                    session_id,
-                    suite: &suite,
-                    protocol_version: 1,
-                    key_counter: 2,
-                },
-                viewer_keys.private_key(),
-            )
-            .expect("viewer key update");
-        let viewer_frame = ControlFrame::KeyUpdate(viewer_update);
-        publisher_handle
-            .process_control_frame(&viewer_peer, &viewer_frame)
-            .expect("publisher processes viewer key update");
-
-        publisher_handle
-            .record_transport_capabilities(&viewer_peer, CapabilityRole::Publisher, resolution)
-            .expect("publisher records capabilities");
-        viewer_handle
-            .record_transport_capabilities(&publisher_peer, CapabilityRole::Viewer, resolution)
-            .expect("viewer records capabilities");
-        let negotiated =
-            CapabilityFlags::from_bits(CapabilityFlags::FEATURE_ENTROPY_BUNDLED | 0b101);
-        publisher_handle
-            .record_negotiated_capabilities(&viewer_peer, CapabilityRole::Publisher, negotiated)
-            .expect("publisher records features");
-        viewer_handle
-            .record_negotiated_capabilities(&publisher_peer, CapabilityRole::Viewer, negotiated)
-            .expect("viewer records features");
-
-        publisher_handle
-            .persist_snapshots()
-            .expect("persist streaming snapshots");
-        let tmp_path = snapshot_temp_path(&snapshot_path);
-        fs::rename(&snapshot_path, &tmp_path).expect("move snapshot to temp");
-
-        let restored_key = snapshot_session_key(&material);
-        let restored_handle = StreamingHandle::with_key_material(material)
-            .with_snapshot_path(snapshot_path.clone())
-            .with_snapshot_encryption_key(&restored_key)
-            .expect("configure restored snapshot encryption key");
-        restored_handle
-            .load_snapshots_from_path(&snapshot_path)
-            .expect("load streaming snapshots from temp");
-        assert!(snapshot_path.exists(), "snapshot file should be promoted");
-        assert!(!tmp_path.exists(), "temp snapshot file should be removed");
-        assert!(
-            restored_handle.transport_keys(viewer_peer.id()).is_some(),
-            "restored handle should retain transport keys"
-        );
-    }
-
-    #[test]
-    fn snapshot_session_key_derivation_is_deterministic() {
-        let key_pair = checked_random_ed25519_keypair();
-        let material = StreamingKeyMaterial::new(key_pair.clone()).expect("material created");
-        let first = snapshot_session_key(&material);
-        let second = snapshot_session_key(&material);
-        assert_eq!(first.payload(), second.payload());
-
-        let other_pair = checked_random_ed25519_keypair();
-        let other_material = StreamingKeyMaterial::new(other_pair).expect("material created");
-        let other = snapshot_session_key(&other_material);
-        assert_ne!(first.payload(), other.payload());
-    }
-
-    #[test]
-    fn apply_crypto_config_sets_sm_feature_bit_from_build() {
-        let mut handle = StreamingHandle::new().with_capabilities(CapabilityFlags::from_bits(0b1));
-        let cfg = actual::Crypto::default();
-        handle.apply_crypto_config(&cfg);
-        #[cfg(feature = "sm")]
-        assert!(
-            !handle
-                .capabilities()
-                .contains(CapabilityFlags::FEATURE_SM_TRANSACTIONS),
-            "SM feature bit should be cleared when SM support is disabled in config"
-        );
-        #[cfg(not(feature = "sm"))]
-        assert!(
-            !handle
-                .capabilities()
-                .contains(CapabilityFlags::FEATURE_SM_TRANSACTIONS),
-            "SM feature bit should be absent when the build lacks SM support"
-        );
-
-        #[cfg(feature = "sm")]
-        {
-            let mut cfg_enabled = actual::Crypto::default();
-            cfg_enabled.allowed_signing = vec![Algorithm::Ed25519, Algorithm::Sm2];
-            handle.apply_crypto_config(&cfg_enabled);
-        }
-        #[cfg(feature = "sm")]
-        assert!(
-            handle
-                .capabilities()
-                .contains(CapabilityFlags::FEATURE_SM_TRANSACTIONS),
-            "SM feature bit should be present when both build and config enable SM support"
-        );
-    }
+    include!("streaming/snapshot_bounds_and_capability_tests.rs");
 }

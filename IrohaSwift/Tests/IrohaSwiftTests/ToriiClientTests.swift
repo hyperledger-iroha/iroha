@@ -402,152 +402,17 @@ func tcBodyJSON(from request: URLRequest) -> [String: Any] {
     return dictionary
 }
 
-func tcMakeSampleManifestRaw(storageTicket: String = String(repeating: "aa", count: 32)) -> [String: ToriiJSONValue] {
-    let manifestBytes = Data("sample-manifest".utf8).base64EncodedString()
-    return [
-        "storage_ticket": .string(storageTicket),
-        "client_blob_id": .string(String(repeating: "bb", count: 32)),
-        "blob_hash": .string(String(repeating: "cc", count: 32)),
-        "manifest_hash": .string(String(repeating: "ff", count: 32)),
-        "chunk_root": .string(String(repeating: "dd", count: 32)),
-        "lane_id": .number(1),
-        "epoch": .number(2),
-        "manifest_len": .number(16),
-        "manifest_norito": .string(manifestBytes),
-        "manifest": .object([
-            "chunking": .object([
-                "namespace": .string("sorafs"),
-                "name": .string("sf1"),
-                "semver": .string("1.0.0")
-            ])
-        ]),
-        "chunk_plan": .object([
-            "schema": .string("sorafs.chunk_fetch_plan.v1"),
-            "payload_digest_blake3_hex": .string(String(repeating: "cc", count: 32)),
-            "chunk_fetch_specs": .array([
-                .object([
-                    "chunk_index": .number(0),
-                    "offset": .number(0),
-                    "length": .number(4),
-                    "digest_blake3": .string(String(repeating: "ee", count: 32))
-                ])
-            ])
-        ])
-    ]
-}
-
-fileprivate func tcMakeSampleManifestBundle(storageTicket: String = String(repeating: "aa", count: 32)) throws -> ToriiDaManifestBundle {
-    try ToriiDaManifestBundle(raw: tcMakeSampleManifestRaw(storageTicket: storageTicket))
-}
-
-fileprivate func tcMakeGatewayFetchResult() -> SorafsGatewayFetchResult {
-    let report = SorafsGatewayFetchReport(
-        chunkCount: 1,
-        providerReports: [],
-        chunkReceipts: [],
-        scoreboard: nil
-    )
-    return SorafsGatewayFetchResult(
-        payload: Data([0x01, 0x02]),
-        report: report,
-        reportJSON: #"{"chunk_count":1}"#
-    )
-}
-
-@available(iOS 15.0, macOS 12.0, *)
-fileprivate enum TcHelperError: Error {
-    case invalidHashEncoding
-    case invalidPayloadEncoding
-}
-
-func tcMakePipelineEnvelope(hashHex: String, marker: UInt8) throws -> SignedTransactionEnvelope {
-    guard let hashData = Data(hexString: hashHex) else {
-        throw TcHelperError.invalidHashEncoding
-    }
-    let payload = Data([marker, marker ^ 0xFF, 0xA5])
-    return SignedTransactionEnvelope(norito: payload,
-                                     signedTransaction: payload,
-                                     payload: nil,
-                                     transactionHash: hashData)
-}
-
-fileprivate func tcLoadDaProofFixture() throws -> (manifest: Data, payload: Data, blobHashHex: String) {
-    let fixtureRoot = tcRepositoryRootURL()
-        .appendingPathComponent("fixtures/da/reconstruct/rs_parity_v1", isDirectory: true)
-    let manifestHexURL = fixtureRoot.appendingPathComponent("manifest.norito.hex")
-    let manifestJSONURL = fixtureRoot.appendingPathComponent("manifest.json")
-    let payloadURL = fixtureRoot.appendingPathComponent("payload.bin")
-
-    let manifestHex = try String(contentsOf: manifestHexURL, encoding: .utf8)
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    let manifestData = try XCTUnwrap(
-        Data(hexString: manifestHex),
-        "failed to decode DA manifest fixture"
-    )
-    let payloadData = try Data(contentsOf: payloadURL)
-    let manifestJSONData = try Data(contentsOf: manifestJSONURL)
-    let manifestObject = try XCTUnwrap(
-        try JSONSerialization.jsonObject(with: manifestJSONData) as? [String: Any],
-        "DA manifest fixture must be a JSON object"
-    )
-    let blobArray = try XCTUnwrap(
-        manifestObject["blob_hash"] as? [[NSNumber]],
-        "blob_hash fixture missing"
-    )
-    let blobBytes = try XCTUnwrap(blobArray.first, "blob_hash fixture is empty")
-    let blobHex = blobBytes.reduce(into: "") { partialResult, value in
-        partialResult.append(String(format: "%02x", value.uint8Value))
-    }
-    return (manifestData, payloadData, blobHex)
-}
-
-fileprivate func tcRepositoryRootURL() -> URL {
-    URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent() // ToriiClientTests.swift
-        .deletingLastPathComponent() // IrohaSwiftTests
-        .deletingLastPathComponent() // Tests
-        .deletingLastPathComponent() // IrohaSwift
-}
-
-fileprivate func tcMakeStubProofSummary() -> ToriiDaProofSummary {
-    let proof = ToriiDaProofRecord(
-        origin: "explicit",
-        leafIndex: 0,
-        chunkIndex: 0,
-        segmentIndex: 0,
-        leafOffset: 0,
-        leafLength: 32,
-        segmentOffset: 0,
-        segmentLength: 32,
-        chunkOffset: 0,
-        chunkLength: 32,
-        payloadLength: 32,
-        chunkDigestHex: "aa",
-        chunkRootHex: "bb",
-        segmentDigestHex: "cc",
-        leafDigestHex: "dd",
-        leafBytes: Data(),
-        segmentLeavesHex: [],
-        chunkSegmentsHex: [],
-        chunkCount: 1,
-        chunkMerklePathHex: [],
-        verified: true
-    )
-    return ToriiDaProofSummary(
-        blobHashHex: "aa",
-        chunkRootHex: "bb",
-        porRootHex: "cc",
-        leafCount: 1,
-        segmentCount: 1,
-        chunkCount: 1,
-        sampleCount: 0,
-        sampleSeed: 0,
-        proofCount: 1,
-        proofs: [proof]
-    )
-}
-
 final class ToriiClientTests: XCTestCase {
+    private static let operatorSigningContext: ToriiOperatorSigningContext = {
+        let signingKey = try! SigningKey.ed25519(
+            privateKey: Data(repeating: 0x5A, count: 32)
+        )
+        return try! ToriiOperatorSigningContext(
+            networkId: TestNetworkIds.canonical,
+            signingKey: signingKey
+        )
+    }()
+
     private static let pipelineHash = String(repeating: "d", count: 64)
     private let canonicalSigningSeed = Data(repeating: 0x41, count: 32)
     private let onboardingToken = String(repeating: "T", count: 32)
@@ -567,6 +432,16 @@ final class ToriiClientTests: XCTestCase {
             privateKey: canonicalSigningSeed,
             timestampMs: 4_102_444_801_000,
             nonce: "canonical-read-test"
+        )
+    }
+
+    private func canonicalReadAuth(accountId: String,
+                                   privateKeyByte: UInt8) -> ToriiCanonicalRequestAuth {
+        ToriiCanonicalRequestAuth(
+            accountId: accountId,
+            privateKey: Data(repeating: privateKeyByte, count: 32),
+            timestampMs: 4_102_444_801_000,
+            nonce: "canonical-application-post-test"
         )
     }
 
@@ -608,7 +483,8 @@ final class ToriiClientTests: XCTestCase {
 
     private func makeClient(
         baseURL: URL = URL(string: "https://example.test")!,
-        defaultHeaders: [String: String] = [:]
+        defaultHeaders: [String: String] = [:],
+        operatorSigningContext: ToriiOperatorSigningContext? = ToriiClientTests.operatorSigningContext
     ) -> ToriiClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
@@ -617,8 +493,32 @@ final class ToriiClientTests: XCTestCase {
             baseURL: baseURL,
             session: session,
             defaultHeaders: defaultHeaders,
-            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical)
+            localSigningContext: ToriiLocalSigningContext(networkId: TestNetworkIds.canonical),
+            operatorSigningContext: operatorSigningContext
         )
+    }
+
+    private func assertOperatorAuthentication(
+        _ request: URLRequest,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        for header in [
+            "X-Iroha-Operator-Public-Key",
+            "X-Iroha-Operator-Timestamp-Ms",
+            "X-Iroha-Operator-Nonce",
+            "X-Iroha-Operator-Signature",
+        ] {
+            XCTAssertNotNil(
+                request.value(forHTTPHeaderField: header),
+                "missing \(header)",
+                file: file,
+                line: line
+            )
+        }
+        XCTAssertTrue(request.httpBody?.isEmpty ?? true, file: file, line: line)
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"), file: file, line: line)
+        XCTAssertNil(request.value(forHTTPHeaderField: "X-API-Token"), file: file, line: line)
     }
 
     private func canonicalUnsignedFeePayload(
@@ -869,81 +769,6 @@ final class ToriiClientTests: XCTestCase {
             ),
             signature: signatureHex
         )
-    }
-
-    private func ramLfeExecuteResponseJSON(
-        programId: String = "identifier_lookup_retail",
-        opaqueHash: String = String(repeating: "11", count: 32),
-        receiptHash: String = String(repeating: "22", count: 32),
-        outputCiphertext: String = "C0FFEE",
-        outputHash: String = String(repeating: "44", count: 32),
-        associatedDataHash: String = String(repeating: "55", count: 32),
-        backend: String = "bfv-programmed-sha3-256-v1",
-        verificationMode: String = "signed"
-    ) -> Data {
-        """
-        {
-          "program_id":"\(programId)",
-          "opaque_hash":"\(opaqueHash)",
-          "receipt_hash":"\(receiptHash)",
-          "output_ciphertext":"\(outputCiphertext)",
-          "output_hash":"\(outputHash)",
-          "associated_data_hash":"\(associatedDataHash)",
-          "executed_at_ms":42,
-          "expires_at_ms":142,
-          "backend":"\(backend)",
-          "verification_mode":"\(verificationMode)",
-          "receipt":{
-            "payload":{
-              "program_id":"identifier_lookup_retail",
-              "program_digest":"\(String(repeating: "11", count: 32))",
-              "backend":"bfv-programmed-sha3-256-v1",
-              "verification_mode":"signed",
-              "output_hash":"\(String(repeating: "22", count: 32))",
-              "associated_data_hash":"\(String(repeating: "33", count: 32))",
-              "executed_at_ms":42,
-              "expires_at_ms":142
-            },
-            "attestation":{
-              "kind":"signed",
-              "signature":"\(String(repeating: "aa", count: 64))"
-            }
-          },
-          "output_opening":{
-            "payload":{
-              "program_id":"identifier_lookup_retail",
-              "input_ciphertext_hash":"\(String(repeating: "ab", count: 32))",
-              "output_ciphertext_hash":"\(String(repeating: "bb", count: 32))",
-              "parameter_digest":"\(String(repeating: "cd", count: 32))",
-              "evaluation_key_digest":"\(String(repeating: "dd", count: 32))",
-              "opened_output_hash":"\(String(repeating: "ee", count: 32))",
-              "opened_at_ms":42,
-              "expires_at_ms":142
-            },
-            "signature":"\(String(repeating: "ff", count: 64))"
-          }
-        }
-        """.data(using: .utf8)!
-    }
-
-    private func ramLfeReceiptVerifyResponseJSON(
-        programId: String = "identifier_lookup_retail",
-        backend: String = "bfv-programmed-sha3-256-v1",
-        verificationMode: String = "signed",
-        outputHash: String = String(repeating: "44", count: 32),
-        associatedDataHash: String = String(repeating: "55", count: 32)
-    ) -> Data {
-        """
-        {
-          "valid":true,
-          "program_id":"\(programId)",
-          "backend":"\(backend)",
-          "verification_mode":"\(verificationMode)",
-          "output_hash":"\(outputHash)",
-          "associated_data_hash":"\(associatedDataHash)",
-          "output_hash_matches":true
-        }
-        """.data(using: .utf8)!
     }
 
     private func ramLfeProgramPoliciesJSON(
@@ -2260,6 +2085,11 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
+                self.authority
+            )
+            XCTAssertNotNil(request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerSignature))
             let payload = self.bodyJSON(from: request)
             XCTAssertNil(payload["input_hex"])
             XCTAssertEqual(payload["encrypted_input"] as? String, "abcd")
@@ -2272,7 +2102,8 @@ final class ToriiClientTests: XCTestCase {
 
         let response = try await makeClient().executeRamLfeProgram(
             programId: "identifier_lookup_retail",
-            encryptedInputHex: "0xABCD"
+            encryptedInputHex: "0xABCD",
+            canonicalAuth: canonicalReadAuth
         )
         XCTAssertEqual(response?.programId, "identifier_lookup_retail")
         XCTAssertEqual(response?.outputCiphertext, "C0FFEE")
@@ -2300,7 +2131,8 @@ final class ToriiClientTests: XCTestCase {
 
         let response = try await makeClient().executeRamLfeProgram(
             programId: "identifier_lookup_retail",
-            encryptedInputHex: "ABCD"
+            encryptedInputHex: "ABCD",
+            canonicalAuth: canonicalReadAuth
         )
         XCTAssertNil(response)
     }
@@ -2326,6 +2158,10 @@ final class ToriiClientTests: XCTestCase {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/ram-lfe/receipts/verify")
             XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
+                self.authority
+            )
             let payload = self.bodyJSON(from: request)
             XCTAssertEqual(payload["output_hex"] as? String, "c0ffee")
             let receiptObject = payload["receipt"] as? [String: Any]
@@ -2340,7 +2176,8 @@ final class ToriiClientTests: XCTestCase {
 
         let response = try await makeClient().verifyRamLfeReceipt(
             receipt: receipt,
-            outputHex: "C0FFEE"
+            outputHex: "C0FFEE",
+            canonicalAuth: canonicalReadAuth
         )
         XCTAssertTrue(response.valid)
         XCTAssertEqual(response.programId, "identifier_lookup_retail")
@@ -2411,6 +2248,10 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: ToriiCanonicalRequest.headerAccount),
+                self.authority
+            )
             let payload = self.bodyJSON(from: request)
             XCTAssertEqual(payload["policy_id"] as? String, "phone#retail")
             XCTAssertEqual(payload["encrypted_input"] as? String, "abcd")
@@ -2431,7 +2272,8 @@ final class ToriiClientTests: XCTestCase {
         let receipt = try await makeClient().resolveIdentifier(
             policyId: " phone#retail ",
             encryptedInputHex: "0xABCD",
-            outputOpening: signedPayload.opening
+            outputOpening: signedPayload.opening,
+            canonicalAuth: canonicalReadAuth
         )
         XCTAssertEqual(receipt?.policyId, "phone#retail")
         XCTAssertEqual(receipt?.opaqueId, opaqueId)
@@ -4086,7 +3928,8 @@ final class ToriiClientTests: XCTestCase {
             _ = try await makeClient().resolveIdentifier(
                 policyId: "phone#retail",
                 encryptedInputHex: "ABCD",
-                outputOpening: signedPayload.opening
+                outputOpening: signedPayload.opening,
+                canonicalAuth: canonicalReadAuth
             )
             XCTFail("Expected invalidPayload error")
         } catch let ToriiClientError.invalidPayload(reason) {
@@ -4117,7 +3960,8 @@ final class ToriiClientTests: XCTestCase {
         let receipt = try await makeClient().resolveIdentifier(
             policyId: "phone#retail",
             encryptedInputHex: "0xABCD",
-            outputOpening: sampleOpening()
+            outputOpening: sampleOpening(),
+            canonicalAuth: canonicalReadAuth
         )
         XCTAssertNil(receipt)
     }
@@ -4157,7 +4001,8 @@ final class ToriiClientTests: XCTestCase {
         let receipt = try await makeClient().resolveIdentifier(
             policyId: "phone#retail",
             encryptedInputHex: "ABCD",
-            outputOpening: signedPayload.opening
+            outputOpening: signedPayload.opening,
+            canonicalAuth: canonicalReadAuth
         )
         XCTAssertEqual(receipt?.resolvedAtMs, 42)
         XCTAssertEqual(receipt?.expiresAtMs, 142)
@@ -4219,7 +4064,8 @@ final class ToriiClientTests: XCTestCase {
             accountId: accountId,
             policyId: "phone#retail",
             encryptedInputHex: "ABCD",
-            outputOpening: signedPayload.opening
+            outputOpening: signedPayload.opening,
+            canonicalAuth: canonicalReadAuth(accountId: accountId, privateKeyByte: 1)
         )
         XCTAssertEqual(receipt?.opaqueId, opaqueId)
         XCTAssertEqual(receipt?.receiptHash, receiptHash)
@@ -4270,7 +4116,8 @@ final class ToriiClientTests: XCTestCase {
             accountId: accountId,
             policyId: "phone#retail",
             encryptedInputHex: "ABCD",
-            outputOpening: signedPayload.opening
+            outputOpening: signedPayload.opening,
+            canonicalAuth: canonicalReadAuth(accountId: accountId, privateKeyByte: 1)
         )
         XCTAssertEqual(receipt?.resolvedAtMs, 7)
         XCTAssertEqual(receipt?.expiresAtMs, 77)
@@ -4285,6 +4132,25 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(receipt?.payload.execution.associatedDataHash, associatedDataHash)
         XCTAssertEqual(receipt?.payload.execution.executedAtMs, 7)
         XCTAssertEqual(receipt?.payload.execution.expiresAtMs, 77)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testIssueIdentifierClaimReceiptRejectsPathAccountSubstitutionBeforeDispatch() async throws {
+        let accountId = try canonicalOwnerLiteral()
+        StubURLProtocol.handler = { _ in
+            XCTFail("path/account substitution must fail before dispatch")
+            throw URLError(.badURL)
+        }
+
+        await assertToriiInvalidPayload(contains: "claim-receipt path accountId") {
+            _ = try await makeClient().issueIdentifierClaimReceipt(
+                accountId: accountId,
+                policyId: "phone#retail",
+                encryptedInputHex: "ABCD",
+                outputOpening: sampleOpening(),
+                canonicalAuth: canonicalReadAuth
+            )
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -5766,8 +5632,8 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetConnectStatusParsesSnapshot() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/connect/status")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            XCTAssertEqual(request.url?.path, "/v1/connect/status/aggregate")
+            self.assertOperatorAuthentication(request)
             let payload: [String: Any] = [
                 "enabled": true,
                 "sessions_total": 10,
@@ -5830,7 +5696,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetConnectStatusReturnsNilFor404() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/connect/status")
+            XCTAssertEqual(request.url?.path, "/v1/connect/status/aggregate")
             let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: [:])!
             return (response, Data())
         }
@@ -9059,50 +8925,6 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(page.items.first?.id, "lot-001$commodities.sora")
     }
 
-    @available(iOS 15.0, macOS 12.0, *)
-    func testQueryRwasPostsEnvelope() async throws {
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.url?.path, "/v1/rwas/query")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-            let body = self.bodyJSON(from: request)
-            let pagination = body["pagination"] as? [String: Any]
-            XCTAssertEqual(pagination?["limit"] as? Int, 10)
-            XCTAssertEqual(pagination?["offset"] as? Int, 5)
-            let sort = body["sort"] as? [[String: Any]]
-            XCTAssertEqual(sort?.first?["key"] as? String, "id")
-            XCTAssertEqual(sort?.first?["order"] as? String, "asc")
-            let select = body["select"] as? [Any]
-            XCTAssertEqual(select?.first as? String, "id")
-            let projection = select?.last as? [String: Any]
-            XCTAssertEqual(projection?["authority"] as? Bool, true)
-            XCTAssertEqual(body["query"] as? String, "recent-rwas")
-            XCTAssertEqual(body["fetch_size"] as? Int, 20)
-            XCTAssertEqual(body["count_mode"] as? String, "bounded")
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let payload = """
-            {"items":[{"id":"lot-002$commodities.sora"}],"total":1}
-            """.data(using: .utf8)!
-            return (response, payload)
-        }
-
-        let envelope = ToriiQueryEnvelope(
-            query: " recent-rwas ",
-            filter: .object(["id": .object(["eq": .string("lot-002$commodities.sora")])]),
-            selectEntries: [.fieldPath(" id "), .object(["authority": .bool(true)])],
-            sort: [ToriiQuerySortKey(key: "id", order: .asc)],
-            pagination: ToriiQueryPagination(limit: 10, offset: 5),
-            fetchSize: 20,
-            countMode: " BOUNDED "
-        )
-        let page = try await makeClient().queryRwas(envelope)
-        XCTAssertEqual(page.total, 1)
-        XCTAssertEqual(page.items.first?.id, "lot-002$commodities.sora")
-    }
-
     func testQueryEnvelopeRejectsBlankSelectFieldPaths() throws {
         let envelope = ToriiQueryEnvelope(selectEntries: [.fieldPath(" ")])
         XCTAssertThrowsError(try JSONEncoder().encode(envelope)) { error in
@@ -10683,6 +10505,7 @@ final class ToriiClientTests: XCTestCase {
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/pipeline/recovery/42")
+            self.assertOperatorAuthentication(request)
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             return (response, payload)
         }
@@ -10697,6 +10520,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetPipelineRecoveryReturnsNilOn404() {
         let expectation = expectation(description: "recovery")
         StubURLProtocol.handler = { request in
+            self.assertOperatorAuthentication(request)
             let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
             return (response, nil)
         }
@@ -10721,6 +10545,7 @@ final class ToriiClientTests: XCTestCase {
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/pipeline/preflight")
+            self.assertOperatorAuthentication(request)
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             return (response, payload)
         }
@@ -10758,6 +10583,7 @@ final class ToriiClientTests: XCTestCase {
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/pipeline/recovery/7")
+            self.assertOperatorAuthentication(request)
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             return (response, payload)
         }
@@ -10765,7 +10591,11 @@ final class ToriiClientTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!, session: session)
+        let sdk = IrohaSDK(
+            baseURL: URL(string: "https://example.test")!,
+            session: session,
+            operatorSigningContext: Self.operatorSigningContext
+        )
 
         let recovery = try await sdk.getPipelineRecovery(height: 7)
         XCTAssertEqual(recovery?.dag.fingerprint, "cafebabe")
@@ -15666,6 +15496,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/time/status")
+            self.assertOperatorAuthentication(request)
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             return (response, payload)
         }
@@ -15678,6 +15509,65 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testCoreAndPipelineOperatorReadsRejectMissingContextBeforeDispatch() async {
+        StubURLProtocol.handler = { request in
+            XCTFail("operator request dispatched without a signing context: \(request)")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 500,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data())
+        }
+        let client = makeClient(operatorSigningContext: nil)
+        let reads: [(String, () async throws -> Void)] = [
+            ("pipeline recovery", { _ = try await client.getPipelineRecovery(height: 42) }),
+            ("pipeline preflight", { _ = try await client.getPipelinePreflight() }),
+            ("time status", { _ = try await client.getTimeStatus() }),
+        ]
+
+        for (name, read) in reads {
+            do {
+                try await read()
+                XCTFail("\(name) must require an operator signing context")
+            } catch {
+                XCTAssertTrue(String(describing: error).contains("ToriiOperatorSigningContext"))
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSumeragiOperatorReadsRejectMissingContextAndFallbackAuthBeforeDispatch() async {
+        StubURLProtocol.handler = { request in
+            XCTFail("operator request should not dispatch without a clean signing context")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 500,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data())
+        }
+
+        do {
+            _ = try await makeClient(operatorSigningContext: nil).getSumeragiStatus()
+            XCTFail("missing operator context must fail before dispatch")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("ToriiOperatorSigningContext"))
+        }
+
+        for header in ["Authorization", "X-API-Token", "X-Iroha-Operator-Signature"] {
+            do {
+                _ = try await makeClient(defaultHeaders: [header: "retired"])
+                    .getSumeragiStatus()
+                XCTFail("fallback or precomputed authentication must fail before dispatch")
+            } catch {
+                XCTAssertTrue(String(describing: error).contains("reject"))
+            }
+        }
+    }
+
     func testGetSumeragiStatusParsesAuthoritativeV2SnapshotAsync() async throws {
         let contextHash = nativeAmxTestHash(0xA7)
         let parentHash = nativeAmxTestHash(0xB1)
@@ -15776,6 +15666,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/sumeragi/status")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            self.assertOperatorAuthentication(request)
             let response = HTTPURLResponse(
                 url: request.url!,
                 statusCode: servedStatus,
@@ -16363,6 +16254,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/sumeragi/diagnostics")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            self.assertOperatorAuthentication(request)
             let response = HTTPURLResponse(
                 url: request.url!,
                 statusCode: 200,
@@ -16657,6 +16549,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/sumeragi/commit-qcs/\(blockHash)")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            self.assertOperatorAuthentication(request)
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,

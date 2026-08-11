@@ -3039,7 +3039,7 @@ impl LinearRelationStatementV1 {
                     return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
                 }
                 term.multiplier.validate(profile)?;
-                if term.multiplier == super::RnsPolynomial::zero(profile) {
+                if term.multiplier.is_zero() {
                     return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
                 }
                 used_witnesses[term.witness_index] = true;

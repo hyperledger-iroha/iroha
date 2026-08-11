@@ -32,18 +32,91 @@ impl<T: Write> RunArgs<T> for Args {
         let normalized = manifest.normalize()?;
 
         match self.format {
-            OutputFormat::Json => {
-                let json = normalized
-                    .to_pretty_json()
-                    .map_err(|err| eyre!("serialize normalized genesis: {err}"))?;
-                writeln!(writer, "{json}")?;
-            }
+            OutputFormat::Json => render_json(&normalized, writer)?,
             OutputFormat::Text => render_text(&normalized, writer)?,
         }
 
         tui::success("Genesis manifest normalized");
         Ok(())
     }
+}
+
+fn render_json<T: Write>(
+    normalized: &NormalizedGenesis,
+    writer: &mut BufWriter<T>,
+) -> color_eyre::Result<()> {
+    writeln!(writer, "{{")?;
+    write!(writer, "  \"chain\": ")?;
+    write_json_value(writer, &normalized.chain)?;
+    writeln!(writer, ",")?;
+    writeln!(
+        writer,
+        "  \"chain_discriminant\": {},",
+        normalized.chain_discriminant
+    )?;
+    write!(writer, "  \"executor\": ")?;
+    if let Some(path) = &normalized.executor {
+        write_json_value(writer, &path.as_path().display().to_string())?;
+    } else {
+        write!(writer, "null")?;
+    }
+    writeln!(writer, ",")?;
+    write!(writer, "  \"ivm_dir\": ")?;
+    write_json_value(writer, &normalized.ivm_dir.display().to_string())?;
+    writeln!(writer, ",")?;
+    write!(writer, "  \"consensus_mode\": ")?;
+    write_json_value(writer, &normalized.consensus_mode)?;
+    writeln!(writer, ",")?;
+    writeln!(
+        writer,
+        "  \"wire_protocol_version\": {},",
+        normalized.wire_protocol_version
+    )?;
+    write!(writer, "  \"consensus_fingerprint\": ")?;
+    write_json_value(writer, &normalized.consensus_fingerprint)?;
+    writeln!(writer, ",")?;
+    write!(writer, "  \"sumeragi_v2\": ")?;
+    write_json_value(writer, &normalized.sumeragi_v2)?;
+    writeln!(writer, ",")?;
+    write!(writer, "  \"crypto\": ")?;
+    write_json_value(writer, &normalized.crypto)?;
+    writeln!(writer, ",")?;
+    writeln!(writer, "  \"transactions\": [")?;
+
+    for (tx_idx, instructions) in normalized.transactions.iter().enumerate() {
+        writeln!(writer, "    {{")?;
+        writeln!(writer, "      \"index\": {tx_idx},")?;
+        writeln!(writer, "      \"instructions\": [")?;
+        for (instruction_idx, instruction) in instructions.iter().enumerate() {
+            let value = iroha_genesis::genesis_instructions_json::instruction_value(instruction);
+            write!(writer, "        ")?;
+            write_json_value(writer, &value)?;
+            if instruction_idx + 1 == instructions.len() {
+                writeln!(writer)?;
+            } else {
+                writeln!(writer, ",")?;
+            }
+        }
+        writeln!(writer, "      ]")?;
+        if tx_idx + 1 == normalized.transactions.len() {
+            writeln!(writer, "    }}")?;
+        } else {
+            writeln!(writer, "    }},")?;
+        }
+    }
+    writeln!(writer, "  ]")?;
+    writeln!(writer, "}}")?;
+    Ok(())
+}
+
+fn write_json_value<T: norito::json::JsonSerialize + ?Sized, W: Write>(
+    writer: &mut BufWriter<W>,
+    value: &T,
+) -> color_eyre::Result<()> {
+    let json = norito::json::to_json(value)
+        .map_err(|error| eyre!("serialize normalized genesis value: {error}"))?;
+    writer.write_all(json.as_bytes())?;
+    Ok(())
 }
 
 fn render_text<T: Write>(
@@ -130,6 +203,8 @@ mod tests {
         let mut sink = BufWriter::new(Vec::new());
         args.run(&mut sink).expect("normalize json");
         let out = String::from_utf8(sink.into_inner().expect("buf")).expect("utf8");
+        let _: norito::json::Value =
+            norito::json::from_str(&out).expect("normalized JSON must be valid");
         assert!(
             out.contains("consensus_fingerprint"),
             "output should include metadata"

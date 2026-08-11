@@ -1,22 +1,35 @@
 //! Re-sign a Norito-framed genesis block with the configured genesis key.
 
-use std::{env, fs, path::PathBuf};
+use std::{
+    env,
+    fs::{self, File},
+    io::Read as _,
+    path::{Path, PathBuf},
+};
 
 use eyre::{Result, eyre};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::{
-    block::{SignedBlock, decode_framed_signed_block},
+    block::SignedBlock,
     confidential::{CONFIDENTIAL_RULES_VERSION, ConfidentialFeatureDigest},
 };
+
+const MAX_GENESIS_PRIVATE_KEY_FILE_BYTES: usize = 4 * 1024;
 
 fn main() -> Result<()> {
     iroha_genesis::init_instruction_registry();
     let args = Args::parse()?;
     let key_pair = args.load_key_pair()?;
-    let bytes = fs::read(&args.input)?;
-    let block = decode_framed_signed_block(&bytes)?;
+    let block = iroha_genesis::read_signed_genesis(&args.input)?;
     let resigned = resign_block(&block, &key_pair, args.zk_policy_hash)?;
     let framed = resigned.encode_wire()?;
+    if framed.len() > iroha_genesis::SIGNED_GENESIS_MAX_BYTES_V1 {
+        return Err(eyre!(
+            "re-signed genesis body is {} bytes, exceeding the {}-byte first-release limit",
+            framed.len(),
+            iroha_genesis::SIGNED_GENESIS_MAX_BYTES_V1
+        ));
+    }
     fs::write(&args.output, framed)?;
     println!(
         "event=genesis_resign input={} output={} signer={} old_signatures={} new_signatures=1",
@@ -103,8 +116,7 @@ impl Args {
         match (&self.private_key, &self.private_key_file, &self.seed) {
             (Some(hex), None, None) => self.load_private_key_hex(hex),
             (None, Some(path), None) => {
-                let hex = fs::read_to_string(path)
-                    .map_err(|err| eyre!("read genesis private key file: {err}"))?;
+                let hex = read_genesis_private_key_file(path)?;
                 self.load_private_key_hex(hex.trim())
             }
             (None, None, Some(seed)) => {
@@ -121,6 +133,33 @@ impl Args {
         KeyPair::from_private_key(private_key)
             .map_err(|err| eyre!("derive genesis key pair from private key: {err}"))
     }
+}
+
+fn read_genesis_private_key_file(path: &Path) -> Result<String> {
+    let max_bytes_u64 =
+        u64::try_from(MAX_GENESIS_PRIVATE_KEY_FILE_BYTES).expect("private-key file limit fits u64");
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| eyre!("inspect genesis private key file: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > max_bytes_u64 {
+        return Err(eyre!(
+            "genesis private key must be a direct regular file of at most {MAX_GENESIS_PRIVATE_KEY_FILE_BYTES} bytes"
+        ));
+    }
+    let mut file =
+        File::open(path).map_err(|error| eyre!("open genesis private key file: {error}"))?;
+    let capacity = usize::try_from(metadata.len())
+        .map_err(|_| eyre!("genesis private key file length does not fit usize"))?;
+    let mut hex = String::with_capacity(capacity.saturating_add(1));
+    file.by_ref()
+        .take(metadata.len().saturating_add(1))
+        .read_to_string(&mut hex)
+        .map_err(|error| eyre!("read genesis private key file: {error}"))?;
+    if hex.len() > MAX_GENESIS_PRIVATE_KEY_FILE_BYTES {
+        return Err(eyre!(
+            "genesis private key file exceeds the {MAX_GENESIS_PRIVATE_KEY_FILE_BYTES}-byte limit"
+        ));
+    }
+    Ok(hex)
 }
 
 fn next_value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String> {
@@ -197,7 +236,10 @@ fn resign_block(
 
 #[cfg(test)]
 mod tests {
-    use super::{confidential_features_with_policy_hash, parse_hex_32};
+    use super::{
+        MAX_GENESIS_PRIVATE_KEY_FILE_BYTES, confidential_features_with_policy_hash, parse_hex_32,
+        read_genesis_private_key_file,
+    };
     use iroha_data_model::confidential::{CONFIDENTIAL_RULES_VERSION, ConfidentialFeatureDigest};
 
     #[test]
@@ -217,6 +259,18 @@ mod tests {
             parse_hex_32("zz0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn private_key_reader_rejects_first_byte_over_limit() {
+        let directory = tempfile::tempdir().expect("create private-key reader directory");
+        let path = directory.path().join("genesis.private_key");
+        std::fs::write(&path, vec![b'a'; MAX_GENESIS_PRIVATE_KEY_FILE_BYTES + 1])
+            .expect("write oversized private-key file");
+
+        let error = read_genesis_private_key_file(&path)
+            .expect_err("oversized private-key file must fail closed");
+        assert!(error.to_string().contains("at most"));
     }
 
     #[test]

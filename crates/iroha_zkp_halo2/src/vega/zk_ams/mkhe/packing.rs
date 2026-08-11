@@ -1,10 +1,12 @@
 //! Exact T256 packing through conjugate quadratic factors of `X^N + 1`.
 
 use super::{
-    BgvProfile, RnsPolynomial, ZkAmsMkheErrorV1,
+    BgvProfile, RnsPolynomial, ZkAmsMkheErrorV1, bytes_mod_u64, checked_coefficient_work,
     manifest::{
-        ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1, release_profile_v1,
+        RELEASE_MODULI_V1, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1,
+        release_profile_v1,
     },
+    t256_centered_residue_with_modulus_residue,
 };
 use crate::vega::{
     VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256ScalarV1 as Scalar,
@@ -18,6 +20,7 @@ const RELEASE_ROOT_DERIVATION_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-fp2
 const RELEASE_ROOT_IDENTITY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-fp2-root-identity";
 const PACKING_LAYOUT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-packing-layout";
 const PACKED_PLAINTEXT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-packed-plaintext";
+const PACKED_RNS_BINDING_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-transformed-rns";
 const PACKED_SUBFIELD_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-packed-subfield";
 const PACKED_SUBFIELD_RELATION_V1: &[u8] = b"sigma_p(M)=M mod p:sigma_p(X)=X^(p mod 2N)=X^(2N-1)";
 const ROTATION_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.t256-rotation";
@@ -116,6 +119,20 @@ impl ZeroizingPackingScalarsV1 {
 /// Deliberately neither `Clone` nor `Debug`.
 struct ZeroizingPackingBytesV1(Vec<[u8; 32]>);
 
+#[cfg(test)]
+std::thread_local! {
+    static PACKING_BYTES_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn packing_bytes_zeroized_drop_count_v1() -> usize {
+    PACKING_BYTES_ZEROIZED_DROPS_V1
+        .try_with(std::cell::Cell::get)
+        .unwrap_or(0)
+}
+
 impl ZeroizingPackingBytesV1 {
     fn with_capacity(capacity: usize) -> Result<Self, ZkAmsMkheErrorV1> {
         let mut values = Vec::new();
@@ -133,10 +150,17 @@ impl ZeroizingPackingBytesV1 {
 impl Drop for ZeroizingPackingBytesV1 {
     fn drop(&mut self) {
         let values = core::hint::black_box(&mut self.0);
+        #[cfg(test)]
+        let owned_values = !values.is_empty();
         for value in values.iter_mut() {
             value.fill(0);
         }
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        #[cfg(test)]
+        if owned_values && values.iter().all(|value| *value == [0; 32]) {
+            let _ = PACKING_BYTES_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
         let _ = core::hint::black_box(&mut *values);
     }
 }
@@ -211,6 +235,356 @@ impl Drop for ZeroizingPackedRnsBindingV1 {
                 .try_with(|drops| drops.set(drops.get().saturating_add(1)));
         }
         let _ = core::hint::black_box(&mut *coefficients);
+    }
+}
+
+/// Heap-stable owner for exactly one release-RNS limb. Its storage is private,
+/// optimizer-resistantly erased on every drop path, and deliberately neither
+/// `Clone` nor `Debug`.
+#[allow(
+    dead_code,
+    reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
+)]
+pub(super) struct ZeroizingT256ReleaseLimbV1 {
+    coefficients: Box<[u64]>,
+    filled_limb: Option<usize>,
+}
+
+/// Immutable typed borrow of one successfully filled release limb. The private
+/// ordinal and modulus travel with the coefficient slice; future adapters must
+/// accept this typed borrow intact when preserving that association. Reading
+/// its parts separately does not by itself enforce correct pairing.
+/// Deliberately neither `Clone` nor `Debug`.
+#[allow(
+    dead_code,
+    reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
+)]
+pub(super) struct FilledT256ReleaseLimbV1<'limb> {
+    limb: usize,
+    modulus: u64,
+    coefficients: &'limb [u64],
+}
+
+#[allow(
+    dead_code,
+    reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
+)]
+impl FilledT256ReleaseLimbV1<'_> {
+    /// Return the canonical zero-based release-limb ordinal.
+    pub(super) fn limb_v1(&self) -> usize {
+        self.limb
+    }
+
+    /// Return the release modulus bound to this limb ordinal.
+    pub(super) fn modulus_v1(&self) -> u64 {
+        self.modulus
+    }
+
+    /// Borrow the canonical residues without permitting mutation or transfer.
+    pub(super) fn coefficients_v1(&self) -> &[u64] {
+        self.coefficients
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static T256_RELEASE_LIMB_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn t256_release_limb_zeroized_drop_count_v1() -> usize {
+    T256_RELEASE_LIMB_ZEROIZED_DROPS_V1
+        .try_with(std::cell::Cell::get)
+        .unwrap_or(0)
+}
+
+#[allow(
+    dead_code,
+    reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
+)]
+impl ZeroizingT256ReleaseLimbV1 {
+    /// Allocate one zeroed release limb before any plaintext-derived residue is
+    /// written into the stable owner.
+    pub(super) fn new_zeroed_v1() -> Result<Self, ZkAmsMkheErrorV1> {
+        let mut coefficients = Vec::new();
+        coefficients
+            .try_reserve_exact(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        coefficients.resize(ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, 0);
+        Ok(Self {
+            coefficients: coefficients.into_boxed_slice(),
+            filled_limb: None,
+        })
+    }
+
+    /// Borrow a successfully absorbed limb together with its exact release
+    /// ordinal and modulus. An unfilled owner fails closed.
+    pub(super) fn filled_v1(&self) -> Result<FilledT256ReleaseLimbV1<'_>, ZkAmsMkheErrorV1> {
+        let limb = self
+            .filled_limb
+            .ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)?;
+        let modulus = *RELEASE_MODULI_V1
+            .get(limb)
+            .ok_or(ZkAmsMkheErrorV1::InvalidPolynomial)?;
+        Ok(FilledT256ReleaseLimbV1 {
+            limb,
+            modulus,
+            coefficients: &self.coefficients,
+        })
+    }
+}
+
+impl Drop for ZeroizingT256ReleaseLimbV1 {
+    fn drop(&mut self) {
+        self.filled_limb = None;
+        #[cfg(test)]
+        let label_cleared = self.filled_limb.is_none();
+        let coefficients = core::hint::black_box(&mut self.coefficients);
+        coefficients.fill(0);
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        #[cfg(test)]
+        if label_cleared && coefficients.iter().all(|coefficient| *coefficient == 0) {
+            let _ = T256_RELEASE_LIMB_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+        let _ = core::hint::black_box(&mut *coefficients);
+    }
+}
+
+/// Borrowed, exact-validation capability for allocation-free release-limb
+/// lifting. Its fields stay private so sibling modules cannot recover the raw
+/// packed artifact through this capability. Deliberately neither `Clone` nor
+/// `Debug`.
+#[allow(
+    dead_code,
+    reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
+)]
+pub(super) struct ValidatedT256PackedPlaintextV1<'packed> {
+    layout: ZkAmsT256PackingLayoutV1,
+    packed: &'packed ZkAmsT256PackedPlaintextV1,
+}
+
+#[allow(
+    dead_code,
+    reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
+)]
+impl<'packed> ValidatedT256PackedPlaintextV1<'packed> {
+    /// Perform metadata, canonical-coefficient, digest, subfield, and decoded-
+    /// padding artifact validation once, then preflight the same complete
+    /// release-lift work gate used by the native full-RNS path.
+    ///
+    /// The work gate runs before decoded-padding allocation. Once this method
+    /// succeeds, partial or repeated limb reads neither bypass nor repeatedly
+    /// claim the full 38-limb source-operation budget.
+    pub(super) fn validate_for_release_limb_stream_v1(
+        layout: ZkAmsT256PackingLayoutV1,
+        packed: &'packed ZkAmsT256PackedPlaintextV1,
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        validate_layout(layout)?;
+        validate_packed(layout, packed)?;
+
+        let profile = release_profile_v1();
+        checked_coefficient_work(&profile, profile.moduli.len())?;
+
+        // Padding is a slot-domain property, so coefficient checks alone are
+        // insufficient. The exact decoder necessarily reparses canonical bytes
+        // into separate scalar scratch; it does not repeat artifact validation.
+        // This decoded-byte owner is erased when validation returns. The public
+        // decoder continues to transfer its output instead.
+        let _decoded_padding_owner =
+            decode_validated_packed_plaintext_into_zeroizing_owner_v1(packed)?;
+
+        Ok(Self { layout, packed })
+    }
+
+    /// Fill exactly one zeroizing release-limb owner without allocation.
+    ///
+    /// Invalid indices or buffer sizes are rejected before the output is
+    /// touched. On success the owner retains the residues for later arithmetic
+    /// and erases them automatically on drop. Scalar loop values and
+    /// compiler-created temporaries are not claimed to be optimizer-resistantly
+    /// zeroized.
+    fn lift_release_limb_into_v1(
+        &self,
+        limb: usize,
+        output: &mut ZeroizingT256ReleaseLimbV1,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        let Some(&modulus) = RELEASE_MODULI_V1.get(limb) else {
+            return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+        };
+        if output.coefficients.len() != ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 {
+            return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+        }
+        debug_assert_eq!(self.packed.layout_digest, self.layout.digest);
+        debug_assert_eq!(self.packed.coefficients.len(), output.coefficients.len());
+
+        lift_centered_t256_coefficients_into_v1(
+            &self.packed.coefficients,
+            modulus,
+            &mut output.coefficients,
+        );
+        Ok(())
+    }
+}
+
+/// Move-only ordered transcript state shared by the release wrapper and tiny
+/// parity tests. It retains only the Keccak state and non-secret profile
+/// geometry, never polynomial coefficients.
+#[allow(
+    dead_code,
+    reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
+)]
+struct OrderedRnsBindingHashV1 {
+    hash: Box<Keccak256>,
+    ring_degree: usize,
+    moduli: &'static [u64],
+    next_limb: usize,
+}
+
+#[allow(
+    dead_code,
+    reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
+)]
+impl OrderedRnsBindingHashV1 {
+    fn new(profile: &BgvProfile) -> Result<Self, ZkAmsMkheErrorV1> {
+        profile.validate()?;
+        // Establish a stable owner before absorbing any plaintext-derived byte.
+        let mut hash = Box::new(Keccak256::new());
+        hash.update(PACKED_RNS_BINDING_DOMAIN_V1);
+        hash.update(&profile.digest()?);
+        hash.update(
+            &u32::try_from(profile.ring_degree)
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+                .to_be_bytes(),
+        );
+        hash.update(
+            &u32::try_from(profile.moduli.len())
+                .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+                .to_be_bytes(),
+        );
+        Ok(Self {
+            hash,
+            ring_degree: profile.ring_degree,
+            moduli: profile.moduli,
+            next_limb: 0,
+        })
+    }
+
+    fn expect_limb(&self, limb: usize, coefficient_count: usize) -> Result<(), ZkAmsMkheErrorV1> {
+        if limb != self.next_limb
+            || limb >= self.moduli.len()
+            || coefficient_count != self.ring_degree
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+        }
+        Ok(())
+    }
+
+    fn absorb_limb(&mut self, limb: usize, coefficients: &[u64]) -> Result<(), ZkAmsMkheErrorV1> {
+        self.expect_limb(limb, coefficients.len())?;
+        let modulus = self.moduli[limb];
+        if coefficients
+            .iter()
+            .any(|coefficient| *coefficient >= modulus)
+        {
+            return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+        }
+        self.hash.update(&modulus.to_be_bytes());
+        for coefficient in coefficients {
+            self.hash.update(&coefficient.to_be_bytes());
+        }
+        self.next_limb = self
+            .next_limb
+            .checked_add(1)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+        if self.next_limb != self.moduli.len() {
+            return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
+        }
+        let mut digest = [0_u8; 32];
+        self.hash.finalize_into(&mut digest);
+        Ok(digest)
+    }
+}
+
+/// Move-only incremental native RNS-binding hasher for one validated packed
+/// plaintext. It enforces the canonical release limb order `0..38` and retains
+/// neither a full plaintext lift nor an individual limb.
+#[allow(
+    dead_code,
+    reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
+)]
+pub(super) struct T256PackedRnsBindingHasherV1<'packed> {
+    plaintext: ValidatedT256PackedPlaintextV1<'packed>,
+    transcript: OrderedRnsBindingHashV1,
+}
+
+#[allow(
+    dead_code,
+    reason = "private limb-stream prerequisite is intentionally not wired to release consumers yet"
+)]
+impl<'packed> T256PackedRnsBindingHasherV1<'packed> {
+    /// Start the exact native RNS-binding transcript for a validated plaintext.
+    pub(super) fn new(
+        plaintext: ValidatedT256PackedPlaintextV1<'packed>,
+    ) -> Result<Self, ZkAmsMkheErrorV1> {
+        Ok(Self {
+            plaintext,
+            transcript: OrderedRnsBindingHashV1::new(&release_profile_v1())?,
+        })
+    }
+
+    /// Lift and absorb the next canonical release limb into a caller-provided
+    /// zeroizing owner. Its typed immutable borrow remains available after
+    /// success.
+    pub(super) fn absorb_next_release_limb_into_v1(
+        &mut self,
+        limb: usize,
+        output: &mut ZeroizingT256ReleaseLimbV1,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        // Check order and size first so a rejected duplicate/out-of-order call
+        // cannot overwrite a caller's existing arithmetic buffer.
+        self.transcript
+            .expect_limb(limb, output.coefficients.len())?;
+        // Once prechecks accept the call, invalidate the previous label before
+        // overwriting bytes. An unexpected unwind therefore cannot expose new
+        // residues under the old ordinal.
+        output.filled_limb = None;
+        self.plaintext.lift_release_limb_into_v1(limb, output)?;
+        self.transcript.absorb_limb(limb, &output.coefficients)?;
+        output.filled_limb = Some(limb);
+        Ok(())
+    }
+
+    /// Finish only after all 38 release limbs were absorbed exactly once.
+    ///
+    /// The returned deterministic digest is a non-hiding in-process
+    /// equality/lineage binding. It is not a proof, MAC, authorization,
+    /// capability, or receipt, and equality or offline guesses can be visible
+    /// for low-entropy plaintexts. No partial transcript state is exposed.
+    pub(super) fn finish(self) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
+        self.transcript.finish()
+    }
+}
+
+fn lift_centered_t256_coefficients_into_v1(
+    coefficients: &[[u8; 32]],
+    modulus: u64,
+    output: &mut [u64],
+) {
+    debug_assert_eq!(coefficients.len(), output.len());
+    let plaintext_modulus_residue = bytes_mod_u64(&VEGA_T256_SCALAR_MODULUS_BE_V1, modulus);
+    for (output, coefficient) in output.iter_mut().zip(coefficients) {
+        *output = t256_centered_residue_with_modulus_residue(
+            coefficient,
+            modulus,
+            plaintext_modulus_residue,
+        );
     }
 }
 
@@ -814,6 +1188,13 @@ pub fn decode_zk_ams_t256_packed_plaintext_v1(
 ) -> Result<Vec<[u8; 32]>, ZkAmsMkheErrorV1> {
     validate_layout(layout)?;
     validate_packed(layout, packed)?;
+    let mut decoded = decode_validated_packed_plaintext_into_zeroizing_owner_v1(packed)?;
+    Ok(decoded.take())
+}
+
+fn decode_validated_packed_plaintext_into_zeroizing_owner_v1(
+    packed: &ZkAmsT256PackedPlaintextV1,
+) -> Result<ZeroizingPackingBytesV1, ZkAmsMkheErrorV1> {
     let mut coefficients = ZeroizingPackingScalarsV1::with_capacity(packed.coefficients.len())?;
     for bytes in &packed.coefficients {
         coefficients.push(
@@ -834,7 +1215,7 @@ pub fn decode_zk_ams_t256_packed_plaintext_v1(
     {
         return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
     }
-    Ok(decoded.take())
+    Ok(decoded)
 }
 
 /// Apply the exact slot permutation as an independent plaintext oracle.
@@ -1330,7 +1711,7 @@ pub(super) fn rns_polynomial_digest(
 ) -> Result<[u8; 32], ZkAmsMkheErrorV1> {
     polynomial.validate(profile)?;
     let mut hash = Keccak256::new();
-    hash.update(b"iroha.zk-ams.v1.mkhe.t256-transformed-rns");
+    hash.update(PACKED_RNS_BINDING_DOMAIN_V1);
     hash.update(&profile.digest()?);
     hash.update(
         &u32::try_from(profile.ring_degree)
@@ -1742,7 +2123,31 @@ fn mod_pow_usize(mut base: usize, mut exponent: usize, modulus: usize) -> usize 
 pub(super) mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
+    use super::super::PlaintextModulus;
     use super::*;
+
+    const TEST_RNS_MODULI_V1: [u64; 2] = [2_013_265_921, 1_811_939_329];
+    const TEST_RNS_ROOTS_V1: [u64; 2] = [1_400_279_418, 677_356_115];
+
+    fn tiny_rns_binding_profile_v1() -> BgvProfile {
+        BgvProfile {
+            profile_id: [0x83; 32],
+            ring_degree: 8,
+            moduli: &TEST_RNS_MODULI_V1,
+            negacyclic_roots: &TEST_RNS_ROOTS_V1,
+            plaintext_modulus: PlaintextModulus::Tiny(17),
+            error_eta: 2,
+            hybrid_rns_decomposition: false,
+            gadget_base_log: 8,
+            gadget_digits: 8,
+            max_ciphertext_bytes: 1 << 20,
+            max_evaluated_key_bytes: 16 << 20,
+            max_round_bytes: 16 << 20,
+            max_share_bytes: 4 << 20,
+            max_workspace_bytes: 16 << 20,
+            max_work_units: 1 << 20,
+        }
+    }
 
     fn schoolbook_negacyclic(left: &[Scalar], right: &[Scalar]) -> Vec<Scalar> {
         let mut output = vec![Scalar::zero(); left.len()];
@@ -1758,6 +2163,260 @@ pub(super) mod tests {
             }
         }
         output
+    }
+
+    #[test]
+    fn ordered_rns_binding_hash_matches_tiny_native_digest_and_fails_closed() {
+        let profile = tiny_rns_binding_profile_v1();
+        let coefficients = profile
+            .moduli
+            .iter()
+            .copied()
+            .enumerate()
+            .flat_map(|(limb, modulus)| {
+                (0..profile.ring_degree).map(move |index| {
+                    u64::try_from(1 + limb * profile.ring_degree + index).unwrap() % modulus
+                })
+            })
+            .collect::<Vec<_>>();
+        let polynomial = RnsPolynomial::from_flat(&profile, coefficients).unwrap();
+        let expected = rns_polynomial_digest(&profile, &polynomial).unwrap();
+
+        let mut ordered = OrderedRnsBindingHashV1::new(&profile).unwrap();
+        assert_eq!(
+            ordered.absorb_limb(1, polynomial.limb(&profile, 1)),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial),
+            "out-of-order absorption must not advance the state"
+        );
+        ordered
+            .absorb_limb(0, polynomial.limb(&profile, 0))
+            .unwrap();
+        assert_eq!(
+            ordered.absorb_limb(0, polynomial.limb(&profile, 0)),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial),
+            "a duplicate limb must fail closed"
+        );
+        assert_eq!(
+            ordered.absorb_limb(1, &polynomial.limb(&profile, 1)[..7]),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial),
+            "a short limb must not advance the state"
+        );
+        ordered
+            .absorb_limb(1, polynomial.limb(&profile, 1))
+            .unwrap();
+        assert_eq!(ordered.finish().unwrap(), expected);
+
+        assert_eq!(
+            OrderedRnsBindingHashV1::new(&profile).unwrap().finish(),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial),
+            "early finalization consumes and rejects the incomplete state"
+        );
+
+        let mut noncanonical = polynomial.limb(&profile, 0).to_vec();
+        noncanonical[0] = profile.moduli[0];
+        let mut rejected = OrderedRnsBindingHashV1::new(&profile).unwrap();
+        assert_eq!(
+            rejected.absorb_limb(0, &noncanonical),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        rejected
+            .absorb_limb(0, polynomial.limb(&profile, 0))
+            .unwrap();
+    }
+
+    #[test]
+    fn typed_release_limb_owner_binds_ordinal_and_preserves_state_on_rejection() {
+        // Direct construction is confined to this child test module. Production
+        // callers can obtain this move-only view only through exact validation.
+        let layout = zk_ams_t256_packing_layout_v1(65_536).unwrap();
+        let mut coefficients = vec![[0_u8; 32]; ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1];
+        coefficients[0][31] = 1;
+        let mut packed = ZkAmsT256PackedPlaintextV1 {
+            version: PACKING_VERSION_V1,
+            profile_digest: layout.profile_digest,
+            layout_digest: layout.digest,
+            chunk_index: 0,
+            used_slots: 65_536,
+            coefficients,
+            digest: [0; 32],
+        };
+        packed.digest = packed_plaintext_digest(&packed).unwrap();
+        let plaintext = ValidatedT256PackedPlaintextV1 {
+            layout,
+            packed: &packed,
+        };
+        let mut hasher = T256PackedRnsBindingHasherV1::new(plaintext).unwrap();
+        let mut owner = ZeroizingT256ReleaseLimbV1::new_zeroed_v1().unwrap();
+        assert!(owner.filled_v1().is_err());
+        hasher
+            .absorb_next_release_limb_into_v1(0, &mut owner)
+            .unwrap();
+        {
+            let filled = owner.filled_v1().unwrap();
+            assert_eq!(filled.limb_v1(), 0);
+            assert_eq!(filled.modulus_v1(), RELEASE_MODULI_V1[0]);
+            assert_eq!(filled.coefficients_v1()[0], 1);
+            assert!(
+                filled.coefficients_v1()[1..]
+                    .iter()
+                    .all(|value| *value == 0)
+            );
+        }
+
+        for rejected_limb in [0, 2, RELEASE_MODULI_V1.len()] {
+            assert_eq!(
+                hasher.absorb_next_release_limb_into_v1(rejected_limb, &mut owner),
+                Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+            );
+            let unchanged = owner.filled_v1().unwrap();
+            assert_eq!(unchanged.limb_v1(), 0);
+            assert_eq!(unchanged.modulus_v1(), RELEASE_MODULI_V1[0]);
+            assert_eq!(unchanged.coefficients_v1()[0], 1);
+            assert!(
+                unchanged.coefficients_v1()[1..]
+                    .iter()
+                    .all(|value| *value == 0)
+            );
+        }
+
+        // These malformed sizes can only be forged inside this child test;
+        // the production constructor always allocates exactly N coefficients.
+        for malformed_len in [
+            ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 - 1,
+            ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 + 1,
+        ] {
+            let mut malformed = ZeroizingT256ReleaseLimbV1 {
+                coefficients: vec![0x55_u64; malformed_len].into_boxed_slice(),
+                filled_limb: Some(0),
+            };
+            assert_eq!(
+                hasher.absorb_next_release_limb_into_v1(1, &mut malformed),
+                Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+            );
+            assert!(
+                malformed
+                    .coefficients
+                    .iter()
+                    .all(|coefficient| *coefficient == 0x55)
+            );
+            assert_eq!(malformed.filled_limb, Some(0));
+        }
+
+        hasher
+            .absorb_next_release_limb_into_v1(1, &mut owner)
+            .unwrap();
+        assert_eq!(owner.filled_v1().unwrap().limb_v1(), 1);
+        assert_eq!(
+            owner.filled_v1().unwrap().modulus_v1(),
+            RELEASE_MODULI_V1[1]
+        );
+        assert_eq!(
+            hasher.finish(),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial),
+            "finishing after two limbs must fail without invalidating the last typed owner"
+        );
+        assert_eq!(owner.filled_v1().unwrap().limb_v1(), 1);
+    }
+
+    #[test]
+    fn centered_t256_limb_fill_matches_native_boundaries() {
+        let half = super::super::T256_CENTERED_MAX_BE_V1;
+        let mut half_plus_one = half;
+        for byte in half_plus_one.iter_mut().rev() {
+            let (next, carry) = byte.overflowing_add(1);
+            *byte = next;
+            if !carry {
+                break;
+            }
+        }
+        let mut p_minus_one = VEGA_T256_SCALAR_MODULUS_BE_V1;
+        for byte in p_minus_one.iter_mut().rev() {
+            let (next, borrow) = byte.overflowing_sub(1);
+            *byte = next;
+            if !borrow {
+                break;
+            }
+        }
+        let mut one = [0_u8; 32];
+        one[31] = 1;
+        let coefficients = [[0_u8; 32], one, half, half_plus_one, p_minus_one];
+        let modulus = RELEASE_MODULI_V1[0];
+        let mut output = [u64::MAX; 5];
+
+        lift_centered_t256_coefficients_into_v1(&coefficients, modulus, &mut output);
+
+        assert_eq!(output[0], 0);
+        assert_eq!(output[1], 1);
+        assert_eq!(output[2], bytes_mod_u64(&half, modulus));
+        assert_eq!(output[4], modulus - 1);
+        assert_eq!(
+            super::super::mod_add(output[2], output[3], modulus),
+            0,
+            "the two centered boundary representatives must be exact negatives"
+        );
+    }
+
+    #[test]
+    fn decoded_padding_byte_owner_zeroizes_success_error_and_unwind() {
+        let owner = || ZeroizingPackingBytesV1(vec![[0x5a; 32], [0xa5; 32]]);
+
+        let before_success = packing_bytes_zeroized_drop_count_v1();
+        drop(owner());
+        assert_eq!(packing_bytes_zeroized_drop_count_v1(), before_success + 1);
+
+        fn reject_owner(_owner: ZeroizingPackingBytesV1) -> Result<(), ZkAmsMkheErrorV1> {
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        }
+        let before_error = packing_bytes_zeroized_drop_count_v1();
+        assert_eq!(
+            reject_owner(owner()),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        assert_eq!(packing_bytes_zeroized_drop_count_v1(), before_error + 1);
+
+        let before_unwind = packing_bytes_zeroized_drop_count_v1();
+        let unwind = catch_unwind(AssertUnwindSafe(|| {
+            let _owner = owner();
+            panic!("intentional decoded-padding owner erasure audit");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(packing_bytes_zeroized_drop_count_v1(), before_unwind + 1);
+    }
+
+    #[test]
+    fn release_limb_owner_zeroizes_success_error_and_unwind() {
+        let owner = || ZeroizingT256ReleaseLimbV1 {
+            coefficients: vec![3, 5, 8].into_boxed_slice(),
+            filled_limb: Some(7),
+        };
+
+        let before_success = t256_release_limb_zeroized_drop_count_v1();
+        drop(owner());
+        assert_eq!(
+            t256_release_limb_zeroized_drop_count_v1(),
+            before_success + 1
+        );
+
+        fn reject_owner(_owner: ZeroizingT256ReleaseLimbV1) -> Result<(), ZkAmsMkheErrorV1> {
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        }
+        let before_error = t256_release_limb_zeroized_drop_count_v1();
+        assert_eq!(
+            reject_owner(owner()),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        assert_eq!(t256_release_limb_zeroized_drop_count_v1(), before_error + 1);
+
+        let before_unwind = t256_release_limb_zeroized_drop_count_v1();
+        let unwind = catch_unwind(AssertUnwindSafe(|| {
+            let _owner = owner();
+            panic!("intentional release-limb owner erasure audit");
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(
+            t256_release_limb_zeroized_drop_count_v1(),
+            before_unwind + 1
+        );
     }
 
     #[test]
@@ -1809,6 +2468,73 @@ pub(super) mod tests {
             coefficients[ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1 - index] -= value;
         }
         coefficients
+    }
+
+    #[test]
+    fn limb_stream_source_guard_keeps_the_prerequisite_private_and_bounded() {
+        let source = include_str!("packing.rs");
+        let start = source
+            .find("pub(super) struct ZeroizingT256ReleaseLimbV1")
+            .expect("zeroizing limb-owner declaration");
+        let end = source[start..]
+            .find("impl T256Fp2")
+            .map(|offset| start + offset)
+            .expect("end of limb-stream prerequisite");
+        let corridor = &source[start..end];
+
+        assert!(!corridor.contains("#[derive("));
+        assert!(!corridor.contains("pub coefficients"));
+        assert!(!corridor.contains("pub layout"));
+        assert!(!corridor.contains("pub packed"));
+        assert!(!corridor.contains("pub digest"));
+        assert!(!corridor.contains("Vec<Vec<u64>>"));
+        assert!(!corridor.contains("RnsPolynomial"));
+        assert!(!corridor.contains("callback"));
+        assert!(!corridor.contains("authority"));
+        assert!(!corridor.contains("impl Clone for"));
+        assert!(!corridor.contains("impl Debug for"));
+        assert!(!corridor.contains("fn take"));
+        assert!(!corridor.contains("into_vec("));
+        assert!(!corridor.contains("pub(super) fn as_mut"));
+        assert!(!corridor.contains("pub(super) fn lift_release_limb_into_v1"));
+        let plain_residue_clone = [".coefficients", ".to_vec()"].concat();
+        assert!(!source.contains(&plain_residue_clone));
+        assert!(!corridor.contains("ready: true"));
+        assert!(!corridor.contains("available: true"));
+        assert!(!corridor.contains("released: true"));
+        assert!(corridor.contains("filled_limb: Option<usize>"));
+        assert!(corridor.contains("pub(super) fn filled_v1"));
+        assert!(corridor.contains("pub(super) fn limb_v1"));
+        assert!(corridor.contains("pub(super) fn modulus_v1"));
+        assert!(corridor.contains("pub(super) fn coefficients_v1"));
+        assert!(corridor.contains("layout: ZkAmsT256PackingLayoutV1"));
+        assert!(corridor.contains("packed: &'packed ZkAmsT256PackedPlaintextV1"));
+        assert!(corridor.contains("hash: Box<Keccak256>"));
+        assert!(corridor.contains("self.hash.finalize_into(&mut digest)"));
+        assert!(
+            corridor
+                .contains("It is not a proof, MAC, authorization,\n    /// capability, or receipt")
+        );
+
+        let artifact_validation = corridor
+            .find("validate_packed(layout, packed)?")
+            .expect("cheap exact artifact validation");
+        let full_work_gate = corridor
+            .find("checked_coefficient_work(&profile, profile.moduli.len())?")
+            .expect("one full-lift work preflight");
+        let padding_decode = corridor
+            .find("decode_validated_packed_plaintext_into_zeroizing_owner_v1(packed)?")
+            .expect("zeroizing decoded-padding validation");
+        let absorb = corridor
+            .find(".absorb_limb(limb, &output.coefficients)?")
+            .expect("exact limb absorption");
+        let label = corridor
+            .find("output.filled_limb = Some(limb)")
+            .expect("post-absorption ordinal label");
+        assert!(artifact_validation < full_work_gate);
+        assert!(full_work_gate < padding_decode);
+        assert!(absorb < label);
+        assert_eq!(corridor.matches("checked_coefficient_work(").count(), 1);
     }
 
     fn error_tag(error: ZkAmsMkheErrorV1) -> u8 {
@@ -2167,16 +2893,97 @@ pub(super) mod tests {
             packed.digest,
             ZK_AMS_T256_RELEASE_PACKED_INPUT_KAT_DIGEST_V1
         );
-        assert_eq!(release_profile_v1().moduli.len(), 38);
-        assert_ne!(
-            packed_plaintext_rns_binding_digest_v1(layout, &packed).unwrap(),
-            [0; 32]
+        let profile = release_profile_v1();
+        assert_eq!(profile.moduli.len(), 38);
+        let native =
+            ZeroizingPackedRnsBindingV1(packed_plaintext_to_rns_v1(layout, &packed).unwrap());
+        let native_binding_digest = rns_polynomial_digest(&profile, &native.0).unwrap();
+        assert_ne!(native_binding_digest, [0; 32]);
+
+        let padding_drops_before = packing_bytes_zeroized_drop_count_v1();
+        let plaintext =
+            ValidatedT256PackedPlaintextV1::validate_for_release_limb_stream_v1(layout, &packed)
+                .unwrap();
+        assert_eq!(
+            packing_bytes_zeroized_drop_count_v1(),
+            padding_drops_before + 1,
+            "the validated view must not retain decoded padding"
+        );
+        let mut streamed = T256PackedRnsBindingHasherV1::new(plaintext).unwrap();
+        let limb_drops_before = t256_release_limb_zeroized_drop_count_v1();
+        let mut limb_owner = ZeroizingT256ReleaseLimbV1::new_zeroed_v1().unwrap();
+        assert_eq!(
+            streamed.absorb_next_release_limb_into_v1(1, &mut limb_owner),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        assert!(limb_owner.coefficients.iter().all(|value| *value == 0));
+        assert!(limb_owner.filled_v1().is_err());
+        for limb in 0..RELEASE_MODULI_V1.len() {
+            if limb == 1 {
+                assert_eq!(
+                    streamed.absorb_next_release_limb_into_v1(0, &mut limb_owner),
+                    Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+                );
+                let unchanged = limb_owner.filled_v1().unwrap();
+                assert_eq!(unchanged.limb_v1(), 0);
+                assert_eq!(unchanged.modulus_v1(), profile.moduli[0]);
+                assert_eq!(unchanged.coefficients_v1(), native.0.limb(&profile, 0));
+            }
+            streamed
+                .absorb_next_release_limb_into_v1(limb, &mut limb_owner)
+                .unwrap();
+            let filled = limb_owner.filled_v1().unwrap();
+            assert_eq!(filled.limb_v1(), limb);
+            assert_eq!(filled.modulus_v1(), profile.moduli[limb]);
+            assert_eq!(filled.coefficients_v1(), native.0.limb(&profile, limb));
+        }
+        assert_eq!(
+            streamed.absorb_next_release_limb_into_v1(RELEASE_MODULI_V1.len(), &mut limb_owner),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        let terminal = limb_owner.filled_v1().unwrap();
+        assert_eq!(terminal.limb_v1(), RELEASE_MODULI_V1.len() - 1);
+        assert_eq!(terminal.modulus_v1(), *profile.moduli.last().unwrap());
+        assert_eq!(
+            terminal.coefficients_v1(),
+            native.0.limb(&profile, RELEASE_MODULI_V1.len() - 1)
+        );
+        assert_eq!(streamed.finish().unwrap(), native_binding_digest);
+        drop(native);
+        drop(limb_owner);
+        assert_eq!(
+            t256_release_limb_zeroized_drop_count_v1(),
+            limb_drops_before + 1
+        );
+
+        let early_plaintext = ValidatedT256PackedPlaintextV1 {
+            layout,
+            packed: &packed,
+        };
+        assert_eq!(
+            T256PackedRnsBindingHasherV1::new(early_plaintext)
+                .unwrap()
+                .finish(),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
         );
         let mut stale_coefficient_digest = packed.clone();
         stale_coefficient_digest.coefficients[0][31] ^= 1;
         assert_eq!(
             packed_plaintext_rns_binding_digest_v1(layout, &stale_coefficient_digest),
             Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        );
+        let stale_drops_before = packing_bytes_zeroized_drop_count_v1();
+        assert!(matches!(
+            ValidatedT256PackedPlaintextV1::validate_for_release_limb_stream_v1(
+                layout,
+                &stale_coefficient_digest
+            ),
+            Err(ZkAmsMkheErrorV1::InvalidPolynomial)
+        ));
+        assert_eq!(
+            packing_bytes_zeroized_drop_count_v1(),
+            stale_drops_before,
+            "artifact rejection must precede decoded-padding allocation"
         );
         let mut stale_metadata_digest = packed.clone();
         stale_metadata_digest.used_slots -= 1;
@@ -2401,12 +3208,21 @@ pub(super) mod tests {
             mutation.layout_digest = partial_layout.digest;
             mutation.used_slots = 1;
             mutation.digest = packed_plaintext_digest(&mutation).unwrap();
-            record_negative(
-                &mut negative,
-                b"decode.padding",
-                decode_zk_ams_t256_packed_plaintext_v1(partial_layout, &mutation),
-                ZkAmsMkheErrorV1::InvalidPolynomial,
+            let padding_drops_before = packing_bytes_zeroized_drop_count_v1();
+            let actual = match ValidatedT256PackedPlaintextV1::validate_for_release_limb_stream_v1(
+                partial_layout,
+                &mutation,
+            ) {
+                Ok(_) => panic!("nonzero decoded padding must fail closed"),
+                Err(error) => error,
+            };
+            assert_eq!(actual, ZkAmsMkheErrorV1::InvalidPolynomial);
+            assert_eq!(
+                packing_bytes_zeroized_drop_count_v1(),
+                padding_drops_before + 1,
+                "decoded padding owner must erase on rejection"
             );
+            negative.record(b"decode.padding", actual);
         }
         record_negative(
             &mut negative,

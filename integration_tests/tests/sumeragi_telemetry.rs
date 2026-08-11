@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use eyre::{Context as _, Result, ensure};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::{
-    client::Status,
+    client::{Client, Status},
     data_model::{
         Level,
         isi::{Log, SetParameter},
@@ -20,7 +20,7 @@ use iroha::{
 };
 use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
-use norito::json::{self, Value};
+use norito::json::Value;
 use reqwest::Client as HttpClient;
 use tokio::time::sleep;
 
@@ -126,10 +126,6 @@ async fn npos_telemetry_soak_matches_metrics_under_chunk_loss() -> Result<()> {
     wait_for_total_height_quorum_with_bounded_lag(&network, 2).await?;
 
     let http = HttpClient::new();
-    let telemetry_url = client
-        .torii_url
-        .join("v1/sumeragi/telemetry")
-        .wrap_err("compose telemetry URL")?;
     let metrics_url = client
         .torii_url
         .join("metrics")
@@ -150,7 +146,7 @@ async fn npos_telemetry_soak_matches_metrics_under_chunk_loss() -> Result<()> {
         )?;
         wait_for_non_empty_height_quorum_with_bounded_lag(&network, target_non_empty).await?;
 
-        let telemetry = wait_for_telemetry(&http, &telemetry_url, |snapshot| {
+        let telemetry = wait_for_telemetry(&client, |snapshot| {
             snapshot
                 .get("availability")
                 .and_then(Value::as_object)
@@ -185,7 +181,7 @@ async fn npos_telemetry_soak_matches_metrics_under_chunk_loss() -> Result<()> {
     }
 
     inject_large_rbc_payloads(&network, "telemetry adversarial backlog".to_owned()).await?;
-    let telemetry = wait_for_telemetry(&http, &telemetry_url, |snapshot| {
+    let telemetry = wait_for_telemetry(&client, |snapshot| {
         snapshot
             .get("rbc_backlog")
             .and_then(Value::as_object)
@@ -440,24 +436,17 @@ fn height_quorum_with_bounded_lag(heights: &[u64], target_height: u64, quorum: u
     max_height >= target_height && max_height.saturating_sub(min_height) <= 1
 }
 
-async fn wait_for_telemetry<F>(http: &HttpClient, url: &reqwest::Url, predicate: F) -> Result<Value>
+async fn wait_for_telemetry<F>(client: &Client, predicate: F) -> Result<Value>
 where
     F: Fn(&Value) -> bool,
 {
     for attempt in 0..TELEMETRY_RETRY_ATTEMPTS {
-        let response = http
-            .get(url.clone())
-            .header("accept", "application/json")
-            .send()
-            .await
-            .wrap_err("fetch telemetry snapshot")?;
-        ensure!(
-            response.status().is_success(),
-            "telemetry endpoint returned {}",
-            response.status()
-        );
-        let body = response.text().await.wrap_err("read telemetry body")?;
-        let value: Value = json::from_str(&body)?;
+        let request_client = client.clone();
+        let value =
+            tokio::task::spawn_blocking(move || request_client.get_sumeragi_telemetry_json())
+                .await
+                .wrap_err("join operator-signed telemetry request")?
+                .wrap_err("fetch operator-signed telemetry snapshot")?;
         if predicate(&value) {
             return Ok(value);
         }

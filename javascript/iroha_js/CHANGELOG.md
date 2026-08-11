@@ -4,6 +4,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Require per-request canonical account authentication for the legacy SoraFS
+  alias and replication inventory helpers, and require an immutable
+  exact-network `OperatorSigningContext` for storage-state and legacy
+  storage-fetch diagnostics. Public live integration no longer performs the
+  retired unsigned diagnostic fetch.
 - Hard-cut SoraFS pin listing to finalized, byte-bounded exclusive-keyset
   pages. The client rejects `offset`, legacy attestation/full-record payloads,
   forged or repeated continuation cursors, and anchor drift; list entries are

@@ -1,4 +1,6 @@
-use super::{CoerceKey, Error, JsonDeserialize, KeyRef, Parser, Visitor, visit_value};
+use super::{
+    CoerceKey, Error, JsonDeserialize, KeyRef, Parser, Visitor, try_decode_string_copy, visit_value,
+};
 
 /// Streaming visitor for a JSON object.
 pub struct MapVisitor<'a, 'p> {
@@ -6,18 +8,20 @@ pub struct MapVisitor<'a, 'p> {
     finished: bool,
     value_pending: bool,
     after_comma: bool,
+    total_entries: usize,
 }
 
 impl<'a, 'p> MapVisitor<'a, 'p> {
     /// Begin visiting an object at the parser's current position.
     pub fn new(parser: &'p mut Parser<'a>) -> Result<Self, Error> {
-        parser.skip_ws();
+        let total_entries = parser.preflight_object_entries()?;
         parser.expect(b'{')?;
         let mut visitor = Self {
             parser,
             finished: false,
             value_pending: false,
             after_comma: false,
+            total_entries,
         };
         if visitor.parser.try_consume_char(b'}')? {
             visitor.finished = true;
@@ -35,6 +39,13 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
     #[inline]
     pub fn is_finished(&self) -> bool {
         self.finished && !self.value_pending
+    }
+
+    /// Number of entries lexically admitted for this object.
+    #[doc(hidden)]
+    #[inline]
+    pub fn total_entries(&self) -> usize {
+        self.total_entries
     }
 
     /// Parse the next object key without materializing its value.
@@ -99,7 +110,7 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
         if !self.value_pending {
             return Err(Error::Message("no pending value for current key".into()));
         }
-        self.parser.skip_value()?;
+        self.parser.skip_value_lexical()?;
         self.finish_value()
     }
 
@@ -108,7 +119,7 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
         match self.next_key()? {
             Some(key) => {
                 let owned = match key {
-                    KeyRef::Borrowed(s) => s.to_owned(),
+                    KeyRef::Borrowed(s) => try_decode_string_copy(s)?,
                     KeyRef::Owned(s) => s,
                 };
                 let value = self.parse_value::<T>()?;
@@ -183,8 +194,8 @@ impl<'a, 'p> MapVisitor<'a, 'p> {
 
     /// Construct a duplicate-field error.
     #[inline]
-    pub fn duplicate_field(field: &str) -> Error {
-        Error::duplicate_field(field)
+    pub fn duplicate_field(_field: &str) -> Error {
+        Error::Message("duplicate JSON object field".to_owned())
     }
 
     /// Construct an unknown-field error.
@@ -240,7 +251,7 @@ pub struct SeqVisitor<'a, 'p> {
 impl<'a, 'p> SeqVisitor<'a, 'p> {
     /// Begin visiting an array at the parser's current position.
     pub fn new(parser: &'p mut Parser<'a>) -> Result<Self, Error> {
-        parser.skip_ws();
+        parser.preflight_array_entries()?;
         parser.expect(b'[')?;
         let mut visitor = Self {
             parser,
@@ -296,7 +307,7 @@ impl<'a, 'p> SeqVisitor<'a, 'p> {
             return Ok(());
         }
         self.prepare_element()?;
-        self.parser.skip_value()?;
+        self.parser.skip_value_lexical()?;
         self.finish_element()
     }
 

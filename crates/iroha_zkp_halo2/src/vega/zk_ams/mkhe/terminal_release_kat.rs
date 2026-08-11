@@ -7,11 +7,13 @@
 //! then pin that digest in the production implementation certificate.
 
 use super::*;
+use std::sync::Arc;
+
 use crate::vega::{
     circuit::CircuitAssignment,
     masked_relaxed::{
         MAX_MASKED_RELAXED_STRICT_INSTANCES_V1, MaskedRelaxedRandomErrorV1,
-        MaskedRelaxedRandomSourceV1, precompute_masked_relaxed_v1,
+        MaskedRelaxedRandomSourceV1, precompute_masked_relaxed_stream_v1,
     },
     sponge::Keccak256,
 };
@@ -78,8 +80,8 @@ fn release_proof_context() -> ZkAmsProofContextV1<'static> {
     }
 }
 
-fn release_admission_assignment() -> CircuitAssignment {
-    let public = ZkAmsAdmissionPublicInputV1 {
+fn release_admission_public() -> ZkAmsAdmissionPublicInputV1 {
+    ZkAmsAdmissionPublicInputV1 {
         issuer_key_x: hex!("8e533b6fa0bf7b4625bb30667c01fb607ef9f8b8a80fef5b300628703187b2a3"),
         issuer_key_y: hex!("73eb1dbde03318366d069f83a6f5900053c73633cb041b21c55e1a86c1f400b4"),
         issuer_key_prefix: 0x02,
@@ -99,7 +101,11 @@ fn release_admission_assignment() -> CircuitAssignment {
         next_registry_epoch: 10,
         batch_size: 1,
         anchor_index: 0,
-    };
+    }
+}
+
+fn release_admission_assignment(shape: Arc<Shape>) -> CircuitAssignment {
+    let public = release_admission_public();
     let subject_commitment = [0x41; 32];
     let credential_nonce = [0x61; 32];
     let signature_r = hex!("3ed113b7883b4c590638379db0c21cda16742ed0255048bf433391d374bc21d1");
@@ -115,16 +121,11 @@ fn release_admission_assignment() -> CircuitAssignment {
         &recovery_y,
     )
     .expect("fixed nonzero release witness");
-    let assignment = super::super::super::synthesize_admission(public, &witness)
+    let assignment = super::super::super::synthesize_admission_with_shape(public, &witness, shape)
         .expect("fixed release assignment must synthesize");
     assignment
         .shape
-        .validate_relaxed_assignment(
-            &assignment.witness,
-            Scalar::one(),
-            &assignment.public_inputs,
-            &vec![Scalar::zero(); assignment.shape.constraint_count()],
-        )
+        .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
         .expect("fixed release assignment must satisfy the canonical relation");
     assignment
 }
@@ -187,14 +188,15 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
     let shape = super::super::super::canonical_shape().expect("canonical release shape");
     let terminal_profile =
         build_terminal_profile(maps, &shape, true).expect("canonical terminal profile");
-    let base_assignment = release_admission_assignment();
-    assert_eq!(base_assignment.shape, shape);
-    let assignments = vec![base_assignment; MAX_MASKED_RELAXED_STRICT_INSTANCES_V1];
-    let governed_inputs = assignments
+    assert!(Arc::ptr_eq(&terminal_profile.shape, &shape));
+    let release_public_inputs = release_admission_public()
+        .to_scalars()
+        .expect("fixed release public input must be canonical");
+    let strict_public_inputs = vec![release_public_inputs; MAX_MASKED_RELAXED_STRICT_INSTANCES_V1];
+    let governed_inputs = strict_public_inputs
         .iter()
-        .map(|assignment| {
-            assignment
-                .public_inputs
+        .map(|public_inputs| {
+            public_inputs
                 .iter()
                 .copied()
                 .map(Scalar::to_be_bytes)
@@ -221,11 +223,13 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
     let proof_context = release_proof_context();
     let context_frame = terminal_composition_context_frame(&proof_context, context, &governed)
         .expect("canonical terminal composition context frame");
-    let precomputation = precompute_masked_relaxed_v1(
+    let precomputation = precompute_masked_relaxed_stream_v1(
         super::super::super::COMPOSITION_DOMAIN_V1,
         &context_frame,
         super::super::super::COMMITMENT_KEY_LABEL_V1,
-        assignments,
+        Arc::clone(&shape),
+        &strict_public_inputs,
+        |_| Ok(release_admission_assignment(Arc::clone(&shape))),
         1,
         &mut ReleaseKatRandom::new(),
     )
@@ -559,4 +563,15 @@ fn release_terminal_max_fold_kat_emits_candidate_digest() {
         shape.public_input_count(),
         RELEASE_TERMINAL_NEGATIVE_CASE_COUNT_V1,
     );
+}
+
+#[test]
+fn release_terminal_kat_keeps_strict_assignments_streamed() {
+    let source = include_str!("terminal_release_kat.rs");
+    assert!(!source.contains(concat!("vec![base_", "assignment;")));
+    assert!(!source.contains(concat!("precompute_masked_relaxed_", "v1(")));
+    assert!(source.contains("precompute_masked_relaxed_stream_v1("));
+    assert!(source.contains("release_admission_assignment(Arc::clone(&shape))"));
+    assert!(source.contains("validate_strict_assignment"));
+    assert!(source.contains("Arc::ptr_eq(&terminal_profile.shape, &shape)"));
 }

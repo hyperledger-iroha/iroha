@@ -171,6 +171,20 @@ impl<T> JsonSerialize for MerkleTreeCommitment<T> {
         self.leaf_count.get().json_serialize(out);
         out.push('}');
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"root\":")?;
+        self.root.json_serialize_to(out)?;
+        out.push_str(",\"leaf_count\":")?;
+        self.leaf_count.get().json_serialize_to(out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -419,6 +433,28 @@ impl<T> JsonSerialize for MerkleTree<T> {
         leaves.json_serialize(out);
         out.push('}');
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        let Ok((hash_scheme, leaves)) = self.serialized_view() else {
+            return json::write_raw_json_to(r#"{"hash_scheme":0,"leaves":[]}"#, out);
+        };
+        out.begin_container()?;
+        out.push_str("{\"hash_scheme\":")?;
+        hash_scheme.json_serialize_to(out)?;
+        out.push_str(",\"leaves\":[")?;
+        for (index, leaf) in leaves.enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            leaf.json_serialize_to(out)?;
+        }
+        out.push_str("]}")?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -586,6 +622,20 @@ impl<T> JsonSerialize for MerkleProof<T> {
         out.push(':');
         json::JsonSerialize::json_serialize(&self.audit_path, out);
         out.push('}');
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"leaf_index\":")?;
+        self.leaf_index.json_serialize_to(out)?;
+        out.push_str(",\"audit_path\":")?;
+        self.audit_path.json_serialize_to(out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -867,6 +917,29 @@ impl<T> MerkleTree<T> {
         Ok((self.hash_scheme.wire_id(), leaves))
     }
 
+    /// Validate the retained cache and expose its canonical leaves without
+    /// cloning the response-sized leaf set.
+    fn serialized_view(&self) -> Result<(u8, LeafHashIterator<'_, T>), MerkleError> {
+        Self::validate_nodes(&self.nodes)?;
+        let leaf_count = self.leaf_count();
+        Self::ensure_serialized_leaf_count(leaf_count)?;
+
+        if !self.nodes.is_empty() {
+            let height = (usize::BITS - self.nodes.len().leading_zeros()).saturating_sub(1);
+            let offset = (1usize << height) - 1;
+            for index in (0..offset).rev() {
+                let left = self.nodes.get((index << 1) + 1).and_then(Option::as_ref);
+                let right = self.nodes.get((index << 1) + 2).and_then(Option::as_ref);
+                let expected = self.pair_hash_for_scheme(left, right);
+                if self.nodes[index] != expected {
+                    return Err(MerkleError::InconsistentCachedNodes);
+                }
+            }
+        }
+
+        Ok((self.hash_scheme.wire_id(), self.leaves()))
+    }
+
     fn validate_nodes(nodes: &[Option<HashOf<T>>]) -> Result<(), MerkleError> {
         if nodes.is_empty() {
             return Ok(());
@@ -957,6 +1030,44 @@ impl<T> MerkleTree<T> {
         self.get(0).copied().map(HashOf::transmute)
     }
 
+    /// Compute the canonical application-tree root with logarithmic memory.
+    ///
+    /// This has the same leaf and internal-node domain separation and ragged
+    /// right-edge promotion as collecting the hashes into [`MerkleTree`], but
+    /// retains only one completed subtree per level.
+    pub fn root_from_typed_leaves<I>(leaves: I) -> Option<HashOf<Self>>
+    where
+        I: IntoIterator<Item = HashOf<T>>,
+    {
+        let mut frontier: Vec<Option<HashOf<T>>> = Vec::new();
+        for leaf in leaves {
+            let mut node = Self::leaf_hash(&leaf);
+            let mut level = 0_usize;
+            loop {
+                if level == frontier.len() {
+                    frontier.push(Some(node));
+                    break;
+                }
+                if let Some(left) = frontier[level].take() {
+                    node = Self::pair_hash(Some(&left), Some(&node))?;
+                    level = level.checked_add(1)?;
+                } else {
+                    frontier[level] = Some(node);
+                    break;
+                }
+            }
+        }
+
+        let mut right = None;
+        for left in frontier.into_iter().flatten() {
+            right = Some(match right {
+                None => left,
+                Some(right) => Self::pair_hash(Some(&left), Some(&right))?,
+            });
+        }
+        right.map(HashOf::transmute)
+    }
+
     /// Return the exact number of leaves represented by this tree.
     #[must_use]
     pub fn leaf_count(&self) -> usize {
@@ -965,6 +1076,47 @@ impl<T> MerkleTree<T> {
         }
         let leaf_offset = (1usize << self.height()) - 1;
         self.nodes.len() - leaf_offset
+    }
+
+    /// Validate the cached tree against the canonical logical leaf hashes.
+    ///
+    /// Unlike rebuilding a [`MerkleTree`] from the iterator, this walks the
+    /// retained leaves and parent nodes in place and uses constant additional
+    /// memory. The retained hash scheme determines whether logical leaves are
+    /// application-domain separated or already SHA-256 leaf nodes.
+    pub fn validate_leaves<I>(&self, leaves: I) -> Result<(), MerkleError>
+    where
+        I: IntoIterator<Item = HashOf<T>>,
+    {
+        Self::validate_nodes(&self.nodes)?;
+
+        let mut supplied = leaves.into_iter();
+        let mut retained = self.leaves();
+        loop {
+            match (supplied.next(), retained.next()) {
+                (Some(leaf), Some(retained_leaf)) => {
+                    let expected = match self.hash_scheme {
+                        MerkleHashScheme::ApplicationV1 => Self::leaf_hash(&leaf),
+                        MerkleHashScheme::Sha256V1 => leaf,
+                    };
+                    if retained_leaf != expected {
+                        return Err(MerkleError::InconsistentCachedNodes);
+                    }
+                }
+                (None, None) => break,
+                _ => return Err(MerkleError::InconsistentCachedNodes),
+            }
+        }
+
+        let leaf_offset = (1usize << self.height()) - 1;
+        for index in (0..leaf_offset).rev() {
+            let expected =
+                self.pair_hash_for_scheme(self.get_l_child(index), self.get_r_child(index));
+            if self.nodes[index] != expected {
+                return Err(MerkleError::InconsistentCachedNodes);
+            }
+        }
+        Ok(())
     }
 
     /// Return the canonical root-and-count commitment, or `None` for an empty tree.
@@ -1342,6 +1494,22 @@ impl<T> JsonSerialize for CompactMerkleProof<T> {
         out.push(':');
         json::JsonSerialize::json_serialize(&self.siblings, out);
         out.push('}');
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"depth\":")?;
+        self.depth.json_serialize_to(out)?;
+        out.push_str(",\"dirs\":")?;
+        self.dirs.json_serialize_to(out)?;
+        out.push_str(",\"siblings\":")?;
+        self.siblings.json_serialize_to(out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -1977,6 +2145,48 @@ mod tests {
         assert_eq!(leaves_iter.next_back(), None);
         assert_eq!(leaves_iter.next(), None);
         assert_eq!(leaves_iter.len(), 0);
+    }
+
+    #[test]
+    fn validates_retained_tree_without_rebuilding_it() {
+        let hashes = test_hashes(5);
+        let tree: MerkleTree<_> = hashes.iter().copied().collect();
+        tree.validate_leaves(hashes.iter().copied())
+            .expect("canonical retained tree");
+
+        assert_eq!(
+            tree.validate_leaves(hashes[..4].iter().copied()),
+            Err(MerkleError::InconsistentCachedNodes)
+        );
+
+        let mut wrong_hashes = hashes.clone();
+        wrong_hashes[2] = HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
+        assert_eq!(
+            tree.validate_leaves(wrong_hashes),
+            Err(MerkleError::InconsistentCachedNodes)
+        );
+
+        let mut corrupt = tree;
+        corrupt.nodes[0] = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
+            [0xBB; Hash::LENGTH],
+        )));
+        assert_eq!(
+            corrupt.validate_leaves(hashes),
+            Err(MerkleError::InconsistentCachedNodes)
+        );
+    }
+
+    #[test]
+    fn streaming_root_matches_retained_tree_for_ragged_layouts() {
+        for count in 0_u8..=31 {
+            let hashes = test_hashes(count);
+            let tree: MerkleTree<_> = hashes.iter().copied().collect();
+            assert_eq!(
+                MerkleTree::root_from_typed_leaves(hashes),
+                tree.root(),
+                "leaf count {count}"
+            );
+        }
     }
 
     #[test]

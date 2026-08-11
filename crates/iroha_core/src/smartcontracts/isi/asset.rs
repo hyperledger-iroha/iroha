@@ -7317,19 +7317,55 @@ pub mod query {
         #[metrics(+"find_asset_by_id")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Asset, Error> {
             let entry = state_ro.world().asset(self.asset_id())?;
-            Ok(Asset {
-                id: entry.id().clone(),
-                value: entry.value().clone().into_inner(),
-            })
+            crate::smartcontracts::isi::query::own_singular_query_struct::<Asset, 2>(
+                [entry.id(), entry.value().as_ref()],
+                || Asset {
+                    id: entry.id().clone(),
+                    value: entry.value().clone().into_inner(),
+                },
+            )
         }
     }
 
     impl ValidSingularQuery for FindAssetDefinitionById {
         #[metrics(+"find_asset_definition_by_id")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<AssetDefinition, Error> {
-            Ok(state_ro
-                .world()
-                .asset_definition(self.asset_definition_id())?)
+            let world = state_ro.world();
+            let definition = world
+                .asset_definitions()
+                .get(self.asset_definition_id())
+                .ok_or_else(|| FindError::AssetDefinition(self.asset_definition_id().clone()))?;
+            let alias = crate::smartcontracts::isi::query::BorrowedSingularOption::new(
+                world
+                    .asset_definition_alias_bindings()
+                    .get(self.asset_definition_id())
+                    .map(|binding| &binding.alias),
+            );
+            crate::smartcontracts::isi::query::own_singular_query_struct::<AssetDefinition, 13>(
+                [
+                    &definition.id,
+                    &definition.name,
+                    &definition.description,
+                    &alias,
+                    &definition.spec,
+                    &definition.mintable,
+                    &definition.logo,
+                    &definition.metadata,
+                    &definition.balance_scope_policy,
+                    &definition.owning_domain,
+                    &definition.owned_by,
+                    &definition.total_quantity,
+                    &definition.confidential_policy,
+                ],
+                || {
+                    let mut owned = definition.clone();
+                    owned.alias = world
+                        .asset_definition_alias_bindings()
+                        .get(self.asset_definition_id())
+                        .map(|binding| binding.alias.clone());
+                    owned
+                },
+            )
         }
     }
 

@@ -17,6 +17,23 @@
     }
 
     #[cfg(feature = "app_api")]
+    const ROUTED_READ_TEST_BODY_BYTES: usize = 1024 * 1024;
+
+    #[cfg(feature = "app_api")]
+    fn routed_read_test_working_set_bytes() -> usize {
+        routed_read_working_set_for_phase(ROUTED_READ_TEST_BODY_BYTES)
+    }
+
+    #[cfg(feature = "app_api")]
+    fn routed_read_test_budget() -> ToriiRoutedReadMemoryBudget {
+        ToriiRoutedReadMemoryBudget::new(
+            routed_read_test_working_set_bytes(),
+            ROUTED_READ_TEST_BODY_BYTES,
+        )
+        .expect("routed-read test memory envelope should fit")
+    }
+
+    #[cfg(feature = "app_api")]
     async fn response_error(response: Response) -> ErrorEnvelope {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -252,26 +269,6 @@
         assert_eq!(decoded.count_mode, params.count_mode);
     }
 
-    #[test]
-    fn canonicalize_query_batch_box_deduplicates_and_applies_pagination() {
-        let pagination =
-            iroha_data_model::query::parameters::Pagination::new(std::num::NonZeroU64::new(2), 1);
-        let batch = canonicalize_query_batch_box(
-            iroha_data_model::query::QueryOutputBatchBox::String(vec![
-                "b".to_owned(),
-                "a".to_owned(),
-                "b".to_owned(),
-                "c".to_owned(),
-            ]),
-            pagination,
-        );
-
-        let iroha_data_model::query::QueryOutputBatchBox::String(items) = batch else {
-            panic!("expected string batch");
-        };
-        assert_eq!(items, vec!["a".to_owned(), "b".to_owned()]);
-    }
-
     fn checked_routed_read_test_keypair(
         seed: Vec<u8>,
         algorithm: iroha_crypto::Algorithm,
@@ -311,24 +308,27 @@
 
     #[test]
     fn fanout_route_scan_query_request_is_bounded_by_signed_window() {
-        let request = iroha_data_model::query::json::IterableQueryJson {
-            kind: iroha_data_model::query::json::IterableQueryKind::FindDomains,
-            params: iroha_data_model::query::json::IterableQueryParamsJson {
-                limit: Some(3),
-                offset: Some(7),
-                fetch_size: Some(1),
-                sort_by_metadata_key: None,
-                order: None,
-                ids_projection: None,
-                lane_id: None,
-                dsid: None,
-            },
-            predicate: None,
-        }
-        .into_request(iroha_test_samples::ALICE_ID.clone())
-        .expect("iterable request should build");
+        let request = authorize_query_for_test(
+            iroha_data_model::query::json::IterableQueryJson {
+                kind: iroha_data_model::query::json::IterableQueryKind::FindDomains,
+                params: iroha_data_model::query::json::IterableQueryParamsJson {
+                    limit: Some(3),
+                    offset: Some(7),
+                    fetch_size: Some(1),
+                    sort_by_metadata_key: None,
+                    order: None,
+                    ids_projection: None,
+                    lane_id: None,
+                    dsid: None,
+                },
+                predicate: None,
+            }
+            .into_request()
+            .expect("iterable request should build"),
+            iroha_test_samples::ALICE_ID.clone(),
+        );
 
-        let request = fanout_route_scan_query_request(&request);
+        let request = fanout_route_scan_query_request(&request).expect("pagination should fit");
         let iroha_data_model::query::QueryRequest::Start(start) = request.request else {
             panic!("expected iterable routed query");
         };
@@ -343,31 +343,37 @@
     }
 
     #[test]
-    fn fanout_route_scan_is_unlimited_only_when_client_signed_no_limit() {
-        let request = iroha_data_model::query::json::IterableQueryJson {
-            kind: iroha_data_model::query::json::IterableQueryKind::FindDomains,
-            params: iroha_data_model::query::json::IterableQueryParamsJson {
-                limit: None,
-                offset: Some(7),
-                fetch_size: Some(1),
-                sort_by_metadata_key: None,
-                order: None,
-                ids_projection: None,
-                lane_id: None,
-                dsid: None,
-            },
-            predicate: None,
-        }
-        .into_request(iroha_test_samples::ALICE_ID.clone())
-        .expect("iterable request should build");
+    fn fanout_route_scan_without_client_limit_uses_configured_fetch_budget() {
+        let request = authorize_query_for_test(
+            iroha_data_model::query::json::IterableQueryJson {
+                kind: iroha_data_model::query::json::IterableQueryKind::FindDomains,
+                params: iroha_data_model::query::json::IterableQueryParamsJson {
+                    limit: None,
+                    offset: Some(7),
+                    fetch_size: Some(1),
+                    sort_by_metadata_key: None,
+                    order: None,
+                    ids_projection: None,
+                    lane_id: None,
+                    dsid: None,
+                },
+                predicate: None,
+            }
+            .into_request()
+            .expect("iterable request should build"),
+            iroha_test_samples::ALICE_ID.clone(),
+        );
 
-        let request = fanout_route_scan_query_request(&request);
+        let request = fanout_route_scan_query_request(&request).expect("default budget should fit");
         let iroha_data_model::query::QueryRequest::Start(start) = request.request else {
             panic!("expected iterable routed query");
         };
         assert_eq!(
             start.params.pagination,
-            iroha_data_model::query::parameters::Pagination::new(None, 0),
+            iroha_data_model::query::parameters::Pagination::new(
+                std::num::NonZeroU64::new(crate::routing::app_query_limits().max_fetch_size.max(1)),
+                0,
+            ),
         );
         assert_eq!(
             start.params.fetch_size.fetch_size,
@@ -420,19 +426,6 @@
     }
 
     #[test]
-    fn merge_query_batch_boxes_rejects_mismatched_variants() {
-        let error = merge_query_batch_boxes(
-            iroha_data_model::query::QueryOutputBatchBox::String(vec!["a".to_owned()]),
-            iroha_data_model::query::QueryOutputBatchBox::Numeric(vec![
-                iroha_primitives::numeric::Numeric::from(1_u32),
-            ]),
-        )
-        .expect_err("mismatched routed query batches should fail");
-
-        assert_eq!(error.status(), StatusCode::CONFLICT);
-    }
-
-    #[test]
     fn iterable_routed_query_skips_not_found_and_route_unavailable_errors() {
         assert!(should_skip_iterable_routed_query_route_error(
             &torii_proxy_error_response(StatusCode::NOT_FOUND, "not_found", "missing")
@@ -466,73 +459,6 @@
         ));
     }
 
-    #[test]
-    fn collect_routed_singular_query_outputs_skips_route_unavailable_until_success() {
-        let outputs = collect_routed_singular_query_outputs([
-            Err(torii_proxy_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "route_unavailable",
-                "authoritative peers offline",
-            )),
-            Ok(42_u32),
-        ])
-        .expect("healthy singular output should survive route_unavailable on another route");
-
-        assert_eq!(outputs, vec![42_u32]);
-    }
-
-    #[test]
-    fn collect_routed_singular_query_outputs_prefers_not_found_when_no_route_succeeds() {
-        let response = collect_routed_singular_query_outputs::<u32>([
-            Err(torii_proxy_error_response(
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "missing",
-            )),
-            Err(torii_proxy_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "route_unavailable",
-                "authoritative peers offline",
-            )),
-        ])
-        .expect_err("all singular routes failing should surface a definitive not_found");
-
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-reject-code")
-                .and_then(|value| value.to_str().ok()),
-            Some("not_found")
-        );
-    }
-
-    #[test]
-    fn collect_routed_singular_query_outputs_returns_route_unavailable_when_only_unavailable() {
-        let response = collect_routed_singular_query_outputs::<u32>([
-            Err(torii_proxy_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "route_unavailable",
-                "first authoritative peer set offline",
-            )),
-            Err(torii_proxy_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "route_unavailable",
-                "second authoritative peer set offline",
-            )),
-        ])
-        .expect_err("all unavailable singular routes should surface route_unavailable");
-
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-reject-code")
-                .and_then(|value| value.to_str().ok()),
-            Some("route_unavailable")
-        );
-    }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn collect_torii_singleton_json_payloads_skips_route_unavailable_until_success() {
@@ -543,6 +469,8 @@
 
         let collected = collect_torii_singleton_json_payloads(
             &[unavailable_route, healthy_route],
+            routed_read_test_working_set_bytes(),
+            ROUTED_READ_TEST_BODY_BYTES,
             move |route| {
                 let expected = expected_for_closure.clone();
                 async move {
@@ -575,17 +503,22 @@
             RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
         ];
 
-        let response = collect_torii_singleton_json_payloads(&routes, move |route| async move {
-            if route == routes[0] {
-                torii_proxy_error_response(StatusCode::NOT_FOUND, "not_found", "missing")
-            } else {
-                torii_proxy_error_response(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "route_unavailable",
-                    "authoritative peers offline",
-                )
-            }
-        })
+        let response = collect_torii_singleton_json_payloads(
+            &routes,
+            routed_read_test_working_set_bytes(),
+            ROUTED_READ_TEST_BODY_BYTES,
+            move |route| async move {
+                if route == routes[0] {
+                    torii_proxy_error_response(StatusCode::NOT_FOUND, "not_found", "missing")
+                } else {
+                    torii_proxy_error_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "route_unavailable",
+                        "authoritative peers offline",
+                    )
+                }
+            },
+        )
         .await
         .expect_err("all singleton routes failing should surface a definitive not_found");
 
@@ -622,13 +555,18 @@
             RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
         ];
 
-        let response = collect_torii_singleton_json_payloads(&routes, move |_route| async move {
-            torii_proxy_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "route_unavailable",
-                "authoritative peers offline",
-            )
-        })
+        let response = collect_torii_singleton_json_payloads(
+            &routes,
+            routed_read_test_working_set_bytes(),
+            ROUTED_READ_TEST_BODY_BYTES,
+            move |_route| async move {
+                torii_proxy_error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "route_unavailable",
+                    "authoritative peers offline",
+                )
+            },
+        )
         .await
         .expect_err("all unavailable singleton routes should surface route_unavailable");
 
@@ -651,38 +589,42 @@
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn collect_torii_singleton_json_payloads_starts_all_routes_concurrently() {
+    async fn collect_torii_singleton_json_payloads_keeps_one_route_body_live_at_a_time() {
         let routes = [
             RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
             RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
         ];
         let route_count = routes.len();
-        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
-        let task_barrier = std::sync::Arc::clone(&barrier);
+        let active = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
-        let handle = tokio::spawn(async move {
-            collect_torii_singleton_json_payloads(&routes, move |route| {
-                let barrier = std::sync::Arc::clone(&task_barrier);
+        let collected = collect_torii_singleton_json_payloads(
+            &routes,
+            routed_read_test_working_set_bytes(),
+            ROUTED_READ_TEST_BODY_BYTES,
+            {
+                let active = std::sync::Arc::clone(&active);
+                move |route| {
+                    let active = std::sync::Arc::clone(&active);
                 async move {
-                    barrier.wait().await;
+                        assert_eq!(
+                            active.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+                            0,
+                            "a second route began while the prior response body was live"
+                        );
+                        tokio::task::yield_now().await;
+                        active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                     let payload =
                         crate::json_object(vec![crate::json_entry("route", route.dataspace_id)]);
                     crate::utils::respond_value_with_format(payload, ResponseFormat::Json)
                 }
-            })
-            .await
-        });
-
-        tokio::time::timeout(Duration::from_millis(200), barrier.wait())
-            .await
-            .expect("all singleton routes should begin before the collector awaits completion");
-
-        let collected = handle
-            .await
-            .expect("collector task should join")
-            .expect("all singleton routes should succeed");
+                }
+            },
+        )
+        .await
+        .expect("all singleton routes should succeed");
         assert_eq!(collected.payloads.len(), route_count);
         assert_eq!(collected.diagnostics.succeeded_routes, route_count);
+        assert_eq!(active.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[cfg(feature = "app_api")]
@@ -694,20 +636,25 @@
         let expected_for_closure = expected.clone();
 
         let collected =
-            collect_torii_list_json_payloads(&[unavailable_route, healthy_route], move |route| {
-                let expected = expected_for_closure.clone();
-                async move {
-                    if route == unavailable_route {
-                        torii_proxy_error_response(
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            "route_unavailable",
-                            "authoritative peers offline",
-                        )
-                    } else {
-                        crate::utils::respond_value_with_format(expected, ResponseFormat::Json)
+            collect_torii_list_json_payloads(
+                &[unavailable_route, healthy_route],
+                routed_read_test_working_set_bytes(),
+                ROUTED_READ_TEST_BODY_BYTES,
+                move |route| {
+                    let expected = expected_for_closure.clone();
+                    async move {
+                        if route == unavailable_route {
+                            torii_proxy_error_response(
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "route_unavailable",
+                                "authoritative peers offline",
+                            )
+                        } else {
+                            crate::utils::respond_value_with_format(expected, ResponseFormat::Json)
+                        }
                     }
-                }
-            })
+                },
+            )
             .await
             .expect("healthy list payload should survive route_unavailable on another route");
 
@@ -725,17 +672,22 @@
             RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
         ];
 
-        let response = collect_torii_list_json_payloads(&routes, move |route| async move {
-            if route == routes[0] {
-                torii_proxy_error_response(StatusCode::NOT_FOUND, "not_found", "missing")
-            } else {
-                torii_proxy_error_response(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "route_unavailable",
-                    "authoritative peers offline",
-                )
-            }
-        })
+        let response = collect_torii_list_json_payloads(
+            &routes,
+            routed_read_test_working_set_bytes(),
+            ROUTED_READ_TEST_BODY_BYTES,
+            move |route| async move {
+                if route == routes[0] {
+                    torii_proxy_error_response(StatusCode::NOT_FOUND, "not_found", "missing")
+                } else {
+                    torii_proxy_error_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "route_unavailable",
+                        "authoritative peers offline",
+                    )
+                }
+            },
+        )
         .await
         .expect_err("all list routes failing should surface a definitive not_found");
 
@@ -764,13 +716,18 @@
             RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
         ];
 
-        let response = collect_torii_list_json_payloads(&routes, move |_route| async move {
-            torii_proxy_error_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "route_unavailable",
-                "authoritative peers offline",
-            )
-        })
+        let response = collect_torii_list_json_payloads(
+            &routes,
+            routed_read_test_working_set_bytes(),
+            ROUTED_READ_TEST_BODY_BYTES,
+            move |_route| async move {
+                torii_proxy_error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "route_unavailable",
+                    "authoritative peers offline",
+                )
+            },
+        )
         .await
         .expect_err("all unavailable list routes should surface route_unavailable");
 
@@ -803,9 +760,16 @@
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         let response =
-            collect_torii_account_history_json_payloads(&[route], &params, 10, "bounded", {
-                let calls = std::sync::Arc::clone(&calls);
-                move |_route, _query| {
+            collect_torii_account_history_json_payloads(
+                &[route],
+                &params,
+                10,
+                "bounded",
+                routed_read_test_working_set_bytes(),
+                ROUTED_READ_TEST_BODY_BYTES,
+                {
+                    let calls = std::sync::Arc::clone(&calls);
+                    move |_route, _query| {
                     let calls = std::sync::Arc::clone(&calls);
                     async move {
                         match calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
@@ -823,8 +787,9 @@
                             ),
                         }
                     }
-                }
-            })
+                    }
+                },
+            )
             .await
             .expect_err("mid-route pagination failure must fail the fanout");
 
@@ -858,9 +823,16 @@
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         let response =
-            collect_torii_account_history_json_payloads(&[route], &params, 10, "bounded", {
-                let calls = std::sync::Arc::clone(&calls);
-                move |_route, _query| {
+            collect_torii_account_history_json_payloads(
+                &[route],
+                &params,
+                10,
+                "bounded",
+                routed_read_test_working_set_bytes(),
+                ROUTED_READ_TEST_BODY_BYTES,
+                {
+                    let calls = std::sync::Arc::clone(&calls);
+                    move |_route, _query| {
                     let calls = std::sync::Arc::clone(&calls);
                     async move {
                         match calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
@@ -878,8 +850,9 @@
                             ),
                         }
                     }
-                }
-            })
+                    }
+                },
+            )
             .await
             .expect_err("mid-route not_found must not merge partial history");
 
@@ -938,20 +911,30 @@
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn collect_torii_list_json_payloads_starts_all_routes_concurrently() {
+    async fn collect_torii_list_json_payloads_keeps_one_route_body_live_at_a_time() {
         let routes = [
             RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
             RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
         ];
         let route_count = routes.len();
-        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
-        let task_barrier = std::sync::Arc::clone(&barrier);
+        let active = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
-        let handle = tokio::spawn(async move {
-            collect_torii_list_json_payloads(&routes, move |route| {
-                let barrier = std::sync::Arc::clone(&task_barrier);
+        let collected = collect_torii_list_json_payloads(
+            &routes,
+            routed_read_test_working_set_bytes(),
+            ROUTED_READ_TEST_BODY_BYTES,
+            {
+                let active = std::sync::Arc::clone(&active);
+                move |route| {
+                    let active = std::sync::Arc::clone(&active);
                 async move {
-                    barrier.wait().await;
+                        assert_eq!(
+                            active.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+                            0,
+                            "a second route began while the prior response body was live"
+                        );
+                        tokio::task::yield_now().await;
+                        active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                     let item =
                         crate::json_object(vec![crate::json_entry("route", route.dataspace_id)]);
                     let payload = crate::json_object(vec![
@@ -960,20 +943,14 @@
                     ]);
                     crate::utils::respond_value_with_format(payload, ResponseFormat::Json)
                 }
-            })
-            .await
-        });
-
-        tokio::time::timeout(Duration::from_millis(200), barrier.wait())
-            .await
-            .expect("all list routes should begin before the collector awaits completion");
-
-        let collected = handle
-            .await
-            .expect("collector task should join")
-            .expect("all list routes should succeed");
+                }
+            },
+        )
+        .await
+        .expect("all list routes should succeed");
         assert_eq!(collected.payloads.len(), route_count);
         assert_eq!(collected.diagnostics.succeeded_routes, route_count);
+        assert_eq!(active.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[cfg(feature = "app_api")]
@@ -984,8 +961,8 @@
             norito::json!([{"id": "alpha"}, {"id": "beta"}]),
         ];
 
-        let response =
-            merged_list_response(payloads, "fanout").expect("raw array list payloads should merge");
+        let response = merged_list_response(payloads, "fanout", routed_read_test_budget())
+            .expect("raw array list payloads should merge");
         let body = response_json(response).await;
         let root = body
             .as_object()
@@ -1069,6 +1046,8 @@
             routes,
             2,
             "alias fanout denied",
+            routed_read_test_working_set_bytes(),
+            ROUTED_READ_TEST_BODY_BYTES,
             |_route: RoutingDecision| async move {
                 crate::utils::respond_value_with_format(norito::json!({}), ResponseFormat::Json)
             },
@@ -1104,6 +1083,8 @@
             routes,
             0,
             "alias fanout denied",
+            routed_read_test_working_set_bytes(),
+            ROUTED_READ_TEST_BODY_BYTES,
             |_route: RoutingDecision| async move {
                 crate::utils::respond_value_with_format(norito::json!({}), ResponseFormat::Json)
             },
@@ -1134,6 +1115,8 @@
             &routes,
             0,
             "alias fanout denied",
+            routed_read_test_working_set_bytes(),
+            ROUTED_READ_TEST_BODY_BYTES,
             move |route| async move {
                 if route == routes[0] {
                     torii_alias_permission_denied_response("routed dataspace blocked the lookup")
@@ -1184,18 +1167,25 @@
         });
 
         let collected =
-            collect_torii_alias_json_payloads(&routes, 0, "alias fanout denied", move |route| {
-                let expected = expected.clone();
-                async move {
-                    if route == routes[0] {
-                        torii_alias_permission_denied_response(
-                            "routed dataspace blocked the lookup",
-                        )
-                    } else {
-                        crate::utils::respond_value_with_format(expected, ResponseFormat::Json)
+            collect_torii_alias_json_payloads(
+                &routes,
+                0,
+                "alias fanout denied",
+                routed_read_test_working_set_bytes(),
+                ROUTED_READ_TEST_BODY_BYTES,
+                move |route| {
+                    let expected = expected.clone();
+                    async move {
+                        if route == routes[0] {
+                            torii_alias_permission_denied_response(
+                                "routed dataspace blocked the lookup",
+                            )
+                        } else {
+                            crate::utils::respond_value_with_format(expected, ResponseFormat::Json)
+                        }
                     }
-                }
-            })
+                },
+            )
             .await
             .expect("successful alias payload should survive denied sibling routes");
 
@@ -1218,6 +1208,8 @@
             &routes,
             0,
             "alias fanout denied",
+            routed_read_test_working_set_bytes(),
+            ROUTED_READ_TEST_BODY_BYTES,
             move |route| async move {
                 if route == routes[0] {
                     torii_proxy_error_response(StatusCode::NOT_FOUND, "not_found", "missing")
@@ -1262,6 +1254,8 @@
             &routes,
             0,
             "alias fanout denied",
+            routed_read_test_working_set_bytes(),
+            ROUTED_READ_TEST_BODY_BYTES,
             move |_route| async move {
                 torii_proxy_error_response(
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -1532,8 +1526,8 @@
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -1593,8 +1587,8 @@
         bind_account_alias_for_test(&app, &authority, "merchant@universal");
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             1,
             DataSpaceId::UNIVERSAL,
@@ -1622,6 +1616,7 @@
                 None,
                 body,
             ),
+            None,
         )
         .await;
 
@@ -1654,6 +1649,7 @@
                 &app,
                 route,
                 torii_read_request(endpoint, route, Vec::new(), None, body),
+                None,
             )
             .await;
             assert_eq!(response.status(), StatusCode::OK);
@@ -2190,6 +2186,7 @@
                 }),
             ],
             "proxy",
+            routed_read_test_budget(),
         )
         .expect("list merge should succeed");
 
@@ -2227,6 +2224,7 @@
                 }),
             ],
             "proxy",
+            routed_read_test_budget(),
         )
         .expect("list merge should succeed");
 
@@ -2249,15 +2247,21 @@
         ];
         let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
 
-        let collected = collect_torii_paginated_list_json_payloads(&routes, 2, {
-            let calls = std::sync::Arc::clone(&calls);
-            move |route, offset, limit| {
+        let collected = collect_torii_paginated_list_json_payloads(
+            &routes,
+            2,
+            routed_read_test_working_set_bytes(),
+            ROUTED_READ_TEST_BODY_BYTES,
+            {
+                let calls = std::sync::Arc::clone(&calls);
+                move |route, offset, limit| {
                 let calls = std::sync::Arc::clone(&calls);
                 async move {
-                    calls
-                        .lock()
-                        .expect("call log lock")
-                        .push((route.dataspace_id.as_u64(), offset, limit));
+                    calls.lock().expect("call log lock").push((
+                        route.dataspace_id.as_u64(),
+                        offset,
+                        limit,
+                    ));
                     let payload = match (route.dataspace_id.as_u64(), offset) {
                         (1, 0) => norito::json!({
                             "items": [{"id": "a"}, {"id": "b"}],
@@ -2281,8 +2285,9 @@
                     };
                     crate::utils::respond_value_with_format(payload, ResponseFormat::Json)
                 }
-            }
-        })
+                }
+            },
+        )
         .await
         .expect("all routed pages should validate");
 
@@ -2301,6 +2306,7 @@
             2,
             "exact",
             "proxy",
+            collected.budget,
         )
         .expect("drained account pages should merge");
         let json = response_json(response).await;
@@ -2324,13 +2330,9 @@
 
     #[test]
     fn routed_account_page_rejects_missing_pagination_metadata() {
-        let response = validate_torii_exact_list_page(
-            &norito::json!({"items": [], "total": 0}),
-            0,
-            100,
-            None,
-        )
-        .expect_err("fanout must not accept an unverifiable partial account inventory");
+        let response =
+            validate_torii_exact_list_page(&norito::json!({"items": [], "total": 0}), 0, 100, None)
+                .expect_err("fanout must not accept an unverifiable partial account inventory");
 
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(
@@ -2365,6 +2367,7 @@
             2,
             "exact",
             "proxy",
+            routed_read_test_budget(),
         )
         .expect("account history merge should succeed");
 
@@ -2391,9 +2394,13 @@
             "source": "on_chain"
         });
 
-        let response =
-            merged_alias_resolve_index_response(vec![payload.clone(), payload], "proxy", "fanout")
-                .expect("identical alias-index bindings should merge cleanly");
+        let response = merged_alias_resolve_index_response(
+            vec![payload.clone(), payload],
+            "proxy",
+            "fanout",
+            routed_read_test_budget(),
+        )
+        .expect("identical alias-index bindings should merge cleanly");
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
@@ -2434,6 +2441,7 @@
             ],
             "proxy",
             "fanout",
+            routed_read_test_budget(),
         )
         .expect_err("incompatible alias-index bindings should conflict");
 
@@ -2457,6 +2465,7 @@
             })],
             "proxy",
             "fanout",
+            routed_read_test_budget(),
         )
         .expect_err("malformed alias-index payloads should fail decoding");
 
@@ -2473,8 +2482,13 @@
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn merged_alias_resolve_index_response_returns_not_found_when_payloads_are_empty() {
-        let response = merged_alias_resolve_index_response(Vec::new(), "proxy", "fanout")
-            .expect_err("empty alias-index merges should surface not_found");
+        let response = merged_alias_resolve_index_response(
+            Vec::new(),
+            "proxy",
+            "fanout",
+            routed_read_test_budget(),
+        )
+        .expect_err("empty alias-index merges should surface not_found");
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert_eq!(
@@ -2522,6 +2536,7 @@
             "proxy",
             "fanout",
             0,
+            routed_read_test_budget(),
         )
         .expect("compatible alias-by-account payloads should merge");
 
@@ -2551,6 +2566,7 @@
             "proxy",
             "fanout",
             0,
+            routed_read_test_budget(),
         )
         .expect_err("malformed alias-account payloads should fail decoding");
 
@@ -2585,6 +2601,7 @@
             "proxy",
             "fanout",
             0,
+            routed_read_test_budget(),
         )
         .expect_err("conflicting account roots should fail");
 
@@ -2612,6 +2629,7 @@
             "proxy",
             "fanout",
             1,
+            routed_read_test_budget(),
         )
         .expect_err("empty merged alias rows with denied routes should fail closed");
 
@@ -2628,6 +2646,7 @@
                 norito::json!({"id": "asset#b"}),
             ],
             "proxy",
+            routed_read_test_budget(),
         )
         .expect_err("conflicting singleton payloads should fail");
 
@@ -2652,6 +2671,7 @@
                 }),
             ],
             "proxy",
+            routed_read_test_budget(),
         )
         .expect("pipeline status fanout should merge semantically compatible statuses");
 
@@ -2686,6 +2706,7 @@
                 }),
             ],
             "proxy",
+            routed_read_test_budget(),
         )
         .expect("pipeline status fanout should prefer committed success over stale rejection");
 
@@ -2807,6 +2828,7 @@
                 }),
             ],
             "proxy",
+            routed_read_test_budget(),
         )
         .expect("bindings merge should succeed");
 

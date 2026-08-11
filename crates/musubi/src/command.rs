@@ -1,8 +1,8 @@
-//! Cargo-style Musubi V1 command parsing and signer-free local workflows.
+//! Cargo-style Musubi V1 command parsing and exact-network authenticated workflows.
 //!
-//! This module owns the public command grammar and returns logical output. Local
-//! and read-only commands never construct a signer; network mutations load one
-//! only at their explicit registry boundary. Resolution, authenticated fetch,
+//! This module owns the public command grammar and returns logical output. Purely local commands
+//! never construct a signer; network reads and mutations load one only at their explicit registry
+//! boundary. Resolution, authenticated fetch,
 //! compiler, test, cache, and publication work stays in dedicated V1 modules.
 
 use std::{
@@ -393,7 +393,7 @@ struct PackageArgs {
 
 #[derive(Args, Clone, Debug, Default)]
 struct RegistryReadArgs {
-    /// Explicit platform Iroha client configuration path for signer-free registry reads.
+    /// Explicit platform Iroha client configuration path for authenticated registry reads.
     #[arg(long, value_name = "PATH")]
     config: Option<PathBuf>,
 }

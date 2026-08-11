@@ -555,12 +555,7 @@ mod tests {
         let assignment = builder.finalize()?;
         assignment
             .shape
-            .validate_relaxed_assignment(
-                &assignment.witness,
-                Scalar::one(),
-                &assignment.public_inputs,
-                &vec![Scalar::zero(); assignment.shape.constraint_count()],
-            )
+            .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
             .map_err(CircuitError::from)
     }
 

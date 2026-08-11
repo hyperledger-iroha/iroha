@@ -986,7 +986,13 @@ absent. The JSON wire does not contain the retired synthetic `block_hash` or `co
 
 The Sumeragi safety WAL is append-only and hash chained. It is bound to the chain, protocol version,
 and consensus key. Each successful append includes `flush` and `sync_data`; only that success is a
-durability acknowledgement to the reducer. Replay happens before consensus ingress opens.
+durability acknowledgement to the reducer. Replay happens before consensus ingress opens. Recovery
+streams and verifies one frame at a time, retaining each payload exactly once instead of buffering
+the complete file and cloning its records. A height-local WAL is bounded to 8,192 complete records
+and 32 MiB of aggregate payload bytes; append rejects the first record that would cross either
+fixed first-release bound before file or hash-chain state changes, and startup fails closed on an
+already oversized complete prefix. These are deterministic WAL-retention invariants, not process
+memory limits.
 
 The WAL records Prepare intent, observed PrepareQC/high QC, atomic lock plus Commit intent, timeout
 intent, installed TC, and decision. A `LockAndCommit` whose proposal origin is older than the

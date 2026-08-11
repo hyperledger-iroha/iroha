@@ -814,10 +814,7 @@ impl CksRelationV1 {
         ] {
             value.validate(profile)?;
         }
-        if self.public_key_a == RnsPolynomial::zero(profile)
-            || self.party_public_b == RnsPolynomial::zero(profile)
-            || self.target_a == RnsPolynomial::zero(profile)
-        {
+        if self.public_key_a.is_zero() || self.party_public_b.is_zero() || self.target_a.is_zero() {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
         Ok(())

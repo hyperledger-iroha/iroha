@@ -28,6 +28,7 @@ fn main() -> Result<()> {
     for (batch_idx, batch) in normalized.transactions.iter().enumerate() {
         print_batch("normalized", batch_idx, batch);
     }
+    drop(normalized);
 
     let signer = normalization_signer()?;
     let block = RawGenesisTransaction::from_path(&path)?.build_and_sign(&signer)?;

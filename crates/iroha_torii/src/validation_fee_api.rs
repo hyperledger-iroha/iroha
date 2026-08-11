@@ -1525,9 +1525,9 @@ pub(crate) async fn handler_current_policy_proof(
             )?,
         );
     }
-    let finality_bytes = norito::to_bytes(&finality_chain)
+    let finality_encoded_bytes = norito::core::encoded_frame_len(&finality_chain)
         .map_err(|error| inconsistent(format!("finality chain cannot be encoded: {error}")))?;
-    if finality_bytes.len() > VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES {
+    if finality_encoded_bytes > VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES {
         return Err(Error::AppConflict {
             code: "validation_fee_finality_page_too_large",
             message: "The bounded finality page exceeds the response byte budget.".to_owned(),
@@ -1549,9 +1549,9 @@ pub(crate) async fn handler_current_policy_proof(
         observed_ledger_tip_height,
         more_available: evaluated_height < observed_ledger_tip_height,
     };
-    let response_bytes = norito::to_bytes(&response)
+    let response_encoded_bytes = norito::core::encoded_frame_len(&response)
         .map_err(|error| inconsistent(format!("policy proof cannot be encoded: {error}")))?;
-    if response_bytes.len() > VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES {
+    if response_encoded_bytes > VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES {
         return Err(Error::AppConflict {
             code: "validation_fee_policy_proof_too_large",
             message: "The validation-fee proof exceeds the response byte budget.".to_owned(),

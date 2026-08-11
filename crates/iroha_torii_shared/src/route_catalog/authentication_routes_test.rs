@@ -1,4 +1,62 @@
 #[test]
+fn offline_receiver_lineage_requires_account_authentication_before_expensive_proof_work() {
+    let route = offline::RECIPIENT_LINEAGE;
+    assert_eq!(route.effect(), RouteEffect::ExpensiveCompute);
+    assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+    assert_eq!(
+        route.authentication(),
+        AuthenticationPolicy::CanonicalAccountSignature
+    );
+}
+
+#[test]
+fn application_query_posts_authenticate_before_expensive_compute() {
+    for route in [
+        application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST,
+        application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST,
+        application_api::DOMAINS_QUERY_POST,
+        application_api::ACCOUNTS_QUERY_POST,
+        application_api::TRANSACTIONS_QUERY_POST,
+        application_api::TRANSACTIONS_VISIBLE_QUERY_POST,
+        application_api::REPO_AGREEMENTS_QUERY_POST,
+        telemetry::ASSET_HOLDERS_QUERY,
+        application_api::ASSETS_DEFINITIONS_QUERY_POST,
+        application_api::NFTS_QUERY_POST,
+        application_api::RWAS_QUERY_POST,
+    ] {
+        assert_eq!(
+            route.effect(),
+            RouteEffect::ExpensiveCompute,
+            "{}",
+            route.path()
+        );
+        assert_eq!(
+            route.admission(),
+            AdmissionPolicy::AuthenticatedAccount,
+            "{}",
+            route.path()
+        );
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature,
+            "{}",
+            route.path()
+        );
+    }
+
+    let proof_query = application_api::PROOFS_QUERY_POST;
+    assert_eq!(proof_query.effect(), RouteEffect::ExpensiveCompute);
+    assert_eq!(
+        proof_query.admission(),
+        AdmissionPolicy::AuthenticatedAccount
+    );
+    assert_eq!(
+        proof_query.authentication(),
+        AuthenticationPolicy::CanonicalSignedBody
+    );
+}
+
+#[test]
 fn canonical_catalog_includes_exact_gateway_and_directory_routes() {
     let catalog = RouteCatalog::new(CATALOGED_ROUTES);
     assert_eq!(catalog.validate(), Ok(()));
@@ -67,29 +125,140 @@ fn dedicated_onboarding_authentication_is_exactly_scoped() {
 }
 
 #[test]
-fn required_api_token_authentication_is_exactly_scoped() {
-    let required_routes = [
-        sorafs::STORAGE_TOKEN,
+fn formerly_bearer_only_routes_require_exact_signatures() {
+    assert_eq!(
+        sorafs::STORAGE_TOKEN.authentication(),
+        AuthenticationPolicy::OperatorSignature
+    );
+    for route in [
         application_api::WEBHOOKS_GET,
         application_api::WEBHOOKS_POST,
         application_api::WEBHOOKS_BY_ID_DELETE,
-    ];
-    for route in &required_routes {
+    ] {
         assert_eq!(
             route.authentication(),
-            AuthenticationPolicy::RequiredApiToken,
-            "{} must advertise its unconditional API credential",
+            AuthenticationPolicy::OperatorSignature,
+            "{} authentication",
             route.stable_route_id()
         );
     }
+}
+
+#[test]
+fn local_sorafs_governance_state_is_operator_signed() {
+    for route in [
+        sorafs::GOVERNANCE_DAG_DASHBOARD,
+        sorafs::GOVERNANCE_DAG_HEAD,
+        sorafs::GOVERNANCE_DAG_BLOCK,
+        sorafs::GOVERNANCE_DAG_NODE,
+        sorafs::GOVERNANCE_DAG_PUBLISH_INDEX,
+        sorafs::GOVERNANCE_DAG_PUBLISH_DIGEST,
+        sorafs::GOVERNANCE_DAG_PUBLISH_KIND,
+        sorafs::GOVERNANCE_DAG_CAR_QUEUE,
+        sorafs::GOVERNANCE_DAG_CAR_QUEUE_DIGEST,
+        sorafs::GOVERNANCE_DAG_CAR_QUEUE_KIND,
+        sorafs::GOVERNANCE_DAG_CAR_QUEUE_ARCHIVE,
+        sorafs::GOVERNANCE_DAG_RUNTIME,
+        sorafs::GOVERNANCE_DAG_RUNTIME_HEAD,
+        sorafs::GOVERNANCE_DAG_RUNTIME_BLOCK,
+        sorafs::GOVERNANCE_DAG_RUNTIME_NODE,
+        sorafs::GOVERNANCE_DAG_RUNTIME_DIGEST,
+        sorafs::GOVERNANCE_DAG_RUNTIME_KIND,
+    ] {
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.surface(), ApiSurface::Operator);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(route.admission(), AdmissionPolicy::Operator);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::OperatorSignature,
+            "{} must not expose node-local inventory anonymously",
+            route.stable_route_id()
+        );
+        assert_eq!(route.projections(), RouteProjections::NONE);
+    }
+}
+
+#[test]
+fn node_local_core_and_pipeline_reads_require_exact_operator_signatures() {
+    for route in [
+        core::PEERS,
+        core::TIME_STATUS,
+        pipeline::PREFLIGHT,
+        pipeline::POLICY,
+        pipeline::PROOF_RETENTION,
+        pipeline::RECOVERY,
+    ] {
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.surface(), ApiSurface::Operator);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(route.admission(), AdmissionPolicy::Operator);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::OperatorSignature,
+            "{} must authenticate before reading node-local state",
+            route.stable_route_id()
+        );
+        assert!(route.projections().openapi());
+        assert!(route.projections().sdk());
+        assert!(
+            !route.projections().mcp(),
+            "{} must not retain a public MCP projection",
+            route.stable_route_id()
+        );
+        assert!(!route.cors_options());
+    }
+}
+
+#[test]
+fn sorafs_inventory_and_storage_reads_declare_fail_closed_admission() {
+    for route in [sorafs::ALIASES, sorafs::REPLICATION] {
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.surface(), ApiSurface::Public);
+        assert_eq!(route.effect(), RouteEffect::ExpensiveCompute);
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature
+        );
+        assert_eq!(route.projections(), RouteProjections::OPENAPI_AND_SDK);
+    }
+
+    let storage_state = sorafs::STORAGE_STATE;
+    assert_eq!(storage_state.method(), HttpMethod::Get);
+    assert_eq!(storage_state.surface(), ApiSurface::Operator);
+    assert_eq!(storage_state.effect(), RouteEffect::ReadOnly);
+    assert_eq!(storage_state.admission(), AdmissionPolicy::Operator);
     assert_eq!(
-        CATALOGED_ROUTES
-            .iter()
-            .filter(|route| { route.authentication() == AuthenticationPolicy::RequiredApiToken })
-            .count(),
-        required_routes.len(),
-        "no unrelated route may inherit the unconditional API-token policy"
+        storage_state.authentication(),
+        AuthenticationPolicy::OperatorSignature
     );
+    assert_eq!(storage_state.projections(), RouteProjections::NONE);
+
+    let storage_fetch = sorafs::STORAGE_FETCH;
+    assert_eq!(storage_fetch.method(), HttpMethod::Post);
+    assert_eq!(storage_fetch.surface(), ApiSurface::Operator);
+    assert_eq!(storage_fetch.effect(), RouteEffect::ExpensiveCompute);
+    assert_eq!(storage_fetch.admission(), AdmissionPolicy::Operator);
+    assert_eq!(
+        storage_fetch.authentication(),
+        AuthenticationPolicy::OperatorSignature
+    );
+    assert_eq!(storage_fetch.projections(), RouteProjections::NONE);
+
+    for route in [sorafs::STORAGE_CAR, sorafs::STORAGE_CHUNK] {
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(
+            route.admission(),
+            AdmissionPolicy::AuthenticatedProtocolPrincipal
+        );
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::ProtocolHandshake
+        );
+        assert_eq!(route.projections(), RouteProjections::OPENAPI_AND_SDK);
+    }
 }
 
 #[test]
@@ -167,6 +336,128 @@ fn soracloud_commands_require_exact_account_authentication_and_honest_effects() 
             "{} advertises the wrong strongest effect",
             route.stable_route_id()
         );
+    }
+}
+
+#[test]
+fn soracloud_sensitive_reads_require_exact_account_authentication() {
+    let protected = [
+        application_api::SORACLOUD_STATUS_GET,
+        application_api::SORACLOUD_APPS_STATUS_GET,
+        application_api::SORACLOUD_APPS_BY_APP_NAME_STATUS_GET,
+        application_api::SORACLOUD_SERVICE_CONFIG_STATUS_GET,
+        application_api::SORACLOUD_SERVICE_SECRET_STATUS_GET,
+        application_api::SORACLOUD_HEALTH_COMPLIANCE_REPORT_GET,
+        application_api::SORACLOUD_TRAINING_JOB_STATUS_GET,
+        application_api::SORACLOUD_MODEL_WEIGHT_STATUS_GET,
+        application_api::SORACLOUD_MODEL_ARTIFACT_STATUS_GET,
+        application_api::SORACLOUD_MODEL_UPLOAD_STATUS_GET,
+        application_api::SORACLOUD_MODEL_UPLOAD_PRIVATE_RECEIPTS_GET,
+        application_api::SORACLOUD_HF_STATUS_GET,
+        application_api::SORACLOUD_MODEL_HOST_STATUS_GET,
+        application_api::SORACLOUD_AGENT_STATUS_GET,
+        application_api::SORACLOUD_AGENT_MAILBOX_STATUS_GET,
+        application_api::SORACLOUD_AGENT_AUTONOMY_STATUS_GET,
+    ];
+    assert_eq!(
+        protected.len(),
+        16,
+        "every sensitive Soracloud GET must be classified"
+    );
+    for route in protected {
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature,
+            "{} must authenticate its exact path and query",
+            route.stable_route_id()
+        );
+    }
+}
+
+#[test]
+fn soracloud_public_reads_are_bounded_single_object_discovery() {
+    for route in [
+        application_api::SORACLOUD_SERVICES_BY_SERVICE_NAME_PUBLIC_DISCOVERY_GET,
+        application_api::SORACLOUD_SERVICES_BY_SERVICE_NAME_REVISIONS_BY_SERVICE_VERSION_PUBLIC_DISCOVERY_GET,
+        application_api::SORACLOUD_MODEL_UPLOAD_ENCRYPTION_RECIPIENT_GET,
+    ] {
+        assert_eq!(route.method(), HttpMethod::Get);
+        assert_eq!(route.effect(), RouteEffect::ReadOnly);
+        assert_eq!(route.admission(), AdmissionPolicy::Public);
+        assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
+    }
+}
+
+#[test]
+fn subscription_commands_require_exact_account_authentication_and_mutation_admission() {
+    for route in [
+        application_api::SUBSCRIPTIONS_PLANS_POST,
+        application_api::SUBSCRIPTIONS_POST,
+        application_api::SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_PAUSE_POST,
+        application_api::SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_RESUME_POST,
+        application_api::SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_CANCEL_POST,
+        application_api::SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_KEEP_POST,
+        application_api::SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_USAGE_POST,
+        application_api::SUBSCRIPTIONS_BY_SUBSCRIPTION_ID_CHARGE_NOW_POST,
+    ] {
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature,
+            "{} must authenticate its exact path and body before decoding",
+            route.stable_route_id()
+        );
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(route.effect(), RouteEffect::Mutation);
+    }
+}
+
+#[test]
+fn application_drafts_and_cryptographic_services_require_exact_account_authentication() {
+    for route in [
+        application_api::SPACE_DIRECTORY_MANIFESTS_POST,
+        application_api::SPACE_DIRECTORY_MANIFESTS_REVOKE_POST,
+        application_api::RAM_LFE_PROGRAMS_BY_PROGRAM_ID_EXECUTE_POST,
+        application_api::RAM_LFE_RECEIPTS_VERIFY_POST,
+        application_api::ACCOUNTS_BY_ACCOUNT_ID_IDENTIFIERS_CLAIM_RECEIPT_POST,
+        application_api::IDENTIFIERS_RESOLVE_POST,
+    ] {
+        assert_eq!(route.method(), HttpMethod::Post);
+        assert_eq!(route.effect(), RouteEffect::ExpensiveCompute);
+        assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::CanonicalAccountSignature,
+            "{} must authenticate its exact path and body before decoding",
+            route.stable_route_id()
+        );
+    }
+}
+
+#[test]
+fn webhook_registry_is_operator_signed_and_effects_are_exact() {
+    assert_eq!(
+        application_api::WEBHOOKS_GET.effect(),
+        RouteEffect::ReadOnly
+    );
+    for route in [
+        application_api::WEBHOOKS_POST,
+        application_api::WEBHOOKS_BY_ID_DELETE,
+    ] {
+        assert_eq!(route.effect(), RouteEffect::Mutation);
+    }
+    for route in [
+        application_api::WEBHOOKS_GET,
+        application_api::WEBHOOKS_POST,
+        application_api::WEBHOOKS_BY_ID_DELETE,
+    ] {
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::OperatorSignature
+        );
+        assert_eq!(route.admission(), AdmissionPolicy::Operator);
     }
 }
 

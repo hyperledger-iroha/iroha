@@ -73,6 +73,7 @@ export {
 export { ValidationError, ValidationErrorCode } from "./validationError.js";
 export {
   LocalSigningContext,
+  OperatorSigningContext,
   ToriiClient,
   TransactionStatusError,
   TransactionTimeoutError,

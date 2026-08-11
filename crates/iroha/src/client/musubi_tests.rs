@@ -31,14 +31,15 @@ fn provider_bundle_attestation_uses_dedicated_public_musubi_route() {
 }
 
 #[test]
-fn public_musubi_query_uses_fixed_route_without_account_headers() {
+fn public_musubi_query_signs_the_exact_fixed_route_and_body() {
     let response = json_response(StatusCode::OK, r#"{"result":"finalized"}"#);
     let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
     let query = norito::json!({"package": "apps.sora/demo"});
+    let client = client_with_base_url(base_url());
     let result: PublicMusubiQueryResultV1<Value> =
         with_mock_http(respond_with(&snapshots, response), || {
             post_public_musubi_query_v1(
-                &base_url(),
+                &client,
                 PublicMusubiQueryPathV1::ExactPackage,
                 &query,
                 Duration::from_secs(1),
@@ -54,17 +55,34 @@ fn public_musubi_query_uses_fixed_route_without_account_headers() {
         snapshot.max_response_bytes,
         MUSUBI_PUBLIC_QUERY_MAX_RESPONSE_BYTES
     );
-    assert!(snapshot.headers.iter().all(|(name, _)| {
-        ![
-            HEADER_ACCOUNT,
-            HEADER_SIGNATURE,
-            HEADER_TIMESTAMP_MS,
-            HEADER_NONCE,
-            "authorization",
-        ]
-        .iter()
-        .any(|forbidden| name.eq_ignore_ascii_case(forbidden))
-    }));
+    assert_canonical_account_signed_json_request(&client, &snapshot);
+}
+
+#[test]
+fn public_musubi_query_rejects_legacy_witness_injection_before_dispatch() {
+    let mut client = client_with_base_url(base_url());
+    client
+        .headers
+        .insert("x-IROHA-witness".to_owned(), "legacy-witness".to_owned());
+    let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+    let stored = Arc::clone(&snapshots);
+    let error = with_mock_http(
+        move |snapshot| {
+            stored.lock().expect("snapshot lock").push(snapshot);
+            Ok(empty_response(StatusCode::OK))
+        },
+        || {
+            post_public_musubi_query_v1::<_, Value>(
+                &client,
+                PublicMusubiQueryPathV1::ExactPackage,
+                &norito::json!({"package": "apps.sora/demo"}),
+                Duration::from_secs(1),
+            )
+        },
+    )
+    .expect_err("legacy witness headers must fail before dispatch");
+    assert!(error.to_string().contains("authenticated Musubi client"));
+    assert!(snapshots.lock().expect("snapshot lock").is_empty());
 }
 
 #[test]
@@ -419,6 +437,7 @@ fn transaction_boundary_exact_release_json_fits_the_musubi_query_cap() {
 #[test]
 fn public_musubi_query_surfaces_missing_and_stale_cursor() {
     let query = norito::json!({"limit": 1_u64});
+    let client = client_with_base_url(base_url());
     let missing: PublicMusubiQueryResultV1<Value> = with_mock_http(
         respond_with(
             &Arc::new(Mutex::new(Vec::new())),
@@ -426,7 +445,7 @@ fn public_musubi_query_surfaces_missing_and_stale_cursor() {
         ),
         || {
             post_public_musubi_query_v1(
-                &base_url(),
+                &client,
                 PublicMusubiQueryPathV1::Versions,
                 &query,
                 Duration::from_secs(1),
@@ -443,7 +462,7 @@ fn public_musubi_query_surfaces_missing_and_stale_cursor() {
         ),
         || {
             post_public_musubi_query_v1(
-                &base_url(),
+                &client,
                 PublicMusubiQueryPathV1::OrderedPrefix,
                 &query,
                 Duration::from_secs(1),

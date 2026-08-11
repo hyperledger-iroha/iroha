@@ -25,6 +25,9 @@ use iroha_logger::{trace, warn};
 use tokio::task::JoinHandle;
 
 use super::cursor::ErasedQueryIterator;
+use crate::smartcontracts::isi::query::{
+    OrdinaryQueryCursorBinding, OrdinaryQueryCursorMemory, OrdinaryQueryMemoryAdmission,
+};
 
 type DeferredMaterializer = Box<dyn FnOnce() -> ErasedQueryIterator + Send + Sync>;
 const QUERY_ID_BYTES: usize = 32;
@@ -355,7 +358,9 @@ struct QueryInfo {
     live_query: LiveQuery,
     last_access_time: Instant,
     authority: AccountId,
+    expected_cursor: NonZeroU64,
     revalidation_request: Option<Arc<[u8]>>,
+    ordinary_cursor_memory: Option<OrdinaryQueryCursorMemory>,
 }
 
 impl LiveQueryStore {
@@ -392,7 +397,10 @@ impl LiveQueryStore {
         let store = Arc::new(self);
         let handle = Arc::clone(&store).spawn_pruning_task();
         (
-            LiveQueryStoreHandle { store },
+            LiveQueryStoreHandle {
+                store,
+                ordinary_memory_admission: None,
+            },
             Child::new(
                 handle,
                 // should shutdown immediately anyway
@@ -486,14 +494,24 @@ impl LiveQueryStore {
         &self,
         live_query: LiveQuery,
         authority: AccountId,
+        expected_cursor: NonZeroU64,
+        ordinary_cursor_memory: Option<OrdinaryQueryCursorMemory>,
     ) -> Result<QueryId, QueryExecutionFail> {
-        self.insert_new_query_with_generator(live_query, authority, Self::random_query_id)
+        self.insert_new_query_with_generator(
+            live_query,
+            authority,
+            expected_cursor,
+            ordinary_cursor_memory,
+            Self::random_query_id,
+        )
     }
 
     fn insert_new_query_with_generator(
         &self,
         live_query: LiveQuery,
         authority: AccountId,
+        expected_cursor: NonZeroU64,
+        ordinary_cursor_memory: Option<OrdinaryQueryCursorMemory>,
         mut generate_query_id: impl FnMut() -> QueryId,
     ) -> Result<QueryId, QueryExecutionFail> {
         if !self.try_reserve_query_slot() {
@@ -519,6 +537,7 @@ impl LiveQueryStore {
         drop(user_count);
 
         let mut live_query = Some(live_query);
+        let mut ordinary_cursor_memory = ordinary_cursor_memory;
         for _ in 0..QUERY_ID_ALLOCATION_ATTEMPTS {
             let query_id = generate_query_id();
             if query_id.is_empty() {
@@ -536,7 +555,9 @@ impl LiveQueryStore {
                 live_query,
                 last_access_time: Instant::now(),
                 authority,
+                expected_cursor,
                 revalidation_request: None,
+                ordinary_cursor_memory: ordinary_cursor_memory.take(),
             });
             trace!(%query_id, "Inserted new query");
             return Ok(query_id);
@@ -573,6 +594,9 @@ impl LiveQueryStore {
             if &entry.authority != authority {
                 return Err(QueryExecutionFail::Expired);
             }
+            if entry.expected_cursor != cursor {
+                return Err(QueryExecutionFail::CursorMismatch);
+            }
             let (next_batch, next_cursor) =
                 match entry.live_query.next_batch(cursor.get(), gas_budget) {
                     Ok(next) => next,
@@ -590,6 +614,9 @@ impl LiveQueryStore {
                     }
                 };
             let remaining = entry.live_query.remaining();
+            if let Some(next_cursor) = next_cursor {
+                entry.expected_cursor = next_cursor;
+            }
             entry.last_access_time = Instant::now();
             (next_batch, remaining, next_cursor)
         };
@@ -641,18 +668,78 @@ impl LiveQueryStore {
             .clone()
             .ok_or(QueryExecutionFail::Expired)
     }
+
+    fn ordinary_cursor_retained_bytes(
+        &self,
+        cursor: &ForwardCursor,
+        authority: &AccountId,
+    ) -> Result<u64, QueryExecutionFail> {
+        let entry = self
+            .queries
+            .get(&cursor.query)
+            .ok_or(QueryExecutionFail::Expired)?;
+        if &entry.authority != authority
+            || entry.expected_cursor != cursor.cursor
+            || entry.revalidation_request.is_none()
+        {
+            return Err(QueryExecutionFail::Expired);
+        }
+        entry
+            .ordinary_cursor_memory
+            .as_ref()
+            .map(|memory| memory.binding().retained_bytes())
+            .ok_or(QueryExecutionFail::Expired)
+    }
+
+    fn ordinary_cursor_binding(
+        &self,
+        cursor: &ForwardCursor,
+        authority: &AccountId,
+    ) -> Result<OrdinaryQueryCursorBinding, QueryExecutionFail> {
+        let entry = self
+            .queries
+            .get(&cursor.query)
+            .ok_or(QueryExecutionFail::Expired)?;
+        if &entry.authority != authority
+            || entry.expected_cursor != cursor.cursor
+            || entry.revalidation_request.is_none()
+        {
+            return Err(QueryExecutionFail::Expired);
+        }
+        entry
+            .ordinary_cursor_memory
+            .as_ref()
+            .map(OrdinaryQueryCursorMemory::binding)
+            .ok_or(QueryExecutionFail::Expired)
+    }
 }
 
 /// Handle to interact with [`LiveQueryStore`].
 #[derive(Clone)]
 pub struct LiveQueryStoreHandle {
     store: Arc<LiveQueryStore>,
+    ordinary_memory_admission: Option<OrdinaryQueryMemoryAdmission>,
 }
 
 impl LiveQueryStoreHandle {
     /// Create a new handle for the store
     pub fn new(store: Arc<LiveQueryStore>) -> Self {
-        Self { store }
+        Self {
+            store,
+            ordinary_memory_admission: None,
+        }
+    }
+
+    /// Return a request-local handle that splits any newly stored cursor's
+    /// retained-memory token from `admission`.
+    pub(crate) fn with_ordinary_memory_admission(
+        &self,
+        admission: OrdinaryQueryMemoryAdmission,
+    ) -> Self {
+        Self {
+            store: Arc::clone(&self.store),
+            ordinary_memory_admission: Some(admission),
+        }
     }
 
     #[cfg(test)]
@@ -686,8 +773,18 @@ impl LiveQueryStoreHandle {
 
         // if the cursor is `None` - the query has ended, we can remove it from the store
         let query_id = if next_cursor.is_some() {
-            self.store
-                .insert_new_query(LiveQuery::ready(live_query), authority.clone())?
+            let expected_cursor = next_cursor.expect("checked as present");
+            let ordinary_memory_lease = self
+                .ordinary_memory_admission
+                .as_ref()
+                .map(OrdinaryQueryMemoryAdmission::split_cursor_lease)
+                .transpose()?;
+            self.store.insert_new_query(
+                LiveQuery::ready(live_query),
+                authority.clone(),
+                expected_cursor,
+                ordinary_memory_lease,
+            )?
         } else {
             String::new()
         };
@@ -720,9 +817,17 @@ impl LiveQueryStoreHandle {
             .map(DeferredQueryContinuation::expected_cursor);
 
         let query_id = if let Some(deferred_continuation) = deferred_continuation {
+            let expected_cursor = deferred_continuation.expected_cursor();
+            let ordinary_memory_lease = self
+                .ordinary_memory_admission
+                .as_ref()
+                .map(OrdinaryQueryMemoryAdmission::split_cursor_lease)
+                .transpose()?;
             self.store.insert_new_query(
                 LiveQuery::deferred(deferred_continuation),
                 authority.clone(),
+                expected_cursor,
+                ordinary_memory_lease,
             )?
         } else {
             String::new()
@@ -759,8 +864,18 @@ impl LiveQueryStoreHandle {
             .and_then(PagedQueryContinuation::remaining);
 
         let query_id = if let Some(paged_continuation) = paged_continuation {
-            self.store
-                .insert_new_query(LiveQuery::paged(paged_continuation), authority.clone())?
+            let expected_cursor = paged_continuation.expected_cursor();
+            let ordinary_memory_lease = self
+                .ordinary_memory_admission
+                .as_ref()
+                .map(OrdinaryQueryMemoryAdmission::split_cursor_lease)
+                .transpose()?;
+            self.store.insert_new_query(
+                LiveQuery::paged(paged_continuation),
+                authority.clone(),
+                expected_cursor,
+                ordinary_memory_lease,
+            )?
         } else {
             String::new()
         };
@@ -849,6 +964,74 @@ impl LiveQueryStoreHandle {
         Ok(request)
     }
 
+    /// Decode an ordinary cursor's archived Start under explicit schema limits
+    /// and verify canonicality with one bounded re-encode buffer.
+    ///
+    /// # Errors
+    /// Returns [`QueryExecutionFail::Expired`] for an absent, foreign,
+    /// oversized, resource-amplifying, malformed, or non-canonical archive.
+    pub(crate) fn ordinary_revalidation_request_bounded(
+        &self,
+        cursor: &ForwardCursor,
+        authority: &AccountId,
+        max_archive_bytes: u64,
+        decode_limits: norito::DecodeLimits,
+    ) -> Result<QueryRequest, QueryExecutionFail> {
+        let archive = self.store.revalidation_request(&cursor.query, authority)?;
+        let max_archive_bytes =
+            usize::try_from(max_archive_bytes).map_err(|_| QueryExecutionFail::Expired)?;
+        if archive.len() > max_archive_bytes {
+            return Err(QueryExecutionFail::Expired);
+        }
+        let request: QueryRequest =
+            norito::decode_from_bytes_with_limits(archive.as_ref(), decode_limits)
+                .map_err(|_| QueryExecutionFail::Expired)?;
+        if !matches!(request, QueryRequest::Start(_)) {
+            return Err(QueryExecutionFail::Expired);
+        }
+
+        let _canonical_flags =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let canonical = norito::core::to_bytes_bounded(&request, max_archive_bytes)
+            .map_err(|_| QueryExecutionFail::Expired)?;
+        if canonical.as_slice() != archive.as_ref() {
+            return Err(QueryExecutionFail::Expired);
+        }
+        Ok(request)
+    }
+
+    /// Return the weighted bytes retained by an ordinary stored cursor.
+    ///
+    /// The lookup validates the opaque query ID, authority, expected cursor,
+    /// completed revalidation binding, and presence of a server-owned lease.
+    /// No map guard escapes this synchronous method, so callers may acquire
+    /// continuation headroom asynchronously after it returns.
+    ///
+    /// # Errors
+    /// Returns [`QueryExecutionFail::Expired`] for every absent, foreign,
+    /// stale, unbound, or legacy-unleased cursor.
+    pub fn ordinary_cursor_retained_bytes(
+        &self,
+        cursor: &ForwardCursor,
+        authority: &AccountId,
+    ) -> Result<u64, QueryExecutionFail> {
+        self.store.ordinary_cursor_retained_bytes(cursor, authority)
+    }
+
+    /// Return the retained-memory and archived-policy binding for a cursor.
+    ///
+    /// This validates the same opaque ID, authority, exact cursor position,
+    /// completed Start archive, and ordinary-memory ownership as
+    /// [`Self::ordinary_cursor_retained_bytes`]. The returned value is copyable,
+    /// so no map guard survives into execution.
+    pub(crate) fn ordinary_cursor_binding(
+        &self,
+        cursor: &ForwardCursor,
+        authority: &AccountId,
+    ) -> Result<OrdinaryQueryCursorBinding, QueryExecutionFail> {
+        self.store.ordinary_cursor_binding(cursor, authority)
+    }
+
     /// Remove query from the storage if there is any.
     pub fn drop_query(&self, query_id: &QueryId) {
         self.store.remove(query_id);
@@ -879,7 +1062,7 @@ mod tests {
         num::NonZeroU64,
         sync::{
             Arc, Barrier,
-            atomic::{AtomicBool, AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         },
         time::Duration,
     };
@@ -897,7 +1080,234 @@ mod tests {
     use nonzero_ext::nonzero;
 
     use super::*;
-    use crate::smartcontracts::isi::query::QueryLimits;
+    use crate::smartcontracts::isi::query::{
+        ORDINARY_NAME_ID_SOURCE_BYTES, OrdinaryQueryExecutionLimits, OrdinaryQueryMemoryLease,
+        OrdinaryQueryMemoryReservation, QueryCountMode, QueryExecutionBudget, QueryLimits,
+    };
+
+    #[derive(Debug)]
+    struct TestMemoryReservation {
+        bytes: u64,
+        pool_generation: u64,
+        released: Arc<AtomicU64>,
+    }
+
+    impl Drop for TestMemoryReservation {
+        fn drop(&mut self) {
+            self.released.fetch_add(self.bytes, Ordering::SeqCst);
+        }
+    }
+
+    impl OrdinaryQueryMemoryReservation for TestMemoryReservation {
+        fn reserved_bytes(&self) -> u64 {
+            self.bytes
+        }
+
+        fn pool_generation(&self) -> u64 {
+            self.pool_generation
+        }
+
+        fn split_off(&mut self, bytes: u64) -> Option<Box<dyn OrdinaryQueryMemoryReservation>> {
+            if bytes == 0 || bytes > self.bytes {
+                return None;
+            }
+            self.bytes -= bytes;
+            Some(Box::new(Self {
+                bytes,
+                pool_generation: self.pool_generation,
+                released: Arc::clone(&self.released),
+            }))
+        }
+    }
+
+    fn ordinary_test_limits() -> OrdinaryQueryExecutionLimits {
+        OrdinaryQueryExecutionLimits::try_new(
+            5,
+            QueryExecutionBudget::from_weighted_limit(64 * 1_024, 1, 1),
+            16,
+            64 * 1_024,
+            ORDINARY_NAME_ID_SOURCE_BYTES,
+            16 * 1_024,
+            16,
+            16 * ORDINARY_NAME_ID_SOURCE_BYTES,
+            32 * 1_024,
+            4 * 1_024,
+            norito::DecodeLimits::new(64, 4 * 1_024, 256, 16 * 1_024, 16),
+        )
+        .expect("test ordinary geometry")
+    }
+
+    fn ordinary_test_admission(
+        released: &Arc<AtomicU64>,
+    ) -> (OrdinaryQueryMemoryAdmission, u64, u64) {
+        let limits = ordinary_test_limits();
+        let retained = limits.max_cursor_retained_bytes();
+        let total = limits
+            .execution_headroom_bytes()
+            .checked_add(retained)
+            .expect("test reservation");
+        let policy = QueryLimits::new(limits.max_page_items())
+            .with_count_mode(QueryCountMode::Bounded)
+            .with_ordinary_execution_limits(limits)
+            .ordinary_cursor_policy(13)
+            .expect("ordinary policy");
+        let admission = OrdinaryQueryMemoryAdmission::new(
+            OrdinaryQueryMemoryLease::new(TestMemoryReservation {
+                bytes: total,
+                pool_generation: 13,
+                released: Arc::clone(released),
+            }),
+            retained,
+            Some(policy),
+        )
+        .expect("admit weighted memory");
+        (admission, retained, total)
+    }
+
+    fn two_item_permission_iterator() -> ErasedQueryIterator {
+        ErasedQueryIterator::new(
+            (0..2).map(|index| Permission::new(format!("permission-{index}"), Json::from(false))),
+            SelectorTuple::default(),
+            nonzero!(1_u64),
+        )
+    }
+
+    #[test]
+    fn ordinary_cursor_charge_is_authority_and_position_bound() {
+        let released = Arc::new(AtomicU64::new(0));
+        let (admission, retained, total) = ordinary_test_admission(&released);
+        let handle = LiveQueryStore::start_test();
+        let scoped = handle.with_ordinary_memory_admission(admission.clone());
+        let response = scoped
+            .handle_iter_start(two_item_permission_iterator(), &ALICE_ID, None)
+            .expect("store cursor");
+        let (_, _, cursor) = response.into_parts();
+        let cursor = cursor.expect("continuation");
+
+        assert_eq!(
+            handle.ordinary_cursor_retained_bytes(&cursor, &ALICE_ID),
+            Err(QueryExecutionFail::Expired),
+            "unbound cursors must not expose retained charge"
+        );
+        handle
+            .bind_revalidation_request(&cursor, &ALICE_ID, vec![0xaa])
+            .expect("bind archive");
+        assert_eq!(
+            handle
+                .ordinary_cursor_retained_bytes(&cursor, &ALICE_ID)
+                .expect("owner charge"),
+            retained
+        );
+        let binding = handle
+            .ordinary_cursor_binding(&cursor, &ALICE_ID)
+            .expect("owner policy binding");
+        assert_eq!(binding.retained_bytes(), retained);
+        assert_eq!(binding.policy().pool_generation(), 13);
+        assert_eq!(
+            handle.ordinary_cursor_retained_bytes(&cursor, &BOB_ID),
+            Err(QueryExecutionFail::Expired)
+        );
+        assert_eq!(
+            handle.ordinary_cursor_binding(&cursor, &BOB_ID),
+            Err(QueryExecutionFail::Expired)
+        );
+        let mut stale = cursor.clone();
+        stale.cursor = NonZeroU64::new(stale.cursor.get().saturating_add(1))
+            .expect("stale cursor remains non-zero");
+        assert_eq!(
+            handle.ordinary_cursor_retained_bytes(&stale, &ALICE_ID),
+            Err(QueryExecutionFail::Expired)
+        );
+        assert_eq!(
+            handle.ordinary_cursor_binding(&stale, &ALICE_ID),
+            Err(QueryExecutionFail::Expired)
+        );
+
+        let response_lease = admission
+            .take_response_lease(false)
+            .expect("response headroom");
+        assert_eq!(
+            response_lease.reserved_bytes(),
+            total.checked_sub(retained).expect("response remainder")
+        );
+        handle.drop_query(&cursor.query);
+        assert_eq!(released.load(Ordering::SeqCst), retained);
+        drop(response_lease);
+        assert_eq!(released.load(Ordering::SeqCst), total);
+    }
+
+    #[test]
+    fn failed_cursor_insertion_releases_split_charge_once() {
+        let config = Config {
+            idle_time: Duration::from_secs(60),
+            capacity: nonzero!(1_usize),
+            capacity_per_user: nonzero!(1_usize),
+        };
+        let store = Arc::new(LiveQueryStore::from_config(config, ShutdownSignal::new()));
+        let handle = LiveQueryStoreHandle::new(store);
+        let first = handle
+            .handle_iter_start(two_item_permission_iterator(), &ALICE_ID, None)
+            .expect("fill only cursor slot");
+        assert!(first.continue_cursor.is_some());
+
+        let released = Arc::new(AtomicU64::new(0));
+        let (admission, retained, total) = ordinary_test_admission(&released);
+        let scoped = handle.with_ordinary_memory_admission(admission.clone());
+        let error = scoped
+            .handle_iter_start(two_item_permission_iterator(), &ALICE_ID, None)
+            .expect_err("full store must reject second cursor");
+        assert_eq!(error, QueryExecutionFail::CapacityLimit);
+        assert_eq!(released.load(Ordering::SeqCst), retained);
+
+        let response_lease = admission
+            .take_response_lease(false)
+            .expect("unsplit response remainder");
+        assert_eq!(
+            response_lease.reserved_bytes(),
+            total.checked_sub(retained).expect("response remainder")
+        );
+        drop(response_lease);
+        assert_eq!(released.load(Ordering::SeqCst), total);
+    }
+
+    #[cfg(feature = "fast_dsl")]
+    #[test]
+    fn bounded_revalidation_rejects_hostile_field_before_cursor_mutation() {
+        let handle = LiveQueryStore::start_test();
+        let response = handle
+            .handle_iter_start(two_item_permission_iterator(), &ALICE_ID, None)
+            .expect("store cursor");
+        let (_, _, cursor) = response.into_parts();
+        let cursor = cursor.expect("continuation");
+
+        let hostile = QueryRequest::Start(iroha_data_model::query::QueryWithParams {
+            query: (),
+            query_payload: Vec::new(),
+            item: iroha_data_model::query::QueryItemKind::RoleId,
+            predicate_bytes: vec![0; 1_024],
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
+        });
+        let archive = norito::encode_canonical(&hostile).expect("encode hostile archive");
+        handle
+            .bind_revalidation_request(&cursor, &ALICE_ID, archive)
+            .expect("bind hostile archive");
+
+        let error = handle
+            .ordinary_revalidation_request_bounded(
+                &cursor,
+                &ALICE_ID,
+                16 * 1_024,
+                norito::DecodeLimits::new(8, 16, 16, 128, 4),
+            )
+            .expect_err("oversized nested field must fail closed");
+        assert_eq!(error, QueryExecutionFail::Expired);
+
+        let next = handle
+            .handle_iter_continue(cursor, &ALICE_ID)
+            .expect("bounded revalidation failure must not mutate cursor");
+        assert_eq!(next.batch.len(), 1);
+    }
 
     #[test]
     fn query_message_order_preserved() {
@@ -1359,19 +1769,29 @@ mod tests {
         let second_id = "22".repeat(QUERY_ID_BYTES);
 
         let inserted = store
-            .insert_new_query_with_generator(make_query("first"), ALICE_ID.clone(), || {
-                first_id.clone()
-            })
+            .insert_new_query_with_generator(
+                make_query("first"),
+                ALICE_ID.clone(),
+                nonzero!(1_u64),
+                None,
+                || first_id.clone(),
+            )
             .expect("insert first fixed test ID");
         assert_eq!(inserted, first_id);
 
         let mut candidates = [first_id.clone(), second_id.clone()].into_iter();
         let inserted = store
-            .insert_new_query_with_generator(make_query("second"), ALICE_ID.clone(), || {
-                candidates
-                    .next()
-                    .expect("test generator has a unique retry")
-            })
+            .insert_new_query_with_generator(
+                make_query("second"),
+                ALICE_ID.clone(),
+                nonzero!(1_u64),
+                None,
+                || {
+                    candidates
+                        .next()
+                        .expect("test generator has a unique retry")
+                },
+            )
             .expect("retry after forced collision");
         assert_eq!(inserted, second_id);
         assert_eq!(store.queries.len(), 2);

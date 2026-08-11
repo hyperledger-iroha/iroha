@@ -650,8 +650,8 @@ impl WalAppendReceipt {
 /// Hash-chain state for ordered append acknowledgement.
 ///
 /// Any I/O error poisons the state. Retrying against the same handle could
-/// append after an unknown partial tail, so only `recover_wal_file` may mint a
-/// replacement state.
+/// append after an unknown partial tail, so only a complete verified recovery
+/// path may mint a replacement state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WalAppendState {
     next_sequence: u64,
@@ -666,6 +666,21 @@ impl WalAppendState {
         Self {
             next_sequence: recovery.next_sequence,
             last_frame_hash: recovery.last_frame_hash,
+            failed_closed: false,
+        }
+    }
+
+    /// Construct append state from a prefix verified by the production streaming reader.
+    ///
+    /// This crate-private constructor keeps the host recovery path from materializing the entire
+    /// WAL merely to recover its final sequence and hash-chain link.
+    pub(crate) const fn from_verified_stream_recovery(
+        next_sequence: u64,
+        last_frame_hash: [u8; SAFETY_WAL_HASH_LEN],
+    ) -> Self {
+        Self {
+            next_sequence,
+            last_frame_hash,
             failed_closed: false,
         }
     }

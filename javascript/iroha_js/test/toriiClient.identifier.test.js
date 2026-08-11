@@ -7,6 +7,7 @@ import {
   AccountAddress,
 } from "../src/address.js";
 import {
+  LocalSigningContext,
   ToriiClient,
   buildIdentifierRequestForPolicy,
   encodeIdentifierResolutionReceiptAttestation,
@@ -16,6 +17,7 @@ import {
   hashIdentifierEncryptedInput,
   verifyIdentifierResolutionReceipt,
 } from "../src/toriiClient.js";
+import { NetworkId } from "../src/networkId.js";
 import { normalizeIdentifierInput } from "../src/normalizers.js";
 import { blake2b256 } from "../src/blake2b.js";
 import { ValidationError } from "../src/validationError.js";
@@ -32,6 +34,8 @@ function demoAccountId() {
 }
 
 const ACCOUNT_ID = demoAccountId();
+const APPLICATION_SIGNING_CONTEXT = new LocalSigningContext(NetworkId.fromBytes(Buffer.alloc(32, 0xa5)));
+const APPLICATION_AUTH = Object.freeze({ accountId: ACCOUNT_ID, privateKey: Buffer.alloc(32, 0x5a) });
 const RESOLVER_PUBLIC_KEY =
   "ed25519:ed0120D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737";
 const POLICY_ID = "phone#retail";
@@ -687,6 +691,7 @@ test("resolveIdentifier posts encrypted input with output opening and normalizes
   let lastRequest = null;
   const signedReceipt = signedReceiptFixture();
   const client = new ToriiClient("https://example.test", {
+    localSigningContext: APPLICATION_SIGNING_CONTEXT,
     fetchImpl: async (input, init) => {
       lastRequest = { input, init };
       assert.equal(init.method, "POST");
@@ -707,6 +712,7 @@ test("resolveIdentifier posts encrypted input with output opening and normalizes
     policyId: POLICY_ID,
     encryptedInput: "ABCD",
     outputOpening: sampleOutputOpening(),
+    canonicalAuth: APPLICATION_AUTH,
   });
   assert.equal(new URL(lastRequest.input).pathname, "/v1/identifiers/resolve");
   assert.equal(result.payload.policy_id, POLICY_ID);
@@ -735,7 +741,7 @@ test("resolveIdentifier requires encrypted input and output opening", async () =
   });
 
   await assert.rejects(
-    () => client.resolveIdentifier({ policyId: POLICY_ID }),
+    () => client.resolveIdentifier({ policyId: POLICY_ID, canonicalAuth: APPLICATION_AUTH }),
     (error) => error instanceof ValidationError,
   );
   await assert.rejects(
@@ -744,6 +750,7 @@ test("resolveIdentifier requires encrypted input and output opening", async () =
         policyId: POLICY_ID,
         input: "alice@example.com",
         outputOpening: sampleOutputOpening(),
+        canonicalAuth: APPLICATION_AUTH,
       }),
     (error) => error instanceof ValidationError,
   );
@@ -752,6 +759,7 @@ test("resolveIdentifier requires encrypted input and output opening", async () =
       client.resolveIdentifier({
         policyId: POLICY_ID,
         encryptedInput: "ABCD",
+        canonicalAuth: APPLICATION_AUTH,
       }),
     (error) => error instanceof ValidationError,
   );
@@ -761,6 +769,7 @@ test("resolveIdentifier requires encrypted input and output opening", async () =
         policyId: POLICY_ID,
         encryptedInput: "ABC",
         outputOpening: sampleOutputOpening(),
+        canonicalAuth: APPLICATION_AUTH,
       }),
     (error) => error instanceof ValidationError,
   );
@@ -770,6 +779,7 @@ test("resolveIdentifier requires encrypted input and output opening", async () =
         policyId: POLICY_ID,
         encryptedInput: "ABCD",
         outputOpening: null,
+        canonicalAuth: APPLICATION_AUTH,
       }),
     (error) => error instanceof ValidationError,
   );
@@ -1587,6 +1597,7 @@ test("encryptIdentifierInputForPolicy rejects adversarial client encryption inpu
 test("resolveIdentifier accepts encrypted input and returns null for missing bindings", async () => {
   let callCount = 0;
   const client = new ToriiClient("https://example.test", {
+    localSigningContext: APPLICATION_SIGNING_CONTEXT,
     fetchImpl: async (_input, init) => {
       callCount += 1;
       const payload = JSON.parse(init.body);
@@ -1600,6 +1611,7 @@ test("resolveIdentifier accepts encrypted input and returns null for missing bin
     policyId: POLICY_ID,
     encryptedInput: "ABCD",
     outputOpening: sampleOutputOpening(),
+    canonicalAuth: APPLICATION_AUTH,
   });
   assert.equal(callCount, 1);
   assert.equal(result, null);
@@ -1612,6 +1624,7 @@ test("issueIdentifierClaimReceipt posts account-scoped requests", async () => {
     opening: outputOpening,
   });
   const client = new ToriiClient("https://example.test", {
+    localSigningContext: APPLICATION_SIGNING_CONTEXT,
     fetchImpl: async (input, init) => {
       assert.equal(
         new URL(input).pathname,
@@ -1634,39 +1647,32 @@ test("issueIdentifierClaimReceipt posts account-scoped requests", async () => {
     policyId: POLICY_ID,
     encryptedInput: "ABCD",
     outputOpening,
+    canonicalAuth: APPLICATION_AUTH,
   });
   assert.equal(result.payload.opaque_id, OPAQUE_ID);
   assert.equal(result.payload.account_id, ACCOUNT_ID);
 });
 
-test("issueIdentifierClaimReceipt accepts account aliases on account-id paths", async () => {
+test("issueIdentifierClaimReceipt rejects account aliases before dispatch", async () => {
   const alias = "operator@banka.universal";
   const outputOpening = sampleOutputOpening({ payload: { opened_at_ms: 7, expires_at_ms: null } });
-  const signedReceipt = signedReceiptFixture({
-    execution: { executed_at_ms: 7, expires_at_ms: null },
-    opening: outputOpening,
-  });
+  let dispatched = false;
   const client = new ToriiClient("https://example.test", {
-    fetchImpl: async (input, init) => {
-      assert.equal(
-        new URL(input).pathname,
-        `/v1/accounts/${encodeURIComponent(alias)}/identifiers/claim-receipt`,
-      );
-      const payload = JSON.parse(init.body);
-      assert.deepEqual(payload.output_opening, outputOpening);
-      return jsonResponse(200, {
-        payload: signedReceipt.payload,
-        attestation: signedReceipt.attestation,
-      });
+    fetchImpl: async () => {
+      dispatched = true;
+      return jsonResponse(500, {});
     },
   });
-
-  const result = await client.issueIdentifierClaimReceipt(alias, {
-    policyId: POLICY_ID,
-    encryptedInput: "ABCD",
-    outputOpening,
-  });
-  assert.equal(result.payload.account_id, ACCOUNT_ID);
+  await assert.rejects(
+    () => client.issueIdentifierClaimReceipt(alias, {
+      policyId: POLICY_ID,
+      encryptedInput: "ABCD",
+      outputOpening,
+      canonicalAuth: APPLICATION_AUTH,
+    }),
+    /canonical I105/u,
+  );
+  assert.equal(dispatched, false);
 });
 
 test("buildIdentifierRequestForPolicy rejects plaintext request bodies", () => {

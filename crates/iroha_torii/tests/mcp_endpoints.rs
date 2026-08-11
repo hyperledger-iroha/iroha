@@ -1430,52 +1430,6 @@ async fn mcp_jsonrpc_tools_call_projected_node_operational_endpoints_dispatch() 
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_commit_certificates_accepts_flat_query_fields()
-{
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1038,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.sumeragi.commit_certificates",
-                "arguments": {
-                    "from": 1,
-                    "limit": 1
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    let structured = structured_content(&call);
-    let http_status = structured.get("status").and_then(Value::as_u64);
-    assert!(
-        http_status.is_some(),
-        "sumeragi commit-certificates alias should return an HTTP status"
-    );
-    if tool_is_error(&call) {
-        assert!(
-            http_status.is_some_and(|status| status >= 400),
-            "error path for sumeragi commit-certificates should reflect HTTP error status"
-        );
-    } else {
-        assert_eq!(
-            http_status,
-            Some(200),
-            "successful sumeragi commit-certificates lookup should return HTTP 200"
-        );
-    }
-}
-
-#[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
@@ -1484,52 +1438,8 @@ async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch() {
 
     let app = build_router(cfg);
     for (id, tool_name, arguments) in [
-        (
-            1039,
-            "iroha.sumeragi.validator_sets.list",
-            norito::json!({}),
-        ),
-        (
-            1040,
-            "iroha.sumeragi.validator_sets.get",
-            norito::json!({
-                "block_height": 1
-            }),
-        ),
         (1042, "iroha.sumeragi.pacemaker", norito::json!({})),
         (1043, "iroha.sumeragi.phases", norito::json!({})),
-        (1044, "iroha.sumeragi.params", norito::json!({})),
-        (1045, "iroha.sumeragi.status", norito::json!({})),
-        (1046, "iroha.sumeragi.leader", norito::json!({})),
-        (1047, "iroha.sumeragi.qc", norito::json!({})),
-        (1048, "iroha.sumeragi.checkpoints", norito::json!({})),
-        (1049, "iroha.sumeragi.consensus_keys", norito::json!({})),
-        (1050, "iroha.sumeragi.bls_keys", norito::json!({})),
-        (1051, "iroha.sumeragi.key_lifecycle", norito::json!({})),
-        (1052, "iroha.sumeragi.telemetry", norito::json!({})),
-        (
-            1054,
-            "iroha.sumeragi.commit_qc.get",
-            norito::json!({
-                "hash": "0xabc123"
-            }),
-        ),
-        (1056, "iroha.sumeragi.evidence.count", norito::json!({})),
-        (1057, "iroha.sumeragi.evidence.list", norito::json!({})),
-        (
-            1060,
-            "iroha.sumeragi.vrf.penalties",
-            norito::json!({
-                "epoch": 0
-            }),
-        ),
-        (
-            1061,
-            "iroha.sumeragi.vrf.epoch",
-            norito::json!({
-                "epoch": 0
-            }),
-        ),
     ] {
         let (status, call) = post_mcp(
             &app,
@@ -2487,109 +2397,38 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly runtime upgrades-cancel MCP tool"
     );
     assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.commit_certificates"),
-        "expected agent-friendly sumeragi commit-certificates MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.validator_sets.list"),
-        "expected agent-friendly sumeragi validator-set list MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.validator_sets.get"),
-        "expected agent-friendly sumeragi validator-set detail MCP tool"
-    );
-    assert!(
         names.iter().any(|name| name == "iroha.sumeragi.pacemaker"),
-        "expected agent-friendly sumeragi pacemaker MCP tool"
+        "expected operator-exposed sumeragi pacemaker MCP tool"
     );
     assert!(
         names.iter().any(|name| name == "iroha.sumeragi.phases"),
-        "expected agent-friendly sumeragi phases MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.params"),
-        "expected agent-friendly sumeragi params MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.status"),
-        "expected agent-friendly sumeragi status MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.leader"),
-        "expected agent-friendly sumeragi leader MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.qc"),
-        "expected agent-friendly sumeragi qc MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.checkpoints"),
-        "expected agent-friendly sumeragi checkpoints MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.consensus_keys"),
-        "expected agent-friendly sumeragi consensus-keys MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.bls_keys"),
-        "expected agent-friendly sumeragi bls-keys MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.key_lifecycle"),
-        "expected agent-friendly sumeragi key-lifecycle MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.telemetry"),
-        "expected agent-friendly sumeragi telemetry MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.commit_qc.get"),
-        "expected agent-friendly sumeragi commit-qc-by-hash MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.evidence.count"),
-        "expected agent-friendly sumeragi evidence-count MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.evidence.list"),
-        "expected agent-friendly sumeragi evidence-list MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.sumeragi.vrf.penalties"),
-        "expected agent-friendly sumeragi VRF penalties MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.vrf.epoch"),
-        "expected agent-friendly sumeragi VRF epoch MCP tool"
+        "expected operator-exposed sumeragi phases MCP tool"
     );
     for retired_name in [
+        "iroha.sumeragi.commit_certificates",
+        "iroha.sumeragi.validator_sets.list",
+        "iroha.sumeragi.validator_sets.get",
+        "iroha.sumeragi.params",
+        "iroha.sumeragi.status",
+        "iroha.sumeragi.leader",
+        "iroha.sumeragi.qc",
+        "iroha.sumeragi.checkpoints",
+        "iroha.sumeragi.consensus_keys",
+        "iroha.sumeragi.bls_keys",
+        "iroha.sumeragi.key_lifecycle",
+        "iroha.sumeragi.telemetry",
+        "iroha.sumeragi.commit_qc.get",
+        "iroha.sumeragi.evidence.count",
+        "iroha.sumeragi.evidence.list",
+        "iroha.sumeragi.vrf.penalties",
+        "iroha.sumeragi.vrf.epoch",
         "iroha.sumeragi.evidence.submit",
         "iroha.sumeragi.vrf.commit",
         "iroha.sumeragi.vrf.reveal",
     ] {
         assert!(
             !names.iter().any(|name| name == retired_name),
-            "retired Sumeragi mutation tool must remain absent: {retired_name}"
+            "operator-only Sumeragi route must remain absent from MCP: {retired_name}"
         );
     }
     assert!(
@@ -3085,8 +2924,10 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly connect ws ticket MCP tool"
     );
     assert!(
-        names.iter().any(|name| name == "iroha.connect.status"),
-        "expected agent-friendly connect status MCP tool"
+        names
+            .iter()
+            .any(|name| name == "iroha.connect.session.status"),
+        "expected agent-friendly connect session status MCP tool"
     );
     assert!(
         names
@@ -4693,10 +4534,6 @@ async fn mcp_jsonrpc_tools_call_musubi_v1_yank_instruction_builds_unsigned_paylo
         "bad archive".parse().expect("reason"),
         1,
     );
-    let release = norito::json::to_value(&instruction.release).expect("release JSON");
-    let yanked = instruction.yanked;
-    let reason = norito::json::to_value(&instruction.reason).expect("reason JSON");
-    let expected_yank_revision = instruction.expected_yank_revision;
     let body = norito::json!({
         "release": (norito::json::to_value(&instruction.release).expect("release JSON")),
         "yanked": (instruction.yanked),
@@ -5762,58 +5599,6 @@ async fn mcp_jsonrpc_connect_session_create_generates_sid_when_omitted() {
             .expect("generated sid");
         let sid_bytes = B64.decode(sid).expect("base64url sid");
         assert_eq!(sid_bytes.len(), 32, "sid should be 32 bytes");
-    }
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_connect_session_create_and_ticket_generates_sid_when_omitted() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    enable_writer_mcp(&mut cfg);
-    cfg.torii.connect.enabled = true;
-
-    let app = build_router(cfg);
-    for (id, tool_name, role) in [
-        (2082, "connect.session.create_and_ticket", "app"),
-        (2083, "iroha.connect.session.create_and_ticket", "wallet"),
-    ] {
-        let (status, call) = post_mcp(
-            &app,
-            norito::json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "method": "tools/call",
-                "params": {
-                    "name": tool_name,
-                    "arguments": {
-                        "role": role,
-                        "node_url": "https://node.example"
-                    }
-                }
-            }),
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert!(
-            !tool_is_error(&call),
-            "create-and-ticket alias `{tool_name}` should auto-generate sid"
-        );
-        let structured = structured_content(&call);
-        let sid = structured
-            .get("sid")
-            .and_then(Value::as_str)
-            .expect("generated sid");
-        assert_eq!(B64.decode(sid).expect("base64url sid").len(), 32);
-        assert_eq!(structured.get("role").and_then(Value::as_str), Some(role));
-        let ticket = structured
-            .get("ticket")
-            .and_then(Value::as_object)
-            .expect("ticket payload");
-        assert_eq!(
-            ticket.get("ws_url").and_then(Value::as_str),
-            Some(format!("wss://node.example/v1/connect/ws?sid={sid}&role={role}").as_str())
-        );
     }
 }
 

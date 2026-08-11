@@ -344,13 +344,19 @@ While the workload is saturating the lane:
    ```bash
    curl -sS https://torii.example.com/v1/nexus/lifecycle \
      > artifacts/nexus/load/payments-2026q2/nexus_lifecycle.json
-   curl -sS https://torii.example.com/v1/sumeragi/status \
+   iroha --operator-private-key-file /run/secrets/iroha/operator.key \
+     --output-format json ops sumeragi status \
      > artifacts/nexus/load/payments-2026q2/sumeragi_status.json
-   curl -sS https://torii.example.com/v1/sumeragi/diagnostics \
+   iroha --operator-private-key-file /run/secrets/iroha/operator.key \
+     --output-format json ops sumeragi diagnostics \
      > artifacts/nexus/load/payments-2026q2/sumeragi_diagnostics.json
    curl -sS https://torii.example.com/metrics \
      > artifacts/nexus/load/payments-2026q2/metrics.prom
    ```
+
+   The operator key path is an absolute runtime-only secret and the CLI binds
+   each one-shot request to the exact `network_id` in its client configuration;
+   it does not reuse the account signer or follow redirects.
 
    `nexus_lane_smoke.py` consumes the lifecycle payload. The status snapshot is
    the authoritative `SumeragiV2Status`; diagnostics contain the

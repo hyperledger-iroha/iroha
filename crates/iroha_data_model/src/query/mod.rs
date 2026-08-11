@@ -111,6 +111,18 @@ pub enum SignedQueryValidationError {
     /// Query request signature is not valid
     #[error("Query request signature is not valid")]
     InvalidSignature,
+    /// JSON reconstruction exceeded its caller-provided decode budget.
+    #[error("Query request JSON exceeded its decode resource limit")]
+    DecodeResourceLimit,
+}
+
+impl SignedQueryValidationError {
+    /// Return whether validation stopped at an active decode resource bound.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn is_decode_resource_limit(self) -> bool {
+        matches!(self, Self::DecodeResourceLimit)
+    }
 }
 
 fn verify_query_signature_for_signer(
@@ -168,6 +180,23 @@ impl iroha_version::codec::DecodeVersioned for SignedQuery {
 #[cfg(all(feature = "json", not(doc)))]
 pub mod json_wrappers {
     use super::*;
+
+    /// Failure to reconstruct the native request carried by a JSON wrapper.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+    pub enum QueryRequestJsonError {
+        /// A required field or encoded payload is invalid.
+        #[error("{0}")]
+        Invalid(&'static str),
+        /// An active decode scope rejected an owned allocation.
+        #[error("query request JSON exceeded its decode resource limit")]
+        DecodeResourceLimit,
+    }
+
+    impl From<&'static str> for QueryRequestJsonError {
+        fn from(message: &'static str) -> Self {
+            Self::Invalid(message)
+        }
+    }
 
     /// JSON wrapper for iterable query parameters (roundtrip-capable).
     ///
@@ -280,9 +309,11 @@ pub mod json_wrappers {
     /// Convert a JSON-wrapped query request into the native query request.
     ///
     /// # Errors
-    /// Returns an error string when required fields are missing or the payload
-    /// cannot be decoded into a query request.
-    pub fn query_request_from_json(req: QueryRequestJson) -> Result<QueryRequest, &'static str> {
+    /// Returns a fixed validation class when required fields are missing or an
+    /// encoded payload is invalid, and preserves active decode-budget failures.
+    pub fn query_request_from_json(
+        req: QueryRequestJson,
+    ) -> Result<QueryRequest, QueryRequestJsonError> {
         match req {
             QueryRequestJson::Singular(q) => Ok(QueryRequest::Singular(q)),
             QueryRequestJson::Continue(c) => Ok(QueryRequest::Continue(c)),
@@ -291,10 +322,22 @@ pub mod json_wrappers {
                 {
                     let wire = s.wire.ok_or("missing wire id")?;
                     let payload_b64 = s.payload_b64.ok_or("missing payload")?;
-                    let bytes = base64_decode(&payload_b64).map_err(|()| "invalid payload_b64")?;
+                    let bytes = base64_decode(payload_b64).map_err(|error| {
+                        if error.is_decode_resource_limit() {
+                            QueryRequestJsonError::DecodeResourceLimit
+                        } else {
+                            QueryRequestJsonError::Invalid("invalid payload_b64")
+                        }
+                    })?;
                     let qb = super::decode_registered_query(&wire, &bytes)
                         .ok_or("unknown query wire id")?
-                        .map_err(|_| "failed to decode query payload")?;
+                        .map_err(|error| {
+                            if error.is_decode_resource_limit() {
+                                QueryRequestJsonError::DecodeResourceLimit
+                            } else {
+                                QueryRequestJsonError::Invalid("failed to decode query payload")
+                            }
+                        })?;
                     Ok(QueryRequest::Start(QueryWithParams {
                         query: qb,
                         params: s.params,
@@ -306,9 +349,18 @@ pub mod json_wrappers {
                     let query_payload = s.query_payload_b64.ok_or("missing query_payload_b64")?;
                     let predicate_b64 = s.predicate_b64.ok_or("missing predicate_b64")?;
                     let selector_b64 = s.selector_b64.ok_or("missing selector_b64")?;
-                    let qp = base64_decode(&query_payload).map_err(|()| "bad query_payload_b64")?;
-                    let pr = base64_decode(&predicate_b64).map_err(|()| "bad predicate_b64")?;
-                    let se = base64_decode(&selector_b64).map_err(|()| "bad selector_b64")?;
+                    let decode = |encoded: String, invalid: &'static str| {
+                        base64_decode(encoded).map_err(|error| {
+                            if error.is_decode_resource_limit() {
+                                QueryRequestJsonError::DecodeResourceLimit
+                            } else {
+                                QueryRequestJsonError::Invalid(invalid)
+                            }
+                        })
+                    };
+                    let qp = decode(query_payload, "bad query_payload_b64")?;
+                    let pr = decode(predicate_b64, "bad predicate_b64")?;
+                    let se = decode(selector_b64, "bad selector_b64")?;
                     Ok(QueryRequest::Start(QueryWithParams {
                         query: (),
                         query_payload: qp,
@@ -379,8 +431,17 @@ pub mod json_wrappers {
         fn try_from(v: SignedQueryJson) -> Result<Self, Self::Error> {
             match v {
                 SignedQueryJson::Canonical(v1) => {
-                    let request = query_request_from_json(v1.payload.request)
-                        .map_err(SignedQueryValidationError::InvalidRequest)?;
+                    let request =
+                        query_request_from_json(v1.payload.request).map_err(
+                            |error| match error {
+                                QueryRequestJsonError::Invalid(message) => {
+                                    SignedQueryValidationError::InvalidRequest(message)
+                                }
+                                QueryRequestJsonError::DecodeResourceLimit => {
+                                    SignedQueryValidationError::DecodeResourceLimit
+                                }
+                            },
+                        )?;
                     let payload = QueryRequestWithAuthority {
                         network_id: v1.payload.network_id,
                         authority: v1.payload.authority,
@@ -420,9 +481,173 @@ pub mod json_wrappers {
         STANDARD.encode(bytes)
     }
 
-    pub(super) fn base64_decode(s: &str) -> Result<Vec<u8>, ()> {
-        use base64::engine::{Engine, general_purpose::STANDARD};
-        STANDARD.decode(s.as_bytes()).map_err(|_| ())
+    fn base64_value(byte: u8) -> Option<u8> {
+        match byte {
+            b'A'..=b'Z' => Some(byte - b'A'),
+            b'a'..=b'z' => Some(byte - b'a' + 26),
+            b'0'..=b'9' => Some(byte - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+
+    /// Decode canonical padded base64 by reusing the owned JSON string buffer.
+    ///
+    /// Each four-byte input quantum is loaded before its three-byte output is
+    /// written, so the forward in-place transform cannot overwrite unread
+    /// input. This removes the attacker-sized second destination allocation.
+    pub(super) fn base64_decode(encoded: String) -> Result<Vec<u8>, norito::json::Error> {
+        let mut bytes = encoded.into_bytes();
+        if bytes.len() % 4 != 0 {
+            return Err(norito::json::Error::InvalidField {
+                field: String::from("base64"),
+                message: String::from("invalid base64 payload"),
+            });
+        }
+        let groups = bytes.len() / 4;
+        let mut written = 0usize;
+        for group in 0..groups {
+            let offset = group * 4;
+            let last = group + 1 == groups;
+            let first = base64_value(bytes[offset]);
+            let second = base64_value(bytes[offset + 1]);
+            let third = base64_value(bytes[offset + 2]);
+            let fourth = base64_value(bytes[offset + 3]);
+            let (Some(first), Some(second)) = (first, second) else {
+                return Err(norito::json::Error::InvalidField {
+                    field: String::from("base64"),
+                    message: String::from("invalid base64 payload"),
+                });
+            };
+            bytes[written] = (first << 2) | (second >> 4);
+            written += 1;
+            match (third, fourth, bytes[offset + 2], bytes[offset + 3], last) {
+                (Some(third), Some(fourth), _, _, _) => {
+                    bytes[written] = (second << 4) | (third >> 2);
+                    bytes[written + 1] = (third << 6) | fourth;
+                    written += 2;
+                }
+                (Some(third), None, _, b'=', true) if third & 0x03 == 0 => {
+                    bytes[written] = (second << 4) | (third >> 2);
+                    written += 1;
+                }
+                (None, None, b'=', b'=', true) if second & 0x0f == 0 => {}
+                _ => {
+                    return Err(norito::json::Error::InvalidField {
+                        field: String::from("base64"),
+                        message: String::from("invalid base64 payload"),
+                    });
+                }
+            }
+        }
+        bytes.truncate(written);
+        Ok(bytes)
+    }
+
+    pub(super) fn base64_encode_to<S: norito::json::JsonWriteSink + ?Sized>(
+        bytes: &[u8],
+        output: &mut S,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let groups = bytes
+            .len()
+            .checked_add(2)
+            .ok_or(norito::json::BoundedJsonError::BodyTooLarge)?
+            / 3;
+        let encoded_bytes = groups
+            .checked_mul(4)
+            .and_then(|bytes| bytes.checked_add(2))
+            .ok_or(norito::json::BoundedJsonError::BodyTooLarge)?;
+        output.reserve(encoded_bytes)?;
+        output.push('"')?;
+        let mut chunks = bytes.chunks_exact(3);
+        for chunk in &mut chunks {
+            output.push(ALPHABET[usize::from(chunk[0] >> 2)] as char)?;
+            output
+                .push(ALPHABET[usize::from(((chunk[0] & 0x03) << 4) | (chunk[1] >> 4))] as char)?;
+            output
+                .push(ALPHABET[usize::from(((chunk[1] & 0x0f) << 2) | (chunk[2] >> 6))] as char)?;
+            output.push(ALPHABET[usize::from(chunk[2] & 0x3f)] as char)?;
+        }
+        match chunks.remainder() {
+            [] => {}
+            [first] => {
+                output.push(ALPHABET[usize::from(*first >> 2)] as char)?;
+                output.push(ALPHABET[usize::from((*first & 0x03) << 4)] as char)?;
+                output.push_str("==")?;
+            }
+            [first, second] => {
+                output.push(ALPHABET[usize::from(*first >> 2)] as char)?;
+                output
+                    .push(ALPHABET[usize::from(((*first & 0x03) << 4) | (*second >> 4))] as char)?;
+                output.push(ALPHABET[usize::from((*second & 0x0f) << 2)] as char)?;
+                output.push('=')?;
+            }
+            _ => unreachable!("chunks_exact remainder is shorter than three bytes"),
+        }
+        output.push('"')
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[derive(Default)]
+        struct StringSink(String);
+
+        impl norito::json::JsonWriteSink for StringSink {
+            fn push(&mut self, value: char) -> Result<(), norito::json::BoundedJsonError> {
+                self.0.push(value);
+                Ok(())
+            }
+
+            fn push_str(&mut self, value: &str) -> Result<(), norito::json::BoundedJsonError> {
+                self.0.push_str(value);
+                Ok(())
+            }
+
+            fn reserve(&mut self, additional: usize) -> Result<(), norito::json::BoundedJsonError> {
+                self.0
+                    .try_reserve(additional)
+                    .map_err(|_| norito::json::BoundedJsonError::AllocationFailed)
+            }
+        }
+
+        #[test]
+        fn streaming_base64_matches_standard_encoding() {
+            for input in [
+                &b""[..],
+                &b"a"[..],
+                &b"ab"[..],
+                &b"abc"[..],
+                &b"abcd"[..],
+                &[0, 1, 2, 0xfe, 0xff][..],
+            ] {
+                let mut sink = StringSink::default();
+                base64_encode_to(input, &mut sink).expect("bounded base64 write");
+                assert_eq!(sink.0, format!("\"{}\"", base64_encode(input)));
+            }
+        }
+
+        #[test]
+        fn base64_decode_reuses_the_owned_input_allocation() {
+            let encoded = String::from("YWJjZA==");
+            let allocation = encoded.as_ptr();
+            let capacity = encoded.capacity();
+            let decoded = base64_decode(encoded).expect("valid base64");
+            assert_eq!(decoded, b"abcd");
+            assert_eq!(decoded.as_ptr(), allocation);
+            assert_eq!(decoded.capacity(), capacity);
+        }
+
+        #[test]
+        fn base64_decode_rejects_noncanonical_padding_and_tail_bits() {
+            for invalid in ["A", "====", "AA=A", "AA==AAAA", "AB==", "AAB="] {
+                base64_decode(invalid.to_owned()).expect_err("noncanonical base64");
+            }
+        }
     }
 }
 
@@ -496,6 +721,28 @@ pub trait Query: seal::Query + Send + Sync + 'static {
         Self: Encode,
     {
         self.encode()
+    }
+
+    /// Return the exact fixed-v1 bare payload length without erasing through an owned buffer.
+    #[doc(hidden)]
+    fn dyn_encoded_len_exact(&self) -> Option<usize>
+    where
+        Self: Sized + norito::core::NoritoSerialize,
+    {
+        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        norito::core::NoritoSerialize::encoded_len_exact(self)
+    }
+
+    /// Stream the fixed-v1 bare payload into an existing Norito encoder.
+    #[doc(hidden)]
+    fn dyn_encode_to(
+        &self,
+        writer: &mut norito::core::Encoder<'_>,
+    ) -> Result<usize, norito::core::Error>
+    where
+        Self: Sized + norito::core::NoritoSerialize,
+    {
+        norito::codec::encode_adaptive_into(self, writer)
     }
 
     /// Downcast to concrete type
@@ -858,6 +1105,13 @@ mod model {
         /// Encode the concrete query behind the erased trait object without
         /// re-encoding the `QueryBox` wrapper (avoids recursion).
         fn encode_bytes(&self) -> Vec<u8>;
+        /// Return the exact fixed-v1 bare payload length without allocating an output buffer.
+        fn encoded_payload_len_exact(&self) -> Option<usize>;
+        /// Stream the fixed-v1 bare payload without allocating an intermediate payload buffer.
+        fn encode_payload_to(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<usize, norito::core::Error>;
         /// Return the concrete Rust type key used for in-process registry lookup.
         ///
         /// The registry maps this key to the stable identifier emitted on the
@@ -878,6 +1132,15 @@ mod model {
             // Delegate to dynamic encoder; concrete types may override it.
             self.dyn_encode()
         }
+        fn encoded_payload_len_exact(&self) -> Option<usize> {
+            self.dyn_encoded_len_exact()
+        }
+        fn encode_payload_to(
+            &self,
+            writer: &mut norito::core::Encoder<'_>,
+        ) -> Result<usize, norito::core::Error> {
+            self.dyn_encode_to(writer)
+        }
         fn type_name_key(&self) -> &'static str {
             std::any::type_name::<Self>()
         }
@@ -886,14 +1149,112 @@ mod model {
     /// Type alias used for ergonomic query handling.
     pub type QueryBox<T> = Box<dyn ErasedQuery<T> + Send + Sync>;
 
+    fn query_box_tuple_flags() -> u8 {
+        let defaults = norito::core::default_encode_flags();
+        let dynamic_mask = norito::core::header_flags::PACKED_SEQ;
+        let static_defaults = defaults & !dynamic_mask;
+        match norito::core::effective_decode_flags() {
+            None => defaults,
+            Some(0) => 0,
+            Some(current) => {
+                let current_dynamic = current & dynamic_mask;
+                let current_static = current & !dynamic_mask;
+                let effective_static = if current_static == 0 {
+                    static_defaults
+                } else {
+                    current_static | static_defaults
+                };
+                current_dynamic | effective_static
+            }
+        }
+    }
+
+    fn query_box_encoded_len(name: &str, payload_len: usize, flags: u8) -> Option<usize> {
+        let name_len = name
+            .len()
+            .checked_add(norito::core::len_prefix_len_with_flags(name.len(), flags))?;
+        let payload_len = payload_len.checked_add(8)?;
+        norito::core::len_prefix_len_with_flags(name_len, flags)
+            .checked_add(name_len)?
+            .checked_add(norito::core::len_prefix_len_with_flags(payload_len, flags))?
+            .checked_add(payload_len)
+    }
+
     impl norito::core::NoritoSerialize for QueryBox<QueryOutputBatchBox> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
-            let name = query_wire_id((**self).type_name_key()).to_string();
-            let payload = (**self).encode_bytes();
-            norito::core::NoritoSerialize::serialize(&(name, payload), writer)
+            let query = &**self;
+            let name = query_wire_id(query.type_name_key());
+            let flags = query_box_tuple_flags();
+            if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+                // Packed-struct is not used by the fixed v1 request path. Retain
+                // the historical owned tuple codec for callers that explicitly
+                // select that layout; its staging cost is confined to this
+                // compatibility branch.
+                let owned = (name.to_owned(), query.encode_bytes());
+                return norito::core::NoritoSerialize::serialize(&owned, writer);
+            }
+            let payload_len = if let Some(exact) = query.encoded_payload_len_exact() {
+                exact
+            } else {
+                // Preserve custom-query compatibility without rebuilding the full payload: count
+                // one streaming pass, then write the length-delimited field in a second pass.
+                let mut sink = std::io::sink();
+                let mut counter = norito::core::Encoder::new(&mut sink);
+                query.encode_payload_to(&mut counter)?
+            };
+            let _flags = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+
+            let name_len = name
+                .len()
+                .checked_add(norito::core::len_prefix_len_with_flags(name.len(), flags))
+                .ok_or(norito::core::Error::LengthMismatch)?;
+            norito::core::write_len_with_flags(
+                writer,
+                u64::try_from(name_len).map_err(|_| norito::core::Error::LengthMismatch)?,
+                flags,
+            )?;
+            norito::core::write_len_with_flags(
+                writer,
+                u64::try_from(name.len()).map_err(|_| norito::core::Error::LengthMismatch)?,
+                flags,
+            )?;
+            writer.write_all(name.as_bytes())?;
+
+            let payload_field_len = payload_len
+                .checked_add(8)
+                .ok_or(norito::core::Error::LengthMismatch)?;
+            norito::core::write_len_with_flags(
+                writer,
+                u64::try_from(payload_field_len)
+                    .map_err(|_| norito::core::Error::LengthMismatch)?,
+                flags,
+            )?;
+            norito::core::write_seq_len(
+                writer,
+                u64::try_from(payload_len).map_err(|_| norito::core::Error::LengthMismatch)?,
+            )?;
+            let written = query.encode_payload_to(writer)?;
+            if written != payload_len {
+                return Err(norito::core::Error::LengthMismatch);
+            }
+            Ok(())
+        }
+
+        fn encoded_len_hint(&self) -> Option<usize> {
+            self.encoded_len_exact()
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            let query = &**self;
+            let name = query_wire_id(query.type_name_key());
+            let flags = query_box_tuple_flags();
+            if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+                return None;
+            }
+            query_box_encoded_len(name, query.encoded_payload_len_exact()?, flags)
         }
     }
 
@@ -2042,6 +2403,13 @@ mod model {
             let encoded = super::json_wrappers::base64_encode(self.0.payload());
             norito::json::write_json_string(&encoded, out);
         }
+
+        fn write_json_to<S: norito::json::JsonWriteSink + ?Sized>(
+            &self,
+            out: &mut S,
+        ) -> Result<(), norito::json::BoundedJsonError> {
+            super::json_wrappers::base64_encode_to(self.0.payload(), out)
+        }
     }
 
     #[cfg(feature = "json")]
@@ -2050,16 +2418,22 @@ mod model {
             parser: &mut norito::json::Parser<'_>,
         ) -> Result<Self, norito::json::Error> {
             let encoded = parser.parse_string()?;
-            let bytes = super::json_wrappers::base64_decode(&encoded).map_err(|()| {
-                norito::json::Error::InvalidField {
-                    field: String::from("QuerySignature"),
-                    message: String::from("invalid base64 signature payload"),
+            let bytes = super::json_wrappers::base64_decode(encoded).map_err(|error| {
+                if error.is_decode_resource_limit() {
+                    error
+                } else {
+                    norito::json::Error::InvalidField {
+                        field: String::from("QuerySignature"),
+                        message: String::from("invalid base64 signature payload"),
+                    }
                 }
             })?;
-            let signature = iroha_crypto::Signature::try_from_bytes(&bytes).map_err(|err| {
+            norito::core::reserve_decode_allocation(bytes.len())
+                .map_err(norito::json::Error::from_decode_resource)?;
+            let signature = iroha_crypto::Signature::try_from_bytes(&bytes).map_err(|_| {
                 norito::json::Error::InvalidField {
                     field: String::from("QuerySignature"),
-                    message: format!("invalid signature payload: {err}"),
+                    message: String::from("invalid signature payload"),
                 }
             })?;
             Ok(QuerySignature(SignatureOf::from_signature(signature)))
@@ -2461,6 +2835,55 @@ where
     payload: Vec<u8>,
 }
 
+struct ErasedIterQueryStreaming<'a, T>(&'a ErasedIterQuery<T>)
+where
+    T: HasProjection<PredicateMarker> + HasProjection<SelectorMarker, AtomType = ()> + Send + Sync;
+
+impl<T> norito::core::NoritoSerialize for ErasedIterQueryStreaming<'_, T>
+where
+    T: HasProjection<PredicateMarker> + HasProjection<SelectorMarker, AtomType = ()> + Send + Sync,
+{
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        if norito::core::use_packed_struct() {
+            return norito::core::NoritoSerialize::serialize(self.0, writer);
+        }
+        let mut field = norito::core::DeriveSmallBuf::new();
+        for value in [
+            &self.0.predicate as &dyn norito::core::NoritoSerialize,
+            &self.0.selector as &dyn norito::core::NoritoSerialize,
+            &self.0.payload as &dyn norito::core::NoritoSerialize,
+        ] {
+            if value.encoded_len_exact().is_none() {
+                return Err(norito::core::Error::LengthMismatch);
+            }
+            norito::core::write_len_prefixed_exact(writer, value, &mut field)?;
+        }
+        Ok(())
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.encoded_len_exact()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        if norito::core::use_packed_struct() {
+            return norito::core::NoritoSerialize::encoded_len_exact(self.0);
+        }
+        let mut total = 0_usize;
+        for value in [
+            &self.0.predicate as &dyn norito::core::NoritoSerialize,
+            &self.0.selector as &dyn norito::core::NoritoSerialize,
+            &self.0.payload as &dyn norito::core::NoritoSerialize,
+        ] {
+            let field_len = value.encoded_len_exact()?;
+            total = total
+                .checked_add(norito::core::len_prefix_len(field_len))?
+                .checked_add(field_len)?;
+        }
+        Some(total)
+    }
+}
+
 /// Attempt to extract a concrete `&QueryWithFilter<T>` from a type-erased iterable query.
 ///
 /// This enables downstream crates (e.g., visitor utilities) to dispatch on the
@@ -2499,9 +2922,19 @@ where
     type Item = QueryOutputBatchBox;
 
     fn dyn_encode(&self) -> Vec<u8> {
-        // Encode the erased iterable query wrapper itself so that decoding via
-        // the registry receives the full structure (predicate, selector, payload).
-        norito::codec::Encode::encode(self)
+        norito::codec::encode_adaptive(&ErasedIterQueryStreaming(self))
+    }
+
+    fn dyn_encoded_len_exact(&self) -> Option<usize> {
+        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        norito::core::NoritoSerialize::encoded_len_exact(&ErasedIterQueryStreaming(self))
+    }
+
+    fn dyn_encode_to(
+        &self,
+        writer: &mut norito::core::Encoder<'_>,
+    ) -> Result<usize, norito::core::Error> {
+        norito::codec::encode_adaptive_into(&ErasedIterQueryStreaming(self), writer)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -4428,6 +4861,49 @@ mod trait_object_tests {
     use super::*;
     use crate::query::dsl::{HasProjection, PredicateMarker, SelectorMarker};
 
+    fn bare_bytes_with_flags(value: &dyn norito::core::NoritoSerialize, flags: u8) -> Vec<u8> {
+        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+        let mut bytes = Vec::new();
+        let mut encoder = norito::core::Encoder::for_buffer(&mut bytes);
+        value.serialize(&mut encoder).expect("encode bare value");
+        bytes
+    }
+
+    #[test]
+    fn query_box_streaming_wire_matches_owned_tuple_for_all_sequence_layouts() {
+        let concrete = domain::FindDomains;
+        let query: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<Domain>::new(
+            CompoundPredicate::PASS,
+            SelectorTuple::default(),
+            concrete.encode(),
+        ));
+        let expected = (
+            query_wire_id((**query).type_name_key()).to_owned(),
+            (**query).encode_bytes(),
+        );
+
+        for flags in [
+            0,
+            norito::core::header_flags::COMPACT_LEN,
+            norito::core::header_flags::PACKED_SEQ | norito::core::header_flags::COMPACT_LEN,
+            norito::core::header_flags::PACKED_STRUCT | norito::core::header_flags::COMPACT_LEN,
+            norito::core::header_flags::PACKED_SEQ
+                | norito::core::header_flags::PACKED_STRUCT
+                | norito::core::header_flags::FIELD_BITSET
+                | norito::core::header_flags::COMPACT_LEN,
+        ] {
+            let actual = bare_bytes_with_flags(&query, flags);
+            assert_eq!(actual, bare_bytes_with_flags(&expected, flags));
+            let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+            let exact = norito::core::NoritoSerialize::encoded_len_exact(&query);
+            if flags & norito::core::header_flags::PACKED_STRUCT == 0 {
+                assert_eq!(exact, Some(actual.len()));
+            } else {
+                assert_eq!(exact, None);
+            }
+        }
+    }
+
     #[test]
     fn query_dyn_encode_matches_encode() {
         let q = domain::FindDomains;
@@ -4724,228 +5200,7 @@ pub mod block {
     }
 }
 
-pub mod error {
-    //! Error types produced by query execution.
-    //!
-    //! Module containing errors that can occur during query execution.
-
-    #[cfg(feature = "json")]
-    use iroha_crypto::HashOf;
-    use iroha_data_model_derive::model;
-    use iroha_macro::FromVariant;
-    use iroha_schema::IntoSchema;
-    use norito::codec::{Decode, Encode};
-
-    pub use self::model::*;
-    use super::*;
-    use crate::prelude::*;
-
-    #[model]
-    mod model {
-        use super::*;
-        /// Query errors.
-        #[derive(
-            Debug,
-            displaydoc::Display,
-            Clone,
-            PartialEq,
-            Eq,
-            PartialOrd,
-            Ord,
-            FromVariant,
-            Decode,
-            Encode,
-            IntoSchema,
-        )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
-        /// High-level failure reasons for query execution.
-        #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
-        #[derive(thiserror::Error)]
-        pub enum QueryExecutionFail {
-            /// {0}
-            #[error(transparent)]
-            Find(FindError),
-            /// Query found wrong type of asset: {0}
-            Conversion(
-                #[skip_from]
-                #[skip_try_from]
-                String,
-            ),
-            /// Query not found in the live query store.
-            NotFound,
-            /// The server's cursor does not match the provided cursor.
-            CursorMismatch,
-            /// There aren't enough items for the cursor to proceed.
-            CursorDone,
-            /// `fetch_size` must not exceed [`MAX_FETCH_SIZE`](crate::query::parameters::MAX_FETCH_SIZE).
-            FetchSizeTooBig,
-            /// Query execution exceeded the configured gas/materialization budget.
-            GasBudgetExceeded,
-            /// Some of the specified parameters (`filter/pagination/fetch_size/sorting`) are not applicable to singular queries
-            InvalidSingularParameters,
-            /// Reached the limit of parallel queries. Either wait for previous queries to complete, or increase the limit in the config.
-            CapacityLimit,
-            /// The stored cursor has expired and was removed from the server.
-            Expired,
-            /// The authority reached the per-tenant limit of stored cursors.
-            AuthorityQuotaExceeded,
-        }
-
-        /// Stable identity carried by a missing chain-authoritative `SoraFS` proof outcome.
-        #[derive(
-            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
-        )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
-        #[norito(deny_unknown_fields)]
-        pub struct SorafsProofOutcomeFindErrorV1 {
-            /// Proof protocol namespace.
-            pub kind: crate::sorafs::proof_ledger::ProofOutcomeKindV1,
-            /// Protocol-scoped challenge or request identity.
-            #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-            pub identity_digest: [u8; 32],
-        }
-
-        /// Type assertion error
-        #[derive(
-            Debug,
-            displaydoc::Display,
-            Clone,
-            PartialEq,
-            Eq,
-            PartialOrd,
-            Ord,
-            Decode,
-            Encode,
-            IntoSchema,
-        )]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
-        #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
-        #[derive(thiserror::Error)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
-        /// Item-level errors returned when resolving query inputs.
-        pub enum FindError {
-            /// Failed to find asset: `{0}`
-            Asset(Box<AssetId>),
-            /// Failed to find asset definition: `{0}`
-            AssetDefinition(AssetDefinitionId),
-            /// Failed to find NFT: `{0}`
-            Nft(NftId),
-            /// Failed to find RWA: `{0}`
-            Rwa(RwaId),
-            /// Failed to find account: `{0}`
-            Account(AccountId),
-            /// Failed to find domain: `{0}`
-            Domain(DomainId),
-            /// Failed to find metadata key: `{0}`
-            MetadataKey(Name),
-            /// Block with hash `{0}` not found
-            Block(HashOf<BlockHeader>),
-            /// Transaction with hash `{0}` not found
-            Transaction(HashOf<SignedTransaction>),
-            /// Peer with id `{0}` not found
-            Peer(PeerId),
-            /// Trigger with id `{0}` not found
-            Trigger(TriggerId),
-            /// Role with id `{0}` not found
-            Role(RoleId),
-            /// Failed to find [`Permission`] by id.
-            Permission(Box<Permission>),
-            /// Failed to find public key: `{0}`
-            PublicKey(PublicKey),
-            /// Failed to find twitter binding for keyed hash `{0:?}`
-            TwitterBinding(crate::oracle::KeyedHash),
-            /// Failed to find oracle feed `{0}`
-            OracleFeed(crate::oracle::FeedId),
-            /// Failed to find oracle dispute `{0:?}`
-            OracleDispute(crate::oracle::OracleDisputeId),
-            /// Failed to find oracle change `{0:?}`
-            OracleChange(crate::oracle::OracleChangeId),
-            /// Failed to find oracle provider stats `{0:?}`
-            OracleProviderStats(crate::oracle::OracleProviderKey),
-            /// Failed to find `DeFi` oracle attestation `{0:?}`
-            DefiOracleAttestation(crate::oracle::DefiOracleAttestationKey),
-            /// Failed to find native asset escrow: `{0:?}`
-            AssetEscrow(crate::escrow::EscrowId),
-            /// Failed to find chain-authoritative `SoraFS` pin manifest: `{0:?}`
-            SorafsPinManifest(crate::sorafs::pin_registry::ManifestDigest),
-            /// Failed to find the active authoritative `SoraFS` orderbook policy
-            SorafsOrderbookPolicy,
-            /// Failed to find authoritative `SoraFS` orderbook order: `{0:?}`
-            SorafsOrderbookOrder([u8; 32]),
-            /// Failed to find authoritative `SoraFS` orderbook cancellation: `{0:?}`
-            SorafsOrderbookCancellation([u8; 32]),
-            /// Failed to find authoritative `SoraFS` orderbook receipt: `{0:?}`
-            SorafsOrderbookReceipt([u8; 32]),
-            /// Failed to find authoritative `SoraFS` orderbook trade: `{0:?}`
-            SorafsOrderbookTrade([u8; 32]),
-            /// Failed to find authoritative `SoraFS` orderbook channel: `{0:?}`
-            SorafsOrderbookChannel([u8; 32]),
-            /// Failed to find authoritative `SoraFS` orderbook status
-            SorafsOrderbookStatus,
-            /// Failed to find the active authoritative `SoraFS` reserve policy
-            SorafsReservePolicy,
-            /// Failed to find authoritative `SoraFS` provider reserve account: `{0:?}`
-            SorafsReserveProvider(crate::sorafs::capacity::ProviderId),
-            /// Failed to find authoritative `SoraFS` reserve movement: `{0:?}`
-            SorafsReserveMovement([u8; 32]),
-            /// Failed to find authoritative `SoraFS` reserve appeal: `{0:?}`
-            SorafsReserveAppeal([u8; 32]),
-            /// Failed to find the active authoritative `SoraFS` `PoP` issuer policy
-            SorafsPopIssuerPolicy,
-            /// Failed to find authoritative `SoraFS` `PoP` credential commitment: `{0:?}`
-            SorafsPopCredentialCommitment([u8; 32]),
-            /// Failed to find authoritative `SoraFS` `PoP` commitment root version `{0}`
-            SorafsPopCommitmentRoot(u64),
-            /// Failed to find authoritative `SoraFS` `PoP` revocation publication version `{0}`
-            SorafsPopRevocationPublication(u64),
-            /// Failed to find authoritative `SoraFS` `PoP` revocation commitment: `{0:?}`
-            SorafsPopRevocation([u8; 32]),
-            /// Failed to find authoritative `SoraFS` `PoP` registry audit sequence `{0}`
-            SorafsPopAuditDigest(u64),
-            /// Failed to find authoritative `SoraFS` `PoP` registry status
-            SorafsPopRegistryStatus,
-            /// Failed to find chain-authoritative `SoraFS` repair task `{0}`
-            SorafsRepairTask(String),
-            /// Failed to find chain-authoritative `SoraFS` repair status
-            SorafsRepairStatus,
-            /// Failed to find chain-authoritative `SoraFS` proof outcome `{0:?}`
-            SorafsProofOutcome(SorafsProofOutcomeFindErrorV1),
-            /// Failed to find the active authoritative `SoraFS` reputation-journal authority policy
-            SorafsReputationJournalAuthorityPolicy,
-            /// Failed to find a finalized `SoraFS` reputation-journal event for source `{0:?}`
-            SorafsReputationJournalEvent(crate::sorafs::reputation::ReputationJournalSourceIdV1),
-            /// Failed to find the active authoritative `SoraFS` moderation policy
-            SorafsModerationPolicy,
-            /// Failed to find authoritative `SoraFS` moderation appeal `{0}`
-            SorafsModerationAppeal(String),
-            /// Failed to find authoritative `SoraFS` moderation juror eligibility `{0}`
-            SorafsModerationJurorEligibility(String),
-            /// Failed to find authoritative `SoraFS` moderation case `{0}`
-            SorafsModerationCase(String),
-            /// Failed to find authoritative `SoraFS` moderation commit `{0}`
-            SorafsModerationCommit(String),
-            /// Failed to find authoritative `SoraFS` moderation reveal `{0}`
-            SorafsModerationReveal(String),
-            /// Failed to find authoritative `SoraFS` moderation challenge `{0}`
-            SorafsModerationChallenge(String),
-            /// Failed to find authoritative `SoraFS` moderation outcome `{0}`
-            SorafsModerationOutcome(String),
-            /// Failed to find authoritative `SoraFS` moderation no-show `{0}`
-            SorafsModerationNoShow(String),
-            /// Failed to find authoritative `SoraFS` moderation status
-            SorafsModerationStatus,
-        }
-    }
-}
+pub mod error;
 
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 #[allow(ambiguous_glob_reexports)]

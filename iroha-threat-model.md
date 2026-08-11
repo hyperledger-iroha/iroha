@@ -222,7 +222,7 @@ For this repo + clarified deployment context (internet-exposed public chain; ope
   - Examples: telemetry/profiling exposure when enabled (TM-004); P2P handshake flooding with limited blast radius (TM-007).
 
 - **low**: Attacks requiring unlikely preconditions, limited blast radius, or primarily operational footguns with easy mitigation.
-  - Examples: minor information leaks from public read-only endpoints that are expected to be public for a blockchain (e.g., `/v1/health`, `/v1/peers`) and are primarily useful for recon rather than direct compromise (not enumerated as top threats here). Evidence: `crates/iroha_torii_shared/src/lib.rs` (`uri::HEALTH`, `uri::PEERS`).
+  - Examples: minor information leaks from genuinely public read-only endpoints such as `/v1/health`, which are primarily useful for recon rather than direct compromise (not enumerated as top threats here). Node-local reads are excluded from this class: `/v1/peers`, `/v1/time/status`, `/v1/pipeline/preflight`, `/v1/pipeline/recovery/{height}`, `/v1/policy`, and `/v1/proofs/retention` require exact-network, replay-resistant operator signatures. Evidence: `crates/iroha_torii_shared/src/route_catalog.rs` and `crates/iroha_torii/src/lib.rs`.
 
 ## Focus paths for security review
 

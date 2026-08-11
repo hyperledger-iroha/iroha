@@ -320,6 +320,15 @@ impl FastJsonWrite for BigInt {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        // BigInt is bounded to 4,096 signed bits, so this scalar scratch string
+        // has a fixed protocol-derived ceiling independent of response size.
+        json::write_json_string_to(&self.to_string(), out)
+    }
 }
 
 impl JsonDeserialize for BigInt {

@@ -162,6 +162,7 @@ impl ZkAmsMkheStreamingDecryptionAuthorityMaterialV1 {
 /// The buffer bound covers this algorithm, not arbitrary storage retained by a
 /// caller's CAS implementation. Release deployment must use bounded/external
 /// staging and remains blocked on the authenticated whole-worker residency run.
+#[allow(dead_code)]
 pub(super) struct ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
     roster: ZkAmsMkheGovernedActiveRosterV1,
     cpk_transcript_digest: [u8; 32],
@@ -313,6 +314,7 @@ impl PersistentDecryptionProofBindingV1 {
     }
 }
 
+#[allow(dead_code)]
 impl ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
     /// Begin the exact bounded ceremony before borrowing any public share.
     pub(super) fn new(
@@ -613,6 +615,7 @@ impl ZkAmsMkheStreamingDecryptionAuthorityBuilderV1 {
 }
 
 /// Start the sole allocation-bounded compact-authority ceremony.
+#[allow(dead_code)]
 pub(super) fn begin_zk_ams_mkhe_streaming_decryption_authority_from_verified_cpk_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     cpk_transcript_digest: [u8; 32],
@@ -620,6 +623,7 @@ pub(super) fn begin_zk_ams_mkhe_streaming_decryption_authority_from_verified_cpk
     ZkAmsMkheStreamingDecryptionAuthorityBuilderV1::new(roster, cpk_transcript_digest)
 }
 
+#[allow(dead_code)]
 fn publish_canonical_party_b_v1<P>(
     party_b: &ZkAmsMkheRnsPolynomialWireV1,
     publisher: &mut P,
@@ -665,6 +669,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 fn validate_compact_publication_provenance_v1(
     expected_pointer: ZkAmsMkheDirectObjectPointerV1,
     verification_read_receipt: &ZkAmsMkheDirectObjectReadReceiptV1,
@@ -714,6 +719,7 @@ fn validate_compact_publication_provenance_v1(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn stream_canonical_party_b_into_hash_v1<P>(
     pointer: ZkAmsMkheDirectObjectPointerV1,
     expected_provider_identity: [u8; 32],
@@ -761,6 +767,7 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 fn public_contribution_set_digest_from_streamed_cpk_v1<P>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     key_context_digest: [u8; 32],

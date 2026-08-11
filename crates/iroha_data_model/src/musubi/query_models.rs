@@ -188,7 +188,10 @@ impl MusubiFinalizedCursorV1 {
 /// Explicit stale-cursor classification returned instead of silently restarting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", deny_unknown_fields)
+)]
 pub enum MusubiCursorFailureV1 {
     /// Finalized height/hash no longer matches the requested snapshot.
     FinalizedAnchorMismatch,
@@ -207,6 +210,7 @@ macro_rules! musubi_page_type {
         #[doc = $doc]
         #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
         #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
         pub struct $name {
             /// Ordered result items.
             pub items: Vec<$item>,
@@ -901,6 +905,7 @@ impl MusubiResolverIndexPageV1 {
 /// Compact ordered directory row; rich fuzzy search may rebuild this projection.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct MusubiOrderedPackageEntryV1 {
     /// Human-facing namespace/package selector.
     pub selector: MusubiPackageSelectorV1,

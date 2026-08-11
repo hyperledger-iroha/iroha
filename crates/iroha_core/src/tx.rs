@@ -1607,7 +1607,9 @@ impl<'tx> AcceptedTransaction<'tx> {
             TransactionSignatureError::AuthorityKeyMismatch
             | TransactionSignatureError::CryptoError(_) => SignatureRejectionCode::InvalidSignature,
             TransactionSignatureError::InvalidFeePaymentIntent(_)
-            | TransactionSignatureError::MissingTimeToLive => {
+            | TransactionSignatureError::MissingTimeToLive
+            | TransactionSignatureError::GenesisDomainNotAllowed
+            | TransactionSignatureError::GenesisDomainRequired => {
                 SignatureRejectionCode::MalformedSignature
             }
             TransactionSignatureError::UnexpectedMultisigSignatures
@@ -2251,7 +2253,7 @@ impl<'tx> AcceptedTransaction<'tx> {
 
     /// Consume the accepted transaction and return its wrapped entrypoint.
     #[must_use]
-    pub(crate) fn into_entrypoint(self) -> TransactionEntrypoint {
+    pub fn into_entrypoint(self) -> TransactionEntrypoint {
         self.entrypoint.into_owned()
     }
 
@@ -5837,17 +5839,15 @@ pub mod tests {
         }
     }
 
-    #[test]
-    fn malformed_multisig_bundle_shapes_have_stable_rejection_code() {
-        for error in [
-            TransactionSignatureError::UnexpectedMultisigSignatures,
-            TransactionSignatureError::NonCanonicalMultisigSignatures,
-        ] {
-            assert_eq!(
-                AcceptedTransaction::signature_rejection_code(&error),
-                SignatureRejectionCode::MalformedSignature,
-            );
-        }
+    mod signature_rejection_tests {
+        //! Verifies stable rejection-code classification for malformed
+        //! signature bundles and transaction-domain metadata.
+        //!
+        //! Kept isolated from the transaction implementation's production code.
+
+        use super::*;
+
+        include!("tx/signature_rejection_tests.rs");
     }
 
     #[test]
@@ -6101,8 +6101,8 @@ pub mod tests {
         let deployer = AccountId::new(deployer_keypair.public_key().clone());
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &deployer,
             1,
             iroha_data_model::nexus::DataSpaceId::new(0),
@@ -11290,8 +11290,8 @@ pub mod tests {
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11334,8 +11334,8 @@ pub mod tests {
 
         let old_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11343,8 +11343,8 @@ pub mod tests {
         .expect("old contract address");
         let new_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             1,
             DataSpaceId::UNIVERSAL,
@@ -11449,8 +11449,8 @@ pub mod tests {
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11867,8 +11867,8 @@ pub mod tests {
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             TestDataSpaceId::UNIVERSAL,

@@ -3926,25 +3926,17 @@ fn encode_bounded<T: norito::NoritoSerialize>(
     value: &T,
     maximum: usize,
 ) -> Result<Vec<u8>, GatewayComplianceError> {
-    let exact = norito::core::encoded_frame_len(value)
-        .map_err(|error| GatewayComplianceError::Encoding(error.to_string()))?;
-    if exact > maximum {
-        return Err(GatewayComplianceError::ResourceLimit {
-            resource: "canonical encoded bytes",
-            found: exact,
-            maximum,
-        });
+    match norito::core::to_bytes_bounded(value, maximum) {
+        Ok(bytes) => Ok(bytes),
+        Err(norito::core::BoundedEncodeError::FrameTooLarge { encoded_bytes, .. }) => {
+            Err(GatewayComplianceError::ResourceLimit {
+                resource: "canonical encoded bytes",
+                found: encoded_bytes,
+                maximum,
+            })
+        }
+        Err(error) => Err(GatewayComplianceError::Encoding(error.to_string())),
     }
-    let bytes = norito::to_bytes(value)
-        .map_err(|error| GatewayComplianceError::Encoding(error.to_string()))?;
-    if bytes.len() > maximum {
-        return Err(GatewayComplianceError::ResourceLimit {
-            resource: "canonical encoded bytes",
-            found: bytes.len(),
-            maximum,
-        });
-    }
-    Ok(bytes)
 }
 
 fn checkpoint_lock_path(path: &Path) -> Result<PathBuf, GatewayComplianceError> {

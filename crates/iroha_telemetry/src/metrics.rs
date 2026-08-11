@@ -3297,59 +3297,7 @@ pub fn install_sorafs_node_otlp_exporter(
     eyre::bail!("otel-exporter feature is disabled; enable it to emit OTLP telemetry");
 }
 
-#[cfg(test)]
-mod otel_tests {
-    use std::sync::Arc;
-
-    use super::*;
-
-    #[test]
-    fn global_fetch_otel_is_singleton() {
-        let first = global_sorafs_fetch_otel();
-        let second = global_sorafs_fetch_otel();
-        assert!(
-            Arc::ptr_eq(&first, &second),
-            "expected OTEL handle to be singleton"
-        );
-    }
-
-    #[test]
-    fn global_gateway_otel_is_singleton() {
-        let first = global_sorafs_gateway_otel();
-        let second = global_sorafs_gateway_otel();
-        assert!(
-            Arc::ptr_eq(&first, &second),
-            "expected gateway OTEL handle to be singleton"
-        );
-    }
-
-    #[cfg(not(feature = "otel-exporter"))]
-    #[test]
-    fn installing_exporter_without_feature_fails() {
-        let result = install_sorafs_fetch_otlp_exporter(
-            "http://127.0.0.1:4317",
-            "sorafs-orchestrator",
-            &[],
-            Duration::from_secs(5),
-        );
-        assert!(
-            result.is_err(),
-            "expected exporter installation to fail without otel-exporter feature"
-        );
-    }
-
-    #[cfg(feature = "otel-exporter")]
-    #[tokio::test]
-    async fn installing_exporter_with_valid_configuration_succeeds() {
-        let result = install_sorafs_fetch_otlp_exporter(
-            "http://127.0.0.1:4317",
-            "sorafs-orchestrator-test",
-            &[("deployment.environment", "test")],
-            Duration::from_secs(3_600),
-        );
-        assert!(result.is_ok(), "OTLP exporter should install: {result:?}");
-    }
-}
+include!("metrics/otel_tests.rs");
 
 impl JsonSerialize for Uptime {
     fn json_serialize(&self, out: &mut String) {
@@ -7174,14 +7122,20 @@ pub struct Metrics {
     pub kaigi_relay_registration_bandwidth: HistogramVec,
     /// Kaigi: relay manifest updates grouped by domain and action.
     pub kaigi_relay_manifest_updates_total: IntCounterVec,
+    /// Kaigi: relay manifest updates grouped only by domain for bounded diagnostics.
+    pub kaigi_relay_manifest_updates_by_domain_total: IntCounterVec,
     /// Kaigi: relay manifest hop-count distribution per domain.
     pub kaigi_relay_manifest_hop_count: HistogramVec,
     /// Kaigi: relay failovers grouped by domain and call.
     pub kaigi_relay_failover_total: IntCounterVec,
+    /// Kaigi: relay failovers grouped only by domain for bounded diagnostics.
+    pub kaigi_relay_failovers_by_domain_total: IntCounterVec,
     /// Kaigi: relay failover hop-count distribution per domain.
     pub kaigi_relay_failover_hop_count: HistogramVec,
     /// Kaigi: relay health reports grouped by domain and status.
     pub kaigi_relay_health_reports_total: IntCounterVec,
+    /// Kaigi: relay health reports grouped only by domain for bounded diagnostics.
+    pub kaigi_relay_health_reports_by_domain_total: IntCounterVec,
     /// Kaigi: current relay health state labelled by domain and relay.
     pub kaigi_relay_health_state: IntGaugeVec,
     /// Number of sumeragi dropped messages
@@ -10168,6 +10122,14 @@ impl Default for Metrics {
             &["domain", "action"],
         )
         .expect("Infallible");
+        let kaigi_relay_manifest_updates_by_domain_total = IntCounterVec::new(
+            Opts::new(
+                "kaigi_relay_manifest_updates_by_domain_total",
+                "Kaigi relay manifest updates grouped only by domain for bounded diagnostics",
+            ),
+            &["domain"],
+        )
+        .expect("Infallible");
         let kaigi_relay_manifest_hop_count = HistogramVec::new(
             HistogramOpts::new(
                 "kaigi_relay_manifest_hop_count",
@@ -10185,6 +10147,14 @@ impl Default for Metrics {
             &["domain", "call"],
         )
         .expect("Infallible");
+        let kaigi_relay_failovers_by_domain_total = IntCounterVec::new(
+            Opts::new(
+                "kaigi_relay_failovers_by_domain_total",
+                "Kaigi relay failovers grouped only by domain for bounded diagnostics",
+            ),
+            &["domain"],
+        )
+        .expect("Infallible");
         let kaigi_relay_failover_hop_count = HistogramVec::new(
             HistogramOpts::new(
                 "kaigi_relay_failover_hop_count",
@@ -10200,6 +10170,14 @@ impl Default for Metrics {
                 "Kaigi relay health reports grouped by domain and status",
             ),
             &["domain", "status"],
+        )
+        .expect("Infallible");
+        let kaigi_relay_health_reports_by_domain_total = IntCounterVec::new(
+            Opts::new(
+                "kaigi_relay_health_reports_by_domain_total",
+                "Kaigi relay health reports grouped only by domain for bounded diagnostics",
+            ),
+            &["domain"],
         )
         .expect("Infallible");
         let kaigi_relay_health_state = IntGaugeVec::new(
@@ -15448,10 +15426,13 @@ impl Default for Metrics {
             kaigi_relay_registered_total,
             kaigi_relay_registration_bandwidth,
             kaigi_relay_manifest_updates_total,
+            kaigi_relay_manifest_updates_by_domain_total,
             kaigi_relay_manifest_hop_count,
             kaigi_relay_failover_total,
+            kaigi_relay_failovers_by_domain_total,
             kaigi_relay_failover_hop_count,
             kaigi_relay_health_reports_total,
+            kaigi_relay_health_reports_by_domain_total,
             kaigi_relay_health_state
         );
         register!(registry, pipeline_overlay_bytes);
@@ -15903,10 +15884,13 @@ impl Default for Metrics {
             kaigi_relay_registered_total,
             kaigi_relay_registration_bandwidth,
             kaigi_relay_manifest_updates_total,
+            kaigi_relay_manifest_updates_by_domain_total,
             kaigi_relay_manifest_hop_count,
             kaigi_relay_failover_total,
+            kaigi_relay_failovers_by_domain_total,
             kaigi_relay_failover_hop_count,
             kaigi_relay_health_reports_total,
+            kaigi_relay_health_reports_by_domain_total,
             kaigi_relay_health_state,
             dropped_messages,
             // Sumeragi dropped message counters (consensus and control paths)

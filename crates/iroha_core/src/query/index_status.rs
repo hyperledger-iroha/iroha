@@ -7,7 +7,7 @@
 
 use std::{
     fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -91,6 +91,7 @@ impl QueryIndexJournal {
     /// Filename used to persist query index status next to the block store.
     pub const JOURNAL_FILE: &'static str = "query-index-status.norito";
     const JOURNAL_VERSION: u32 = 1;
+    const JOURNAL_MAX_BYTES: u64 = 4 * 1024;
 
     /// Build the canonical journal path under the provided root.
     #[must_use]
@@ -153,10 +154,41 @@ impl QueryIndexJournal {
     }
 
     fn load_persisted(path: &Path) -> Result<PersistedQueryIndexStatus, QueryIndexJournalError> {
-        let bytes = fs::read(path).map_err(|source| QueryIndexJournalError::Read {
+        let file = fs::File::open(path).map_err(|source| QueryIndexJournalError::Read {
             path: path.to_path_buf(),
             source,
         })?;
+        let metadata = file
+            .metadata()
+            .map_err(|source| QueryIndexJournalError::Read {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if !metadata.is_file() || metadata.len() > Self::JOURNAL_MAX_BYTES {
+            return Err(QueryIndexJournalError::Read {
+                path: path.to_path_buf(),
+                source: std::io::Error::other(format!(
+                    "journal is not a regular file within the {}-byte limit",
+                    Self::JOURNAL_MAX_BYTES
+                )),
+            });
+        }
+        let mut bytes = Vec::new();
+        file.take(Self::JOURNAL_MAX_BYTES.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|source| QueryIndexJournalError::Read {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > Self::JOURNAL_MAX_BYTES {
+            return Err(QueryIndexJournalError::Read {
+                path: path.to_path_buf(),
+                source: std::io::Error::other(format!(
+                    "journal grew beyond the {}-byte limit while reading",
+                    Self::JOURNAL_MAX_BYTES
+                )),
+            });
+        }
         let persisted: PersistedQueryIndexStatus =
             decode_from_bytes(&bytes).map_err(|source| QueryIndexJournalError::Decode {
                 path: path.to_path_buf(),
@@ -341,5 +373,25 @@ mod tests {
         assert_eq!(loaded.snapshot().indexed_height, 7);
         assert!(path.exists(), "temp journal should be promoted");
         assert!(!tmp_path.exists(), "temp journal should be consumed");
+    }
+
+    #[test]
+    fn query_index_journal_rejects_oversized_file_before_decode() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(QueryIndexJournal::JOURNAL_FILE);
+        fs::write(
+            &path,
+            vec![
+                0_u8;
+                usize::try_from(QueryIndexJournal::JOURNAL_MAX_BYTES).expect("limit fits") + 1
+            ],
+        )
+        .expect("write oversized journal");
+
+        let error = QueryIndexJournal::load(path).expect_err("oversized journal must fail");
+        assert!(
+            error.to_string().contains("byte limit"),
+            "unexpected error: {error}"
+        );
     }
 }

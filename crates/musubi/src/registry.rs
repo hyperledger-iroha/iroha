@@ -1,8 +1,8 @@
 //! First-release Musubi registry, signing, and production-publication boundary.
 //!
-//! Public finalized reads retain only a Torii URL and never construct an account or
-//! key pair. Mutations load a required Iroha `client.toml` only when the mutation is
-//! dispatched, then sign the concrete V1 instruction locally. Publication delegates
+//! Public finalized reads load the required exact-network account signer from the selected
+//! Iroha `client.toml` and sign every concrete query body/path. Mutations use the same required
+//! signing configuration and sign the concrete V1 instruction locally. Publication delegates
 //! clean-package validation, authenticated seed ingress, pin/order coordination, and
 //! provider readback to an explicit runtime service; the default service fails closed.
 //! Archive registration itself is not delegated: the signer prebuilds, fee-quotes, and
@@ -31,10 +31,11 @@ use iroha::{
     client::{
         Client, PublicMusubiQueryPathV1, PublicMusubiQueryResultV1, post_public_musubi_query_v1,
     },
-    config::{Config, resolve_account_chain_discriminant},
+    config::Config,
     musubi_runtime::MusubiSeedIngressCarPlanV1,
 };
 use iroha_data_model::{
+    NetworkId,
     account::address::ChainDiscriminantGuard,
     isi::InstructionBox,
     metadata::Metadata,
@@ -84,7 +85,6 @@ use crate::{
 
 const DEFAULT_CLIENT_CONFIG: &str = "client.toml";
 const MAX_PUBLIC_CONFIG_BYTES_USIZE: usize = 1024 * 1024;
-const DEFAULT_PUBLIC_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 const PLATFORM_CONFIG_PROVENANCE_CONTEXT: &str =
     "iroha:musubi:platform-client-config-provenance:v1";
 
@@ -190,15 +190,29 @@ impl fmt::Display for RegistryErrorV1 {
 
 impl Error for RegistryErrorV1 {}
 
-/// Signer-free client for the fixed public Musubi V1 finalized-query inventory.
-#[derive(Clone, Debug)]
+/// Exact-network authenticated client for the fixed public Musubi V1 finalized-query inventory.
+#[derive(Clone)]
 pub struct RegistryReadClientV1 {
-    torii_url: Url,
+    client: Client,
     timeout: Duration,
     account_chain_discriminant: u16,
 }
 
-/// One bounded platform configuration image shared by signer-free consumers in this process.
+impl fmt::Debug for RegistryReadClientV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RegistryReadClientV1")
+            .field("authenticated", &true)
+            .field("timeout", &self.timeout)
+            .field(
+                "account_chain_discriminant",
+                &self.account_chain_discriminant,
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+/// One bounded platform configuration image shared by authenticated consumers in this process.
 pub(crate) struct RegistryPublicConfigImageV1 {
     path: PathBuf,
     bytes: Vec<u8>,
@@ -270,53 +284,92 @@ fn platform_config_provenance_digest(bytes: &[u8]) -> [u8; 32] {
 }
 
 impl RegistryReadClientV1 {
-    /// Construct a signer-free client from an already validated public Torii URL.
+    /// Construct an authenticated reader from an exact-network Iroha client.
     ///
     /// # Errors
     ///
-    /// Returns an error when the URL is not credential-free HTTP(S), the
-    /// timeout is zero or exceeds one minute, or the chain discriminant is zero.
+    /// Returns an error when the URL is not credential-free HTTP(S), the account key does not
+    /// match the canonical single-signature account, the timeout is outside the one-minute bound,
+    /// a legacy witness header is configured, or the chain discriminant is zero.
     pub fn new(
-        torii_url: Url,
+        mut client: Client,
         timeout: Duration,
         account_chain_discriminant: u16,
     ) -> Result<Self, RegistryErrorV1> {
-        if !matches!(torii_url.scheme(), "http" | "https")
-            || !torii_url.username().is_empty()
-            || torii_url.password().is_some()
+        if !matches!(client.torii_url.scheme(), "http" | "https")
+            || !client.torii_url.username().is_empty()
+            || client.torii_url.password().is_some()
             || timeout == Duration::ZERO
             || timeout > Duration::from_secs(60)
             || account_chain_discriminant == 0
+            || client.account.controller.single_signatory() != Some(client.key_pair.public_key())
+            || client
+                .headers
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case("X-Iroha-Witness"))
         {
             return Err(RegistryErrorV1::new(
                 RegistryFailureClassV1::Permanent,
                 "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
             ));
         }
+        client.torii_request_timeout = timeout;
         Ok(Self {
-            torii_url,
+            client,
             timeout,
             account_chain_discriminant,
         })
     }
 
-    /// Load only public endpoint/network context from `--config` or platform `client.toml`.
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        torii_url: Url,
+        timeout: Duration,
+        account_chain_discriminant: u16,
+    ) -> Result<Self, RegistryErrorV1> {
+        let timeout_ms = u64::try_from(timeout.as_millis()).map_err(|_| invalid_public_config())?;
+        let source = format!(
+            r#"
+chain = "00000000-0000-0000-0000-000000000000"
+network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
+torii_url = "{torii_url}"
+torii_request_timeout_ms = {timeout_ms}
+
+[account]
+chain_discriminant = {account_chain_discriminant}
+public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+"#,
+        );
+        let (configuration, _) = Config::load_bytes_with_musubi_publication(
+            Path::new("musubi-authenticated-test-client.toml"),
+            source.as_bytes(),
+        )
+        .map_err(|_| invalid_public_config())?;
+        Self::new(
+            Client::new(configuration),
+            timeout,
+            account_chain_discriminant,
+        )
+    }
+
+    /// Load the exact-network account signer from `--config` or platform `client.toml`.
     ///
-    /// Only `torii_url`, timeout, and `[account].profile`/`chain_discriminant` are interpreted.
-    /// Account identity, private-key, bearer-token, and basic-auth fields are neither parsed into
-    /// typed forms nor retained. The default path is the same required `client.toml` used by the
-    /// Iroha CLI; project manifests and command-line credential values are never consulted.
+    /// The exact network identity, account, matching private key, Torii URL, timeout, and account
+    /// profile are mandatory typed configuration. The default path is the same required
+    /// `client.toml` used by the Iroha CLI; project manifests, environment values, and command-line
+    /// credential values are never consulted.
     ///
     /// # Errors
     ///
     /// Returns `MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID` on non-Unix targets before the selected
     /// absolute path is inspected. On Unix, returns an error when the bounded configuration cannot
-    /// be read or its public endpoint, timeout, profile, or chain discriminant is invalid.
+    /// be read or its signer, exact network, endpoint, timeout, profile, or discriminant is invalid.
     pub fn load(config: Option<&Path>) -> Result<Self, RegistryErrorV1> {
         Self::load_with_config_image(config).map(|(reader, _image)| reader)
     }
 
-    /// Load the public reader and retain the exact same bounded image for sibling parsers.
+    /// Load the authenticated reader and retain the exact same bounded image for sibling parsers.
     ///
     /// The returned image is transient configuration provenance. Callers must parse any required
     /// secret-free subtrees immediately and must not retain its raw bytes in resolver graphs.
@@ -333,76 +386,40 @@ impl RegistryReadClientV1 {
                 .join(selected)
         };
         let bytes = read_bounded_config(&path)?;
-        let reader = Self::load_from_config_bytes(&bytes)?;
+        let reader = Self::load_from_config_bytes(&path, &bytes)?;
         Ok((reader, RegistryPublicConfigImageV1 { path, bytes }))
     }
 
-    /// Parse public endpoint and network context from one already-read `client.toml` image.
+    /// Parse the exact-network signer and endpoint from one already-read `client.toml` image.
     ///
     /// Publication uses this entry point so the signer, private runtime client, and finalized
     /// registry reader all derive from the same bounded file image instead of reopening a path
     /// after authenticated storage coordination has started.
-    pub(crate) fn load_from_config_bytes(bytes: &[u8]) -> Result<Self, RegistryErrorV1> {
+    pub(crate) fn load_from_config_bytes(
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<Self, RegistryErrorV1> {
         if bytes.is_empty() || bytes.len() > MAX_PUBLIC_CONFIG_BYTES_USIZE {
             return Err(invalid_public_config());
         }
-        let text = std::str::from_utf8(bytes).map_err(|_| invalid_public_config())?;
-        let document = text.parse::<toml::Table>().map_err(|_| {
-            RegistryErrorV1::new(
-                RegistryFailureClassV1::Permanent,
-                "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
-            )
-        })?;
-        let raw_url = document
-            .get("torii_url")
-            .and_then(toml::Value::as_str)
-            .ok_or_else(|| {
-                RegistryErrorV1::new(
-                    RegistryFailureClassV1::Permanent,
-                    "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
-                )
-            })?;
-        let torii_url = raw_url.parse::<Url>().map_err(|_| {
-            RegistryErrorV1::new(
-                RegistryFailureClassV1::Permanent,
-                "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID",
-            )
-        })?;
-        let timeout = document
-            .get("torii_request_timeout_ms")
-            .and_then(toml::Value::as_integer)
-            .and_then(|value| u64::try_from(value).ok())
-            .map_or(DEFAULT_PUBLIC_QUERY_TIMEOUT, Duration::from_millis)
-            .min(Duration::from_secs(60));
-        let account = match document.get("account") {
-            Some(value) => Some(value.as_table().ok_or_else(invalid_public_config)?),
-            None => None,
-        };
-        let profile = match account.and_then(|account| account.get("profile")) {
-            Some(value) => Some(value.as_str().ok_or_else(invalid_public_config)?),
-            None => None,
-        };
-        let explicit_discriminant =
-            match account.and_then(|account| account.get("chain_discriminant")) {
-                Some(value) => {
-                    let value = value.as_integer().ok_or_else(invalid_public_config)?;
-                    Some(u16::try_from(value).map_err(|_| invalid_public_config())?)
-                }
-                None => None,
-            };
-        let account_chain_discriminant =
-            resolve_account_chain_discriminant(profile, explicit_discriminant)
-                .map_err(|_| invalid_public_config())?;
-        Self::new(torii_url, timeout, account_chain_discriminant)
+        let (configuration, _) = Config::load_bytes_with_musubi_publication(path, bytes)
+            .map_err(|_| invalid_public_config())?;
+        let timeout = configuration.torii_request_timeout;
+        let account_chain_discriminant = configuration.account_chain_discriminant;
+        Self::new(
+            Client::new(configuration),
+            timeout,
+            account_chain_discriminant,
+        )
     }
 
-    /// Return the configured public endpoint. No account or credential material is retained.
+    /// Return the configured authenticated endpoint without exposing signer material.
     #[must_use]
     pub const fn torii_url(&self) -> &Url {
-        &self.torii_url
+        &self.client.torii_url
     }
 
-    /// Return the validated public I105 account chain discriminant without loading a signer.
+    /// Return the validated I105 account chain discriminant used by the request signer.
     #[must_use]
     pub const fn account_chain_discriminant(&self) -> u16 {
         self.account_chain_discriminant
@@ -764,7 +781,7 @@ impl RegistryReadClientV1 {
         R: JsonDeserialize,
     {
         let _chain_discriminant = ChainDiscriminantGuard::enter(self.account_chain_discriminant);
-        let response = post_public_musubi_query_v1(&self.torii_url, path, query, self.timeout)
+        let response = post_public_musubi_query_v1(&self.client, path, query, self.timeout)
             .map_err(|_| {
                 RegistryErrorV1::new(
                     RegistryFailureClassV1::Retryable,
@@ -808,6 +825,15 @@ impl RegistrySigningClientV1 {
     #[must_use]
     pub(crate) fn network_id(&self) -> NetworkId {
         self.client.network_id
+    }
+
+    /// Clone an authenticated registry reader from this exact signing configuration.
+    pub(crate) fn authenticated_reader(&self) -> Result<RegistryReadClientV1, RegistryErrorV1> {
+        RegistryReadClientV1::new(
+            self.client.clone(),
+            self.client.torii_request_timeout,
+            self.account_chain_discriminant,
+        )
     }
 
     /// Load a required explicit `--config` or the platform `client.toml`, without env overrides.
@@ -2467,6 +2493,26 @@ mod tests {
         ))
     }
 
+    fn authenticated_reader_config(url: &str) -> String {
+        let signer = KeyPair::try_from_seed(vec![0x59; 32], Algorithm::Ed25519)
+            .expect("authenticated reader key");
+        format!(
+            r#"
+chain = "musubi-registry-test"
+network_id = "{}"
+torii_url = "{url}"
+
+[account]
+profile = "taira"
+public_key = "{}"
+private_key = "{}"
+"#,
+            test_network_id(0x15),
+            signer.public_key(),
+            ExposedPrivateKey(signer.private_key().clone()),
+        )
+    }
+
     fn serve_http_once(
         status: &'static str,
         response: Vec<u8>,
@@ -2633,8 +2679,8 @@ mod tests {
         let valid = retention_page(&archive_ids, snapshot);
         let (url, server) =
             serve_json_once(norito::json::to_vec(&valid).expect("retention page JSON"));
-        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 753)
-            .expect("signer-free registry client");
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 753)
+            .expect("authenticated registry client");
         assert_eq!(
             client
                 .archive_retention(&request)
@@ -2647,8 +2693,8 @@ mod tests {
         stale.snapshot.finalized_height += 1;
         stale.snapshot.finalized_block_hash = [0x72; 32];
         let (url, server) = serve_json_once(norito::json::to_vec(&stale).expect("stale page JSON"));
-        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 753)
-            .expect("signer-free registry client");
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 753)
+            .expect("authenticated registry client");
         assert_eq!(
             client
                 .archive_retention(&request)
@@ -2663,8 +2709,8 @@ mod tests {
         let (url, server) = serve_json_once(
             norito::json::to_vec(&mismatched).expect("mismatched retention page JSON"),
         );
-        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 753)
-            .expect("signer-free registry client");
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 753)
+            .expect("authenticated registry client");
         assert_eq!(
             client
                 .archive_retention(&request)
@@ -2677,8 +2723,8 @@ mod tests {
         let reversed = retention_page(&[archive_ids[1], archive_ids[0]], snapshot);
         let (url, server) =
             serve_json_once(norito::json::to_vec(&reversed).expect("reversed page JSON"));
-        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 753)
-            .expect("signer-free registry client");
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 753)
+            .expect("authenticated registry client");
         assert_eq!(
             client
                 .archive_retention(&request)
@@ -2691,12 +2737,12 @@ mod tests {
 
     #[test]
     fn archive_retention_rejects_an_invalid_request_before_network_io() {
-        let client = RegistryReadClientV1::new(
+        let client = RegistryReadClientV1::new_for_test(
             "http://127.0.0.1:9/".parse().expect("loopback URL"),
             Duration::from_secs(1),
             753,
         )
-        .expect("signer-free reader");
+        .expect("authenticated reader");
         let error = client
             .archive_retention(&MusubiArchiveRetentionQueryV1 {
                 archive_ids: Vec::new(),
@@ -2708,23 +2754,14 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn public_config_ignores_signer_fields() {
+    fn authenticated_config_image_loads_one_exact_signer_and_redacts_it() {
         let temporary = tempdir().expect("temporary directory");
         let path = temporary.path().join("client.toml");
-        fs::write(
-            &path,
-            r#"
-                torii_url = "https://registry.example/iroha/"
-                [account]
-                profile = "taira"
-                public_key = "deliberately-not-a-key"
-                private_key = "must-not-be-parsed"
-            "#,
-        )
-        .expect("write public config fixture");
+        let source = authenticated_reader_config("https://registry.example/iroha/");
+        fs::write(&path, &source).expect("write authenticated config fixture");
 
         let (client, image) = RegistryReadClientV1::load_with_config_image(Some(&path))
-            .expect("load URL and exact bounded image");
+            .expect("load signer and exact bounded image");
         assert_eq!(
             client.torii_url().as_str(),
             "https://registry.example/iroha/"
@@ -2741,22 +2778,58 @@ mod tests {
         changed_bytes.push(b'\n');
         assert!(!provenance.matches(&changed_bytes));
         let image_debug = format!("{image:?}");
-        assert!(!image_debug.contains("must-not-be-parsed"));
+        assert!(!image_debug.contains(&source));
         assert!(!image_debug.contains(path.to_string_lossy().as_ref()));
+        let client_debug = format!("{client:?}");
+        assert!(!client_debug.contains("private_key"));
+        assert!(!client_debug.contains("ed0120"));
         let provenance_debug = format!("{provenance:?}");
-        assert!(!provenance_debug.contains("must-not-be-parsed"));
+        assert!(!provenance_debug.contains(&source));
         assert!(!provenance_debug.contains(path.to_string_lossy().as_ref()));
         assert!(
             !provenance_debug
                 .contains(&hex::encode(platform_config_provenance_digest(&same_bytes)))
         );
-        let from_bytes = RegistryReadClientV1::load_from_config_bytes(&same_bytes)
-            .expect("load public context from the already-read image");
+        let from_bytes = RegistryReadClientV1::load_from_config_bytes(&path, &same_bytes)
+            .expect("load authenticated context from the already-read image");
         assert_eq!(from_bytes.torii_url(), client.torii_url());
         assert_eq!(
             from_bytes.account_chain_discriminant(),
             client.account_chain_discriminant()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authenticated_config_rejects_missing_and_foreign_account_keys_before_dispatch() {
+        let temporary = tempdir().expect("temporary directory");
+        let path = temporary.path().join("client.toml");
+        let valid = authenticated_reader_config("http://127.0.0.1:9/");
+        let missing = valid
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("private_key ="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let foreign = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
+            .expect("foreign account key");
+        let foreign_private = ExposedPrivateKey(foreign.private_key().clone()).to_string();
+        let mismatched = valid
+            .lines()
+            .map(|line| {
+                if line.trim_start().starts_with("private_key =") {
+                    format!("private_key = \"{foreign_private}\"")
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        for source in [missing, mismatched] {
+            fs::write(&path, source).expect("write rejected authenticated config");
+            let error = RegistryReadClientV1::load_with_config_image(Some(&path))
+                .expect_err("missing or foreign signer must fail before dispatch");
+            assert_eq!(error.code(), "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID");
+        }
     }
 
     #[cfg(unix)]
@@ -2768,13 +2841,9 @@ mod tests {
         let path = temporary.path().join("client.toml");
         fs::write(
             &path,
-            r#"
-                torii_url = "https://registry.example/iroha/"
-                [account]
-                profile = "taira"
-            "#,
+            authenticated_reader_config("https://registry.example/iroha/"),
         )
-        .expect("write public config fixture");
+        .expect("write authenticated config fixture");
 
         let symbolic = temporary.path().join("symbolic.toml");
         symlink(&path, &symbolic).expect("create symbolic link");
@@ -2806,13 +2875,9 @@ mod tests {
         let path = temporary.path().join("client.toml");
         fs::write(
             &path,
-            r#"
-                torii_url = "https://registry.example/iroha/"
-                [account]
-                profile = "taira"
-            "#,
+            authenticated_reader_config("https://registry.example/iroha/"),
         )
-        .expect("write public config fixture");
+        .expect("write authenticated config fixture");
         let relative = path
             .strip_prefix(&current)
             .expect("temporary path is below current directory");
@@ -2838,12 +2903,12 @@ mod tests {
 
     #[test]
     fn search_rejects_an_invalid_request_before_network_io() {
-        let client = RegistryReadClientV1::new(
+        let client = RegistryReadClientV1::new_for_test(
             "http://127.0.0.1:9/".parse().expect("loopback URL"),
             Duration::from_secs(1),
             753,
         )
-        .expect("signer-free reader");
+        .expect("authenticated reader");
         let error = client
             .search(&MusubiSearchQueryV1 {
                 query: String::new(),
@@ -3128,7 +3193,7 @@ mod tests {
             norito::json::to_vec(&expected).expect("account response JSON")
         };
         let (url, server) = serve_json_once(response);
-        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 369)
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 369)
             .expect("Taira registry reader");
 
         let actual: AccountId = client
@@ -3198,8 +3263,8 @@ mod tests {
             norito::json::to_vec(&package_record).expect("package record JSON")
         };
         let (url, server) = serve_json_once(package_response);
-        let client =
-            RegistryReadClientV1::new(url, Duration::from_secs(2), 369).expect("registry reader");
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 369)
+            .expect("registry reader");
         let error = client
             .exact_package(requested_package.clone())
             .expect_err("an exact package response cannot cross identities");
@@ -3226,8 +3291,8 @@ mod tests {
             norito::json::to_vec(&release_snapshot).expect("release snapshot JSON")
         };
         let (url, server) = serve_json_once(release_response);
-        let client =
-            RegistryReadClientV1::new(url, Duration::from_secs(2), 369).expect("registry reader");
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 369)
+            .expect("registry reader");
         let error = client
             .exact_release(requested_release.clone())
             .expect_err("an exact release response cannot cross identities");
@@ -3336,8 +3401,8 @@ mod tests {
         };
         let response = norito::json::to_vec(&page).expect("directory response JSON");
         let (url, server) = serve_json_once(response);
-        let client = RegistryReadClientV1::new(url, Duration::from_secs(2), 753)
-            .expect("signer-free registry client");
+        let client = RegistryReadClientV1::new_for_test(url, Duration::from_secs(2), 753)
+            .expect("authenticated registry client");
 
         let package = client
             .bind_selector_namespace(&selector)
@@ -3857,7 +3922,7 @@ mod tests {
             ("200 OK", resolver_json),
             ("200 OK", exact_json),
         ]);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let mut backend = RegistryPublicationBackendV1::new(
@@ -3940,7 +4005,7 @@ mod tests {
             norito::json::to_vec(&resolver).expect("foreign resolver page JSON")
         };
         let (url, server) = serve_json_once(response);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(
@@ -3977,7 +4042,7 @@ mod tests {
             norito::json::to_vec(&retention).expect("foreign retention page JSON")
         };
         let (url, server) = serve_json_once(response);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(
@@ -4022,7 +4087,7 @@ mod tests {
             ("200 OK", resolver_json),
             ("200 OK", retention_json),
         ]);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let mut backend = RegistryPublicationBackendV1::new(
@@ -4130,7 +4195,7 @@ mod tests {
             "RELEASE_SUBMISSION_TRANSACTION_HASH_MISMATCH"
         );
 
-        let read = RegistryReadClientV1::new(
+        let read = RegistryReadClientV1::new_for_test(
             "http://127.0.0.1:9/".parse().expect("loopback URL"),
             Duration::from_secs(1),
             753,
@@ -4186,7 +4251,7 @@ mod tests {
             norito::json::to_vec(&exact_release).expect("exact release snapshot JSON")
         };
         let (url, server) = serve_json_once(response);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let mut backend = RegistryPublicationBackendV1::new(
@@ -4235,7 +4300,7 @@ mod tests {
             norito::json::to_vec(&exact_release).expect("foreign exact release snapshot JSON")
         };
         let (url, server) = serve_json_once(response);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let mut backend = RegistryPublicationBackendV1::new(
@@ -4273,7 +4338,7 @@ mod tests {
             norito::json::to_vec(&exact_page).expect("archive page JSON")
         };
         let (url, server) = serve_json_once(exact_page_json);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(
@@ -4320,7 +4385,7 @@ mod tests {
             norito::json::to_vec(&conflicting_page).expect("conflicting archive page JSON")
         };
         let (url, server) = serve_json_once(conflicting_page_json);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(
@@ -4346,7 +4411,7 @@ mod tests {
             norito::json::to_vec(&exact_page).expect("archive page JSON")
         };
         let (url, server) = serve_json_once(response);
-        let read = RegistryReadClientV1::new(url.clone(), Duration::from_secs(2), 369)
+        let read = RegistryReadClientV1::new_for_test(url.clone(), Duration::from_secs(2), 369)
             .expect("registry reader");
         let signing = signing_client_at(&url, &publisher_key, request.network_id());
         let backend = RegistryPublicationBackendV1::new(

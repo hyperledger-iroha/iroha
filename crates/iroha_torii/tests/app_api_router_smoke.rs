@@ -43,6 +43,8 @@ async fn app_api_router_smoke() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = mk_minimal_root_cfg();
     cfg.torii.webhooks_enabled = true;
+    cfg.torii.operator_signatures.enabled = true;
+    cfg.torii.operator_signatures.allow_node_key = true;
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -114,6 +116,34 @@ async fn app_api_router_smoke() {
     };
 
     let app = torii.api_router_for_tests();
+
+    for path in ["/v1/soracloud/status", "/v1/soracloud/apps/status"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .body(axum::body::Body::empty())
+                    .expect("unsigned Soracloud GET"),
+            )
+            .await
+            .expect("Soracloud auth response");
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "{path} must reject missing canonical account authentication"
+        );
+    }
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .uri(Uri::from_static(
+                "/v1/soracloud/model/upload/encryption-recipient",
+            ))
+            .body(axum::body::Body::empty())
+            .expect("public Soracloud discovery GET"),
+    )
+    .await;
 
     // The v1 alias VOPRF-shaped hash helper was retired before release because it was
     // neither keyed nor verifiable. Every legacy request shape must remain unroutable,
@@ -296,13 +326,31 @@ async fn app_api_router_smoke() {
         ));
     }
 
-    // 3) App API: GET /v1/webhooks — ensure route exists; allow OK or 429
+    // 3) App API: GET /v1/webhooks — operator auth runs before route dispatch.
+    let unsigned_webhooks_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static("/v1/webhooks"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        unsigned_webhooks_response.status(),
+        StatusCode::UNAUTHORIZED
+    );
     assert_route_is_not_auth_denied(
         app.clone(),
-        Request::builder()
-            .uri(Uri::from_static("/v1/webhooks"))
-            .body(axum::body::Body::empty())
-            .unwrap(),
+        fixtures::operator_signed_request(
+            &cfg.common.key_pair,
+            Request::builder()
+                .uri(Uri::from_static("/v1/webhooks"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+            &[],
+        ),
     )
     .await;
 
@@ -327,12 +375,16 @@ async fn app_api_router_smoke() {
 }"#;
     assert_route_is_not_auth_denied(
         app.clone(),
-        Request::builder()
-            .method("POST")
-            .uri(Uri::from_static("/v1/webhooks"))
-            .header(axum::http::header::CONTENT_TYPE, "application/json")
-            .body(axum::body::Body::from(body))
-            .unwrap(),
+        fixtures::operator_signed_request(
+            &cfg.common.key_pair,
+            Request::builder()
+                .method("POST")
+                .uri(Uri::from_static("/v1/webhooks"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(body))
+                .unwrap(),
+            body.as_bytes(),
+        ),
     )
     .await;
 

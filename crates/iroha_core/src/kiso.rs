@@ -929,6 +929,8 @@ mod tests {
                 query_max_inflight: iroha_config::parameters::defaults::torii::QUERY_MAX_INFLIGHT,
                 query_heavy_max_inflight:
                     iroha_config::parameters::defaults::torii::QUERY_HEAVY_MAX_INFLIGHT,
+                query_fanout_max_retained_bytes:
+                    iroha_config::parameters::defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES,
                 query_queue_timeout: Duration::from_millis(
                     iroha_config::parameters::defaults::torii::QUERY_QUEUE_TIMEOUT_MS,
                 ),
@@ -1017,6 +1019,10 @@ mod tests {
                 zk_prover_enabled: false,
                 zk_prover_scan_period_secs: 60,
                 zk_prover_reports_ttl_secs: 3600,
+                zk_prover_reports_max_count:
+                    iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT,
+                zk_prover_reports_max_bytes:
+                    iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_BYTES,
                 zk_prover_max_inflight:
                     iroha_config::parameters::defaults::torii::ZK_PROVER_MAX_INFLIGHT,
                 zk_prover_max_scan_bytes:

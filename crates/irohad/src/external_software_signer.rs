@@ -16,6 +16,8 @@ mod adapter;
 mod envelope;
 #[cfg(unix)]
 mod journal;
+#[allow(dead_code)]
+mod privacy_governance;
 mod protocol;
 #[cfg(unix)]
 mod runtime_adapters;

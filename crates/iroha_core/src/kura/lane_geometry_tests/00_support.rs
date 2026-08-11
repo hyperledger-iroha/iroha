@@ -69,3 +69,9 @@ use crate::{
 // Keep the authenticated archive payload comfortably larger than the checkpoint sidecar.
 // This makes the net disk-reclamation assertion independent of small encoding-size changes.
 const GC_PAYLOAD_LEN: usize = 16 * 1024;
+
+fn test_network_id(label: &[u8]) -> iroha_data_model::NetworkId {
+    iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+        iroha_crypto::Hash::new(label),
+    ))
+}

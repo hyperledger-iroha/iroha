@@ -68,6 +68,7 @@ pub use core::{
         select_layout_flags_for_size_with as select_layout_flags_with,
     },
     to_bytes, to_bytes_auto, to_bytes_in, to_compressed_bytes, with_decode_limits,
+    with_decode_limits_scope,
 };
 
 #[cfg(feature = "parallel-decode")]
@@ -493,7 +494,7 @@ pub mod codec {
         {
             let _fg = core::DecodeFlagsGuard::enter(flags);
             let mut encoder = core::Encoder::new(&mut counting);
-            NoritoSerialize::serialize(value, &mut encoder).expect("encode pass 1");
+            NoritoSerialize::serialize(value, &mut encoder)?;
         }
         #[cfg(feature = "adaptive-telemetry")]
         let __pass1_ns = __t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
@@ -579,6 +580,19 @@ pub mod codec {
             }
         }
 
+        struct AlwaysFails;
+
+        impl NoritoSerialize for AlwaysFails {
+            fn serialize(
+                &self,
+                _encoder: &mut crate::core::Encoder<'_>,
+            ) -> Result<(), crate::Error> {
+                Err(crate::Error::Message(
+                    "intentional serializer failure".into(),
+                ))
+            }
+        }
+
         #[derive(Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
         struct AdaptiveFixedFields {
             tag: u8,
@@ -615,6 +629,17 @@ pub mod codec {
             let items = vec![Hinted(1), Hinted(2), Hinted(3)];
             let _ = items.encode();
             assert!(HINT_CALLS.load(Ordering::Relaxed) > 0);
+        }
+
+        #[test]
+        fn adaptive_writer_propagates_serializer_errors() {
+            let mut out = Vec::new();
+            let error = super::encode_adaptive_into(&AlwaysFails, &mut out)
+                .expect_err("fallible writer API must propagate serializer errors");
+            assert!(
+                matches!(error, crate::Error::Message(message) if message == "intentional serializer failure")
+            );
+            assert!(out.is_empty());
         }
 
         #[test]
@@ -1284,6 +1309,12 @@ pub mod json {
             limit: usize,
             context: &'static str,
         },
+        /// An active decode scope rejected allocation or structural work.
+        #[error("JSON decode resource limit exceeded")]
+        DecodeResourceLimit,
+        /// A fallible allocation needed by the JSON decoder failed.
+        #[error("JSON decode allocation failed")]
+        AllocationFailed,
         #[error("invalid utf8")]
         InvalidUtf8,
         #[error("{0}")]
@@ -1310,7 +1341,45 @@ pub mod json {
                 field: field.into(),
             }
         }
+
+        /// Return whether decoding stopped at a caller-provided resource bound.
+        #[doc(hidden)]
+        #[must_use]
+        pub const fn is_decode_resource_limit(&self) -> bool {
+            matches!(
+                self,
+                Self::DecodeResourceLimit
+                    | Self::AllocationFailed
+                    | Self::NestingDepthExceeded { .. }
+            )
+        }
+
+        /// Convert a core decode-budget failure without copying its diagnostics.
+        #[doc(hidden)]
+        pub fn from_decode_resource(error: crate::core::Error) -> Self {
+            if error.is_decode_resource_limit() {
+                Self::DecodeResourceLimit
+            } else {
+                Self::AllocationFailed
+            }
+        }
     }
+
+    mod bounded;
+    pub use bounded::{
+        BoundedJsonError, FastJsonWrite, JsonWriteSink, to_json_bounded, write_json_string_to,
+        write_json_unbounded,
+    };
+
+    /// Stream bytes as one uppercase-hex JSON string through a checked sink.
+    #[doc(hidden)]
+    pub fn write_upper_hex_json_string_to(
+        bytes: &[u8],
+        output: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        bounded::write_hex_to(bytes, output)
+    }
+
     impl From<String> for Error {
         fn from(s: String) -> Self {
             Error::Message(s)
@@ -2418,7 +2487,7 @@ pub mod json {
     /// Convert a native JSON `Value` into `T` using `JsonDeserialize`.
     pub fn from_value<T: JsonDeserialize>(v: Value) -> Result<T, Error> {
         let result = T::json_from_value(&v);
-        drop_json_values_iteratively(vec![v]);
+        drop_json_value_iteratively(v);
         result
     }
 
@@ -2484,90 +2553,49 @@ pub mod json {
         Ok(())
     }
 
-    fn drop_json_values_iteratively(mut pending: Vec<Value>) {
-        while let Some(value) = pending.pop() {
-            match value {
-                Value::Array(mut values) => pending.append(&mut values),
-                Value::Object(values) => pending.extend(values.into_values()),
-                Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
-            }
+    fn try_decode_vec_with_capacity<T>(entries: usize) -> Result<Vec<T>, Error> {
+        let requested_bytes = entries
+            .checked_mul(core::mem::size_of::<T>())
+            .ok_or(Error::DecodeResourceLimit)?;
+        crate::core::reserve_decode_allocation(requested_bytes)
+            .map_err(Error::from_decode_resource)?;
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(entries)
+            .map_err(|_| Error::AllocationFailed)?;
+        let allocated_bytes = values
+            .capacity()
+            .checked_mul(core::mem::size_of::<T>())
+            .ok_or(Error::DecodeResourceLimit)?;
+        if let Some(extra_bytes) = allocated_bytes.checked_sub(requested_bytes)
+            && extra_bytes != 0
+        {
+            crate::core::reserve_decode_allocation(extra_bytes)
+                .map_err(Error::from_decode_resource)?;
         }
+        Ok(values)
     }
 
-    struct IterativeValueDropGuard(Option<Value>);
-
-    impl IterativeValueDropGuard {
-        fn new(value: Value) -> Self {
-            Self(Some(value))
+    fn try_decode_string_copy(value: &str) -> Result<String, Error> {
+        crate::core::reserve_decode_allocation(value.len()).map_err(Error::from_decode_resource)?;
+        let mut decoded = String::new();
+        decoded
+            .try_reserve_exact(value.len())
+            .map_err(|_| Error::AllocationFailed)?;
+        let allocated_bytes = decoded.capacity();
+        if let Some(extra_bytes) = allocated_bytes.checked_sub(value.len())
+            && extra_bytes != 0
+        {
+            crate::core::reserve_decode_allocation(extra_bytes)
+                .map_err(Error::from_decode_resource)?;
         }
-
-        fn take(&mut self) -> Value {
-            self.0.take().expect("iterative JSON value guard is empty")
-        }
+        decoded.push_str(value);
+        Ok(decoded)
     }
 
-    impl Drop for IterativeValueDropGuard {
-        fn drop(&mut self) {
-            if let Some(value) = self.0.take() {
-                drop_json_values_iteratively(vec![value]);
-            }
-        }
-    }
-
-    enum ValueParseFrame {
-        Array {
-            values: Vec<Value>,
-            child_depth: usize,
-        },
-        Object {
-            values: Map,
-            key: Option<String>,
-            child_depth: usize,
-        },
-    }
-
-    impl ValueParseFrame {
-        fn append_values_to(self, pending: &mut Vec<Value>) {
-            match self {
-                Self::Array { mut values, .. } => pending.append(&mut values),
-                Self::Object { values, .. } => pending.extend(values.into_values()),
-            }
-        }
-
-        fn finish(self) -> Value {
-            match self {
-                Self::Array { values, .. } => Value::Array(values),
-                Self::Object { values, .. } => Value::Object(values),
-            }
-        }
-    }
-
-    #[derive(Default)]
-    struct ValueParseState {
-        frames: Vec<ValueParseFrame>,
-        completed: Option<Value>,
-    }
-
-    impl ValueParseState {
-        fn take_completed(&mut self) -> Value {
-            self.completed
-                .take()
-                .expect("iterative JSON parser has no completed value")
-        }
-    }
-
-    impl Drop for ValueParseState {
-        fn drop(&mut self) {
-            let mut pending = Vec::new();
-            if let Some(value) = self.completed.take() {
-                pending.push(value);
-            }
-            for frame in self.frames.drain(..) {
-                frame.append_values_to(&mut pending);
-            }
-            drop_json_values_iteratively(pending);
-        }
-    }
+    mod value_drop;
+    pub use value_drop::drop_json_value_iteratively;
+    use value_drop::{IterativeValueDropGuard, ValueParseFrame, ValueParseState};
 
     fn parse_object_key(p: &mut Parser<'_>) -> Result<String, Error> {
         let key = p.parse_string()?;
@@ -2587,7 +2615,11 @@ pub mod json {
             Close,
         }
 
-        let mut state = ValueParseState::default();
+        p.skip_ws();
+        let (profile, _) = preflight::value_profile_at_depth(p.input(), p.position(), depth)
+            .map_err(|error| p.lexical_preflight_error(error))?;
+        let frame_capacity = profile.max_nesting_depth().saturating_sub(depth);
+        let mut state = ValueParseState::with_frame_capacity(frame_capacity)?;
         let mut next_depth = depth;
         'parse: loop {
             ensure_json_value_depth(next_depth)?;
@@ -2600,15 +2632,17 @@ pub mod json {
                 }
                 Some(b't') | Some(b'f') => Some(Value::Bool(p.parse_bool()?)),
                 Some(b'[') => {
+                    let entries = p.preflight_container_entries(b'[')?;
+                    let values = try_decode_vec_with_capacity(entries)?;
                     p.bump();
                     p.skip_ws();
                     if p.peek() == Some(b']') {
                         p.bump();
-                        Some(Value::Array(Vec::new()))
+                        Some(Value::Array(values))
                     } else {
                         let child_depth = next_depth.saturating_add(1);
                         state.frames.push(ValueParseFrame::Array {
-                            values: Vec::new(),
+                            values,
                             child_depth,
                         });
                         next_depth = child_depth;
@@ -2616,6 +2650,9 @@ pub mod json {
                     }
                 }
                 Some(b'{') => {
+                    let entries = p.preflight_container_entries(b'{')?;
+                    crate::core::reserve_decode_btree_allocation::<String, Value>(entries)
+                        .map_err(Error::from_decode_resource)?;
                     p.bump();
                     p.skip_ws();
                     if p.peek() == Some(b'}') {
@@ -2885,7 +2922,7 @@ pub mod json {
                 "]".repeat(MAX_JSON_VALUE_NESTING_DEPTH - 1)
             );
             let value = parse_value(&at_limit).expect("JSON nesting at the limit must decode");
-            drop_json_values_iteratively(vec![value]);
+            drop_json_value_iteratively(value);
 
             let over_limit = format!(
                 "{}null{}",
@@ -2899,7 +2936,7 @@ pub mod json {
                     context: "JSON value",
                 }) if depth == MAX_JSON_VALUE_NESTING_DEPTH + 1 => {}
                 Ok(value) => {
-                    drop_json_values_iteratively(vec![value]);
+                    drop_json_value_iteratively(value);
                     panic!("owned parser accepted over-limit nesting");
                 }
                 Err(error) => panic!("owned parser returned wrong over-limit error: {error}"),
@@ -3085,7 +3122,7 @@ pub mod json {
                 let value = parse_value(valid).unwrap_or_else(|error| {
                     panic!("owned parser rejected valid JSON {valid:?}: {error}")
                 });
-                drop_json_values_iteratively(vec![value]);
+                drop_json_value_iteratively(value);
             }
 
             for invalid in [
@@ -3152,7 +3189,7 @@ pub mod json {
                     if rendered != at_255 {
                         return Err("iterative JSON writer changed the boundary value".to_owned());
                     }
-                    drop_json_values_iteratively(vec![value]);
+                    drop_json_value_iteratively(value);
 
                     let value = from_json::<Value>(&at_255).map_err(|error| error.to_string())?;
                     let raw = from_value::<RawValue>(value).map_err(|error| error.to_string())?;
@@ -3164,7 +3201,7 @@ pub mod json {
                     match from_json::<Value>(&trailing) {
                         Err(Error::TrailingCharacters { .. }) => {}
                         Ok(value) => {
-                            drop_json_values_iteratively(vec![value]);
+                            drop_json_value_iteratively(value);
                             return Err(
                                 "typed Value parser accepted trailing characters".to_owned()
                             );
@@ -3181,7 +3218,7 @@ pub mod json {
                         return Err("validator accepted a trailing comma".to_owned());
                     }
                     if let Ok(value) = parse_value(&invalid_256th_wrapper) {
-                        drop_json_values_iteratively(vec![value]);
+                        drop_json_value_iteratively(value);
                         return Err("owned parser accepted a trailing comma".to_owned());
                     }
 
@@ -3193,7 +3230,7 @@ pub mod json {
                     match parse_value(&over_limit) {
                         Err(Error::NestingDepthExceeded { .. }) => {}
                         Ok(value) => {
-                            drop_json_values_iteratively(vec![value]);
+                            drop_json_value_iteratively(value);
                             return Err("owned parser accepted over-limit nesting".to_owned());
                         }
                         Err(error) => {
@@ -3767,11 +3804,17 @@ pub mod json {
     pub trait JsonSerialize {
         /// Serialize `self` into `out` as JSON.
         fn json_serialize(&self, out: &mut String);
-    }
 
-    impl JsonSerialize for bool {
-        fn json_serialize(&self, out: &mut String) {
-            out.push_str(if *self { "true" } else { "false" });
+        /// Serialize `self` into a checked JSON sink.
+        ///
+        /// Manual serializers retain their ordinary behaviour but fail closed
+        /// for bounded sinks until they explicitly implement this method.
+        fn json_serialize_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+            let Some(unbounded) = out.unbounded_output() else {
+                return Err(BoundedJsonError::Unsupported);
+            };
+            self.json_serialize(unbounded);
+            Ok(())
         }
     }
 
@@ -3849,11 +3892,6 @@ pub mod json {
         write_u128_json(out, v as u128)
     }
     #[inline]
-    fn write_u32_json(out: &mut String, v: u32) {
-        write_u64_json(out, v as u64)
-    }
-
-    #[inline]
     fn write_i64_json(out: &mut String, v: i64) {
         if v >= 0 {
             write_u64_json(out, v as u64);
@@ -3863,90 +3901,19 @@ pub mod json {
         }
     }
 
-    impl JsonSerialize for core::num::NonZeroU128 {
-        fn json_serialize(&self, out: &mut String) {
-            write_u128_json(out, self.get());
-        }
-    }
-    impl JsonSerialize for core::num::NonZeroU64 {
-        fn json_serialize(&self, out: &mut String) {
-            write_u64_json(out, self.get());
-        }
-    }
-    impl JsonSerialize for core::num::NonZeroU32 {
-        fn json_serialize(&self, out: &mut String) {
-            write_u32_json(out, self.get());
-        }
-    }
-    impl JsonSerialize for core::num::NonZeroU16 {
-        fn json_serialize(&self, out: &mut String) {
-            write_u32_json(out, self.get() as u32);
-        }
-    }
-    impl JsonSerialize for core::num::NonZeroUsize {
-        fn json_serialize(&self, out: &mut String) {
-            write_u64_json(out, self.get() as u64);
-        }
-    }
-    impl JsonSerialize for str {
-        fn json_serialize(&self, out: &mut String) {
-            write_json_string(self, out);
-        }
-    }
-
-    impl JsonSerialize for std::time::Duration {
-        fn json_serialize(&self, out: &mut String) {
-            out.push('{');
-            out.push_str("\"secs\":");
-            JsonSerialize::json_serialize(&self.as_secs(), out);
-            out.push(',');
-            out.push_str("\"nanos\":");
-            JsonSerialize::json_serialize(&self.subsec_nanos(), out);
-            out.push('}');
-        }
-    }
-    impl<T: JsonSerialize> JsonSerialize for Option<T> {
-        fn json_serialize(&self, out: &mut String) {
-            match self {
-                Some(v) => v.json_serialize(out),
-                None => out.push_str("null"),
-            }
-        }
-    }
-    impl JsonSerialize for () {
-        fn json_serialize(&self, out: &mut String) {
-            out.push_str("null");
-        }
-    }
-    impl<T: JsonSerialize> JsonSerialize for Vec<T> {
-        fn json_serialize(&self, out: &mut String) {
-            out.push('[');
-            let mut first = true;
-            for v in self {
-                if !first {
-                    out.push(',');
-                }
-                first = false;
-                v.json_serialize(out);
-            }
-            out.push(']');
-        }
-    }
-
-    impl FastJsonWrite for Value {
-        fn write_json(&self, out: &mut String) {
-            write_value_to_string(self, out, false, 0);
-        }
-    }
-
     impl<T: JsonDeserialize> JsonDeserialize for Box<T> {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
             let _depth_guard = OwnedValueDecodeDepthGuard::enter()?;
-            T::json_deserialize(parser).map(Box::new)
+            crate::core::reserve_decode_box_allocation::<T>()
+                .map_err(Error::from_decode_resource)?;
+            let value = T::json_deserialize(parser)?;
+            Ok(Box::new(value))
         }
 
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             let _depth_guard = OwnedValueDecodeDepthGuard::enter()?;
+            crate::core::reserve_decode_box_allocation::<T>()
+                .map_err(Error::from_decode_resource)?;
             T::json_from_value(value).map(Box::new)
         }
     }
@@ -3959,26 +3926,13 @@ pub mod json {
 
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Some(s) = value.as_str() {
-                return Ok(s.to_owned().into_boxed_str());
+                return try_decode_string_copy(s).map(String::into_boxed_str);
             }
             String::json_from_value(value).map(String::into_boxed_str)
         }
 
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            Ok(key.to_owned().into_boxed_str())
-        }
-    }
-
-    impl<T: JsonSerialize + ?Sized> FastJsonWrite for Box<T> {
-        fn write_json(&self, out: &mut String) {
-            (**self).json_serialize(out);
-        }
-    }
-
-    /// Bridge: any type with a typed writer can serve as a JSON serializer.
-    impl<T: FastJsonWrite> JsonSerialize for T {
-        fn json_serialize(&self, out: &mut String) {
-            self.write_json(out)
+            try_decode_string_copy(key).map(String::into_boxed_str)
         }
     }
 
@@ -4488,6 +4442,7 @@ pub mod json {
         /// Parse a JSON string with escaping support.
         pub fn parse_string(&mut self) -> Result<String, Error> {
             self.skip_ws();
+            let token_start = self.i;
             self.expect(b'"')?;
             // Fast path: scan for closing quote without encountering escapes or controls.
             let start = self.i;
@@ -4500,15 +4455,31 @@ pub mod json {
                     self.i = i + 1;
                     let st = std::str::from_utf8(slice)
                         .map_err(|_| self.err_at(start, "invalid utf8"))?;
-                    return Ok(st.to_string());
+                    crate::core::reserve_decode_allocation(st.len())
+                        .map_err(Error::from_decode_resource)?;
+                    let mut value = String::new();
+                    value
+                        .try_reserve_exact(st.len())
+                        .map_err(|_| Error::AllocationFailed)?;
+                    value.push_str(st);
+                    return Ok(value);
                 }
                 if b == b'\\' || b < 0x20 {
                     break;
                 }
                 i += 1;
             }
-            // Slow path: build into a UTF-8 byte buffer, handling escapes
-            let mut out: Vec<u8> = Vec::with_capacity(16);
+            // Slow path: first determine the exact decoded length without
+            // allocating, then reserve and decode into that admitted buffer.
+            let decoded_bytes = {
+                let mut preflight = Parser::new_at(self.input(), token_start);
+                preflight.skip_string_bounded(usize::MAX)?
+            };
+            crate::core::reserve_decode_allocation(decoded_bytes)
+                .map_err(Error::from_decode_resource)?;
+            let mut out: Vec<u8> = Vec::new();
+            out.try_reserve_exact(decoded_bytes)
+                .map_err(|_| Error::AllocationFailed)?;
             loop {
                 let b = self.bump().ok_or_else(|| {
                     let (byte, line, col) = self.pos_meta(self.i);
@@ -4654,14 +4625,14 @@ pub mod json {
                     b => out.push(b),
                 }
             }
-            let s = std::str::from_utf8(&out).map_err(|_| self.err_here("invalid utf8"))?;
-            Ok(s.to_string())
+            String::from_utf8(out).map_err(|_| self.err_here("invalid utf8"))
         }
         /// Parse a JSON array into `Vec<T>` using `JsonDeserialize` for elements.
         pub fn parse_array<T: JsonDeserialize>(&mut self) -> Result<Vec<T>, Error> {
+            let entries = self.preflight_container_entries(b'[')?;
+            let mut out = try_decode_vec_with_capacity(entries)?;
             self.skip_ws();
             self.expect(b'[')?;
-            let mut out = Vec::new();
             self.skip_ws();
             if matches!(self.peek(), Some(b']')) {
                 self.bump(); // consume ']'
@@ -4865,6 +4836,86 @@ pub mod json {
             } else {
                 let (byte, line, col) = self.pos_meta(self.i);
                 Err(Error::ExpectedColon { byte, line, col })
+            }
+        }
+
+        fn preflight_container_entries(&mut self, opening: u8) -> Result<usize, Error> {
+            self.skip_ws();
+            if self.peek() != Some(opening) {
+                let (byte, line, col) = self.pos_meta(self.i);
+                return Err(if opening == b'[' {
+                    Error::ExpectedArrayStart { byte, line, col }
+                } else {
+                    Error::ExpectedObjectStart { byte, line, col }
+                });
+            }
+            let (profile, _) = preflight::value_profile_at_depth(self.input(), self.i, 1)
+                .map_err(|error| self.lexical_preflight_error(error))?;
+            let entries = profile.root_container_entries();
+            crate::core::enforce_decode_sequence_length(
+                u64::try_from(entries).map_err(|_| Error::DecodeResourceLimit)?,
+            )
+            .map_err(Error::from_decode_resource)?;
+            Ok(entries)
+        }
+
+        /// Count and charge the entries in the next object without allocating.
+        #[doc(hidden)]
+        pub fn preflight_object_entries(&mut self) -> Result<usize, Error> {
+            self.preflight_container_entries(b'{')
+        }
+
+        /// Count and charge the entries in the next array without allocating.
+        #[doc(hidden)]
+        pub fn preflight_array_entries(&mut self) -> Result<usize, Error> {
+            self.preflight_container_entries(b'[')
+        }
+
+        /// Borrow the exact source spelling of the next JSON value.
+        ///
+        /// The value boundary is found with the allocation-free bounded
+        /// lexical scanner. This is intended for typed dispatch (notably
+        /// tagged enums) that immediately parses the borrowed fragment and
+        /// therefore must not copy an attacker-sized `content` subtree first.
+        pub fn raw_value_slice(&mut self) -> Result<&'a str, Error> {
+            self.skip_ws();
+            let start = self.i;
+            let end = preflight::value_end_at_depth(self.input(), start, 1)
+                .map_err(|error| self.lexical_preflight_error(error))?;
+            self.i = end;
+            Ok(&self.input()[start..end])
+        }
+
+        /// Skip the next JSON value with bounded stack and no owned value tree.
+        ///
+        /// Duplicate object names remain the responsibility of a typed object
+        /// decoder. The lexical walk validates the complete value grammar,
+        /// including strings, numbers, delimiters, and nesting depth.
+        pub fn skip_value_lexical(&mut self) -> Result<(), Error> {
+            self.skip_ws();
+            let start = self.i;
+            self.i = preflight::value_end_at_depth(self.input(), start, 1)
+                .map_err(|error| self.lexical_preflight_error(error))?;
+            Ok(())
+        }
+
+        fn lexical_preflight_error(&self, error: preflight::JsonPreflightError) -> Error {
+            if error.resource_kind() == Some(preflight::JsonPreflightResource::NestingDepth) {
+                return Error::NestingDepthExceeded {
+                    depth: error.attempted(),
+                    limit: error.limit(),
+                    context: "JSON value",
+                };
+            }
+            let (byte, line, col) = self.pos_meta(error.offset());
+            Error::WithPos {
+                msg: error.syntax_kind().map_or(
+                    "JSON lexical counter overflow",
+                    preflight::JsonPreflightSyntax::message,
+                ),
+                byte,
+                line,
+                col,
             }
         }
 
@@ -5719,13 +5770,13 @@ pub mod json {
 
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Some(s) = value.as_str() {
-                return Ok(s.to_owned());
+                return try_decode_string_copy(s);
             }
             json_from_value_via_string(value)
         }
 
         fn json_from_map_key(key: &str) -> Result<Self, Error> {
-            Ok(key.to_owned())
+            try_decode_string_copy(key)
         }
     }
 
@@ -5841,7 +5892,7 @@ pub mod json {
 
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Value::Array(items) = value {
-                let mut out = Vec::with_capacity(items.len());
+                let mut out = try_decode_vec_with_capacity(items.len())?;
                 for item in items {
                     out.push(T::json_from_value(item)?);
                 }
@@ -5857,18 +5908,35 @@ pub mod json {
         T: JsonDeserialize + Ord,
     {
         fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
-            let values: Vec<T> = p.parse_array()?;
+            let entries = p.preflight_container_entries(b'[')?;
+            crate::core::reserve_decode_btree_allocation::<T, ()>(entries)
+                .map_err(Error::from_decode_resource)?;
             let mut set = std::collections::BTreeSet::new();
-            for value in values {
+            p.skip_ws();
+            p.expect(b'[')?;
+            p.skip_ws();
+            if p.try_consume_char(b']')? {
+                return Ok(set);
+            }
+            loop {
+                let value = T::json_deserialize(p)?;
                 if !set.insert(value) {
                     return Err(Error::Message("duplicate element in set".into()));
                 }
+                p.skip_ws();
+                if p.try_consume_char(b',')? {
+                    continue;
+                }
+                p.expect(b']')?;
+                break;
             }
             Ok(set)
         }
 
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Value::Array(items) = value {
+                crate::core::reserve_decode_btree_allocation::<T, ()>(items.len())
+                    .map_err(Error::from_decode_resource)?;
                 let mut set = std::collections::BTreeSet::new();
                 for item in items {
                     let v = T::json_from_value(item)?;
@@ -5889,7 +5957,7 @@ pub mod json {
         }
 
         fn json_drop_after_error(self) {
-            drop_json_values_iteratively(vec![self]);
+            drop_json_value_iteratively(self);
         }
 
         fn json_from_value(value: &Value) -> Result<Self, Error> {
@@ -9287,136 +9355,6 @@ pub mod json {
     pub trait FastFromJson<'a>: Sized {
         fn parse<'b>(w: &mut TapeWalker<'a>, arena: &'b mut Arena) -> Result<Self, FastPathError>;
     }
-    /// Typed, straight-line JSON writer.
-    pub trait FastJsonWrite {
-        fn write_json(&self, out: &mut String);
-    }
-
-    impl FastJsonWrite for u16 {
-        fn write_json(&self, out: &mut String) {
-            write_u64_json(out, u64::from(*self));
-        }
-    }
-    impl FastJsonWrite for u8 {
-        fn write_json(&self, out: &mut String) {
-            write_u64_json(out, u64::from(*self));
-        }
-    }
-    impl FastJsonWrite for usize {
-        fn write_json(&self, out: &mut String) {
-            write_u64_json(out, *self as u64);
-        }
-    }
-    impl FastJsonWrite for u32 {
-        fn write_json(&self, out: &mut String) {
-            write_u32_json(out, *self);
-        }
-    }
-    impl FastJsonWrite for u64 {
-        fn write_json(&self, out: &mut String) {
-            write_u64_json(out, *self);
-        }
-    }
-    impl FastJsonWrite for u128 {
-        fn write_json(&self, out: &mut String) {
-            write_u128_json(out, *self);
-        }
-    }
-    impl FastJsonWrite for i64 {
-        fn write_json(&self, out: &mut String) {
-            write_i64_json(out, *self);
-        }
-    }
-    impl FastJsonWrite for i32 {
-        fn write_json(&self, out: &mut String) {
-            write_i64_json(out, *self as i64);
-        }
-    }
-    impl FastJsonWrite for i16 {
-        fn write_json(&self, out: &mut String) {
-            write_i64_json(out, i64::from(*self));
-        }
-    }
-    impl FastJsonWrite for i8 {
-        fn write_json(&self, out: &mut String) {
-            write_i64_json(out, i64::from(*self));
-        }
-    }
-    impl FastJsonWrite for isize {
-        fn write_json(&self, out: &mut String) {
-            write_i64_json(out, *self as i64);
-        }
-    }
-
-    impl<T: JsonSerialize + Ord> FastJsonWrite for std::collections::BTreeSet<T> {
-        fn write_json(&self, out: &mut String) {
-            out.push('[');
-            let mut iter = self.iter();
-            if let Some(first) = iter.next() {
-                first.json_serialize(out);
-                for value in iter {
-                    out.push(',');
-                    value.json_serialize(out);
-                }
-            }
-            out.push(']');
-        }
-    }
-
-    impl<K, V> FastJsonWrite for std::collections::BTreeMap<K, V>
-    where
-        K: JsonSerialize + Ord,
-        V: JsonSerialize,
-    {
-        fn write_json(&self, out: &mut String) {
-            out.push('{');
-            let mut iter = self.iter();
-            if let Some((key, value)) = iter.next() {
-                key.json_serialize(out);
-                out.push(':');
-                value.json_serialize(out);
-                for (key, value) in iter {
-                    out.push(',');
-                    key.json_serialize(out);
-                    out.push(':');
-                    value.json_serialize(out);
-                }
-            }
-            out.push('}');
-        }
-    }
-
-    // Minimal writer for f64 used by derives. Non-finite values are encoded as null.
-    impl FastJsonWrite for f64 {
-        fn write_json(&self, out: &mut String) {
-            write_f64_json(*self, out);
-        }
-    }
-
-    impl<T: FastJsonWrite + ?Sized> FastJsonWrite for &T {
-        fn write_json(&self, out: &mut String) {
-            (**self).write_json(out);
-        }
-    }
-
-    impl<T: FastJsonWrite + ?Sized> FastJsonWrite for &mut T {
-        fn write_json(&self, out: &mut String) {
-            (**self).write_json(out);
-        }
-    }
-
-    impl FastJsonWrite for str {
-        fn write_json(&self, out: &mut String) {
-            write_json_string(self, out);
-        }
-    }
-
-    impl FastJsonWrite for String {
-        fn write_json(&self, out: &mut String) {
-            write_json_string(self, out);
-        }
-    }
-
     impl<const N: usize> JsonDeserialize for [u8; N] {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
             let raw = parser.parse_string()?;
@@ -9440,6 +9378,10 @@ pub mod json {
         fn write_json(&self, out: &mut String) {
             encode_hex(self, out);
         }
+
+        fn write_json_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+            bounded::write_hex_to(self, out)
+        }
     }
 
     impl<K, V> JsonDeserialize for std::collections::HashMap<K, V>
@@ -9449,7 +9391,12 @@ pub mod json {
     {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
             let mut visitor = MapVisitor::new(parser)?;
+            let entries = visitor.total_entries();
+            crate::core::reserve_decode_hash_table_allocation::<(K, V)>(entries)
+                .map_err(Error::from_decode_resource)?;
             let mut map = std::collections::HashMap::new();
+            map.try_reserve(entries)
+                .map_err(|_| Error::AllocationFailed)?;
             while let Some(key) = visitor.next_key()? {
                 let key_ref = match &key {
                     KeyRef::Borrowed(s) => *s,
@@ -9467,7 +9414,11 @@ pub mod json {
 
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Value::Object(obj) = value {
-                let mut map = std::collections::HashMap::with_capacity(obj.len());
+                crate::core::reserve_decode_hash_table_allocation::<(K, V)>(obj.len())
+                    .map_err(Error::from_decode_resource)?;
+                let mut map = std::collections::HashMap::new();
+                map.try_reserve(obj.len())
+                    .map_err(|_| Error::AllocationFailed)?;
                 for (k, v) in obj.iter() {
                     let parsed_key = K::json_from_map_key(k)?;
                     if map.insert(parsed_key, V::json_from_value(v)?).is_some() {
@@ -9488,6 +9439,9 @@ pub mod json {
     {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
             let mut visitor = MapVisitor::new(parser)?;
+            let entries = visitor.total_entries();
+            crate::core::reserve_decode_btree_allocation::<K, V>(entries)
+                .map_err(Error::from_decode_resource)?;
             let mut map = std::collections::BTreeMap::new();
             while let Some(key) = visitor.next_key()? {
                 let key_ref = match &key {
@@ -9506,6 +9460,8 @@ pub mod json {
 
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Value::Object(obj) = value {
+                crate::core::reserve_decode_btree_allocation::<K, V>(obj.len())
+                    .map_err(Error::from_decode_resource)?;
                 let mut map = std::collections::BTreeMap::new();
                 for (k, v) in obj.iter() {
                     let parsed_key = K::json_from_map_key(k)?;
@@ -9525,9 +9481,14 @@ pub mod json {
         T: JsonDeserialize + Eq + core::hash::Hash,
     {
         fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, Error> {
+            let entries = parser.preflight_array_entries()?;
+            crate::core::reserve_decode_hash_table_allocation::<T>(entries)
+                .map_err(Error::from_decode_resource)?;
             parser.skip_ws();
             parser.expect(b'[')?;
             let mut set = std::collections::HashSet::new();
+            set.try_reserve(entries)
+                .map_err(|_| Error::AllocationFailed)?;
             parser.skip_ws();
             if parser.try_consume_char(b']')? {
                 return Ok(set);
@@ -9549,7 +9510,11 @@ pub mod json {
 
         fn json_from_value(value: &Value) -> Result<Self, Error> {
             if let Value::Array(items) = value {
-                let mut set = std::collections::HashSet::with_capacity(items.len());
+                crate::core::reserve_decode_hash_table_allocation::<T>(items.len())
+                    .map_err(Error::from_decode_resource)?;
+                let mut set = std::collections::HashSet::new();
+                set.try_reserve(items.len())
+                    .map_err(|_| Error::AllocationFailed)?;
                 for item in items {
                     let v = T::json_from_value(item)?;
                     if !set.insert(v) {
@@ -9581,11 +9546,43 @@ pub mod json {
             }
             out.push(']');
         }
+
+        fn write_json_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+            out.begin_container()?;
+            out.push('[')?;
+            let mut previous: Option<&T> = None;
+            for index in 0..self.len() {
+                let mut next: Option<&T> = None;
+                for candidate in self {
+                    if previous.is_some_and(|value| candidate <= value) {
+                        continue;
+                    }
+                    if next.is_none_or(|value| candidate < value) {
+                        next = Some(candidate);
+                    }
+                }
+                let Some(value) = next else {
+                    return Err(BoundedJsonError::LengthMismatch);
+                };
+                if index != 0 {
+                    out.push(',')?;
+                }
+                value.json_serialize_to(out)?;
+                previous = Some(value);
+            }
+            out.push(']')?;
+            out.end_container();
+            Ok(())
+        }
     }
 
     impl FastJsonWrite for Url {
         fn write_json(&self, out: &mut String) {
             write_json_string(self.as_str(), out);
+        }
+
+        fn write_json_to(&self, out: &mut dyn JsonWriteSink) -> Result<(), BoundedJsonError> {
+            write_json_string_to(self.as_str(), out)
         }
     }
 
@@ -9649,61 +9646,14 @@ pub mod json {
         }
     }
 
-    #[derive(Debug, Clone)]
-    pub struct RawValue {
-        inner: Box<str>,
-    }
+    mod raw_value;
+    pub use raw_value::RawValue;
 
-    impl RawValue {
-        #[inline]
-        pub fn from_boxed(inner: Box<str>) -> Self {
-            Self { inner }
-        }
-
-        #[inline]
-        pub fn from_string(s: String) -> Self {
-            Self {
-                inner: s.into_boxed_str(),
-            }
-        }
-
-        #[inline]
-        pub fn get(&self) -> &str {
-            &self.inner
-        }
-
-        #[inline]
-        pub fn as_str(&self) -> &str {
-            &self.inner
-        }
-
-        #[inline]
-        pub fn into_boxed_str(self) -> Box<str> {
-            self.inner
-        }
-
-        #[inline]
-        pub fn into_string(self) -> String {
-            self.inner.into()
-        }
-    }
-
-    impl JsonSerialize for RawValue {
-        fn json_serialize(&self, out: &mut String) {
-            out.push_str(self.get());
-        }
-    }
-
-    impl JsonDeserialize for RawValue {
-        fn json_deserialize(p: &mut Parser<'_>) -> Result<Self, Error> {
-            p.skip_ws();
-            let start = p.position();
-            p.skip_value()?;
-            let end = p.position();
-            let slice = &p.input()[start..end];
-            Ok(RawValue::from_string(slice.to_owned()))
-        }
-    }
+    mod preflight;
+    pub use preflight::{
+        JsonPreflightError, JsonPreflightLimits, JsonPreflightProfile, JsonPreflightResource,
+        JsonPreflightSyntax, preflight_slice,
+    };
 
     mod visitors;
     pub use visitors::{MapVisitor, SeqVisitor};

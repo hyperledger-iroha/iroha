@@ -3,8 +3,9 @@
 use norito::json::{Map, Value};
 
 use super::{
-    json_delete_operation, json_get_operation, json_post_operation, string_header_param,
-    string_path_param, string_query_param, text_get_operation,
+    json_delete_operation, json_get_operation, json_post_operation,
+    operator_signature_header_parameters, required_string_query_param, string_header_param,
+    string_path_param, text_get_operation,
 };
 
 pub(super) fn connect_paths() -> Map {
@@ -37,33 +38,58 @@ pub(super) fn connect_paths() -> Map {
             ],
         )),
     );
-    paths.insert(
-        "/v1/connect/ws".to_owned(),
-        Value::Object(text_get_operation(
-            "Connect",
-            "Connect to the Connect WebSocket.",
-            "Upgrade to the Connect WebSocket stream.",
-            None,
-        )),
+    let mut websocket = text_get_operation(
+        "Connect",
+        "Connect to the Connect WebSocket.",
+        "Upgrade to the Connect WebSocket stream for exactly one session role. Authenticate with either the role bearer token or its `iroha-connect.token.v1.*` WebSocket subprotocol form; query-string tokens are rejected.",
+        None,
     );
+    websocket.insert(
+        "parameters".to_owned(),
+        Value::Array(vec![
+            required_string_query_param("sid", "Canonical Connect session id."),
+            required_string_query_param("role", "Exact role: `app` or `wallet`."),
+            string_header_param(
+                "Authorization",
+                "Optional `Bearer <role-token>` authentication; omit only when using the Connect token subprotocol.",
+                false,
+            ),
+            string_header_param(
+                "Sec-WebSocket-Protocol",
+                "Optional `iroha-connect.token.v1.<base64url>` role-token authentication; omit only when using Authorization.",
+                false,
+            ),
+        ]),
+    );
+    paths.insert("/v1/connect/ws".to_owned(), Value::Object(websocket));
     paths.insert(
         "/v1/connect/status".to_owned(),
         Value::Object(json_get_operation(
             "Connect",
-            "Fetch Connect status.",
-            "Return redacted aggregate Connect relay status. Add `sid` with `Authorization: Bearer <token_management>` for per-session status.",
+            "Fetch one Connect session status.",
+            "Return the bounded status for exactly one Connect session. The required `sid` is authorized by the management bearer token returned when the session was created; unknown and duplicate query parameters are rejected.",
             "#/components/schemas/JsonValue",
             vec![
-                string_query_param(
+                required_string_query_param(
                     "sid",
-                    "Optional Connect session id for token-gated per-session status.",
+                    "Connect session id authorized by the management token.",
                 ),
                 string_header_param(
                     "Authorization",
-                    "Bearer management token required when `sid` is supplied.",
-                    false,
+                    "Bearer management token returned by `/v1/connect/session`.",
+                    true,
                 ),
             ],
+        )),
+    );
+    paths.insert(
+        "/v1/connect/status/aggregate".to_owned(),
+        Value::Object(json_get_operation(
+            "Connect",
+            "Fetch aggregate Connect node status.",
+            "Return redacted node-local Connect relay counters and policy state. This operator-only route requires a fresh signature bound to the exact NetworkId, GET target, and empty body.",
+            "#/components/schemas/JsonValue",
+            operator_signature_header_parameters(),
         )),
     );
     paths
@@ -207,6 +233,78 @@ mod tests {
                     .iter()
                     .any(|value| value.as_str() == Some(field))
             );
+        }
+    }
+
+    #[test]
+    fn status_routes_have_disjoint_protocol_and_operator_authentication() {
+        let paths = connect_paths();
+        let session = paths["/v1/connect/status"]["get"]
+            .as_object()
+            .expect("session status GET");
+        let session_parameters = session["parameters"]
+            .as_array()
+            .expect("session status parameters");
+        for name in ["sid", "Authorization"] {
+            let parameter = session_parameters
+                .iter()
+                .find(|parameter| parameter["name"].as_str() == Some(name))
+                .expect("required session-status parameter");
+            assert_eq!(parameter["required"].as_bool(), Some(true));
+        }
+        assert!(session_parameters.iter().all(|parameter| {
+            !parameter["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("X-Iroha-Operator-"))
+        }));
+
+        let aggregate = paths["/v1/connect/status/aggregate"]["get"]
+            .as_object()
+            .expect("aggregate status GET");
+        let aggregate_parameters = aggregate["parameters"]
+            .as_array()
+            .expect("aggregate operator parameters");
+        for name in [
+            "X-Iroha-Operator-Public-Key",
+            "X-Iroha-Operator-Timestamp-Ms",
+            "X-Iroha-Operator-Nonce",
+            "X-Iroha-Operator-Signature",
+        ] {
+            let parameter = aggregate_parameters
+                .iter()
+                .find(|parameter| parameter["name"].as_str() == Some(name))
+                .expect("required aggregate operator parameter");
+            assert_eq!(parameter["required"].as_bool(), Some(true));
+        }
+        assert!(aggregate_parameters.iter().all(|parameter| {
+            !matches!(parameter["name"].as_str(), Some("sid" | "Authorization"))
+        }));
+    }
+
+    #[test]
+    fn websocket_documents_exact_session_role_and_header_token_transport() {
+        let paths = connect_paths();
+        let websocket = paths["/v1/connect/ws"]["get"]
+            .as_object()
+            .expect("Connect websocket GET");
+        let parameters = websocket["parameters"]
+            .as_array()
+            .expect("Connect websocket parameters");
+        for name in ["sid", "role"] {
+            let parameter = parameters
+                .iter()
+                .find(|parameter| parameter["name"].as_str() == Some(name))
+                .expect("required websocket query parameter");
+            assert_eq!(parameter["in"].as_str(), Some("query"));
+            assert_eq!(parameter["required"].as_bool(), Some(true));
+        }
+        for name in ["Authorization", "Sec-WebSocket-Protocol"] {
+            let parameter = parameters
+                .iter()
+                .find(|parameter| parameter["name"].as_str() == Some(name))
+                .expect("optional websocket token header");
+            assert_eq!(parameter["in"].as_str(), Some("header"));
+            assert_eq!(parameter["required"].as_bool(), Some(false));
         }
     }
 }

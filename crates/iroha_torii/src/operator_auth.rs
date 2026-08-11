@@ -1,4 +1,8 @@
-//! WebAuthn/mTLS operator authentication for Torii operator endpoints.
+//! Optional WebAuthn/mTLS second-factor authentication for Torii operator endpoints.
+//!
+//! Exact-network operator request signatures remain mandatory at the route
+//! middleware boundary; sessions and bootstrap tokens never authorize a route
+//! by themselves.
 
 use std::{
     collections::HashSet,
@@ -12,10 +16,8 @@ use std::{
 };
 
 use axum::{
-    body::Body,
     extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
-    middleware::Next,
     response::{IntoResponse, Response},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -1772,25 +1774,6 @@ fn expect_cbor_bytes_i(
             "COSE bytes entry must be a byte array",
         )),
     }
-}
-
-pub async fn enforce_operator_auth(
-    State(app): State<SharedAppState>,
-    req: axum::http::Request<Body>,
-    next: Next,
-) -> Result<Response, std::convert::Infallible> {
-    let remote_ip = req
-        .extensions()
-        .get::<ConnectInfo<std::net::SocketAddr>>()
-        .map(|connect_info| connect_info.0.ip());
-    if let Err(err) = app
-        .operator_auth
-        .authorize_operator_endpoint(req.headers(), remote_ip)
-        .await
-    {
-        return Ok(err.into_response());
-    }
-    Ok(next.run(req).await)
 }
 
 pub async fn handle_operator_register_options(

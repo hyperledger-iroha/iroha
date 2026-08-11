@@ -12,6 +12,7 @@
 
 #[cfg(test)]
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use once_cell::sync::Lazy;
 
@@ -1064,10 +1065,8 @@ fn public_accumulator_from_protocol_v1(
     )
 }
 
-fn release_shape_and_commitment_key_v1() -> Result<(&'static Shape, CommitmentKey), ZkAmsMkheErrorV1>
-{
-    let shape =
-        super::super::canonical_shape_ref().map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+fn release_shape_and_commitment_key_v1() -> Result<(Arc<Shape>, CommitmentKey), ZkAmsMkheErrorV1> {
+    let shape = super::super::canonical_shape().map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
     if shape.public_input_count() != ZK_AMS_PHASE23_RELEASE_PUBLIC_INPUT_COUNT_V1
         || shape
             .variable_count()
@@ -1173,7 +1172,7 @@ fn replay_public_fold_history_v1(
     let mut transcript = masked_relaxed_composition_transcript_v1(
         super::super::COMPOSITION_DOMAIN_V1,
         &history.composition_context_frame,
-        shape,
+        shape.as_ref(),
         &strict_public_inputs,
     )
     .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
@@ -1185,7 +1184,7 @@ fn replay_public_fold_history_v1(
             )?,
         };
         let (result, challenge) = nifs
-            .verify_with_challenge(&key, shape, &mut transcript, &prior, strict)
+            .verify_with_challenge(&key, shape.as_ref(), &mut transcript, &prior, strict)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
         let result_public = public_accumulator_from_protocol_v1(&result)?;
         if record.challenge != challenge.to_be_bytes()
@@ -1273,7 +1272,7 @@ fn build_public_fold_history_v1(
     let mut transcript = masked_relaxed_composition_transcript_v1(
         super::super::COMPOSITION_DOMAIN_V1,
         &composition_context_frame,
-        shape,
+        shape.as_ref(),
         &strict_public_inputs,
     )
     .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
@@ -1292,7 +1291,7 @@ fn build_public_fold_history_v1(
         let (result, challenge) = nifs
             .verify_with_challenge(
                 &key,
-                shape,
+                shape.as_ref(),
                 &mut transcript,
                 &prior_protocol,
                 &strict_protocol,
@@ -1958,8 +1957,7 @@ fn sparse_map_digest(map: &ZkAmsPhase23SparseMapV1) -> Result<[u8; 32], ZkAmsMkh
 }
 
 fn compile_release_maps_v1() -> Result<ZkAmsPhase23ReleaseMapsV1, ZkAmsMkheErrorV1> {
-    let shape =
-        super::super::canonical_shape_ref().map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+    let shape = super::super::canonical_shape().map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
     let variable_count = shape.variable_count();
     let public_input_count = shape.public_input_count();
     let a = compile_paper_order_relation_map_v1(

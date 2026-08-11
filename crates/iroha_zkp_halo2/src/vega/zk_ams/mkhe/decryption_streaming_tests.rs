@@ -315,6 +315,12 @@ fn residency_evidence_is_phase_exact_and_cannot_claim_release() {
         119_153_329
     );
     assert_eq!(evidence.staged_prover_enumerated_peak_bytes, 157_286_714);
+    assert_eq!(
+        evidence
+            .governed_workspace_ceiling_bytes
+            .checked_sub(evidence.staged_prover_enumerated_peak_bytes),
+        Some(10_485_446)
+    );
     assert!(!evidence.staged_prover_cas_backend_residency_enumerated);
     assert!(evidence.staged_prover_enumerated_ceiling_met);
     assert_eq!(evidence.staged_prover_component_source_passes, 1);
@@ -346,6 +352,10 @@ fn residency_evidence_is_phase_exact_and_cannot_claim_release() {
         evidence.staged_prover_first_candidate_common_a_xof_bytes,
         9_642_704_896
     );
+    assert_eq!(
+        evidence.staged_prover_common_a_residue_output_work_units,
+        1_205_338_112
+    );
     assert_eq!(evidence.staged_prover_common_a_prepare_validation_passes, 1);
     assert_eq!(evidence.staged_prover_common_a_limb_derivations, 9_196);
     assert_eq!(evidence.staged_prover_common_a_frame_work_units, 1_452_968);
@@ -362,7 +372,13 @@ fn residency_evidence_is_phase_exact_and_cannot_claim_release() {
         evidence.staged_prover_semantic_replay_work_units,
         1_539_047_424
     );
-    assert_eq!(evidence.staged_prover_total_work_units, 97_255_811_806);
+    assert_eq!(evidence.staged_prover_total_work_units, 98_461_149_918);
+    assert_eq!(
+        release_profile_v1()
+            .max_work_units
+            .checked_sub(evidence.staged_prover_total_work_units),
+        Some(1_538_850_082)
+    );
     assert!(evidence.staged_prover_work_ceiling_met);
     assert_eq!(evidence.staged_prover_party_b_read_passes, 122);
     assert_eq!(evidence.staged_prover_share_immutable_read_passes, 124);
@@ -771,12 +787,11 @@ fn staged_mask_sampling_matches_native_three_pass_random_order() {
     for _ in 0..degree {
         native_error.push(sample_signed_small(29, &mut native_random).expect("error draw"));
     }
-    let mut native_wide = super::super::ZeroizingSignedWideVectorV1::with_capacity(degree)
-        .expect("wide mask");
+    let mut native_wide =
+        super::super::ZeroizingSignedWideVectorV1::with_capacity(degree).expect("wide mask");
     for _ in 0..degree {
-        native_wide.push(
-            sample_signed_wide(&wide_bound, &mut native_random).expect("wide mask draw"),
-        );
+        native_wide
+            .push(sample_signed_wide(&wide_bound, &mut native_random).expect("wide mask draw"));
     }
 
     assert_eq!(staged_secret.as_slice(), native_secret.as_slice());
@@ -804,9 +819,7 @@ fn staged_complete_zadp_encoding_matches_native_section_order_and_bytes() {
         .map(SignedWideV1::from_i64)
         .collect::<Vec<_>>();
     let secret_response = (0..degree)
-        .map(|index| {
-            staged_small_response_v1(secret_mask[index], &terms, &witness_secret, index)
-        })
+        .map(|index| staged_small_response_v1(secret_mask[index], &terms, &witness_secret, index))
         .collect::<Result<Vec<_>, _>>()
         .expect("secret responses");
     let error_response = (0..degree)
@@ -814,9 +827,7 @@ fn staged_complete_zadp_encoding_matches_native_section_order_and_bytes() {
         .collect::<Result<Vec<_>, _>>()
         .expect("error responses");
     let smudge_response = (0..degree)
-        .map(|index| {
-            staged_wide_response_v1(&smudge_mask[index], &terms, &witness_smudge, index)
-        })
+        .map(|index| staged_wide_response_v1(&smudge_mask[index], &terms, &witness_smudge, index))
         .collect::<Result<Vec<_>, _>>()
         .expect("smudge responses");
     let wide_response_bytes = 17_u16;
@@ -872,12 +883,11 @@ fn staged_transcript_rns_frames_match_native_order_and_bytes() {
     let mut native =
         initialize_decryption_challenge_transcript(&profile, 13, &binding).expect("native prefix");
     for polynomial in &polynomials {
-        super::super::update_rns_hash(&mut native, &profile, polynomial)
-            .expect("native RNS frame");
+        super::super::update_rns_hash(&mut native, &profile, polynomial).expect("native RNS frame");
     }
 
-    let mut staged = initialize_decryption_challenge_transcript(&profile, 13, &binding)
-        .expect("staged prefix");
+    let mut staged =
+        initialize_decryption_challenge_transcript(&profile, 13, &binding).expect("staged prefix");
     for polynomial in &polynomials {
         update_streamed_rns_header(&mut staged, &profile).expect("staged RNS header");
         for limb in 0..profile.moduli.len() {
@@ -895,10 +905,7 @@ fn staged_random_budget_accepts_boundary_and_rejects_one_over_or_source_error() 
     }
 
     impl MaskedRelaxedRandomSourceV1 for RecordingRandom {
-        fn fill_bytes(
-            &mut self,
-            destination: &mut [u8],
-        ) -> Result<(), MaskedRelaxedRandomErrorV1> {
+        fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             self.forwarded += u64::try_from(destination.len()).expect("test length");
             if self.fail {
                 return Err(MaskedRelaxedRandomErrorV1::Unavailable);
@@ -921,7 +928,10 @@ fn staged_random_budget_accepts_boundary_and_rejects_one_over_or_source_error() 
         Err(MaskedRelaxedRandomErrorV1::Unavailable)
     );
     drop(bounded);
-    assert_eq!(source.forwarded, 3, "one-over request must not be forwarded");
+    assert_eq!(
+        source.forwarded, 3,
+        "one-over request must not be forwarded"
+    );
 
     let mut source = RecordingRandom {
         forwarded: 0,
@@ -932,7 +942,10 @@ fn staged_random_budget_accepts_boundary_and_rejects_one_over_or_source_error() 
         bounded.fill_bytes(&mut [0_u8; 2]),
         Err(MaskedRelaxedRandomErrorV1::Unavailable)
     );
-    assert_eq!(bounded.remaining_bytes, 2, "failed source draw stays charged");
+    assert_eq!(
+        bounded.remaining_bytes, 2,
+        "failed source draw stays charged"
+    );
 }
 
 #[test]
@@ -1018,10 +1031,7 @@ fn staged_mask_owners_zeroize_on_success_error_and_unwind() {
     }
 
     impl MaskedRelaxedRandomSourceV1 for FailAfterFirstFill {
-        fn fill_bytes(
-            &mut self,
-            destination: &mut [u8],
-        ) -> Result<(), MaskedRelaxedRandomErrorV1> {
+        fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
             self.fills += 1;
             if self.fills > 1 {
                 if self.panic_instead {
@@ -1126,7 +1136,9 @@ fn staged_prover_source_is_capability_owned_semantic_and_fail_closed() {
     let staged = &streaming[start..end];
 
     assert!(staged.contains("persistent_use: ZkAmsMkhePersistentDecryptionPartyUseV1"));
-    assert!(staged.contains("let common_a_context = statement.prepare_common_a_context(&profile)?;"));
+    assert!(
+        staged.contains("let common_a_context = statement.prepare_common_a_context(&profile)?;")
+    );
     assert!(staged.contains("statement.consume_party_use_v1("));
     assert!(staged.contains("publish_staged_share_polynomial_v1("));
     assert!(staged.contains("publish_staged_decryption_proof_v1("));
@@ -1182,9 +1194,10 @@ fn staged_prover_source_is_capability_owned_semantic_and_fail_closed() {
     assert!(streaming.contains("ZeroizingStagedU64VectorV1::with_capacity"));
     assert!(streaming.contains("drop(secret_mask);"));
     assert!(streaming.contains("drop(smudge);"));
-    assert!(common_a.contains(
-        "pub(in super::super) struct ZkAmsMkhePreparedCollectivePublicAContextV1"
-    ));
+    assert!(
+        common_a
+            .contains("pub(in super::super) struct ZkAmsMkhePreparedCollectivePublicAContextV1")
+    );
     assert!(common_a.contains("pub(in super::super) fn derive_limb_budgeted_v1("));
     assert!(common_a.contains("validate_profile_digest_axis_v1("));
     assert!(!common_a.contains("derive(Clone"));
@@ -1202,11 +1215,13 @@ fn staged_ntt_matches_native_on_every_release_limb_and_boundary_pattern() {
                 1 => 1,
                 2 => modulus - 1,
                 3 => modulus / 2,
-                _ => u64::try_from(index)
-                    .expect("release index")
-                    .wrapping_mul(0x9e37_79b9)
-                    .wrapping_add(u64::try_from(limb).expect("release limb") + 17)
-                    % modulus,
+                _ => {
+                    u64::try_from(index)
+                        .expect("release index")
+                        .wrapping_mul(0x9e37_79b9)
+                        .wrapping_add(u64::try_from(limb).expect("release limb") + 17)
+                        % modulus
+                }
             })
             .collect::<Vec<_>>();
         let right = (0..profile.ring_degree)
@@ -1214,27 +1229,20 @@ fn staged_ntt_matches_native_on_every_release_limb_and_boundary_pattern() {
                 0 => modulus - 1,
                 1 => 0,
                 2 => 1,
-                _ => u64::try_from(index)
-                    .expect("release index")
-                    .wrapping_mul(0x85eb_ca6b)
-                    .wrapping_add(u64::try_from(limb).expect("release limb") + 31)
-                    % modulus,
+                _ => {
+                    u64::try_from(index)
+                        .expect("release index")
+                        .wrapping_mul(0x85eb_ca6b)
+                        .wrapping_add(u64::try_from(limb).expect("release limb") + 31)
+                        % modulus
+                }
             })
             .collect::<Vec<_>>();
-        let native = negacyclic_multiply(
-            &left,
-            &right,
-            modulus,
-            profile.negacyclic_roots[limb],
-        )
-        .expect("native release NTT");
-        let staged = negacyclic_multiply_staged_v1(
-            &left,
-            &right,
-            modulus,
-            profile.negacyclic_roots[limb],
-        )
-        .expect("staged release NTT");
+        let native = negacyclic_multiply(&left, &right, modulus, profile.negacyclic_roots[limb])
+            .expect("native release NTT");
+        let staged =
+            negacyclic_multiply_staged_v1(&left, &right, modulus, profile.negacyclic_roots[limb])
+                .expect("staged release NTT");
         assert_eq!(staged.as_slice(), native.as_slice(), "release limb {limb}");
     }
 }

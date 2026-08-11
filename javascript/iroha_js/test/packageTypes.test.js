@@ -424,6 +424,42 @@ test("SoraFS gateway denial declarations expose only governed catalog evidence",
 
 test("strict NodeNext resolves the root and every public subpath from a packed layout", () => {
   const packageJson = readPackageJson();
+  const rootDeclarations = fs.readFileSync(
+    path.join(PACKAGE_ROOT, "index.d.ts"),
+    "utf8",
+  );
+  const blockProofDeclarations = fs.readFileSync(
+    path.join(PACKAGE_ROOT, "src", "blockProofTypes.d.ts"),
+    "utf8",
+  );
+  for (const name of [
+    "ToriiBlockMerkleCommitment",
+    "ToriiBlockMerkleProof",
+    "ToriiBlockProofs",
+    "ToriiBlockProofTrustedAnchor",
+    "ToriiBlockProofVerification",
+  ]) {
+    assert.doesNotMatch(
+      rootDeclarations,
+      new RegExp(`export interface ${name}\\b`, "u"),
+      `${name} must have one canonical declaration source`,
+    );
+    assert.match(
+      blockProofDeclarations,
+      new RegExp(`export interface ${name}\\b`, "u"),
+      `missing canonical ${name} declaration`,
+    );
+  }
+  assert.match(
+    blockProofDeclarations,
+    /readonly networkId: string;/u,
+    "authenticated BlockProofs must bind the exact NetworkId",
+  );
+  assert.doesNotMatch(
+    blockProofDeclarations,
+    /readonly chainId:/u,
+    "retired ChainId spelling must stay absent",
+  );
   const indexOfSubpath = (subpath) => Object.keys(packageJson.exports).indexOf(subpath);
   const noritoIndex = indexOfSubpath("./norito");
   const cryptoIndex = indexOfSubpath("./crypto");
@@ -443,7 +479,7 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
       [
         ...imports,
         `import * as RootSdk from ${JSON.stringify(PACKAGE_NAME)};`,
-        `import { Crypto, Norito, NumericV1, Torii, ToriiBrowserClient, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, buildSetAssetTransferAvailabilityInstruction, decodeCancelAssetLockV1, encodeCancelAssetLockV1, validateAppealFinanceCancelAssetLock, type AssetTransferAvailability, type CancelAssetLockInstruction, type CancelAssetLockV1, type CancelAssetLockV1Archive, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type PrivacyEngineIdV1, type PrivacyProofSystemIdV1, type RamLfeExecuteResponse, type RamLfeOutputOpening, type SetAssetTransferAvailabilityInstruction, type SorafsValidationOutcome, type ToriiRepoAgreement, type ToriiVerifierBackendLabelV1 } from ${JSON.stringify(PACKAGE_NAME)};`,
+        `import { Crypto, Norito, NumericV1, Torii, ToriiBrowserClient, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, buildSetAssetTransferAvailabilityInstruction, decodeCancelAssetLockV1, encodeCancelAssetLockV1, validateAppealFinanceCancelAssetLock, type AssetTransferAvailability, type CancelAssetLockInstruction, type CancelAssetLockV1, type CancelAssetLockV1Archive, type CanonicalRequestAuth, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type PrivacyEngineIdV1, type PrivacyProofSystemIdV1, type RamLfeExecuteResponse, type RamLfeOutputOpening, type SetAssetTransferAvailabilityInstruction, type SorafsValidationOutcome, type ToriiRepoAgreement, type ToriiVerifierBackendLabelV1 } from ${JSON.stringify(PACKAGE_NAME)};`,
         `import { getPrivacyCapabilitiesV1, parsePrivacyCapabilitySnapshotV1, type PrivacyCapabilitySnapshotV1 } from ${JSON.stringify(`${PACKAGE_NAME}/privacy-capabilities`)};`,
         'const algorithm: CryptoAlgorithm = "ed25519";',
         "const cancelAssetLockMaxLockIdUtf8BytesV1: 4096 = CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1;",
@@ -469,8 +505,8 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         `const generateKeyPair: typeof export${cryptoIndex}.generateKeyPair = Crypto.generateKeyPair;`,
         "const privacySnapshot: PrivacyCapabilitySnapshotV1 = parsePrivacyCapabilitySnapshotV1({});",
         "const privacyCommittedHeight: bigint = privacySnapshot.committed_height;",
-        "const privacyNodeResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(new ToriiClient('https://torii.example'));",
-        "const privacyBrowserResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(new ToriiBrowserClient('https://torii.example'));",
+        "const privacyNodeResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(new ToriiClient('https://torii.example'), { canonicalAuth: { accountId: 'i105...', privateKey: '11'.repeat(32) } });",
+        "const privacyBrowserResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(new ToriiBrowserClient('https://torii.example'), { authAccountId: 'i105...', sign: async () => new Uint8Array(64) });",
         'const privacyProofSystems: PrivacyProofSystemIdV1[] = ["stark-fri-sha256-goldilocks", "anonymous-pgc-p256", "iroha-verange-p256", "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512", "vega-neutron-nova-spartan-hyrax-t256", "jindo-polynomial-commitment", "lantern-lnp22-module-linear-norm", "halo2-ipa-pasta", "fcmp-plus-plus-curve-tree-bulletproofs"];',
         'const privacyEngines: PrivacyEngineIdV1[] = ["native-goldilocks-stark-fri", "native-anonymous-pgc-p256", "native-verange-p256", "native-zk-ams-masked-relaxed-spartan-t256-ristretto255", "native-vega", "native-jindo", "native-lantern-lnp22", "native-halo2-orchard", "native-fcmp-plus-plus"];',
         "// @ts-expect-error retired SIS-with-hints proof systems fail closed.",
@@ -501,7 +537,7 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         "// @ts-expect-error privacy capability parser is not a root runtime export.",
         "void RootSdk.parsePrivacyCapabilitySnapshotV1;",
         "// @ts-expect-error the optional fetch API rejects unknown request options.",
-        "getPrivacyCapabilitiesV1(new ToriiClient('https://torii.example'), { unknown: true });",
+        "getPrivacyCapabilitiesV1(new ToriiClient('https://torii.example'), { canonicalAuth: { accountId: 'i105...', privateKey: '11'.repeat(32) }, unknown: true });",
         "const quantityFrame: Uint8Array = NumericV1.encodeQuantityFrame(42n);",
         "const quantityEnvelope: Uint8Array = NumericV1.encodeQuantityEnvelope(42n);",
         "const quantityJson: string = NumericV1.encodeQuantityJson(42n);",
@@ -510,15 +546,15 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
         'const retiredRootAmount: ContractEntrypointValueKindName = "Amount";',
         '// @ts-expect-error U128 is not a canonical V1 boundary kind.',
         'const retiredRootU128: ContractEntrypointValueKindName = "U128";',
-        "async function checkIdentifierApiTypes(client: ToriiClient): Promise<void> {",
+        "async function checkIdentifierApiTypes(client: ToriiClient, auth: CanonicalRequestAuth): Promise<void> {",
         "  const policies: IdentifierPolicyListResponse = await client.listIdentifierPolicies();",
         "  const policy = policies.items[0]!;",
-        "  const execution: RamLfeExecuteResponse | null = await client.executeRamLfeProgram(policy.program_id, { encryptedInput: 'ABCD' });",
+        "  const execution: RamLfeExecuteResponse | null = await client.executeRamLfeProgram(policy.program_id, { encryptedInput: 'ABCD', canonicalAuth: auth });",
         "  const claim: IdentifierClaimLookupResponse | null = await client.getIdentifierClaimByReceiptHash('11'.repeat(32));",
         "  if (execution) {",
         "    const opening: RamLfeOutputOpening = execution.output_opening;",
-        "    const resolved: IdentifierResolutionReceipt | null = await client.resolveIdentifier({ policyId: policy.policy_id, encryptedInput: 'ABCD', outputOpening: opening });",
-        "    const issued: IdentifierResolutionReceipt | null = await client.issueIdentifierClaimReceipt('account-id', { policyId: policy.policy_id, encryptedInput: 'ABCD', outputOpening: opening });",
+        "    const resolved: IdentifierResolutionReceipt | null = await client.resolveIdentifier({ policyId: policy.policy_id, encryptedInput: 'ABCD', outputOpening: opening, canonicalAuth: auth });",
+        "    const issued: IdentifierResolutionReceipt | null = await client.issueIdentifierClaimReceipt('account-id', { policyId: policy.policy_id, encryptedInput: 'ABCD', outputOpening: opening, canonicalAuth: auth });",
         "    void [resolved, issued, opening.payload.opened_output_hash];",
         "  }",
         "  void claim;",
@@ -559,6 +595,11 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
 });
 
 test("dedicated browser declarations compile without ambient Node types", () => {
+  for (const declaration of ["index.d.ts", "src/blockProofTypes.d.ts"]) {
+    const source = fs.readFileSync(path.join(PACKAGE_ROOT, declaration), "utf8");
+    assert.doesNotMatch(source, /reference types=["']node["']/u, declaration);
+    assert.doesNotMatch(source, /["']node:/u, declaration);
+  }
   const { tempRoot } = createPackedLayout({ includeNodeTypes: false });
   try {
     assert.equal(fs.existsSync(path.join(tempRoot, "node_modules", "@types", "node")), false);
@@ -582,7 +623,7 @@ test("dedicated browser declarations compile without ambient Node types", () => 
         "void new NexusAppClient({ transactionCodec: browserTransactionCodec });",
         "void computeIvmArtifactHashes(bytes);",
         "declare const privacyClient: PrivacyCapabilitiesBrowserClientV1;",
-        "const privacyResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(privacyClient, { headers: { Accept: 'application/json' } });",
+        "const privacyResult: Promise<PrivacyCapabilitySnapshotV1> = getPrivacyCapabilitiesV1(privacyClient, { headers: { Accept: 'application/json' }, authAccountId: 'i105...', sign: async () => new Uint8Array(64) });",
         'void canonicalQueryString(new URLSearchParams({ browser: "true" }));',
         'void compileKotodamaProgram("CREATE DOMAIN browser");',
         "const compilerTransport: KotodamaCompilerTransportOptions = { signal: new AbortController().signal, timeoutMs: 30_000 };",

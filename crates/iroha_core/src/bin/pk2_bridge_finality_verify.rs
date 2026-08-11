@@ -31,7 +31,6 @@ use iroha_data_model::{
             BlockSubject, ConsensusMode, ExecutionCommitment, GlobalPhase, HeightContextId,
             PROTOCOL_VERSION, QuorumCertificateRef, SumeragiV2Status,
         },
-        decode_framed_signed_block,
     },
     bridge::{BridgeFinalityAttestationV1, BridgeFinalityProof},
     peer::PeerId,
@@ -49,7 +48,6 @@ const MAX_STATUS_BYTES: u64 = 1024 * 1024;
 const MAX_PROOF_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_ATTESTATION_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_EXPECTATIONS_BYTES: u64 = 64 * 1024;
-const MAX_SIGNED_GENESIS_BYTES: u64 = 256 * 1024 * 1024;
 const CHALLENGE_BYTES: u64 = 32;
 /// Exact sealed-source identity supplied by the artifact builder.
 ///
@@ -271,8 +269,12 @@ fn run_cli(cli: Cli) -> Result<String, String> {
             let challenge = read_challenge_source(&challenge)?;
             let attestation_json =
                 read_bounded_source(&attestation, MAX_ATTESTATION_BYTES, "attestation")?;
-            let signed_genesis =
-                read_bounded_source(&signed_genesis, MAX_SIGNED_GENESIS_BYTES, "signed genesis")?;
+            let signed_genesis = read_bounded_source(
+                &signed_genesis,
+                u64::try_from(iroha_genesis::SIGNED_GENESIS_MAX_BYTES_V1)
+                    .expect("signed-genesis limit fits u64"),
+                "signed genesis",
+            )?;
             let expectations_json =
                 read_bounded_source(&expected_roster, MAX_EXPECTATIONS_BYTES, "expected roster")?;
             let receipt = verify_attested_json_inputs(
@@ -582,10 +584,11 @@ fn read_bounded_fd(fd: i32, max_bytes: u64, label: &str) -> Result<Vec<u8>, Stri
     }
     file.seek(SeekFrom::Start(0))
         .map_err(|error| format!("failed to rewind {label} inherited fd {fd}: {error}"))?;
-    let capacity = usize::try_from(metadata.len()).unwrap_or(0);
-    let mut bytes = Vec::with_capacity(capacity);
+    let capacity = usize::try_from(metadata.len())
+        .map_err(|_| format!("{label} inherited fd {fd} length does not fit usize"))?;
+    let mut bytes = Vec::with_capacity(capacity.saturating_add(1));
     (&mut file)
-        .take(max_bytes.saturating_add(1))
+        .take(metadata.len().saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|error| format!("failed to read {label} inherited fd {fd}: {error}"))?;
     let metadata_after = file.metadata().map_err(|error| {
@@ -638,11 +641,12 @@ fn read_bounded(path: &Path, max_bytes: u64, label: &str) -> Result<Vec<u8>, Str
             metadata.len()
         ));
     }
-    let capacity = usize::try_from(metadata.len()).unwrap_or(0);
-    let mut bytes = Vec::with_capacity(capacity);
+    let capacity = usize::try_from(metadata.len())
+        .map_err(|_| format!("{label} {} length does not fit usize", path.display()))?;
+    let mut bytes = Vec::with_capacity(capacity.saturating_add(1));
     let mut file = file;
     (&mut file)
-        .take(max_bytes.saturating_add(1))
+        .take(metadata.len().saturating_add(1))
         .read_to_end(&mut bytes)
         .map_err(|error| format!("failed to read {label} {}: {error}", path.display()))?;
     let metadata_after = file
@@ -860,8 +864,7 @@ fn decode_validate_signed_genesis(
     signed_genesis: &[u8],
     genesis_public_key: &PublicKey,
 ) -> Result<ValidatedSignedGenesis, String> {
-    iroha_genesis::init_instruction_registry();
-    let block = decode_framed_signed_block(signed_genesis)
+    let block = iroha_genesis::decode_signed_genesis(signed_genesis)
         .map_err(|error| format!("signed genesis is not a current framed SignedBlock: {error}"))?;
     let canonical = block
         .encode_wire()

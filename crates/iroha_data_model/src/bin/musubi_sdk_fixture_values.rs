@@ -8,7 +8,7 @@ use iroha_data_model::{
     musubi::{
         ArchiveId, MUSUBI_MIN_HEALTHY_REPLICAS_V1, MUSUBI_REGISTRY_VERSION_V1, MusubiAbiBindingV1,
         MusubiAliasHistoryActionV1, MusubiAliasHistoryEntryV1, MusubiAliasHistoryPageV1,
-        MusubiAliasPricingPolicyV1, MusubiAliasQueryV1, MusubiAliasRecordV1,
+        MusubiAliasNameV1, MusubiAliasPricingPolicyV1, MusubiAliasQueryV1, MusubiAliasRecordV1,
         MusubiArchiveAvailabilityV1, MusubiArchiveCommitmentV1, MusubiArchiveLocationPageV1,
         MusubiArchiveLocationQueryV1, MusubiArchiveRecordV1, MusubiArchiveRetentionDecisionV1,
         MusubiArchiveRetentionDispositionV1, MusubiArchiveRetentionPageV1,
@@ -639,7 +639,9 @@ fn routes() -> Vec<Value> {
     };
     retention_page.validate().expect("SDK retention page");
 
-    let alias = "math".parse().expect("SDK fixture alias");
+    let alias = "math"
+        .parse::<MusubiAliasNameV1>()
+        .expect("SDK fixture alias");
     let alias_query = MusubiAliasQueryV1 {
         alias: alias.clone(),
         page: page_request(),

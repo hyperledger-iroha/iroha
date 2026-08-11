@@ -108,7 +108,13 @@ until Torii threads real bundles through.
 1. Torii DA ingest persists signed receipts and commitment records into the
    DA spool (`da-receipt-*.norito` / `da-commitment-*.norito`). The durable
    receipt log seeds cursors on restart so replayed receipts are still ordered
-   deterministically.
+   deterministically. Receipt recovery streams the directory one artifact at a
+   time, retains only one compact high-water record per bounded `(lane, epoch)`
+   window, and proves sequence coverage with a constant-size summary. Historical
+   duplicate acknowledgements load their deterministic receipt path directly;
+   they are never kept as an unbounded in-memory receipt map. V1 rejects a
+   receipt above 64 KiB, a manifest above 2 MiB, or a PDP commitment above its
+   canonical 16 KiB limit before decoding the artifact.
 2. Block assembly loads receipts from the spool, drops stale/already-sealed
    entries using the committed cursor snapshot, and enforces contiguity per
    `(lane, epoch)`. If a reachable receipt lacks a matching commitment or the

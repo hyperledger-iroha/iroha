@@ -106,6 +106,15 @@ impl SoracloudRuntimeManager {
         self
     }
 
+    /// Attach the inert remote stream-token operator boundary.
+    #[must_use]
+    pub(crate) fn with_remote_stream_token_operator_from_config(
+        self,
+        _config: &iroha_config::parameters::actual::Root,
+    ) -> Self {
+        self
+    }
+
     #[must_use]
     pub fn with_sorafs_node(self, _sorafs_node: sorafs_node::NodeHandle) -> Self {
         self

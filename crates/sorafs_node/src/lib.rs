@@ -61,7 +61,7 @@ pub use governance_service::{
 };
 pub use iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1;
 pub use moderation::{
-    MODERATION_SCREENING_ADMISSION_RECEIPT_VERSION_V1,
+    MODERATION_READ_VIEW_MAX_RECORDS_V1, MODERATION_SCREENING_ADMISSION_RECEIPT_VERSION_V1,
     MODERATION_SCREENING_AUTHORITY_BUNDLE_VERSION_V1,
     ModerationAuthenticatedScreeningAdmissionError, ModerationAuthenticatedScreeningEvidenceV1,
     ModerationAuthenticatedScreeningOutcomeV1, ModerationAuthenticatedScreeningRequestV1,
@@ -71,19 +71,20 @@ pub use moderation::{
     ModerationEvidenceViewerAuditReportInput, ModerationEvidenceViewerError,
     ModerationEvidenceViewerSessionInput, ModerationEvidenceViewerSessionRecord,
     ModerationEvidenceViewerSnapshot, ModerationModelRegistryError,
-    ModerationModelRegistrySnapshot, ModerationQuarantineKeyOperationErrorV1,
-    ModerationQuarantineKeyProviderBindingV1, ModerationQuarantineKeyProviderQualificationErrorV1,
+    ModerationModelRegistryReadView, ModerationModelRegistrySnapshot,
+    ModerationQuarantineKeyOperationErrorV1, ModerationQuarantineKeyProviderBindingV1,
+    ModerationQuarantineKeyProviderQualificationErrorV1,
     ModerationQuarantineKeyProviderQualificationV1,
     ModerationQuarantineKeyProviderReadinessErrorV1, ModerationQuarantineKeyWrapper,
     ModerationQuarantineObjectError, ModerationQuarantineObjectInput,
     ModerationQuarantineObjectPayload, ModerationQuarantineObjectRangePayload,
     ModerationQuarantineObjectRecord, ModerationQuarantineObjectSnapshot,
-    ModerationQuarantineRecord, ModerationQuarantineReleaseInput, ModerationQuarantineReviewInput,
-    ModerationQuarantineState, ModerationReproRegistryRecord,
+    ModerationQuarantineReadView, ModerationQuarantineRecord, ModerationQuarantineReleaseInput,
+    ModerationQuarantineReviewInput, ModerationQuarantineState, ModerationReproRegistryRecord,
     ModerationScreeningAdmissionReceiptV1, ModerationScreeningAuthenticationError,
     ModerationScreeningAuthorityBundleV1, ModerationScreeningAuthorityV1, ModerationScreeningError,
-    ModerationScreeningInput, ModerationScreeningOutcome, ModerationScreeningRecord,
-    ModerationScreeningSnapshot, ModerationScreeningVerdict,
+    ModerationScreeningInput, ModerationScreeningOutcome, ModerationScreeningReadView,
+    ModerationScreeningRecord, ModerationScreeningSnapshot, ModerationScreeningVerdict,
     verify_authenticated_moderation_screening_v1,
 };
 pub use pdp_provider::{
@@ -413,7 +414,7 @@ use config::{GcConfig, RepairConfig, StorageConfig};
 #[cfg(test)]
 use iroha_data_model::sorafs::pin_registry::{PinManifestFinalizedRecordV1, PinStatus};
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     account::AccountId,
     da::ingest::DaStripeLayout,
     sorafs::{
@@ -10797,6 +10798,25 @@ impl NodeHandle {
             .snapshot())
     }
 
+    /// Return a bounded deterministic read view of the local moderation model registry.
+    ///
+    /// Unlike snapshot export, this clones at most `limit` records from each
+    /// registry so request memory is proportional to the admitted response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the registry lock is poisoned.
+    pub fn moderation_model_registry_read_view(
+        &self,
+        limit: usize,
+    ) -> Result<ModerationModelRegistryReadView, ModerationModelRegistryError> {
+        Ok(self
+            .moderation_model_registry
+            .read()
+            .map_err(|_| ModerationModelRegistryError::StateLockPoisoned)?
+            .read_view(limit))
+    }
+
     /// Replace the local moderation model registry from a validated snapshot.
     ///
     /// The snapshot is duplicate-checked before it replaces local state, then it
@@ -11419,6 +11439,54 @@ impl NodeHandle {
             .snapshot())
     }
 
+    /// Return a bounded deterministic read view of local screening state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the screening runtime lock is poisoned.
+    pub fn moderation_screening_read_view(
+        &self,
+        limit: usize,
+    ) -> Result<ModerationScreeningReadView, ModerationScreeningError> {
+        Ok(self
+            .moderation_screening
+            .read()
+            .map_err(|_| ModerationScreeningError::StateLockPoisoned)?
+            .read_view(limit))
+    }
+
+    /// Return a bounded deterministic read view of the local quarantine queue.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the screening runtime lock is poisoned.
+    pub fn moderation_quarantine_read_view(
+        &self,
+        limit: usize,
+    ) -> Result<ModerationQuarantineReadView, ModerationScreeningError> {
+        Ok(self
+            .moderation_screening
+            .read()
+            .map_err(|_| ModerationScreeningError::StateLockPoisoned)?
+            .quarantine_read_view(limit))
+    }
+
+    /// Look up one local quarantine record without cloning the full screening snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the screening runtime lock is poisoned.
+    pub fn moderation_quarantine_record(
+        &self,
+        quarantine_id: &[u8; 16],
+    ) -> Result<Option<ModerationQuarantineRecord>, ModerationScreeningError> {
+        Ok(self
+            .moderation_screening
+            .read()
+            .map_err(|_| ModerationScreeningError::StateLockPoisoned)?
+            .quarantine_record(quarantine_id))
+    }
+
     /// Replace local screening/quarantine state from a validated snapshot.
     ///
     /// # Errors
@@ -11829,6 +11897,22 @@ impl NodeHandle {
             .read()
             .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?
             .snapshot())
+    }
+
+    /// Look up one quarantine object index record without cloning the full index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the object index lock is poisoned.
+    pub fn moderation_quarantine_object_record(
+        &self,
+        quarantine_id: &[u8; 16],
+    ) -> Result<Option<ModerationQuarantineObjectRecord>, ModerationQuarantineObjectError> {
+        Ok(self
+            .moderation_quarantine_objects
+            .read()
+            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?
+            .get(quarantine_id))
     }
 
     /// Replace the local quarantine object index from a validated snapshot.
@@ -16595,12 +16679,8 @@ impl NodeHandle {
             {
                 Ok(request)
             }
-            Ok(Ok(_)) | Ok(Err(ProviderIngestLocalStorageErrorV1::Permanent)) => {
-                Err(ProviderIngestLocalStorageErrorV1::Permanent)
-            }
-            Ok(Err(ProviderIngestLocalStorageErrorV1::Retryable)) => {
-                Err(ProviderIngestLocalStorageErrorV1::Retryable)
-            }
+            Ok(Ok(_)) => Err(ProviderIngestLocalStorageErrorV1::Permanent),
+            Ok(Err(error)) => Err(error),
             Err(AdmittedPayloadReadLeaseErrorV1::Disabled) => {
                 Err(ProviderIngestLocalStorageErrorV1::Permanent)
             }
@@ -16680,30 +16760,7 @@ impl NodeHandle {
         })
     }
 
-    /// Retrieve stored manifest metadata by digest.
-    pub fn manifest_metadata_by_digest(
-        &self,
-        digest: &[u8; 32],
-    ) -> Result<StoredManifest, NodeStorageError> {
-        let storage = self.storage_backend()?;
-        storage.manifest_by_digest(digest).ok_or_else(|| {
-            NodeStorageError::from(StorageError::ManifestNotFound {
-                manifest_id: hex::encode(digest),
-            })
-        })
-    }
-
-    /// Return stored manifest metadata ordered deterministically by manifest digest then identifier.
-    pub fn stored_manifests(&self) -> Result<Vec<StoredManifest>, NodeStorageError> {
-        let storage = self.storage_backend()?;
-        let mut manifests = storage.manifests();
-        manifests.sort_by(|left, right| {
-            left.manifest_digest()
-                .cmp(right.manifest_digest())
-                .then_with(|| left.manifest_id().cmp(right.manifest_id()))
-        });
-        Ok(manifests)
-    }
+    include!("lib/manifest_metadata_access.rs");
 
     fn derive_layout_and_roles(
         plan: &CarBuildPlan,

@@ -81,6 +81,12 @@ and all key/token binding or lifetime failures before sending a request. Token
 TTL, concurrency, byte, issuance, live-record, and per-client quotas are bounded
 and fail closed on exhaustion.
 
+Issuance itself requires one fresh operator signature over the exact
+genesis-derived `NetworkId`, HTTP method, canonical target, body, timestamp,
+and nonce. Torii admits no API-token, operator-session, or diagnostic-client
+header fallback; the bounded issuance quota is keyed by the authenticated
+operator public key.
+
 Torii client base URLs are HTTPS-only port-443 origins at `/`. Credentials,
 queries, fragments, redirects, non-root paths, and non-public addresses are
 forbidden; hostname resolution must return only globally routable addresses,

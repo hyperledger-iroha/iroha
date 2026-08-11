@@ -85,6 +85,13 @@ impl FastJsonWrite for Level {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(&self.to_string(), out)
+    }
 }
 
 #[cfg(feature = "json")]

@@ -2564,8 +2564,8 @@ mod tests {
         let (roster, _secrets) = governed_roster_fixture(b"exact-binding-token-roster");
         let transcript = keccak256(b"exact-binding-cpk-transcript");
         let share = keccak256(b"exact-binding-cpk-share-0");
-        let binding =
-            verified_binding_fixture(&roster, transcript, 0, share, b"exact-binding-party-0", 1);
+        let label = b"exact-binding-party-0";
+        let binding = verified_binding_fixture(&roster, transcript, 0, share, label, 1);
         for consumer in [
             PersistentWitnessConsumerV1::CollectivePublicKey,
             PersistentWitnessConsumerV1::RkgRoundOne,
@@ -2581,13 +2581,12 @@ mod tests {
 
         // Membership proofs may be freshly randomized without changing the
         // persistent source-commitment identity.
-        let reproved =
-            verified_binding_fixture(&roster, transcript, 0, share, b"exact-binding-party-0", 2);
+        let reproved = verified_binding_fixture(&roster, transcript, 0, share, label, 2);
         assert_eq!(binding.identity_digest(), reproved.identity_digest());
         assert_ne!(binding.verification_digest, reproved.verification_digest);
 
         for mutation in 0..20 {
-            let mut forged = binding.clone();
+            let mut forged = verified_binding_fixture(&roster, transcript, 0, share, label, 1);
             match mutation {
                 0 => forged.version ^= 1,
                 1 => forged.profile_digest[0] ^= 1,
@@ -2626,7 +2625,7 @@ mod tests {
                 "mutation {mutation} must fail"
             );
         }
-        let mut forged = binding.clone();
+        let mut forged = reproved;
         forged.verification_digest[0] ^= 1;
         assert_eq!(
             forged.validate_for(

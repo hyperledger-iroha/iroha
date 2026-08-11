@@ -4633,7 +4633,17 @@ where
             format!("{label} exceeds {REPAIR_STATE_MAX_BYTES_V1} bytes").into(),
         ));
     }
-    decode_canonical_with_limits::<T>(bytes, REPAIR_STATE_LIMITS_V1).map_err(|error| {
+    let limits = crate::smartcontracts::isi::query::singular_query_decode_limits(
+        bytes.len(),
+        REPAIR_STATE_LIMITS_V1,
+    )
+    .map_err(InstructionExecutionError::Query)?;
+    decode_canonical_with_limits::<T>(bytes, limits).map_err(|error| {
+        if crate::smartcontracts::isi::query::singular_query_limits_active()
+            && error.is_decode_resource_limit()
+        {
+            return InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit);
+        }
         if matches!(&error, norito::Error::NonCanonicalEncoding) {
             InstructionExecutionError::InvariantViolation(
                 format!("{label} is not exact canonical Norito").into(),
@@ -6170,7 +6180,10 @@ impl Execute for iroha_data_model::isi::sorafs::SubmitSorafsRepairAppeal {
 }
 
 fn repair_query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
-    QueryExecutionFail::Conversion(error.to_string())
+    match error {
+        InstructionExecutionError::Query(error) => error,
+        error => QueryExecutionFail::Conversion(error.to_string()),
+    }
 }
 
 fn checked_repair_query_limit(limit: u32) -> Result<usize, QueryExecutionFail> {
@@ -6223,11 +6236,11 @@ fn ensure_repair_query_encoded_budget<T: norito::core::NoritoSerialize>(
     maximum: usize,
     label: &str,
 ) -> Result<(), QueryExecutionFail> {
-    let encoded_len = norito::encode_canonical(value)
-        .map_err(|error| {
-            QueryExecutionFail::Conversion(format!("failed to encode {label}: {error}"))
-        })?
-        .len();
+    let maximum =
+        crate::smartcontracts::isi::query::singular_query_frame_limit(maximum);
+    let encoded_len = norito::core::encoded_frame_len(value).map_err(|error| {
+        QueryExecutionFail::Conversion(format!("failed to size {label}: {error}"))
+    })?;
     if encoded_len > maximum {
         return Err(QueryExecutionFail::Conversion(format!(
             "{label} encodes to {encoded_len} bytes, above {maximum}"
@@ -6262,7 +6275,10 @@ fn resolve_pin_manifest_finalized_cursor(
 }
 
 fn pin_query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
-    QueryExecutionFail::Conversion(error.to_string())
+    match error {
+        InstructionExecutionError::Query(error) => error,
+        error => QueryExecutionFail::Conversion(error.to_string()),
+    }
 }
 
 fn pin_status_kind_label(status: PinStatusKindV1) -> &'static str {
@@ -6327,6 +6343,23 @@ fn validate_pin_status_index_marker(
     Ok(())
 }
 
+fn bounded_pin_manifest_summary(
+    record: &PinManifestRecord,
+) -> Result<PinManifestSummaryV1, QueryExecutionFail> {
+    crate::smartcontracts::isi::query::own_singular_query_struct::<PinManifestSummaryV1, 7>(
+        [
+            &record.digest,
+            &record.submitted_by,
+            &record.submitted_epoch,
+            &record.content_length,
+            &record.policy.retention_epoch,
+            &record.status,
+            &record.successor_of,
+        ],
+        || PinManifestSummaryV1::from(record),
+    )
+}
+
 fn finalize_pin_manifest_page(
     finalized_cursor: PinManifestFinalizedCursorV1,
     charged_usage: PinResourceUsage,
@@ -6334,6 +6367,8 @@ fn finalize_pin_manifest_page(
     mut has_more: bool,
     maximum_bytes: usize,
 ) -> Result<PinManifestPageV1, QueryExecutionFail> {
+    let maximum_bytes =
+        crate::smartcontracts::isi::query::singular_query_frame_limit(maximum_bytes);
     loop {
         let next_after_digest = has_more
             .then(|| manifests.last().map(|entry| entry.digest))
@@ -6345,13 +6380,11 @@ fn finalize_pin_manifest_page(
             has_more,
             next_after_digest,
         };
-        let encoded_len = norito::encode_canonical(&page)
-            .map_err(|error| {
-                QueryExecutionFail::Conversion(format!(
-                    "failed to encode finalized pin-manifest page: {error}"
-                ))
-            })?
-            .len();
+        let encoded_len = norito::core::encoded_frame_len(&page).map_err(|error| {
+            QueryExecutionFail::Conversion(format!(
+                "failed to size finalized pin-manifest page: {error}"
+            ))
+        })?;
         if encoded_len <= maximum_bytes {
             if page.has_more && page.next_after_digest.is_none() {
                 return Err(QueryExecutionFail::Conversion(
@@ -6409,7 +6442,8 @@ fn query_pin_manifest_page(
         None => PinResourceUsage::default(),
     };
     let limit = usize::try_from(query.limit).expect("u32 page limit fits usize");
-    let mut manifests = Vec::with_capacity(limit);
+    let mut manifests =
+        crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
     let mut has_more = false;
 
     if let Some(status) = query.status {
@@ -6456,7 +6490,7 @@ fn query_pin_manifest_page(
                 has_more = true;
                 break;
             }
-            manifests.push(PinManifestSummaryV1::from(record));
+            manifests.try_push(bounded_pin_manifest_summary(record)?)?;
         }
     } else {
         let mut visit = |digest: &ManifestDigest,
@@ -6476,7 +6510,7 @@ fn query_pin_manifest_page(
                 has_more = true;
                 return Ok(false);
             }
-            manifests.push(PinManifestSummaryV1::from(record));
+            manifests.try_push(bounded_pin_manifest_summary(record)?)?;
             Ok(true)
         };
         if let Some(after) = query.after_digest {
@@ -6498,7 +6532,7 @@ fn query_pin_manifest_page(
     finalize_pin_manifest_page(
         finalized_cursor,
         charged_usage,
-        manifests,
+        manifests.into_vec(),
         has_more,
         usize::try_from(query.max_bytes).expect("u32 byte limit fits usize"),
     )
@@ -6567,13 +6601,22 @@ fn resolve_repair_committed_event(
             record.sequence
         )));
     }
-    Ok(RepairFinalizedEventV1 {
-        sequence: record.sequence,
-        block_height: record.target_block_height,
-        block_hash,
-        event_index: record.event_index,
-        event: record.event.clone(),
-    })
+    crate::smartcontracts::isi::query::own_singular_query_struct::<RepairFinalizedEventV1, 5>(
+        [
+            &record.sequence,
+            &record.target_block_height,
+            &block_hash,
+            &record.event_index,
+            &record.event,
+        ],
+        || RepairFinalizedEventV1 {
+            sequence: record.sequence,
+            block_height: record.target_block_height,
+            block_hash,
+            event_index: record.event_index,
+            event: record.event.clone(),
+        },
+    )
 }
 
 fn read_repair_event_sequence(
@@ -6619,11 +6662,14 @@ fn query_repair_task_page(
         query.after_task_id.unwrap_or([0; 32]),
     );
     let read_budget = limit.saturating_add(2);
-    let task_payload_budget = REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1.saturating_sub(1_024);
+    let task_payload_budget = crate::smartcontracts::isi::query::singular_query_frame_limit(
+        REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1,
+    )
+    .saturating_sub(1_024);
     let mut reads = 0usize;
     let mut state_read_bytes = 0usize;
     let mut encoded_task_bytes = 0usize;
-    let mut tasks = Vec::with_capacity(limit);
+    let mut tasks = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
     let mut has_more = false;
     for (key, payload) in world.smart_contract_state().range(start..) {
         if !key
@@ -6698,13 +6744,11 @@ fn query_repair_task_page(
                 "authoritative repair task disagrees with its page index".to_owned(),
             ));
         }
-        let task_len = norito::encode_canonical(&task)
-            .map_err(|error| {
-                QueryExecutionFail::Conversion(format!(
-                    "failed to encode authoritative repair task: {error}"
-                ))
-            })?
-            .len();
+        let task_len = norito::core::encoded_frame_len(&task).map_err(|error| {
+            QueryExecutionFail::Conversion(format!(
+                "failed to size authoritative repair task: {error}"
+            ))
+        })?;
         let next_encoded_task_bytes =
             encoded_task_bytes.checked_add(task_len).ok_or_else(|| {
                 QueryExecutionFail::Conversion("repair task-page byte counter overflow".to_owned())
@@ -6719,7 +6763,7 @@ fn query_repair_task_page(
             break;
         }
         encoded_task_bytes = next_encoded_task_bytes;
-        tasks.push(task);
+        tasks.try_push(task)?;
     }
     let next_after_task_id = if has_more {
         Some(
@@ -6737,7 +6781,7 @@ fn query_repair_task_page(
     };
     let page = RepairLedgerTaskPageV1 {
         finalized_cursor,
-        tasks,
+        tasks: tasks.into_vec(),
         has_more,
         next_after_task_id,
     };
@@ -6891,7 +6935,7 @@ fn query_repair_event_page(
     let mut sequence = query
         .after
         .map_or(Some(1), |after| after.sequence.checked_add(1));
-    let mut events = Vec::with_capacity(limit);
+    let mut events = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
     let mut encoded_event_bytes = 0usize;
     while let Some(current_sequence) = sequence {
         if current_sequence > head.last_sequence || events.len() >= limit {
@@ -6913,13 +6957,11 @@ fn query_repair_event_page(
         )?;
         encoded_event_bytes = encoded_event_bytes
             .checked_add(
-                norito::encode_canonical(&resolved)
-                    .map_err(|error| {
-                        QueryExecutionFail::Conversion(format!(
-                            "failed to encode committed repair event: {error}"
-                        ))
-                    })?
-                    .len(),
+                norito::core::encoded_frame_len(&resolved).map_err(|error| {
+                    QueryExecutionFail::Conversion(format!(
+                        "failed to size committed repair event: {error}"
+                    ))
+                })?,
             )
             .ok_or_else(|| {
                 QueryExecutionFail::Conversion(
@@ -6932,7 +6974,7 @@ fn query_repair_event_page(
             )));
         }
         previous = Some(record);
-        events.push(resolved);
+        events.try_push(resolved)?;
         sequence = current_sequence.checked_add(1);
     }
     let has_more = events
@@ -6946,7 +6988,7 @@ fn query_repair_event_page(
     });
     let page = RepairFinalizedEventPageV1 {
         finalized_cursor,
-        events,
+        events: events.into_vec(),
         has_more,
         next_after,
     };
@@ -6979,14 +7021,19 @@ impl ValidSingularQuery for FindSorafsPinManifest {
             .world()
             .pin_manifests()
             .get(&self.digest)
-            .cloned()
             .ok_or(QueryExecutionFail::Find(FindError::SorafsPinManifest(
                 self.digest,
             )))?;
-        Ok(PinManifestFinalizedRecordV1 {
-            finalized_cursor,
-            manifest,
-        })
+        crate::smartcontracts::isi::query::own_singular_query_struct::<
+            PinManifestFinalizedRecordV1,
+            2,
+        >(
+            [&finalized_cursor, manifest],
+            || PinManifestFinalizedRecordV1 {
+                finalized_cursor,
+                manifest: manifest.clone(),
+            },
+        )
     }
 }
 

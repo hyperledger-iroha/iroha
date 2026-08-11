@@ -187,8 +187,9 @@ fn seeded_zk_roots_state(
                 .push_commitment(note, nonzero!(64_usize))
                 .expect("seed authenticated commitment root");
         }
-        stx.world.zk_assets.remove(asset_def_id.clone());
-        stx.world.zk_assets.insert(asset_def_id.clone(), zk_state);
+        let zk_assets = stx.world_mut_for_testing().zk_assets_mut_for_testing();
+        zk_assets.remove(asset_def_id.clone());
+        zk_assets.insert(asset_def_id.clone(), zk_state);
         stx.apply();
         block.transactions.insert_block(
             HashSet::<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>::new(

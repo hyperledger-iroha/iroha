@@ -122,6 +122,12 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
   produces `ValidationFailed`. Profiles that do not use a reference-backed identifier
   need not configure its dataset, but no validation call silently degrades to syntax-only
   acceptance.【crates/iroha_torii/src/iso20022_bridge.rs#L3025】
+- Reference-data refresh is a bounded streaming operation. Each source is a direct regular,
+  no-follow file of at most 16 MiB; one refresh examines at most 64 MiB and retains at most
+  65,536 records under a conservative 64 MiB crosswalk-index budget. Metadata and record
+  strings are limited to 4 KiB. Rows are parsed and indexed one at a time rather than first
+  materialising the complete JSON tree, and any source-identity, size, record, or retained
+  memory overflow marks that dataset failed before further allocation.
 - IBAN and ISO 4217 bindings are enforced at the same layer: pacs.008/pacs.009 flows now
   emit `InvalidIdentifier` errors when debtor/creditor IBANs lack configured aliases or when
   the settlement currency is missing from `currency_assets`, preventing malformed bridge

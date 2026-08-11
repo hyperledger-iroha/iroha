@@ -5,7 +5,9 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
-use iroha_crypto::soranet::directory::{GuardDirectorySnapshotV2, compute_snapshot_digest};
+use iroha_crypto::soranet::directory::{
+    GuardDirectorySnapshotV2, compute_snapshot_digest, read_guard_directory_snapshot_file,
+};
 use norito::json;
 use soranet_relay::{
     directory::{
@@ -147,7 +149,7 @@ fn command_rotate(
     overwrite: bool,
     keys_out: Option<&Path>,
 ) -> Result<(), String> {
-    let bytes = fs::read(snapshot_path).map_err(|err| {
+    let bytes = read_guard_directory_snapshot_file(snapshot_path).map_err(|err| {
         format!(
             "failed to read snapshot `{}`: {err}",
             snapshot_path.display()
@@ -188,7 +190,7 @@ fn command_rotate(
 }
 
 fn command_inspect(snapshot_path: &Path) -> Result<(), String> {
-    let bytes = fs::read(snapshot_path).map_err(|err| {
+    let bytes = read_guard_directory_snapshot_file(snapshot_path).map_err(|err| {
         format!(
             "failed to read snapshot `{}`: {err}",
             snapshot_path.display()
@@ -227,7 +229,7 @@ fn command_verify_proof(proof_path: &Path, snapshot_override: Option<&Path>) -> 
     } else {
         PathBuf::from(proof.snapshot_path())
     };
-    let snapshot_bytes = fs::read(&snapshot_path).map_err(|err| {
+    let snapshot_bytes = read_guard_directory_snapshot_file(&snapshot_path).map_err(|err| {
         format!(
             "failed to read guard directory snapshot `{}`: {err}",
             snapshot_path.display()
@@ -259,7 +261,7 @@ fn command_collect_proofs(
     out_path: Option<&Path>,
     overwrite: bool,
 ) -> Result<(), String> {
-    let snapshot_bytes = fs::read(snapshot_path).map_err(|err| {
+    let snapshot_bytes = read_guard_directory_snapshot_file(snapshot_path).map_err(|err| {
         format!(
             "failed to read guard directory snapshot `{}`: {err}",
             snapshot_path.display()

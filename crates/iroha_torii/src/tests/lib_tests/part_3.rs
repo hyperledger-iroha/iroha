@@ -1,5 +1,5 @@
 #[tokio::test]
-async fn alias_lookup_by_account_unsigned_read_returns_only_public_aliases() {
+async fn alias_lookup_by_account_rejects_multiroute_before_public_alias_filtering() {
     let authority = checked_torii_test_account_id(
         0xa8,
         "derive unsigned alias lookup filtering authority fixture key",
@@ -30,18 +30,24 @@ async fn alias_lookup_by_account_unsigned_read_returns_only_public_aliases() {
         axum::body::Bytes::from(body),
     )
     .await
-    .expect("unsigned lookup should return only visible public aliases")
+    .expect("handler should return a fixed multi-route rejection")
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .expect("collect public alias lookup response")
-        .to_bytes();
-    let dto: routing::AliasLookupByAccountResponseDto =
-        norito::json::from_slice(&body).expect("decode public alias lookup response");
-    assert_eq!(dto.total, 1);
-    assert_eq!(dto.items[0].alias, "merchant@universal");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-iroha-reject-code")
+            .and_then(|value| value.to_str().ok()),
+        Some("query_unsupported")
+    );
+    assert!(
+        response
+            .headers()
+            .get("x-iroha-fanout-routes-attempted")
+            .is_none(),
+        "the rejection must precede alias source execution"
+    );
 }
 
 #[tokio::test]
@@ -226,7 +232,7 @@ async fn account_alias_enumeration_rejects_signed_caller_without_exact_scope() {
 }
 
 #[tokio::test]
-async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant() {
+async fn alias_lookup_by_account_rejects_multiroute_before_permission_filtering() {
     let caller_keypair = checked_torii_test_ed25519_keypair(
         0x37,
         "derive alias lookup permission filter caller fixture key",
@@ -262,34 +268,6 @@ async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant
         .expect("alias by-account uri");
     let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
     let response = handler_alias_lookup_by_account(
-        State(app.clone()),
-        method.clone(),
-        uri.clone(),
-        headers.clone(),
-        axum::body::Bytes::from(body.clone()),
-    )
-    .await
-    .expect("handler should succeed")
-    .into_response();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .unwrap()
-        .to_bytes();
-    let dto: routing::AliasLookupByAccountResponseDto =
-        norito::json::from_slice(&body).expect("json decode");
-    assert_eq!(dto.total, 1);
-    assert_eq!(dto.items[0].alias, "merchant@restricted");
-
-    let domain_alias = AccountAlias::from_literal(
-        "merchant@bank.restricted",
-        &app.state.nexus_snapshot().dataspace_catalog,
-    )
-    .expect("domain alias");
-    grant_alias_resolve_permissions(&app, &caller, &domain_alias);
-    let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
-    let response = handler_alias_lookup_by_account(
         State(app),
         method,
         uri,
@@ -297,26 +275,28 @@ async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant
         axum::body::Bytes::from(body),
     )
     .await
-    .expect("handler should succeed after exact domain grant")
+    .expect("handler should return a fixed multi-route rejection")
     .into_response();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .unwrap()
-        .to_bytes();
-    let dto: routing::AliasLookupByAccountResponseDto =
-        norito::json::from_slice(&body).expect("json decode");
-    assert_eq!(dto.total, 2);
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-iroha-reject-code")
+            .and_then(|value| value.to_str().ok()),
+        Some("query_unsupported")
+    );
     assert!(
-        dto.items
-            .iter()
-            .any(|item| item.alias == "merchant@bank.restricted")
+        response
+            .headers()
+            .get("x-iroha-fanout-routes-attempted")
+            .is_none(),
+        "the rejection must precede permission filtering and source execution"
     );
 }
 
 #[tokio::test]
-async fn alias_lookup_by_account_returns_empty_fanout_result_when_offline_route_has_no_reachable_aliases()
- {
+async fn alias_lookup_by_account_rejects_multiroute_before_offline_route_fetch() {
     let authority_keypair = checked_torii_test_ed25519_keypair(
         0xaa,
         "derive alias lookup offline fanout authority fixture key",
@@ -359,34 +339,24 @@ async fn alias_lookup_by_account_returns_empty_fanout_result_when_offline_route_
         axum::body::Bytes::from(body),
     )
     .await
-    .expect("handler should return a routed response")
+    .expect("handler should return a fixed multi-route rejection")
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(
         response
             .headers()
-            .get("x-iroha-routed-by")
+            .get("x-iroha-reject-code")
             .and_then(|value| value.to_str().ok()),
-        Some("proxy")
+        Some("query_unsupported")
     );
-    assert_eq!(
+    assert!(
         response
             .headers()
-            .get("x-iroha-fanout-routes-unavailable")
-            .and_then(|value| value.to_str().ok()),
-        Some("1")
+            .get("x-iroha-fanout-routes-attempted")
+            .is_none(),
+        "the rejection must precede offline route execution"
     );
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .unwrap()
-        .to_bytes();
-    let dto: routing::AliasLookupByAccountResponseDto =
-        norito::json::from_slice(&body).expect("json decode");
-    assert_eq!(dto.account_id, authority.to_string());
-    assert_eq!(dto.total, 0);
-    assert!(dto.items.is_empty());
-    assert_eq!(dto.source.as_deref(), Some("fanout"));
 }
 
 #[tokio::test]
@@ -1824,8 +1794,13 @@ async fn asset_alias_resolve_returns_definition_fields() {
         Name::from_str("usd").expect("asset name token"),
     );
     let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("asset alias");
-    let definition = iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone(), "usd".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
-        .build(&authority);
+    let definition = iroha_data_model::asset::AssetDefinition::numeric(
+        definition_id.clone(),
+        "usd".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority);
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = World::with([domain], [account], [definition]);
@@ -1875,8 +1850,13 @@ async fn asset_alias_resolve_accepts_short_form_alias() {
         Name::from_str("usd").expect("asset name token"),
     );
     let alias: AssetDefinitionAlias = "usd#main".parse().expect("asset alias");
-    let definition = iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone(), "usd".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
-        .build(&authority);
+    let definition = iroha_data_model::asset::AssetDefinition::numeric(
+        definition_id.clone(),
+        "usd".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority);
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = World::with([domain], [account], [definition]);
@@ -1924,9 +1904,14 @@ async fn asset_definition_get_returns_full_definition_by_base58_id() {
         Name::from_str("usd").expect("asset name token"),
     );
     let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("asset alias");
-    let definition = iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone(), "usd".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
-        .with_description(Some("Treasury settlement token".to_owned()))
-        .build(&authority);
+    let definition = iroha_data_model::asset::AssetDefinition::numeric(
+        definition_id.clone(),
+        "usd".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .with_description(Some("Treasury settlement token".to_owned()))
+    .build(&authority);
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = World::with([domain], [account], [definition.clone()]);
@@ -1979,8 +1964,13 @@ async fn asset_alias_resolve_returns_not_found_after_grace() {
         Name::from_str("usd").expect("asset name token"),
     );
     let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("asset alias");
-    let definition = iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone(), "usd".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
-        .build(&authority);
+    let definition = iroha_data_model::asset::AssetDefinition::numeric(
+        definition_id.clone(),
+        "usd".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority);
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = World::with([domain], [account], [definition]);
@@ -2021,8 +2011,13 @@ async fn asset_definition_get_reports_expired_pending_cleanup_status_after_grace
         Name::from_str("usd").expect("asset name token"),
     );
     let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("asset alias");
-    let definition = iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone(), "usd".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
-        .build(&authority);
+    let definition = iroha_data_model::asset::AssetDefinition::numeric(
+        definition_id.clone(),
+        "usd".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority);
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = World::with([domain], [account], [definition]);
@@ -2073,8 +2068,13 @@ async fn parse_asset_definition_id_rejects_alias_after_grace() {
         Name::from_str("usd").expect("asset name token"),
     );
     let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("asset alias");
-    let definition = iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone(), "usd".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
-        .build(&authority);
+    let definition = iroha_data_model::asset::AssetDefinition::numeric(
+        definition_id.clone(),
+        "usd".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority);
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = World::with([domain], [account], [definition]);
@@ -2114,11 +2114,20 @@ async fn parse_asset_definition_id_accepts_base58_and_alias_literals() {
         domain_id.clone(),
         Name::from_str("usd").expect("asset name token"),
     );
-    let long_definition = iroha_data_model::asset::AssetDefinition::numeric(long_id.clone(), "cbdc".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
-        .build(&authority);
-    let short_definition =
-        iroha_data_model::asset::AssetDefinition::numeric(short_id.clone(), "usd".to_owned(), iroha_data_model::asset::AssetBalancePolicy::Global, None)
-            .build(&authority);
+    let long_definition = iroha_data_model::asset::AssetDefinition::numeric(
+        long_id.clone(),
+        "cbdc".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority);
+    let short_definition = iroha_data_model::asset::AssetDefinition::numeric(
+        short_id.clone(),
+        "usd".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    )
+    .build(&authority);
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = World::with([domain], [account], [long_definition, short_definition]);
@@ -2258,35 +2267,61 @@ async fn torii_norito_body_decodes_successful_responses() {
         bridge: None,
     };
     let response = (StatusCode::OK, utils::NoritoBody(record.clone())).into_response();
+    let phase_bytes = 1024 * 1024;
+    let working_set_bytes = super::query_fanout_fixed_overhead_bytes()
+        .expect("fixed fanout overhead fits")
+        .checked_add(
+            phase_bytes
+                .checked_mul(super::QUERY_FANOUT_PREBODY_UNITS)
+                .expect("test phase geometry fits"),
+        )
+        .expect("test working set fits");
+    let mut budget = super::ToriiRoutedReadMemoryBudget::new(working_set_bytes, phase_bytes)
+        .expect("test routed-read budget");
 
-    let decoded = super::torii_norito_body::<ProofRecord>(response, "proof record response")
-        .await
-        .expect("norito body should decode");
+    let decoded =
+        super::torii_norito_body::<ProofRecord>(response, "proof record response", &mut budget)
+            .await
+            .expect("norito body should decode");
 
-    assert_eq!(decoded, record);
+    assert_eq!(decoded.value, record);
+    assert_eq!(
+        decoded.canonical_bytes,
+        norito::to_bytes(&decoded.value).expect("canonical proof record encoding")
+    );
 }
 
 #[tokio::test]
-async fn resolve_torii_proof_record_for_routes_fanouts_matching_records() {
+async fn resolve_torii_proof_record_for_routes_rejects_multiroute_before_source_execution() {
     let mut app = mk_app_state_for_tests();
     crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
     let id = seed_proof_record(&app, "debug-proof", [0xBC; 32]);
     let routes = super::torii_all_dataspace_routes(app.as_ref());
 
-    let (record, diagnostics, routed_by) =
-        super::resolve_torii_proof_record_for_routes(&app, routes, id.clone())
-            .await
-            .expect("proof record fanout should resolve");
+    assert!(routes.len() > 1, "fixture must exercise multi-route fanout");
+    let response = super::resolve_torii_proof_record_for_routes(&app, routes, id)
+        .await
+        .expect_err("multi-route proof reads must fail before source execution");
 
-    assert_eq!(record.id.to_string(), id);
-    assert_eq!(diagnostics.attempted_routes, 3);
-    assert_eq!(diagnostics.succeeded_routes, 3);
-    assert_eq!(routed_by, "local");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-iroha-reject-code")
+            .and_then(|value| value.to_str().ok()),
+        Some("query_unsupported")
+    );
+    assert!(
+        response
+            .headers()
+            .get("x-iroha-fanout-routes-attempted")
+            .is_none(),
+        "the rejection must precede route execution"
+    );
 }
 
 #[tokio::test]
-async fn resolve_torii_proof_record_for_routes_prefers_not_found_over_route_unavailable_when_missing()
- {
+async fn resolve_torii_proof_record_for_routes_rejects_multiroute_before_route_fetch() {
     let mut app = mk_app_state_for_tests();
     let (local_route, foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(&mut app);
@@ -2302,16 +2337,22 @@ async fn resolve_torii_proof_record_for_routes_prefers_not_found_over_route_unav
         missing_id,
     )
     .await
-    .expect_err("missing proof record should return an error response");
+    .expect_err("multi-route proof reads must fail before remote fetch");
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert_ne!(
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
         response
             .headers()
             .get("x-iroha-reject-code")
             .and_then(|value| value.to_str().ok()),
-        Some("route_unavailable"),
-        "a definitive missing-proof response should outrank an unrelated unavailable route",
+        Some("query_unsupported")
+    );
+    assert!(
+        response
+            .headers()
+            .get("x-iroha-fanout-routes-attempted")
+            .is_none(),
+        "the rejection must precede remote route execution"
     );
 }
 
@@ -2398,54 +2439,40 @@ async fn proof_record_get_advertises_cache_and_304() {
 }
 
 #[tokio::test]
-async fn proof_record_get_reports_fanout_headers_when_dataspaces_are_configured() {
+async fn proof_record_get_rejects_multiroute_before_local_source() {
     let mut app = mk_app_state_for_tests();
     crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
     let id = seed_proof_record(&app, "debug-proof", [0xCD; 32]);
 
     let response = handler_proof_record_get(
-        State(app.clone()),
+        State(app),
         HeaderMap::new(),
         crate::loopback_connect_info(),
-        axum::extract::Path(id.clone()),
+        axum::extract::Path(id),
     )
     .await
-    .expect("proof record ok")
+    .expect("proof handler should return a fixed multi-route rejection")
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::CONFLICT);
     assert_eq!(
         response
             .headers()
-            .get("x-iroha-routed-by")
+            .get("x-iroha-reject-code")
             .and_then(|value| value.to_str().ok()),
-        Some("local")
+        Some("query_unsupported")
     );
-    assert_eq!(
+    assert!(
         response
             .headers()
             .get("x-iroha-fanout-routes-attempted")
-            .and_then(|value| value.to_str().ok()),
-        Some("3")
+            .is_none(),
+        "the rejection must precede local proof source execution"
     );
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-fanout-routes-succeeded")
-            .and_then(|value| value.to_str().ok()),
-        Some("3")
-    );
-
-    let body = http_body_util::BodyExt::collect(response.into_body())
-        .await
-        .unwrap()
-        .to_bytes();
-    let record = norito::decode_from_bytes::<ProofRecord>(&body).expect("proof record body");
-    assert_eq!(record.id.to_string(), id);
 }
 
 #[tokio::test]
-async fn proof_record_get_returns_not_found_when_all_routes_miss() {
+async fn proof_record_get_rejects_multiroute_before_missing_source_scan() {
     let mut app = mk_app_state_for_tests();
     crate::tests_runtime_handlers::configure_private_ingress_routes_for_test(&mut app);
     let missing_id = ProofId {
@@ -2455,7 +2482,7 @@ async fn proof_record_get_returns_not_found_when_all_routes_miss() {
     .to_string();
 
     let response = handler_proof_record_get(
-        State(app.clone()),
+        State(app),
         HeaderMap::new(),
         crate::loopback_connect_info(),
         axum::extract::Path(missing_id),
@@ -2464,12 +2491,21 @@ async fn proof_record_get_returns_not_found_when_all_routes_miss() {
     .expect("proof handler should return a response")
     .into_response();
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body bytes");
-    let envelope: ErrorEnvelope = norito::decode_from_bytes(&body).expect("error envelope payload");
-    assert_eq!(envelope.code, "proof_record_not_found");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-iroha-reject-code")
+            .and_then(|value| value.to_str().ok()),
+        Some("query_unsupported")
+    );
+    assert!(
+        response
+            .headers()
+            .get("x-iroha-fanout-routes-attempted")
+            .is_none(),
+        "the rejection must precede missing-proof source execution"
+    );
 }
 
 #[tokio::test]

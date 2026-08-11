@@ -1098,8 +1098,8 @@ impl Bus {
                                 .await;
                             return;
                         };
-                        let account = match account_id.parse::<AccountId>() {
-                            Ok(account) => account,
+                        let account = match AccountId::parse_encoded(&account_id) {
+                            Ok(parsed) => parsed.into_account_id(),
                             Err(error) => {
                                 drop(approved);
                                 warn!(sid = ?hex::encode(frame.sid), ?error, "connect: rejecting approval with malformed account id");

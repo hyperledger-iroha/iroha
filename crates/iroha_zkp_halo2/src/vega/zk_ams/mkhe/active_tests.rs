@@ -123,6 +123,48 @@ fn governed_roster_is_exactly_eight_ordered_key_bound_parties() {
 }
 
 #[test]
+fn prepared_common_a_rejects_a_valid_roster_under_a_different_profile() {
+    let fixture = fixture(b"prepared-common-a-profile-mismatch", 401);
+    let transcript = keccak256(b"prepared-common-a-profile-mismatch-transcript");
+    assert!(matches!(
+        super::super::cpk_relation::prepare_active_collective_public_a_v1(
+            &linear_test_profile(),
+            &fixture.roster,
+            transcript,
+        ),
+        Err(super::super::cpk_relation::ZkAmsMkheCpkRelationErrorV1::GovernedContext)
+    ));
+}
+
+#[test]
+#[ignore = "release-size native/prepared common-a parity exercise; isolated resource job only"]
+fn prepared_common_a_is_byte_identical_to_the_native_whole_polynomial() {
+    let fixture = fixture(b"prepared-common-a-release-parity", 402);
+    let profile = release_profile_v1();
+    let transcript = keccak256(b"prepared-common-a-release-parity-transcript");
+    let native = derive_active_collective_public_a(&profile, &fixture.roster, transcript)
+        .expect("native whole common-a");
+    let prepared = super::super::cpk_relation::prepare_active_collective_public_a_v1(
+        &profile,
+        &fixture.roster,
+        transcript,
+    )
+    .expect("prepared common-a");
+    let mut remaining_candidates = u64::MAX;
+    let mut coefficients = Vec::with_capacity(profile.ring_degree * profile.moduli.len());
+    for limb in 0..profile.moduli.len() {
+        coefficients.extend(
+            prepared
+                .derive_limb_budgeted_v1(limb, &mut remaining_candidates)
+                .expect("prepared common-a limb"),
+        );
+    }
+    let staged = super::super::RnsPolynomial::from_flat(&profile, coefficients)
+        .expect("prepared whole common-a");
+    assert_eq!(staged, native);
+}
+
+#[test]
 fn every_public_witness_debug_representation_is_redacted() {
     let secret = [1_i64, -1, 0];
     let error = [2_i64, -2, 0];

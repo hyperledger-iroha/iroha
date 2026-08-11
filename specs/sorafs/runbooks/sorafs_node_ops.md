@@ -369,19 +369,15 @@ the same authority still names the exact fence and canonical checkpoint.
    The sealed checkpoint record must advance monotonically and bind the exact
    predecessor revision/checkpoint digest, bounded canonical checkpoint bytes
    and digest, and deterministic CAS revision.
-4. Fetch the provider-ingested data:
-
-   ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/fetch \
-     -H 'Content-Type: application/json' \
-     -d '{
-       "manifest_id_hex": "<canonical manifest id>",
-       "offset": 0,
-       "length": <payload length>
-     }'
-   ```
-
-   Base64-decode the `data_b64` field and verify it matches the original bytes.
+4. Fetch the provider-ingested data with the deployment's exact-network
+   operator request-signing helper (for example a `ToriiClient` constructed
+   with a runtime-only `OperatorSigningContext`). The helper must generate a
+   fresh timestamp and nonce and sign the exact
+   `POST /v1/sorafs/storage/fetch` JSON body; unsigned curl, bearer/API tokens,
+   precomputed headers, and redirects are not accepted. Base64-decode the
+   `data_b64` field and verify it matches the original bytes. For normal content
+   delivery, use request-bound stream tokens with the CAR/chunk GET routes;
+   this POST remains a local operator diagnostic only.
 
 ## 3. Restart Recovery Drill
 
@@ -393,10 +389,10 @@ the same authority still names the exact fence and canonical checkpoint.
 3. Restart the Torii process (or the entire node). Startup must requalify the
    configured provider before and after loading its head and revalidate or
    rewrite the local cache from that authoritative record.
-4. Re-submit the fetch request. The payload must still be retrievable and the
-   returned digest must match the pre-restart value.
-5. Inspect `GET /v1/sorafs/storage/state` to confirm `bytes_used` reflects the
-   persisted manifests after the reboot.
+4. Re-submit the freshly operator-signed fetch request. The payload must still
+   be retrievable and the returned digest must match the pre-restart value.
+5. Inspect a freshly operator-signed `GET /v1/sorafs/storage/state` to confirm
+   `bytes_used` reflects the persisted manifests after the reboot.
 
 For CAS timeout/unknown-result drills, the provider adapter must report an
 ambiguous outcome and permit immediate authoritative readback. The exact

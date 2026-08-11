@@ -2266,8 +2266,8 @@ pub mod query {
                 .world()
                 .oracle_feeds()
                 .get(&self.feed_id)
-                .cloned()
                 .ok_or_else(|| Error::Find(FindError::OracleFeed(self.feed_id.clone())))
+                .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
         }
     }
 
@@ -2278,8 +2278,8 @@ pub mod query {
                 .world()
                 .oracle_disputes()
                 .get(&self.dispute_id)
-                .cloned()
                 .ok_or_else(|| Error::Find(FindError::OracleDispute(self.dispute_id)))
+                .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
         }
     }
 
@@ -2290,8 +2290,8 @@ pub mod query {
                 .world()
                 .oracle_changes()
                 .get(&self.change_id)
-                .cloned()
                 .ok_or_else(|| Error::Find(FindError::OracleChange(self.change_id)))
+                .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
         }
     }
 
@@ -2314,8 +2314,8 @@ pub mod query {
                 .world()
                 .twitter_bindings()
                 .get(&self.binding_hash.digest)
-                .cloned()
                 .ok_or_else(|| Error::Find(FindError::TwitterBinding(self.binding_hash.clone())))
+                .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
         }
     }
 
@@ -2327,8 +2327,8 @@ pub mod query {
                 .defi_oracle_attestations()
                 .get(&self.key)
                 .and_then(|items| items.last())
-                .cloned()
                 .ok_or_else(|| Error::Find(FindError::DefiOracleAttestation(self.key)))
+                .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
         }
     }
 

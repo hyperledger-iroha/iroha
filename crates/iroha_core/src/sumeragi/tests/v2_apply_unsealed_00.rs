@@ -35,7 +35,7 @@ use crate::{
 use iroha_config::parameters::actual::{LaneConfig as RuntimeLaneConfig, Queue as QueueConfig};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
-    Level, Registrable, ValidationFail,
+    ChainId, Level, Registrable, ValidationFail,
     account::Account,
     asset::{AssetDefinition, AssetDefinitionId, AssetId},
     block::{
@@ -623,15 +623,11 @@ impl ApplyFixture {
             block_hash: body.hash(),
             payload_hash: Hash::new(&canonical_wire),
         };
-        let manifest = crate::sumeragi::v2_chunks::encode_payload(
-            &context,
-            round,
-            subject,
-            &canonical_wire,
-        )
-        .expect("fixture manifest")
-        .into_parts()
-        .0;
+        let manifest =
+            crate::sumeragi::v2_chunks::encode_payload(&context, round, subject, &canonical_wire)
+                .expect("fixture manifest")
+                .into_parts()
+                .0;
         let execution_commitment = service
             .validate_candidate(&context, &body)
             .expect("derive exact fixture execution commitment");
@@ -1124,15 +1120,11 @@ fn build_successor_apply_fixture_with_autonomous_payloads(
         block_hash: body.hash(),
         payload_hash: Hash::new(&canonical_wire),
     };
-    let manifest = crate::sumeragi::v2_chunks::encode_payload(
-        &context,
-        round,
-        subject,
-        &canonical_wire,
-    )
-    .expect("derive successor payload manifest")
-    .into_parts()
-    .0;
+    let manifest =
+        crate::sumeragi::v2_chunks::encode_payload(&context, round, subject, &canonical_wire)
+            .expect("derive successor payload manifest")
+            .into_parts()
+            .0;
     let execution_commitment = fixture
         .service
         .validate_candidate(&context, &body)

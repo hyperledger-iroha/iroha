@@ -11,7 +11,10 @@ import org.hyperledger.iroha.android.client.ToriiCanonicalRequestAuth;
 import org.hyperledger.iroha.android.client.ZkMerklePathRequest;
 import org.hyperledger.iroha.android.client.ZkMerklePathResponse;
 
-/** Fetches current confidential-v2 commitment inclusion paths from Torii. */
+/**
+ * Fetches current confidential-v2 commitment inclusion paths with exact-network authentication.
+ * Freshness is generated for every request; reusable explicit timestamp/nonce pairs are rejected.
+ */
 public final class ToriiZkAssetMerklePathProvider implements ZkAssetMerklePathProvider {
   private final ConfidentialAssetToriiClient client;
   private final ToriiCanonicalRequestAuth canonicalAuth;
@@ -21,6 +24,10 @@ public final class ToriiZkAssetMerklePathProvider implements ZkAssetMerklePathPr
       final ToriiCanonicalRequestAuth canonicalAuth) {
     this.client = Objects.requireNonNull(client, "client");
     this.canonicalAuth = Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    if (canonicalAuth.timestampMs() != null || canonicalAuth.nonce() != null) {
+      throw new IllegalArgumentException(
+          "Torii Merkle path providers require generated per-request freshness");
+    }
   }
 
   @Override

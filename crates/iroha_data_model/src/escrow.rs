@@ -92,6 +92,13 @@ impl FastJsonWrite for EscrowId {
     fn write_json(&self, out: &mut String) {
         self.0.write_json(out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.write_json_to(out)
+    }
 }
 
 #[cfg(feature = "json")]

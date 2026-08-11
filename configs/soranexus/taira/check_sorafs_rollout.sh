@@ -25,6 +25,8 @@ CAPACITY_STATE_RECHECK_ATTEMPTS="${CAPACITY_STATE_RECHECK_ATTEMPTS:-10}"
 CAPACITY_STATE_RECHECK_DELAY_SECONDS="${CAPACITY_STATE_RECHECK_DELAY_SECONDS:-2}"
 SORAFS_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS="${SORAFS_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS:-5}"
 SORAFS_ROLLOUT_CURL_MAX_TIME_SECONDS="${SORAFS_ROLLOUT_CURL_MAX_TIME_SECONDS:-20}"
+OPERATOR_NETWORK_ID="${OPERATOR_NETWORK_ID:-}"
+OPERATOR_PRIVATE_KEY_FILE="${OPERATOR_PRIVATE_KEY_FILE:-}"
 SKIP_WRITE_CANARY=0
 IROHA_RUNNER=()
 SORAFS_MANIFEST_BUILDER_RUNNER=()
@@ -48,6 +50,8 @@ Usage: check_sorafs_rollout.sh --public-root URL [--write-config PATH]
                                [--resolve-host HOST:IP|HOST:PORT:IP]
                                [--curl-connect-timeout-seconds N]
                                [--curl-max-time-seconds N]
+                               [--operator-network-id NETWORK_ID]
+                               [--operator-private-key-file ABSOLUTE_PATH]
                                [--skip-write-canary]
 
 Verify that a public Taira node exposes the required SoraFS routes and, unless
@@ -151,6 +155,22 @@ while [[ $# -gt 0 ]]; do
         exit 1
       }
       IROHA_BIN="$2"
+      shift 2
+      ;;
+    --operator-network-id)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --operator-network-id" >&2
+        exit 1
+      }
+      OPERATOR_NETWORK_ID="$2"
+      shift 2
+      ;;
+    --operator-private-key-file)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --operator-private-key-file" >&2
+        exit 1
+      }
+      OPERATOR_PRIVATE_KEY_FILE="$2"
       shift 2
       ;;
     --sorafs-manifest-builder-bin)
@@ -264,6 +284,15 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -z "$OPERATOR_NETWORK_ID" || -z "$OPERATOR_PRIVATE_KEY_FILE" ]]; then
+  echo "Sumeragi rollout checks require --operator-network-id and --operator-private-key-file" >&2
+  exit 1
+fi
+if [[ "$OPERATOR_PRIVATE_KEY_FILE" != /* ]]; then
+  echo "--operator-private-key-file must be an absolute runtime-only path" >&2
+  exit 1
+fi
 
 [[ -n "$PUBLIC_TORII_ROOT" ]] || {
   echo "--public-root is required" >&2
@@ -409,6 +438,29 @@ http_request() {
   last_body="$body_file"
   build_curl_resolve_args "$url"
   curl_cmd+=( ${CURL_URL_RESOLVE_ARGS[@]+"${CURL_URL_RESOLVE_ARGS[@]}"} )
+  if [[ "$url" == */v1/sumeragi/status ]]; then
+    local header_output header
+    local -a operator_auth_args=()
+    if ! header_output="$(
+      python3 "${REPO_ROOT}/scripts/operator_http_headers.py" \
+        --network-id "$OPERATOR_NETWORK_ID" \
+        --private-key-file "$OPERATOR_PRIVATE_KEY_FILE" \
+        --method "$method" \
+        --url "$url"
+    )"; then
+      echo "failed to build fresh operator headers for ${method} ${url}" >&2
+      exit 1
+    fi
+    while IFS= read -r header; do
+      [[ -n "$header" ]] || continue
+      operator_auth_args+=(--header "$header")
+    done <<<"$header_output"
+    if [[ ${#operator_auth_args[@]} -ne 8 ]]; then
+      echo "operator header helper returned an incomplete signature quartet" >&2
+      exit 1
+    fi
+    curl_cmd+=("${operator_auth_args[@]}")
+  fi
 
   if [[ "$method" == "GET" ]]; then
     curl_status="$( "${curl_cmd[@]}" --output "$body_file" --write-out '%{http_code}' "$url" )"

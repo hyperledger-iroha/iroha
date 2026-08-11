@@ -12,6 +12,7 @@ use std::{
 use base64::Engine as _;
 use ed25519_dalek::VerifyingKey;
 use iroha_config::parameters::{actual, validate_production_runtime_handle};
+use iroha_crypto::PublicKey;
 use rand::{
     rand_core::{TryCryptoRng, TryRngCore},
     rngs::OsRng,
@@ -167,9 +168,9 @@ pub struct StreamTokenIssuer {
 
 /// Opaque, non-secret identity used for stream-token issuance accounting.
 ///
-/// The subject is derived only after the Torii API credential has been
-/// authenticated. Display labels such as `X-SoraFS-Client` must never be used
-/// to construct quota identities.
+/// The subject is derived only after the exact-network operator signature has
+/// been authenticated. Display labels such as `X-SoraFS-Client` must never be
+/// used to construct quota identities.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct StreamTokenQuotaSubject([u8; 32]);
 
@@ -177,11 +178,11 @@ impl StreamTokenQuotaSubject {
     const DERIVATION_CONTEXT: &'static str =
         "iroha.torii.sorafs.stream-token.issuance-quota-subject.v1";
 
-    /// Derive a non-reversible quota subject from an already validated API
-    /// credential.
-    pub(crate) fn from_validated_api_token(api_token: &str) -> Self {
+    /// Derive a non-reversible quota subject from an authenticated operator
+    /// public key.
+    pub(crate) fn from_authenticated_operator(public_key: &PublicKey) -> Self {
         let mut hasher = blake3::Hasher::new_derive_key(Self::DERIVATION_CONTEXT);
-        hasher.update(api_token.as_bytes());
+        hasher.update(public_key.to_string().as_bytes());
         Self(*hasher.finalize().as_bytes())
     }
 }
@@ -241,7 +242,6 @@ impl StreamTokenIssuer {
     /// runtime signer do not form one exact, safe binding.
     pub fn from_config(
         config: &actual::SorafsTokenConfig,
-        configured_api_tokens: &[String],
         signer: Option<Arc<dyn StreamTokenRuntimeSigner>>,
     ) -> Result<Option<Self>, StreamTokenIssuerError> {
         if !config.enabled {
@@ -250,16 +250,6 @@ impl StreamTokenIssuer {
             }
             return Ok(None);
         }
-        if configured_api_tokens.is_empty() {
-            return Err(StreamTokenIssuerError::MissingIssuanceApiCredential);
-        }
-        if configured_api_tokens
-            .iter()
-            .any(|token| token.is_empty() || !token.bytes().all(|byte| byte.is_ascii_graphic()))
-        {
-            return Err(StreamTokenIssuerError::InvalidIssuanceApiCredential);
-        }
-
         let signer = signer.ok_or(StreamTokenIssuerError::MissingRuntimeSigner)?;
         let configured_handle = config
             .signer_handle
@@ -655,13 +645,6 @@ pub enum StreamTokenIssuerError {
     /// A signer was injected while stream-token issuance is disabled.
     #[error("stream-token runtime signer injected while issuance is disabled")]
     UnexpectedRuntimeSigner,
-    /// Stream-token issuance was enabled without an API credential.
-    #[error("stream-token issuance requires at least one configured Torii API token")]
-    MissingIssuanceApiCredential,
-    /// A configured issuance credential cannot be represented canonically in
-    /// an HTTP header.
-    #[error("stream-token issuance API tokens must be non-empty visible ASCII strings")]
-    InvalidIssuanceApiCredential,
     /// Stream-token issuance is enabled without a runtime signer.
     #[error("stream-token issuance requires an injected runtime signer")]
     MissingRuntimeSigner,
@@ -1040,10 +1023,6 @@ mod tests {
         }
     }
 
-    fn configured_api_tokens() -> Vec<String> {
-        vec!["stream-token-api-credential".to_owned()]
-    }
-
     fn issuer_and_signer(
         limit: u32,
         mode: TestSignerMode,
@@ -1055,10 +1034,9 @@ mod tests {
         ));
         let config = token_config(signer.public_key(), limit);
         let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer.clone();
-        let issuer =
-            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(runtime_signer))
-                .expect("valid runtime signer binding")
-                .expect("enabled issuer");
+        let issuer = StreamTokenIssuer::from_config(&config, Some(runtime_signer))
+            .expect("valid runtime signer binding")
+            .expect("enabled issuer");
         (issuer, signer)
     }
 
@@ -1116,35 +1094,22 @@ mod tests {
     }
 
     #[test]
-    fn enabled_issuance_requires_a_canonical_api_credential_at_startup() {
+    fn disabled_issuance_rejects_an_unexpected_runtime_signer() {
         let signer = Arc::new(TestStreamTokenRuntimeSigner::new(
             "pkcs11:prod/stream-token/v1",
             [0x33; 32],
             TestSignerMode::Sign,
         ));
         let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer.clone();
-        let config = token_config(signer.public_key(), 2);
-
+        let mut config = token_config(signer.public_key(), 2);
+        config.enabled = false;
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, &[], Some(runtime_signer.clone())),
-            Err(StreamTokenIssuerError::MissingIssuanceApiCredential)
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer)),
+            Err(StreamTokenIssuerError::UnexpectedRuntimeSigner)
         ));
-        for invalid_credential in ["", "contains space", "non-ascii-\u{2713}"] {
-            assert!(matches!(
-                StreamTokenIssuer::from_config(
-                    &config,
-                    &[invalid_credential.to_owned()],
-                    Some(runtime_signer.clone()),
-                ),
-                Err(StreamTokenIssuerError::InvalidIssuanceApiCredential)
-            ));
-        }
-
-        let mut disabled_config = token_config(signer.public_key(), 2);
-        disabled_config.enabled = false;
         assert!(
-            StreamTokenIssuer::from_config(&disabled_config, &[], None)
-                .expect("disabled issuance needs no credential")
+            StreamTokenIssuer::from_config(&config, None)
+                .expect("disabled issuance needs no signer")
                 .is_none()
         );
     }
@@ -1160,38 +1125,26 @@ mod tests {
         let mut config = token_config(signer.public_key(), 2);
 
         assert!(
-            StreamTokenIssuer::from_config(
-                &config,
-                &configured_api_tokens(),
-                Some(runtime_signer.clone()),
-            )
-            .expect("canonical production handle must be accepted")
-            .is_some()
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone()))
+                .expect("canonical production handle must be accepted")
+                .is_some()
         );
 
         config.enabled = false;
         assert!(matches!(
-            StreamTokenIssuer::from_config(
-                &config,
-                &configured_api_tokens(),
-                Some(runtime_signer.clone()),
-            ),
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
             Err(StreamTokenIssuerError::UnexpectedRuntimeSigner)
         ));
 
         config.enabled = true;
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), None),
+            StreamTokenIssuer::from_config(&config, None),
             Err(StreamTokenIssuerError::MissingRuntimeSigner)
         ));
 
         config.signer_handle = None;
         assert!(matches!(
-            StreamTokenIssuer::from_config(
-                &config,
-                &configured_api_tokens(),
-                Some(runtime_signer.clone()),
-            ),
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
             Err(StreamTokenIssuerError::MissingRuntimeSignerHandle)
         ));
 
@@ -1205,33 +1158,21 @@ mod tests {
         ] {
             config.signer_handle = Some(invalid_handle.to_owned());
             assert!(matches!(
-                StreamTokenIssuer::from_config(
-                    &config,
-                    &configured_api_tokens(),
-                    Some(runtime_signer.clone()),
-                ),
+                StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
                 Err(StreamTokenIssuerError::InvalidRuntimeSignerHandle)
             ));
         }
 
         config.signer_handle = Some("pkcs11:prod/other-token/v1".to_owned());
         assert!(matches!(
-            StreamTokenIssuer::from_config(
-                &config,
-                &configured_api_tokens(),
-                Some(runtime_signer.clone()),
-            ),
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
             Err(StreamTokenIssuerError::RuntimeSignerHandleMismatch)
         ));
 
         config.signer_handle = Some("pkcs11:prod/stream-token/v1".to_owned());
         config.signer_public_key = None;
         assert!(matches!(
-            StreamTokenIssuer::from_config(
-                &config,
-                &configured_api_tokens(),
-                Some(runtime_signer.clone()),
-            ),
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
             Err(StreamTokenIssuerError::MissingRuntimeSignerPublicKey)
         ));
 
@@ -1239,11 +1180,7 @@ mod tests {
         weak_public_key[0] = 1;
         config.signer_public_key = Some(weak_public_key);
         assert!(matches!(
-            StreamTokenIssuer::from_config(
-                &config,
-                &configured_api_tokens(),
-                Some(runtime_signer.clone()),
-            ),
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
             Err(StreamTokenIssuerError::WeakRuntimeSignerPublicKey)
         ));
 
@@ -1253,7 +1190,7 @@ mod tests {
                 .to_bytes(),
         );
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(runtime_signer),),
+            StreamTokenIssuer::from_config(&config, Some(runtime_signer)),
             Err(StreamTokenIssuerError::RuntimeSignerPublicKeyMismatch)
         ));
     }
@@ -1269,24 +1206,24 @@ mod tests {
 
         config.signer_revision = None;
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(signer.clone()),),
+            StreamTokenIssuer::from_config(&config, Some(signer.clone())),
             Err(StreamTokenIssuerError::MissingRuntimeSignerRevision)
         ));
         config.signer_revision = Some(4);
         config.signer_policy_digest = None;
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(signer.clone()),),
+            StreamTokenIssuer::from_config(&config, Some(signer.clone())),
             Err(StreamTokenIssuerError::MissingRuntimeSignerPolicyDigest)
         ));
         config.signer_policy_digest = Some([0; 32]);
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(signer.clone()),),
+            StreamTokenIssuer::from_config(&config, Some(signer.clone())),
             Err(StreamTokenIssuerError::InvalidRuntimeSignerQualification)
         ));
         config.signer_policy_digest = Some([0xb4; 32]);
         config.signer_revision = Some(5);
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(signer.clone()),),
+            StreamTokenIssuer::from_config(&config, Some(signer.clone())),
             Err(StreamTokenIssuerError::RuntimeSignerQualificationMismatch)
         ));
 
@@ -1302,7 +1239,7 @@ mod tests {
         );
         let config = token_config(unavailable.public_key(), 2);
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(unavailable)),
+            StreamTokenIssuer::from_config(&config, Some(unavailable)),
             Err(StreamTokenIssuerError::RuntimeSignerUnavailable)
         ));
 
@@ -1318,7 +1255,7 @@ mod tests {
         );
         let config = token_config(drifting.public_key(), 2);
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(drifting)),
+            StreamTokenIssuer::from_config(&config, Some(drifting)),
             Err(StreamTokenIssuerError::RuntimeSignerQualificationChanged)
         ));
 
@@ -1332,11 +1269,7 @@ mod tests {
         );
         let config = token_config(transient_identity_drift.public_key(), 2);
         assert!(matches!(
-            StreamTokenIssuer::from_config(
-                &config,
-                &configured_api_tokens(),
-                Some(transient_identity_drift),
-            ),
+            StreamTokenIssuer::from_config(&config, Some(transient_identity_drift)),
             Err(StreamTokenIssuerError::RuntimeSignerQualificationMismatch)
         ));
 
@@ -1347,7 +1280,7 @@ mod tests {
         ));
         let config = token_config(test_marked.public_key(), 2);
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(test_marked)),
+            StreamTokenIssuer::from_config(&config, Some(test_marked)),
             Err(StreamTokenIssuerError::InvalidRuntimeSignerHandle)
         ));
     }
@@ -1373,8 +1306,15 @@ mod tests {
         issuer
     }
 
-    fn quota_subject(credential: &str) -> StreamTokenQuotaSubject {
-        StreamTokenQuotaSubject::from_validated_api_token(credential)
+    fn quota_subject(label: &str) -> StreamTokenQuotaSubject {
+        let seed = *blake3::hash(label.as_bytes()).as_bytes();
+        let signing_key = SigningKey::from_bytes(&seed);
+        let public_key = PublicKey::from_bytes(
+            iroha_crypto::Algorithm::Ed25519,
+            &signing_key.verifying_key().to_bytes(),
+        )
+        .expect("derived operator fixture key");
+        StreamTokenQuotaSubject::from_authenticated_operator(&public_key)
     }
 
     #[test]
@@ -1438,13 +1378,9 @@ mod tests {
                 .with_qualification_results(reports),
             );
             let config = token_config(signer.public_key(), 1);
-            let issuer = StreamTokenIssuer::from_config(
-                &config,
-                &configured_api_tokens(),
-                Some(signer.clone()),
-            )
-            .expect("startup qualification")
-            .expect("enabled issuer");
+            let issuer = StreamTokenIssuer::from_config(&config, Some(signer.clone()))
+                .expect("startup qualification")
+                .expect("enabled issuer");
             assert!(
                 matches!(
                     issuer.issue_token(
@@ -1492,10 +1428,9 @@ mod tests {
             ]),
         );
         let config = token_config(signer.public_key(), 1);
-        let issuer =
-            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(signer.clone()))
-                .expect("startup qualification")
-                .expect("enabled issuer");
+        let issuer = StreamTokenIssuer::from_config(&config, Some(signer.clone()))
+            .expect("startup qualification")
+            .expect("enabled issuer");
         let error = issuer
             .issue_token(
                 quota_subject("credential-unavailable-probe"),

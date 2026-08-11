@@ -1,6 +1,10 @@
 //! Telemetry integrity helpers (hash chaining and optional keyed signatures).
 
-use std::path::{Path, PathBuf};
+use std::{
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use iroha_config::parameters::actual::TelemetryIntegrity as TelemetryIntegrityConfig;
 use norito::json::{Map, Value};
@@ -8,6 +12,7 @@ use thiserror::Error;
 
 const STATE_VERSION: u64 = 1;
 const STATE_FILE_PREFIX: &str = "telemetry_integrity_";
+const STATE_FILE_MAX_BYTES: u64 = 4 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct IntegrityConfig {
@@ -155,13 +160,35 @@ fn state_path_for(kind: &str, state_dir: Option<&PathBuf>) -> Option<PathBuf> {
 }
 
 fn load_state_snapshot(path: &Path) -> Result<Option<ChainStateSnapshot>, String> {
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
+    let file = match File::open(path) {
+        Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
-            return Err(format!("failed to read state file: {err}"));
+            return Err(format!("failed to open state file: {err}"));
         }
     };
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("failed to inspect state file: {err}"))?;
+    if !metadata.is_file() {
+        return Err("state path is not a regular file".to_string());
+    }
+    if metadata.len() > STATE_FILE_MAX_BYTES {
+        return Err(format!(
+            "state file is {} bytes, exceeding the {STATE_FILE_MAX_BYTES}-byte limit",
+            metadata.len()
+        ));
+    }
+    let mut bytes = Vec::new();
+    let mut limited = file.take(STATE_FILE_MAX_BYTES.saturating_add(1));
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(|err| format!("failed to read state file: {err}"))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > STATE_FILE_MAX_BYTES {
+        return Err(format!(
+            "state file grew beyond the {STATE_FILE_MAX_BYTES}-byte limit while reading"
+        ));
+    }
 
     let value: Value = norito::json::from_slice(&bytes)
         .map_err(|err| format!("failed to decode state file: {err}"))?;
@@ -357,6 +384,29 @@ mod tests {
             chain_map.get("prev_hash").and_then(Value::as_str),
             Some(hex::encode(expected_hash).as_str())
         );
+    }
+
+    #[test]
+    fn oversized_state_file_is_rejected_before_json_decode() {
+        let dir = std::env::temp_dir().join(format!(
+            "iroha-telemetry-integrity-oversized-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temporary directory");
+        let state_path = dir.join("telemetry_integrity_ws.json");
+        std::fs::write(
+            &state_path,
+            vec![b' '; usize::try_from(STATE_FILE_MAX_BYTES).expect("limit fits") + 1],
+        )
+        .expect("write oversized state");
+
+        let error = load_state_snapshot(&state_path).expect_err("oversized state must fail");
+        assert!(error.contains("exceeding"), "unexpected error: {error}");
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

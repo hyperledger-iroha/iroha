@@ -29,14 +29,11 @@ use crate::{
 impl ValidSingularQuery for FindDataspaceNameOwnerById {
     #[metrics(+"find_dataspace_name_owner_by_id")]
     fn execute(&self, state_ro: &impl StateReadOnly) -> Result<AccountId, QueryError> {
-        let now_ms = state_ro.latest_block().map_or(0, |block| {
-            u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-        });
         crate::sns::active_dataspace_owner_by_id(
             state_ro.world(),
             &state_ro.nexus().dataspace_catalog,
             self.dataspace_id(),
-            now_ms,
+            state_ro.query_ledger_time_ms(),
         )
         .ok_or(QueryError::NotFound)
     }
@@ -2593,6 +2590,67 @@ mod tests {
             .execute(&view)
             .expect("query succeeds");
         assert_eq!(resolved, owner);
+    }
+
+    #[test]
+    fn find_dataspace_name_owner_uses_cached_ledger_time_without_loading_a_block() {
+        let mut state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: DataSpaceId::new(9),
+                alias: "trade".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("catalog");
+
+        let owner = owner();
+        let target = AliasTargetV1::Dataspace(ResolvedDataSpaceV1::new(
+            "trade".parse().expect("canonical alias"),
+            DataSpaceId::new(9),
+        ));
+        let selector = crate::alias_setup::selector_for_resolved_alias_target(&target)
+            .expect("dataspace selector");
+        let address = AccountAddress::from_account_id(&owner).expect("owner address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner,
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            10,
+            10,
+            10,
+            crate::alias_setup::alias_registration_metadata(&target).expect("dataspace metadata"),
+        );
+        state.world.smart_contract_state_mut_for_testing().insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+        state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+            NonZeroU64::new(1).expect("nonzero height"),
+            None,
+            None,
+            None,
+            11,
+            0,
+        ));
+
+        let view = state.query_view();
+        assert!(
+            view.latest_block().is_none(),
+            "the blank Kura fixture must not provide a block body"
+        );
+        assert!(matches!(
+            FindDataspaceNameOwnerById::new(DataSpaceId::new(9)).execute(&view),
+            Err(QueryError::NotFound)
+        ));
     }
 
     #[test]

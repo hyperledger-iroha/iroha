@@ -630,6 +630,8 @@ impl SignedBlock {
         entry_hash: &HashOf<TransactionEntrypoint>,
     ) -> Option<crate::block::proofs::BlockProofs> {
         let result_state = self.result.as_ref()?;
+        self.validate_entrypoint_merkle_cache().ok()?;
+        self.validate_result_merkle_cache().ok()?;
         let (idx, _) = self
             .entrypoint_hashes()
             .enumerate()
@@ -2159,6 +2161,50 @@ mod tests {
                 ..BlockResult::default()
             }),
         };
+
+        let mut explicit_iter = block.external_entrypoints_cloned();
+        assert_eq!(explicit_iter.len(), 1);
+        assert_eq!(explicit_iter.next_back(), Some(entrypoint.clone()));
+        assert_eq!(explicit_iter.len(), 0);
+        let (entrypoint_hash, borrowed_tx) = block
+            .external_signed_transaction_at(0)
+            .expect("explicit signed entrypoint must be directly addressable");
+        assert_eq!(entrypoint_hash, entrypoint.hash());
+        let TransactionEntrypoint::External(stored_tx) = &block
+            .external_entrypoints_slice()
+            .expect("explicit entries")[0]
+        else {
+            panic!("expected external signed transaction");
+        };
+        assert!(std::ptr::eq(borrowed_tx, stored_tx));
+        assert!(std::ptr::eq(
+            block
+                .external_signed_transaction_ref_at(0)
+                .expect("explicit transaction reference"),
+            stored_tx
+        ));
+
+        let mut legacy_block = block.clone();
+        legacy_block.payload.external_entrypoints.clear();
+        legacy_block
+            .result
+            .as_mut()
+            .expect("test block result")
+            .external_entrypoints
+            .clear();
+        let mut legacy_iter = legacy_block.external_entrypoints_cloned();
+        assert_eq!(legacy_iter.len(), 1);
+        assert_eq!(legacy_iter.next(), Some(entrypoint.clone()));
+        assert_eq!(legacy_iter.len(), 0);
+        let (legacy_hash, legacy_tx) = legacy_block
+            .external_signed_transaction_at(0)
+            .expect("legacy signed transaction must remain directly addressable");
+        assert_eq!(legacy_hash, entrypoint.hash());
+        assert!(std::ptr::eq(
+            legacy_tx,
+            &legacy_block.payload.transactions[0]
+        ));
+
         let encoded = block.encode_versioned();
 
         block.payload.transactions.clear();

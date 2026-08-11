@@ -324,6 +324,29 @@ fn channel_key(channel_id: [u8; 32]) -> StatePath {
     digest_key(CHANNEL_STATE_KEY_PREFIX, channel_id)
 }
 
+fn parse_query_digest_key(
+    key: &StatePath,
+    prefix: &str,
+    label: &str,
+) -> Result<[u8; 32], QueryExecutionFail> {
+    let suffix = key
+        .as_ref()
+        .strip_prefix(prefix)
+        .filter(|suffix| suffix.len() == 64)
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(format!(
+                "authoritative orderbook {label} key has an invalid digest suffix"
+            ))
+        })?;
+    let mut digest = [0_u8; 32];
+    hex::decode_to_slice(suffix, &mut digest).map_err(|error| {
+        QueryExecutionFail::Conversion(format!(
+            "authoritative orderbook {label} key has invalid hex: {error}"
+        ))
+    })?;
+    Ok(digest)
+}
+
 fn event_key(sequence: u64) -> StatePath {
     StatePath::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
         .expect("static prefix plus fixed-width lowercase hex is a valid state key")
@@ -360,8 +383,20 @@ where
             "{label} state exceeds {STATE_MAX_BYTES} bytes"
         )));
     }
-    let value = decode_from_bytes_with_limits::<T>(bytes, STATE_LIMITS)
-        .map_err(|error| corrupt_state(format!("failed to decode {label}: {error}")))?;
+    let limits = crate::smartcontracts::isi::query::singular_query_decode_limits(
+        bytes.len(),
+        STATE_LIMITS,
+    )
+    .map_err(InstructionExecutionError::Query)?;
+    let value = decode_from_bytes_with_limits::<T>(bytes, limits).map_err(|error| {
+        if crate::smartcontracts::isi::query::singular_query_limits_active()
+            && error.is_decode_resource_limit()
+        {
+            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+        } else {
+            corrupt_state(format!("failed to decode {label}: {error}"))
+        }
+    })?;
     let canonical = encode_state(&value, label)?;
     if canonical != bytes {
         return Err(corrupt_state(format!(
@@ -2948,8 +2983,11 @@ impl Execute for RecordSorafsOrderbookSettlementReceipt {
     }
 }
 
-fn query_failure(error: impl core::fmt::Display) -> QueryExecutionFail {
-    QueryExecutionFail::Conversion(error.to_string())
+fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
+    match error {
+        InstructionExecutionError::Query(error) => error,
+        error => QueryExecutionFail::Conversion(error.to_string()),
+    }
 }
 
 fn ensure_orderbook_query_state(world: &impl WorldReadOnly) -> Result<(), QueryExecutionFail> {
@@ -3094,13 +3132,22 @@ fn resolve_committed_event(
             record.sequence
         )));
     }
-    Ok(OrderbookFinalizedEventV1 {
-        sequence: record.sequence,
-        block_height: record.target_block_height,
-        block_hash,
-        event_index: record.event_index,
-        event: record.event.clone(),
-    })
+    crate::smartcontracts::isi::query::own_singular_query_struct::<OrderbookFinalizedEventV1, 5>(
+        [
+            &record.sequence,
+            &record.target_block_height,
+            &block_hash,
+            &record.event_index,
+            &record.event,
+        ],
+        || OrderbookFinalizedEventV1 {
+            sequence: record.sequence,
+            block_height: record.target_block_height,
+            block_hash,
+            event_index: record.event_index,
+            event: record.event.clone(),
+        },
+    )
 }
 
 fn read_event_sequence(
@@ -3138,26 +3185,21 @@ fn query_order_page_with_budget(
     let limit = checked_query_limit(query.limit)?;
     let world = state_ro.world();
     let start = order_key(query.after_order_id.unwrap_or([0; 32]));
-    let mut orders = Vec::with_capacity(limit.saturating_add(1));
+    let mut orders = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
+    let mut has_more = false;
     for (key, payload) in world.smart_contract_state().range(start..) {
         if !key.to_string().starts_with(ORDER_STATE_KEY_PREFIX) {
             break;
         }
         scan_budget.inspect(payload.len(), "order page")?;
-        let candidate: OrderbookOrderRecord =
-            decode_state(payload, "orderbook order").map_err(query_failure)?;
-        if order_key(candidate.order_id) != *key {
-            return Err(QueryExecutionFail::Conversion(
-                "authoritative orderbook order key does not match its record".to_owned(),
-            ));
-        }
+        let order_id = parse_query_digest_key(key, ORDER_STATE_KEY_PREFIX, "order")?;
         if query
             .after_order_id
-            .is_some_and(|cursor| candidate.order_id <= cursor)
+            .is_some_and(|cursor| order_id <= cursor)
         {
             continue;
         }
-        let record = read_order(world, candidate.order_id)
+        let record = read_order(world, order_id)
             .map_err(query_failure)?
             .ok_or_else(|| {
                 QueryExecutionFail::Conversion(
@@ -3167,14 +3209,12 @@ fn query_order_page_with_budget(
         if query.status.is_some_and(|status| record.status != status) {
             continue;
         }
-        orders.push(record);
-        if orders.len() > limit {
+        if orders.len() == limit {
+            drop(record);
+            has_more = true;
             break;
         }
-    }
-    let has_more = orders.len() > limit;
-    if has_more {
-        orders.pop();
+        orders.try_push(record)?;
     }
     let next_after_order_id = if has_more {
         Some(
@@ -3192,7 +3232,7 @@ fn query_order_page_with_budget(
     };
     Ok(OrderbookOrderPageV1 {
         finalized_cursor,
-        orders,
+        orders: orders.into_vec(),
         has_more,
         next_after_order_id,
     })
@@ -3216,26 +3256,21 @@ fn query_receipt_page_with_budget(
     let limit = checked_query_limit(query.limit)?;
     let world = state_ro.world();
     let start = receipt_key(query.after_receipt_id.unwrap_or([0; 32]));
-    let mut receipts = Vec::with_capacity(limit.saturating_add(1));
+    let mut receipts = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
+    let mut has_more = false;
     for (key, payload) in world.smart_contract_state().range(start..) {
         if !key.to_string().starts_with(RECEIPT_STATE_KEY_PREFIX) {
             break;
         }
         scan_budget.inspect(payload.len(), "receipt page")?;
-        let candidate: OrderbookSettlementReceiptRecord =
-            decode_state(payload, "orderbook settlement receipt").map_err(query_failure)?;
-        if receipt_key(candidate.receipt_id) != *key {
-            return Err(QueryExecutionFail::Conversion(
-                "authoritative orderbook receipt key does not match its record".to_owned(),
-            ));
-        }
+        let receipt_id = parse_query_digest_key(key, RECEIPT_STATE_KEY_PREFIX, "receipt")?;
         if query
             .after_receipt_id
-            .is_some_and(|cursor| candidate.receipt_id <= cursor)
+            .is_some_and(|cursor| receipt_id <= cursor)
         {
             continue;
         }
-        let record = read_receipt(world, candidate.receipt_id)
+        let record = read_receipt(world, receipt_id)
             .map_err(query_failure)?
             .ok_or_else(|| {
                 QueryExecutionFail::Conversion(
@@ -3248,14 +3283,12 @@ fn query_receipt_page_with_budget(
         {
             continue;
         }
-        receipts.push(record);
-        if receipts.len() > limit {
+        if receipts.len() == limit {
+            drop(record);
+            has_more = true;
             break;
         }
-    }
-    let has_more = receipts.len() > limit;
-    if has_more {
-        receipts.pop();
+        receipts.try_push(record)?;
     }
     let next_after_receipt_id = if has_more {
         Some(
@@ -3273,7 +3306,7 @@ fn query_receipt_page_with_budget(
     };
     Ok(OrderbookSettlementReceiptPageV1 {
         finalized_cursor,
-        receipts,
+        receipts: receipts.into_vec(),
         has_more,
         next_after_receipt_id,
     })
@@ -3287,39 +3320,32 @@ fn query_trade_page(
     let limit = checked_query_limit(query.limit)?;
     let world = state_ro.world();
     let start = trade_key(query.after_trade_id.unwrap_or([0; 32]));
-    let mut trades = Vec::with_capacity(limit.saturating_add(1));
-    for (key, payload) in world.smart_contract_state().range(start..) {
+    let mut trades = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
+    let mut has_more = false;
+    for (key, _payload) in world.smart_contract_state().range(start..) {
         if !key.to_string().starts_with(TRADE_STATE_KEY_PREFIX) {
             break;
         }
-        let candidate: OrderbookTradeRecord =
-            decode_state(payload, "orderbook trade").map_err(query_failure)?;
-        if trade_key(candidate.trade_id) != *key {
-            return Err(QueryExecutionFail::Conversion(
-                "authoritative orderbook trade key does not match its record".to_owned(),
-            ));
-        }
+        let trade_id = parse_query_digest_key(key, TRADE_STATE_KEY_PREFIX, "trade")?;
         if query
             .after_trade_id
-            .is_some_and(|cursor| candidate.trade_id <= cursor)
+            .is_some_and(|cursor| trade_id <= cursor)
         {
             continue;
         }
-        let record = read_trade(world, candidate.trade_id)
+        let record = read_trade(world, trade_id)
             .map_err(query_failure)?
             .ok_or_else(|| {
                 QueryExecutionFail::Conversion(
                     "authoritative orderbook trade disappeared during read".to_owned(),
                 )
             })?;
-        trades.push(record);
-        if trades.len() > limit {
+        if trades.len() == limit {
+            drop(record);
+            has_more = true;
             break;
         }
-    }
-    let has_more = trades.len() > limit;
-    if has_more {
-        trades.pop();
+        trades.try_push(record)?;
     }
     let next_after_trade_id = if has_more {
         Some(
@@ -3337,7 +3363,7 @@ fn query_trade_page(
     };
     Ok(OrderbookTradePageV1 {
         finalized_cursor,
-        trades,
+        trades: trades.into_vec(),
         has_more,
         next_after_trade_id,
     })
@@ -3361,26 +3387,21 @@ fn query_channel_page_with_budget(
     let limit = checked_query_limit(query.limit)?;
     let world = state_ro.world();
     let start = channel_key(query.after_channel_id.unwrap_or([0; 32]));
-    let mut channels = Vec::with_capacity(limit.saturating_add(1));
+    let mut channels = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
+    let mut has_more = false;
     for (key, payload) in world.smart_contract_state().range(start..) {
         if !key.to_string().starts_with(CHANNEL_STATE_KEY_PREFIX) {
             break;
         }
         scan_budget.inspect(payload.len(), "channel page")?;
-        let candidate: OrderbookSettlementChannelRecord =
-            decode_state(payload, "orderbook settlement channel").map_err(query_failure)?;
-        if channel_key(candidate.channel_id) != *key {
-            return Err(QueryExecutionFail::Conversion(
-                "authoritative orderbook channel key does not match its record".to_owned(),
-            ));
-        }
+        let channel_id = parse_query_digest_key(key, CHANNEL_STATE_KEY_PREFIX, "channel")?;
         if query
             .after_channel_id
-            .is_some_and(|cursor| candidate.channel_id <= cursor)
+            .is_some_and(|cursor| channel_id <= cursor)
         {
             continue;
         }
-        let record = read_channel(world, candidate.channel_id)
+        let record = read_channel(world, channel_id)
             .map_err(query_failure)?
             .ok_or_else(|| {
                 QueryExecutionFail::Conversion(
@@ -3390,14 +3411,12 @@ fn query_channel_page_with_budget(
         if query.status.is_some_and(|status| record.status != status) {
             continue;
         }
-        channels.push(record);
-        if channels.len() > limit {
+        if channels.len() == limit {
+            drop(record);
+            has_more = true;
             break;
         }
-    }
-    let has_more = channels.len() > limit;
-    if has_more {
-        channels.pop();
+        channels.try_push(record)?;
     }
     let next_after_channel_id = if has_more {
         Some(
@@ -3415,7 +3434,7 @@ fn query_channel_page_with_budget(
     };
     Ok(OrderbookSettlementChannelPageV1 {
         finalized_cursor,
-        channels,
+        channels: channels.into_vec(),
         has_more,
         next_after_channel_id,
     })
@@ -3427,6 +3446,9 @@ fn query_event_page(
     finalized_cursor: OrderbookFinalizedCursorV1,
 ) -> Result<OrderbookFinalizedEventPageV1, QueryExecutionFail> {
     let limit = checked_query_limit(query.limit)?;
+    let page_bytes_limit = crate::smartcontracts::isi::query::singular_query_frame_limit(
+        ORDERBOOK_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+    );
     let head = read_event_journal_head(state_ro.world())
         .map_err(query_failure)?
         .ok_or_else(|| {
@@ -3480,7 +3502,7 @@ fn query_event_page(
         .after
         .map_or(Some(1), |after| after.sequence.checked_add(1));
     let last_sequence = head.map_or(0, |head| head.last_sequence);
-    let mut events = Vec::with_capacity(limit);
+    let mut events = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
     let mut encoded_event_bytes = 0usize;
     let mut sequence = start;
     while let Some(current_sequence) = sequence {
@@ -3491,26 +3513,25 @@ fn query_event_page(
             read_event_sequence(state_ro, current_sequence, previous.as_ref())?;
         encoded_event_bytes = encoded_event_bytes
             .checked_add(
-                norito::to_bytes(&resolved)
+                norito::core::encoded_frame_len(&resolved)
                     .map_err(|error| {
                         QueryExecutionFail::Conversion(format!(
-                            "failed to encode committed orderbook event: {error}"
+                            "failed to size committed orderbook event: {error}"
                         ))
-                    })?
-                    .len(),
+                    })?,
             )
             .ok_or_else(|| {
                 QueryExecutionFail::Conversion(
                     "committed orderbook event page byte counter overflow".to_owned(),
                 )
             })?;
-        if encoded_event_bytes > ORDERBOOK_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+        if encoded_event_bytes > page_bytes_limit {
             return Err(QueryExecutionFail::Conversion(format!(
-                "committed orderbook event page exceeds {ORDERBOOK_QUERY_MAX_EVENT_PAGE_BYTES_V1} bytes"
+                "committed orderbook event page exceeds {page_bytes_limit} bytes"
             )));
         }
         previous = Some(record);
-        events.push(resolved);
+        events.try_push(resolved)?;
         sequence = current_sequence.checked_add(1);
     }
     let has_more = events
@@ -3524,20 +3545,18 @@ fn query_event_page(
     });
     let page = OrderbookFinalizedEventPageV1 {
         finalized_cursor,
-        events,
+        events: events.into_vec(),
         has_more,
         next_after,
     };
-    let encoded_len = norito::to_bytes(&page)
-        .map_err(|error| {
-            QueryExecutionFail::Conversion(format!(
-                "failed to encode committed orderbook event page: {error}"
-            ))
-        })?
-        .len();
-    if encoded_len > ORDERBOOK_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+    let encoded_len = norito::core::encoded_frame_len(&page).map_err(|error| {
+        QueryExecutionFail::Conversion(format!(
+            "failed to size committed orderbook event page: {error}"
+        ))
+    })?;
+    if encoded_len > page_bytes_limit {
         return Err(QueryExecutionFail::Conversion(format!(
-            "committed orderbook event page encodes to {encoded_len} bytes, above {ORDERBOOK_QUERY_MAX_EVENT_PAGE_BYTES_V1}"
+            "committed orderbook event page encodes to {encoded_len} bytes, above {page_bytes_limit}"
         )));
     }
     Ok(page)

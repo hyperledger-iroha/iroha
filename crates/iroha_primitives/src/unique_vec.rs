@@ -166,6 +166,23 @@ impl<T: JsonSerialize> JsonSerialize for UniqueVec<T> {
         }
         out.push(']');
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('[')?;
+        for (index, value) in self.0.iter().enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            value.json_serialize_to(out)?;
+        }
+        out.push(']')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 impl<T> JsonDeserialize for UniqueVec<T>

@@ -15,7 +15,7 @@ use iroha_data_model::NetworkId;
 use iroha_logger::prelude::*;
 use iroha_telemetry::metrics::Status;
 use norito::json::{self, Value};
-use reqwest::Client;
+use reqwest::{Client, redirect::Policy};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinSet,
@@ -42,6 +42,59 @@ const GET_CONFIG_INIT_INTERVAL: Duration = Duration::from_secs(15);
 const GET_CONFIG_MAX_INTERVAL: Duration = Duration::from_mins(2);
 const GET_CONFIG_INTERVAL_MULTIPLIER: f64 = 1.67;
 const STATUS_RTT_WINDOW: usize = 32;
+/// Fixed JSON envelope returned by the configured geo provider.
+const GEO_RESPONSE_MAX_BYTES: usize = 16 * 1024;
+/// Complete public/operator configuration snapshot accepted by the monitor.
+const CONFIG_RESPONSE_MAX_BYTES: usize = 4 * 1024 * 1024;
+/// Bounded online-peer inventory accepted from one monitored node.
+const PEERS_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
+/// Fixed-schema `/status` response accepted from one monitored node.
+const STATUS_RESPONSE_MAX_BYTES: usize = 64 * 1024;
+
+/// Read one remote response without allowing a peer, proxy, or decompressor to
+/// grow a monitor task's resident body buffer without bound.
+async fn read_response_body_bounded(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+    label: &'static str,
+) -> Result<Vec<u8>, Report> {
+    if max_bytes == 0 {
+        return Err(eyre!("{label} response byte limit must be non-zero"));
+    }
+    let max_bytes_u64 = u64::try_from(max_bytes)
+        .map_err(|_| eyre!("{label} response byte limit does not fit u64"))?;
+    if let Some(declared) = response.content_length()
+        && declared > max_bytes_u64
+    {
+        return Err(eyre!(
+            "{label} response declares {declared} bytes, exceeding the {max_bytes}-byte limit"
+        ));
+    }
+
+    let initial_capacity = response
+        .content_length()
+        .and_then(|declared| usize::try_from(declared).ok())
+        .unwrap_or(0)
+        .min(max_bytes);
+    let mut body = Vec::new();
+    body.try_reserve_exact(initial_capacity)
+        .map_err(|error| eyre!("failed to reserve {label} response buffer: {error}"))?;
+    while let Some(chunk) = response.chunk().await? {
+        let next_len = body
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| eyre!("{label} response length overflowed"))?;
+        if next_len > max_bytes {
+            return Err(eyre!(
+                "{label} response exceeded the {max_bytes}-byte limit while streaming"
+            ));
+        }
+        body.try_reserve(chunk.len())
+            .map_err(|error| eyre!("failed to grow {label} response buffer: {error}"))?;
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Metrics {
@@ -157,8 +210,16 @@ pub fn run(
                             workers.spawn({
                                 let tx = tx.clone();
                                 let url = Arc::clone(&url);
+                                let network_id = network_id;
+                                let operator_signer = operator_signer.clone();
                                 async move {
-                                    get_peers_periodic(&url, tx).await;
+                                    get_peers_periodic(
+                                        &url,
+                                        &network_id,
+                                        operator_signer.as_ref(),
+                                        tx,
+                                    )
+                                    .await;
                                 }
                             });
                             workers.spawn({
@@ -292,7 +353,10 @@ async fn collect_geo(
     let url = construct_geo_query(torii_url, geo_config.endpoint.as_ref())?;
 
     let do_request = || async {
-        let bytes = client.get(url.clone()).send().await?.bytes().await?;
+        let response = client.get(url.clone()).send().await?;
+        let bytes = read_response_body_bounded(response, GEO_RESPONSE_MAX_BYTES, "geo lookup")
+            .await
+            .map_err(|error| RequestError::InvalidResponse(error.to_string()))?;
         let response = decode_ip_api_response(&bytes)?;
         match response {
             IpApiComResponse::Success(data) => Ok(data),
@@ -526,7 +590,9 @@ async fn get_config_with_retry(
         }
         let response = request.send().await?;
         let status = response.status();
-        let bytes = response.bytes().await?;
+        let bytes =
+            read_response_body_bounded(response, CONFIG_RESPONSE_MAX_BYTES, "peer configuration")
+                .await?;
         if status == StatusCode::NOT_FOUND {
             iroha_logger::debug!(
                 %status,
@@ -562,16 +628,52 @@ async fn get_config_with_retry(
     }
 }
 
-async fn get_peers_periodic(torii_url: &ToriiUrl, tx: mpsc::Sender<Update>) -> ! {
-    let client = Client::new();
+fn signed_peers_request(
+    client: &Client,
+    url: Url,
+    network_id: &NetworkId,
+    operator_signer: Option<&KeyPair>,
+) -> eyre::Result<reqwest::Request> {
+    let key_pair = operator_signer
+        .ok_or_else(|| eyre!("/v1/peers requires an immutable operator signing context"))?;
+    let peers_uri: crate::Uri = iroha_torii_shared::uri::PEERS
+        .parse()
+        .expect("static peers URI");
+    let headers = operator_signatures::signed_request_headers(
+        key_pair,
+        network_id,
+        &crate::Method::GET,
+        &peers_uri,
+        &[],
+    )
+    .map_err(|error| eyre!("failed to sign /v1/peers operator request: {error}"))?;
+    client.get(url).headers(headers).build().map_err(Into::into)
+}
+
+async fn get_peers_periodic(
+    torii_url: &ToriiUrl,
+    network_id: &NetworkId,
+    operator_signer: Option<&KeyPair>,
+    tx: mpsc::Sender<Update>,
+) -> ! {
+    let client = Client::builder()
+        .redirect(Policy::none())
+        .build()
+        .expect("peer monitor HTTP client configuration is valid");
     let url = torii_url
         .0
         .join(iroha_torii_shared::uri::PEERS)
         .expect("valid url");
 
     let get = || async {
-        let response = client.get(url.clone()).send().await?;
-        let bytes = response.bytes().await?;
+        let request = signed_peers_request(&client, url.clone(), network_id, operator_signer)?;
+        let response = client.execute(request).await?;
+        let status = response.status();
+        let bytes =
+            read_response_body_bounded(response, PEERS_RESPONSE_MAX_BYTES, "peer list").await?;
+        if !status.is_success() {
+            return Err(eyre!("/v1/peers returned HTTP {status}"));
+        }
         let peers: Vec<String> = json::from_slice(&bytes)
             .map_err(|err| eyre!("failed to decode /v1/peers payload: {err}"))?;
         Ok::<_, Report>(peers)
@@ -626,6 +728,8 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
         TelemetryUnavailable(StatusCode),
         #[error("unexpected status code: {0}")]
         UnexpectedStatus(StatusCode),
+        #[error("invalid bounded response: {0}")]
+        Response(String),
     }
 
     let mut avg_commit_time = AverageCommitTime::<AVG_COMMIT_BLOCK_TIME_WINDOW>::new();
@@ -650,7 +754,9 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
         if !status.is_success() {
             return Err(GetError::UnexpectedStatus(status));
         }
-        let bytes = resp.bytes().await?;
+        let bytes = read_response_body_bounded(resp, STATUS_RESPONSE_MAX_BYTES, "peer status")
+            .await
+            .map_err(|error| GetError::Response(error.to_string()))?;
         let status: Status = json::from_slice(&bytes)?;
         let request_rtt = started_at.elapsed();
         let observed_at_ms = unix_epoch_ms();
@@ -698,6 +804,9 @@ async fn get_metrics_periodic_timeout(torii_url: &ToriiUrl, tx: mpsc::Sender<Upd
             }
             Ok(Err(GetError::Decode(err))) => {
                 iroha_logger::warn!(?err, "failed to decode peer status payload");
+            }
+            Ok(Err(GetError::Response(err))) => {
+                iroha_logger::warn!(%err, "rejected oversized peer status payload");
             }
             Err(_) => {
                 iroha_logger::warn!(
@@ -833,6 +942,61 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    async fn raw_http_response(response: Vec<u8>) -> reqwest::Response {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind bounded-response listener");
+        let addr = listener.local_addr().expect("bounded-response address");
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept request");
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).await;
+            socket
+                .write_all(&response)
+                .await
+                .expect("write raw response");
+        });
+        Client::new()
+            .get(format!("http://{addr}/bounded"))
+            .send()
+            .await
+            .expect("receive raw response headers")
+    }
+
+    #[tokio::test]
+    async fn bounded_response_reader_rejects_declared_and_streamed_overflow() {
+        let declared = raw_http_response(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\n123456789".to_vec(),
+        )
+        .await;
+        let declared_error = read_response_body_bounded(declared, 8, "test")
+            .await
+            .expect_err("declared overflow must fail before body retention");
+        assert!(declared_error.to_string().contains("declares 9 bytes"));
+
+        let exact = raw_http_response(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n8\r\n12345678\r\n0\r\n\r\n"
+                .to_vec(),
+        )
+        .await;
+        assert_eq!(
+            read_response_body_bounded(exact, 8, "test")
+                .await
+                .expect("exact limit is accepted"),
+            b"12345678"
+        );
+
+        let streamed = raw_http_response(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n9\r\n123456789\r\n0\r\n\r\n"
+                .to_vec(),
+        )
+        .await;
+        let streamed_error = read_response_body_bounded(streamed, 8, "test")
+            .await
+            .expect_err("chunked overflow must fail at max plus one");
+        assert!(streamed_error.to_string().contains("while streaming"));
+    }
 
     #[test]
     fn decode_ip_api_com_success() {
@@ -1096,6 +1260,49 @@ mod tests {
     fn non_operator_error_payload_is_not_treated_as_configless_fallback() {
         let payload = br#"{"code":"some_other_error","message":"boom"}"#;
         assert!(decode_operator_access_error(payload).is_none());
+    }
+
+    #[test]
+    fn peer_monitor_builds_an_exact_signed_empty_body_get() {
+        let cfg = crate::test_utils::mk_minimal_root_cfg();
+        let network_id = crate::test_utils::signed_query_network_id();
+        let client = Client::builder()
+            .redirect(Policy::none())
+            .build()
+            .expect("test HTTP client");
+        let url = Url::parse("https://peer.example/v1/peers").expect("peers URL");
+
+        let request = signed_peers_request(&client, url, &network_id, Some(&cfg.common.key_pair))
+            .expect("signed peers request");
+
+        assert_eq!(request.method(), reqwest::Method::GET);
+        assert_eq!(request.url().path(), "/v1/peers");
+        assert!(request.url().query().is_none());
+        assert!(request.body().is_none());
+        for header in [
+            "x-iroha-operator-public-key",
+            "x-iroha-operator-timestamp-ms",
+            "x-iroha-operator-nonce",
+            "x-iroha-operator-signature",
+        ] {
+            assert!(request.headers().contains_key(header), "missing {header}");
+        }
+        assert!(!request.headers().contains_key("authorization"));
+        assert!(!request.headers().contains_key("x-api-token"));
+    }
+
+    #[test]
+    fn peer_monitor_fails_before_dispatch_without_an_operator_signer() {
+        let client = Client::new();
+        let url = Url::parse("https://peer.example/v1/peers").expect("peers URL");
+        let error = signed_peers_request(
+            &client,
+            url,
+            &crate::test_utils::signed_query_network_id(),
+            None,
+        )
+        .expect_err("missing operator signer must fail closed");
+        assert!(error.to_string().contains("operator signing context"));
     }
 
     #[test]

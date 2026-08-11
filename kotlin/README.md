@@ -60,6 +60,11 @@ are `RETRY_SAFE`; all other requests are `ONE_SHOT`.
 Raw `witness_base64` body authentication is not an SDK surface. Multisig writes must use a
 canonical signed transaction or a closed typed signed intent.
 
+Identifier resolve/claim-receipt and RAM-LFE execute/receipt-verify calls require a per-call
+`ToriiCanonicalRequestAuth` and `ClientConfig.localSigningContext`. The transport signs the exact
+POST path and body once, rejects caller-supplied canonical headers, and requires a claim-receipt
+path account to be the same exact canonical I105 account as the signer.
+
 If `submitTransaction` cannot obtain an authoritative admission result, it fails with
 `AmbiguousTransactionSubmissionException`. Use its `hashHex` or `reconcileWith(client)` to query
 pipeline status. Never resend the same signed bytes. `RetryPolicy` applies only to caller-managed
@@ -425,6 +430,11 @@ artifact. The top-up-finality roster is authenticated release metadata outside t
 cryptographic inventory. `ReleaseAuthentication` also requires the canonical candidate-bound
 promotion record alongside the trusted policy, attestation, benchmark evidence, and cryptographic
 review; an authenticated-but-unpromoted release cannot be installed.
+
+`KagemushaRecursiveSpendProver.newToriiClient` requires a genesis-derived
+`LocalSigningContext`. Its receiver-lineage method additionally requires a per-call
+`ToriiCanonicalRequestAuth` and signs the exact NetworkId, POST path, and Norito selector body with
+fresh metadata; the resulting transport request is one-shot and cannot be redirected or retried.
 
 Lifecycle calls fail closed until the proof backend and the exact manifest-bound artifact set are
 available. Request and result archives stay typed and canonically framed while recursive proof,
@@ -805,8 +815,10 @@ the record.
 
 ## Musubi V1 registry reads
 
-`MusubiToriiClientV1` is the signer-free, read-only client for the twelve typed
-`/v1/musubi/queries/*` POST routes. The `sdk.musubi` models preserve structural
+`MusubiToriiClientV1` is the exact-network authenticated client for the twelve typed
+`/v1/musubi/queries/*` POST routes. Its builder requires `LocalSigningContext`, and every method
+requires `ToriiCanonicalRequestAuth`. Each exact raw body/path is signed with the configured
+`NetworkId` and dispatched with one-shot replay policy. The `sdk.musubi` models preserve structural
 package IDs, immutable namespace bindings, canonical structured SemVer
 requirements, exact unsigned integers, finalized cursors, archive commitments,
 and one exact genesis-derived `NetworkId` without legacy aliases or compatibility decoding.
@@ -816,9 +828,8 @@ resolver row must use a distinct parent-local alias for every dependency.
 
 The canonical cross-SDK JSON contract is
 [`fixtures/musubi/sdk_v1.json`](../fixtures/musubi/sdk_v1.json), owned by the Rust
-`iroha_data_model::musubi` surface. Registry mutation credentials remain an
-explicit transport/configuration concern; these local read models never load a
-signer or accept secret material.
+`iroha_data_model::musubi` surface. Canonical or witness headers cannot be injected through
+default transport headers; the client derives them only from the explicit signing values.
 
 The `/v1/musubi/queries/search` route exposes bounded exact-token
 description and keyword discovery with a search-specific finalized projection

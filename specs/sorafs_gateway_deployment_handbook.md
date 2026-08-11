@@ -120,11 +120,10 @@ range of at most 8 MiB and receive `206` plus `Content-Range`.
 
 1. Generate a stream token for the new gateway (stage) host:
    ```bash
-   curl -sS -X POST https://stage-gw.example/token \
-     -H "X-API-Token: ${TORII_API_TOKEN}" \
-     -H "X-SoraFS-Client: stage-orchestrator" \
-     -H "X-SoraFS-Nonce: $(uuidgen)" \
-     --data-binary @admission_envelope.to \
+   iroha --config "${RUNTIME_ONLY_CLIENT_CONFIG}" app sorafs storage token issue \
+     --manifest-id "${MANIFEST_ID}" \
+     --provider-id "${PROVIDER_ID}" \
+     --client-id stage-orchestrator \
      | jq .
    ```
 2. Run a gateway fetch dry-run from a staging orchestrator using the new CLI flag:

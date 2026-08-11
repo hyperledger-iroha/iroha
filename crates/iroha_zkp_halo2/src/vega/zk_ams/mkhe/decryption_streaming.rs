@@ -17,10 +17,10 @@ use super::super::{
     checked_ring_multiplication_work,
     collective::{ZkAmsMkheCollectivePartyStateV1, cpk_party_b_payload_blake3_v1},
     cpk_relation::{
-        ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1,
-        ZkAmsMkheCpkRelationErrorV1, ZkAmsMkhePreparedCollectivePublicAContextV1,
-        active_collective_public_a_limb_frame_bytes_v1,
-        derive_active_collective_public_a_limb_v1, prepare_active_collective_public_a_v1,
+        ZK_AMS_MKHE_CPK_PARTY_B_OBJECT_BYTES_V1, ZkAmsMkheCpkRelationErrorV1,
+        ZkAmsMkhePreparedCollectivePublicAContextV1,
+        active_collective_public_a_limb_frame_bytes_v1, derive_active_collective_public_a_limb_v1,
+        prepare_active_collective_public_a_v1,
     },
     direct_object_transport::{
         ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1, ZkAmsMkheDirectObjectCasPublicationV1,
@@ -69,11 +69,11 @@ const DECRYPTION_SPLIT_COMPONENT_COUNT_V1: u8 = 2;
 const STAGED_PROVER_MAXIMUM_FS_ATTEMPTS_V1: usize = 120;
 const STAGED_PROVER_MAXIMUM_RING_MULTIPLICATIONS_V1: usize =
     1 + 2 * STAGED_PROVER_MAXIMUM_FS_ATTEMPTS_V1 + 2;
-// Forwarded random bytes are charged one-for-one as governed work. The cap is
-// deliberately below the residual work allowance after every deterministic
+// Forwarded random bytes are charged one-for-one as classified governed bulk
+// work. The cap is below the residual allowance after every deterministic
 // release pass is enumerated below. It leaves enough room for all 120 outer
 // attempts when each native rejection sampler accepts its first candidate,
-// while adversarial inner rejection streams fail closed before 1e11 work.
+// while adversarial inner rejection streams fail closed before 1e11 bulk units.
 const STAGED_PROVER_RNG_BYTE_BUDGET_V1: u64 = 5_000_000_000;
 const STAGED_PROVER_COMMON_A_CANDIDATE_BUDGET_V1: u64 = 1_500_000_000;
 const DECRYPTION_BINDING_HASH_BYTES_V1: u64 = 6 * 32 + 8 + 4 + 8 + 1 + 32 + 1;
@@ -121,6 +121,13 @@ pub enum ZkAmsMkheDecryptionStreamingBlockerV1 {
 /// governed worker ceiling even though this source topology fits it; release
 /// requires a separately bounded/external provider and the nonzero runtime
 /// residency certificate which is presently absent.
+///
+/// Work fields classify governed bulk units: ring/coefficient operations and
+/// bytes sampled, absorbed, scanned, folded, decoded, or emitted. Fixed control
+/// operations are not CPU-cycle estimates. The prepared common-`a` axis records
+/// one child constructor after separate statement/authority prevalidation; it
+/// is not a count of all profile/roster/PoP validation calls. The absent release
+/// KAT and worker certificate remain mandatory for whole-operation authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheDecryptionStreamingResidencyEvidenceV1 {
     /// Exact payload bytes in one full native RNS polynomial.
@@ -209,9 +216,11 @@ pub struct ZkAmsMkheDecryptionStreamingResidencyEvidenceV1 {
     pub staged_prover_direct_io_buffer_bytes: u64,
     /// Exact canonical signed `ZDSM` output bytes.
     pub staged_prover_manifest_bytes: u64,
-    /// Once-prepared common-`a` frame prefix retained for the worker.
+    /// Once-prepared common-`a` frame-prefix heap payload. The cloned profile's
+    /// moduli/roots are static slices; fixed digests, epoch, and container
+    /// handles are small stack metadata excluded above and covered at runtime.
     pub staged_prover_common_a_context_bytes: u64,
-    /// Per-limb common-`a` frame allocated alongside the derived limb.
+    /// Per-limb common-`a` frame heap payload allocated beside the derived limb.
     pub staged_prover_common_a_limb_frame_scratch_bytes: u64,
     /// Largest phase while creating and publishing the share polynomial.
     pub staged_prover_share_construction_peak_bytes: u64,
@@ -239,7 +248,7 @@ pub struct ZkAmsMkheDecryptionStreamingResidencyEvidenceV1 {
     /// Exact worst-case number of release-RNS multiplications executed by one
     /// accepted-last-attempt staged share: `1 + 2*120 + 2 = 243`.
     pub staged_prover_maximum_ring_multiplications: u16,
-    /// Exact governed ring-multiplication work for those 243 operations.
+    /// Classified ring-multiplication bulk work for those exact 243 operations.
     pub staged_prover_ring_multiplication_work_units: u64,
     /// Maximum random bytes forwarded by the fail-closed staged budget owner.
     pub staged_prover_rng_byte_budget: u64,
@@ -252,12 +261,16 @@ pub struct ZkAmsMkheDecryptionStreamingResidencyEvidenceV1 {
     /// Exact candidates required if every common-`a` coefficient accepts its
     /// first deterministic SHAKE word.
     pub staged_prover_first_candidate_common_a_candidates: u64,
-    /// Candidate budget converted to byte-consistent governed work (`* 8`).
+    /// Candidate budget converted to byte-consistent classified work (`* 8`).
     pub staged_prover_common_a_xof_byte_budget: u64,
     /// First-candidate common-`a` demand converted to SHAKE bytes (`* 8`).
     pub staged_prover_first_candidate_common_a_xof_bytes: u64,
-    /// Complete profile/roster/PoP/transcript validation passes used to prepare
-    /// common-`a`; this must remain one, before any capability or side effect.
+    /// Fixed accepted common-`a` residue reductions/emissions across all limb
+    /// derivations, separately from SHAKE candidate-byte work.
+    pub staged_prover_common_a_residue_output_work_units: u64,
+    /// Prepared common-`a` child-constructor invocations after the separate
+    /// statement/authority prevalidations. This is one before side effects, not
+    /// a total count of fixed profile/roster/PoP validation calls.
     pub staged_prover_common_a_prepare_validation_passes: u8,
     /// Exact prepared common-`a` limb derivations across attempts and replay.
     pub staged_prover_common_a_limb_derivations: u64,
@@ -277,7 +290,7 @@ pub struct ZkAmsMkheDecryptionStreamingResidencyEvidenceV1 {
     /// Sum of ring, RNG, prepared common-`a`, immutable-scan, transcript,
     /// response, and semantic-replay work for one accepted-last-attempt share.
     pub staged_prover_total_work_units: u64,
-    /// Whether the exact enumerated total is within `profile.max_work_units`.
+    /// Whether the enumerated classified bulk total fits `profile.max_work_units`.
     pub staged_prover_work_ceiling_met: bool,
     /// Maximum immutable reads of `b_i` when the final permitted attempt is
     /// accepted: one per attempt plus two semantic-replay passes.
@@ -508,10 +521,9 @@ fn derive_streaming_residency_evidence_v1()
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
     )
     .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    let staged_prover_common_a_limb_frame_scratch_bytes = u64::try_from(
-        active_collective_public_a_limb_frame_bytes_v1(),
-    )
-    .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let staged_prover_common_a_limb_frame_scratch_bytes =
+        u64::try_from(active_collective_public_a_limb_frame_bytes_v1())
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let staged_prover_witness_base_bytes = ciphertext_input_bytes
         .checked_add(staged_prover_party_state_witness_bytes)
         .and_then(|value| value.checked_add(staged_prover_smudge_witness_bytes))
@@ -702,10 +714,8 @@ fn derive_streaming_residency_evidence_v1()
         })
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     // The common-a limb is derived twice per attempt (public-input hash and
-    // masked commitment) and twice during semantic replay. Its budget charges
-    // every accepted or rejected 64-bit SHAKE candidate, so the four accepted
-    // common-a coefficient passes are intentionally not duplicated in the
-    // non-NTT coefficient count above.
+    // masked commitment) and twice during semantic replay. Candidate bytes and
+    // fixed accepted residue reduction/emission are classified separately.
     let staged_prover_first_candidate_common_a_candidates = rns_coefficients
         .checked_mul(2)
         .and_then(|value| value.checked_mul(maximum_fs_attempts.checked_add(1)?))
@@ -722,20 +732,22 @@ fn derive_streaming_residency_evidence_v1()
         staged_prover_first_candidate_common_a_candidates
             .checked_mul(size_of::<u64>() as u64)
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let staged_prover_common_a_residue_output_work_units =
+        staged_prover_first_candidate_common_a_candidates;
     let staged_prover_common_a_prepare_validation_passes = 1_u8;
     let staged_prover_common_a_limb_derivations = limbs
         .checked_mul(2)
         .and_then(|value| value.checked_mul(maximum_fs_attempts.checked_add(1)?))
         .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    let staged_prover_common_a_frame_work_units = u64::try_from(
-        active_collective_public_a_limb_frame_bytes_v1(),
-    )
-    .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
-    .checked_mul(staged_prover_common_a_limb_derivations)
-    .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
+    let staged_prover_common_a_frame_work_units =
+        u64::try_from(active_collective_public_a_limb_frame_bytes_v1())
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+            .checked_mul(staged_prover_common_a_limb_derivations)
+            .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
     let staged_prover_total_work_units = staged_prover_ring_multiplication_work_units
         .checked_add(STAGED_PROVER_RNG_BYTE_BUDGET_V1)
         .and_then(|value| value.checked_add(staged_prover_common_a_xof_byte_budget))
+        .and_then(|value| value.checked_add(staged_prover_common_a_residue_output_work_units))
         .and_then(|value| value.checked_add(staged_prover_common_a_context_bytes))
         .and_then(|value| value.checked_add(staged_prover_common_a_frame_work_units))
         .and_then(|value| value.checked_add(staged_prover_immutable_object_scan_work_units))
@@ -814,10 +826,8 @@ fn derive_streaming_residency_evidence_v1()
             STAGED_PROVER_MAXIMUM_FS_ATTEMPTS_V1,
         )
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
-        staged_prover_inner_rejection_attempts: u8::try_from(
-            MAX_RANDOM_REJECTION_ATTEMPTS_V1,
-        )
-        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+        staged_prover_inner_rejection_attempts: u8::try_from(MAX_RANDOM_REJECTION_ATTEMPTS_V1)
+            .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
         staged_prover_maximum_ring_multiplications: u16::try_from(
             STAGED_PROVER_MAXIMUM_RING_MULTIPLICATIONS_V1,
         )
@@ -829,6 +839,7 @@ fn derive_streaming_residency_evidence_v1()
         staged_prover_first_candidate_common_a_candidates,
         staged_prover_common_a_xof_byte_budget,
         staged_prover_first_candidate_common_a_xof_bytes,
+        staged_prover_common_a_residue_output_work_units,
         staged_prover_common_a_prepare_validation_passes,
         staged_prover_common_a_limb_derivations,
         staged_prover_common_a_frame_work_units,
@@ -838,10 +849,10 @@ fn derive_streaming_residency_evidence_v1()
         staged_prover_semantic_replay_work_units,
         staged_prover_total_work_units,
         staged_prover_work_ceiling_met,
-        staged_prover_party_b_read_passes: u8::try_from(
-            STAGED_PROVER_MAXIMUM_FS_ATTEMPTS_V1 + 2,
-        )
-        .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?,
+        staged_prover_party_b_read_passes: u8::try_from(STAGED_PROVER_MAXIMUM_FS_ATTEMPTS_V1 + 2)
+            .map_err(|_| {
+            ZkAmsMkheErrorV1::ResourceCeilingExceeded
+        })?,
         staged_prover_share_immutable_read_passes: u8::try_from(
             STAGED_PROVER_MAXIMUM_FS_ATTEMPTS_V1 + 4,
         )
@@ -927,6 +938,7 @@ fn streaming_residency_evidence_digest(
         evidence.staged_prover_first_candidate_common_a_candidates,
         evidence.staged_prover_common_a_xof_byte_budget,
         evidence.staged_prover_first_candidate_common_a_xof_bytes,
+        evidence.staged_prover_common_a_residue_output_work_units,
         evidence.staged_prover_common_a_limb_derivations,
         evidence.staged_prover_common_a_frame_work_units,
         evidence.staged_prover_immutable_object_scan_work_units,
@@ -1202,7 +1214,9 @@ impl<'a> ZkAmsMkheStreamingDecryptionStatementV1<'a> {
     ///
     /// No caller-supplied digest or pointer enters this operation. Each use is
     /// derived from the retained complete-CPK authority and is consumed by one
-    /// [`prove_zk_ams_mkhe_decryption_share_staged_v1`] invocation.
+    /// [`prove_zk_ams_mkhe_decryption_share_staged_v1`] invocation. Calling
+    /// this method again remints the same statement-bound set; persistent
+    /// same-statement replay admission remains an external responsibility.
     pub fn bind_party_uses_v1(
         &self,
     ) -> Result<
@@ -1309,9 +1323,7 @@ impl<'a> ZkAmsMkheStreamingDecryptionStatementV1<'a> {
 
 fn map_common_a_derivation_error_v1(error: ZkAmsMkheCpkRelationErrorV1) -> ZkAmsMkheErrorV1 {
     match error {
-        ZkAmsMkheCpkRelationErrorV1::ResourceCeiling => {
-            ZkAmsMkheErrorV1::ResourceCeilingExceeded
-        }
+        ZkAmsMkheCpkRelationErrorV1::ResourceCeiling => ZkAmsMkheErrorV1::ResourceCeilingExceeded,
         _ => ZkAmsMkheErrorV1::InvalidKeyMaterial,
     }
 }
@@ -2168,6 +2180,10 @@ fn direct_to_decryption_transport_pointer_v1(
     Ok(value)
 }
 
+/// Replay one published party relation through the same zero-copy readers,
+/// transcript frames, and response equations used by the public consumer. The
+/// public entry point requires exactly eight authenticated manifests before it
+/// can aggregate/decode, so it cannot self-verify a lone staged output here.
 #[allow(clippy::too_many_arguments)]
 fn verify_published_staged_relation_v1<P>(
     statement: &ZkAmsMkheStreamingDecryptionStatementV1<'_>,
@@ -2385,9 +2401,10 @@ where
 ///
 /// The move-only persistent use is consumed before randomness or staging. The
 /// polynomial is written limb-by-limb and the `ZADP` proof section-by-section;
-/// neither canonical component is ever retained by the prover. All private
-/// witness, mask, response, NTT, and encoding buffers are erased on success,
-/// error, and unwind. The returned manifest is suitable for
+/// neither canonical component is ever retained by the prover. All prover-owned
+/// transient smudge, mask, response, NTT, and encoding buffers are erased on
+/// success, error, and unwind. Borrowed party-state and active-secret owners
+/// deliberately persist and enforce their own `Drop`. The manifest is suitable for
 /// [`verify_combine_decode_zk_ams_mkhe_decryption_streaming_v1`], but the
 /// separately pinned whole-worker residency certificate remains mandatory for
 /// release qualification.
@@ -2407,8 +2424,8 @@ where
 {
     let profile = release_profile_v1();
     profile.validate()?;
-    // Static topology, memory, and worst-case work are validated before the
-    // move-only party use is consumed and before any RNG or CAS side effect.
+    // Static topology, memory, and classified bulk-work ceilings are validated
+    // before the move-only party use or any RNG/CAS side effect is consumed.
     let streaming_resource = zk_ams_mkhe_decryption_streaming_residency_evidence_v1()?;
     if !streaming_resource.enumerated_verifier_ceiling_met
         || !streaming_resource.compact_authority_enumerated_ceiling_met

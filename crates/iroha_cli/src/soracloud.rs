@@ -5,8 +5,8 @@
 //! locally and then call the authoritative Soracloud control plane through
 //! Torii. Model-training, Hugging Face shared-lease, and weight-lifecycle
 //! helpers also execute through live Torii endpoints. Outbound mutation DTOs
-//! carry signed provenance only; account identity is authenticated by the HTTP
-//! signature/witness headers and private keys never enter request JSON.
+//! carry signed provenance only; account identity uses HTTP signature/witness
+//! headers, while protected GETs require the exact NetworkId and local key.
 
 use std::{
     cell::RefCell,
@@ -9385,23 +9385,12 @@ fn fetch_existing_public_service_discovery_registry(
         query.append_pair("service_name", service_name.as_str());
         query.append_pair("config_name", PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME);
     }
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for public service discovery config status")?;
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii public discovery config status response body")?;
+    let (_, status, body) = send_torii_soracloud_authenticated_get(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii public-discovery config status",
+    )?;
     if status == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
@@ -12450,6 +12439,29 @@ fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
         ]);
     }
 
+    build_soracloud_signature_auth_headers_with_rng(submission_config, "POST", endpoint, body, rng)
+}
+
+fn build_soracloud_read_auth_headers(
+    submission_config: &ClientConfig,
+    endpoint: &reqwest::Url,
+) -> Result<Vec<(&'static str, String)>> {
+    build_soracloud_signature_auth_headers_with_rng(
+        submission_config,
+        "GET",
+        endpoint,
+        &[],
+        &mut OsRng,
+    )
+}
+
+fn build_soracloud_signature_auth_headers_with_rng<R: TryCryptoRng>(
+    submission_config: &ClientConfig,
+    method: &str,
+    endpoint: &reqwest::Url,
+    body: &[u8],
+    rng: &mut R,
+) -> Result<Vec<(&'static str, String)>> {
     let timestamp_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -12458,11 +12470,11 @@ fn build_soracloud_mutation_auth_headers_with_rng<R: TryCryptoRng>(
         .unwrap_or(u64::MAX);
     let mut nonce_bytes = [0_u8; 16];
     rng.try_fill_bytes(&mut nonce_bytes)
-        .map_err(|error| eyre!("Soracloud mutation signature nonce OS RNG failed: {error}"))?;
+        .map_err(|error| eyre!("Soracloud request signature nonce OS RNG failed: {error}"))?;
     let nonce = hex::encode(nonce_bytes);
     let message = canonical_network_request_signature_message(
         &submission_config.network_id,
-        "POST",
+        method,
         endpoint,
         body,
         timestamp_ms,
@@ -12925,6 +12937,66 @@ fn find_agent_autonomy_run_id(
         .ok_or_else(|| eyre!("agent autonomy status entry is missing `run_id`"))
 }
 
+fn send_torii_soracloud_authenticated_get(
+    endpoint: reqwest::Url,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+    response_context: &'static str,
+) -> Result<(reqwest::Url, reqwest::StatusCode, Vec<u8>)> {
+    let submission_config = soracloud_submission_config()
+        .wrap_err("Soracloud protected GET requires an initialized local account signer")?;
+    let auth_headers = build_soracloud_read_auth_headers(&submission_config, &endpoint)?;
+    let client = BlockingHttpClient::builder()
+        .timeout(Duration::from_secs(timeout_secs.max(1)))
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .build()
+        .wrap_err("failed to build exact-auth Soracloud HTTP client")?;
+    let mut request = client
+        .get(endpoint.clone())
+        .header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    for (name, value) in auth_headers {
+        request = request.header(name, value);
+    }
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err_with(|| format!("failed to read {response_context} response body"))?
+        .to_vec();
+    Ok((endpoint, status, body))
+}
+
+fn fetch_torii_soracloud_authenticated_json(
+    endpoint: reqwest::Url,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+    response_context: &'static str,
+) -> Result<(String, norito::json::Value)> {
+    let (endpoint, status, body) = send_torii_soracloud_authenticated_get(
+        endpoint,
+        api_token,
+        timeout_secs,
+        response_context,
+    )?;
+    if !status.is_success() {
+        return Err(eyre!(
+            "Torii {} returned {}: {}",
+            endpoint.path(),
+            status,
+            String::from_utf8_lossy(&body)
+        ));
+    }
+    let payload = json::from_slice(&body)
+        .wrap_err_with(|| format!("failed to decode {response_context} JSON payload"))?;
+    Ok((endpoint.to_string(), payload))
+}
+
 fn fetch_torii_soracloud_status(
     torii_url: &str,
     service_name: Option<&str>,
@@ -12935,39 +13007,14 @@ fn fetch_torii_soracloud_status(
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
         .join("v1/soracloud/status")
         .wrap_err("failed to derive /v1/soracloud/status URL from --torii-url")?;
-
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let mut payload: norito::json::Value =
-        json::from_slice(&body).wrap_err("failed to decode Torii soracloud status JSON payload")?;
+    let (endpoint, mut payload) = fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud status",
+    )?;
     filter_soracloud_status_payload(&mut payload, service_name);
-    Ok((endpoint.to_string(), payload))
+    Ok((endpoint, payload))
 }
 
 fn fetch_torii_soracloud_app_infra_status(
@@ -12994,37 +13041,12 @@ fn fetch_torii_soracloud_app_infra_status(
             .wrap_err("failed to derive /v1/soracloud/apps/status URL from --torii-url")?;
     }
 
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud app infra status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii app infra status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/apps/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii soracloud app infra status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud app-infra status",
+    )
 }
 
 fn filter_soracloud_status_payload(payload: &mut norito::json::Value, service_name: Option<&str>) {
@@ -13104,34 +13126,12 @@ fn fetch_torii_soracloud_service_config_status(
             query.append_pair("config_name", config_name);
         }
     }
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud service config status")?;
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii service config status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/service/config/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii service config status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud service-config status",
+    )
 }
 
 fn fetch_torii_soracloud_service_secret_status(
@@ -13160,34 +13160,12 @@ fn fetch_torii_soracloud_service_secret_status(
             query.append_pair("secret_name", secret_name);
         }
     }
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud service secret status")?;
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii service secret status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/service/secret/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii service secret status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud service-secret status",
+    )
 }
 
 fn fetch_torii_soracloud_agent_status(
@@ -13208,37 +13186,12 @@ fn fetch_torii_soracloud_agent_status(
             .append_pair("apartment_name", apartment_name.trim());
     }
 
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud agent status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii agent status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/agent/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii soracloud agent status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud agent status",
+    )
 }
 
 fn fetch_torii_soracloud_agent_mailbox_status(
@@ -13260,37 +13213,12 @@ fn fetch_torii_soracloud_agent_mailbox_status(
         .query_pairs_mut()
         .append_pair("apartment_name", apartment_name);
 
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud agent mailbox status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii agent mailbox status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/agent/mailbox/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii soracloud agent mailbox status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud agent-mailbox status",
+    )
 }
 
 fn fetch_torii_soracloud_agent_autonomy_status(
@@ -13312,37 +13240,12 @@ fn fetch_torii_soracloud_agent_autonomy_status(
         .query_pairs_mut()
         .append_pair("apartment_name", apartment_name);
 
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud agent autonomy status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii agent autonomy status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/agent/autonomy/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii soracloud agent autonomy status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud agent-autonomy status",
+    )
 }
 
 fn fetch_torii_soracloud_training_job_status(
@@ -13370,37 +13273,12 @@ fn fetch_torii_soracloud_training_job_status(
         .append_pair("service_name", service_name)
         .append_pair("job_id", job_id);
 
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud training job status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii training job status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/training/job/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii training job status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud training-job status",
+    )
 }
 
 fn fetch_torii_soracloud_model_artifact_status(
@@ -13428,37 +13306,12 @@ fn fetch_torii_soracloud_model_artifact_status(
         .append_pair("service_name", service_name)
         .append_pair("training_job_id", training_job_id);
 
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud model artifact status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii model artifact status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/model/artifact/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii model artifact status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud model-artifact status",
+    )
 }
 
 fn fetch_torii_soracloud_model_weight_status(
@@ -13486,37 +13339,12 @@ fn fetch_torii_soracloud_model_weight_status(
         .append_pair("service_name", service_name)
         .append_pair("model_name", model_name);
 
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud model weight status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii model weight status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/model/weight/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii model weight status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud model-weight status",
+    )
 }
 
 fn fetch_torii_soracloud_uploaded_model_encryption_recipient(
@@ -13604,34 +13432,12 @@ fn fetch_torii_soracloud_uploaded_model_status(
             query.append_pair("bundle_root", &json::to_json(&bundle_root)?);
         }
     }
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for uploaded-model status")?;
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii uploaded-model status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /{endpoint_path} returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii uploaded-model status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud uploaded-model status",
+    )
 }
 
 const fn storage_class_query_label(storage_class: StorageClass) -> &'static str {
@@ -13678,37 +13484,12 @@ fn fetch_torii_soracloud_hf_status(
         }
     }
 
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud hf status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii hf status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/hf/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value =
-        json::from_slice(&body).wrap_err("failed to decode Torii hf status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud HF status",
+    )
 }
 
 fn fetch_torii_soracloud_model_host_status(
@@ -13728,37 +13509,12 @@ fn fetch_torii_soracloud_model_host_status(
             .append_pair("account_id", validator_account_id);
     }
 
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let client = BlockingHttpClient::builder()
-        .timeout(timeout)
-        .build()
-        .wrap_err("failed to build HTTP client for soracloud model host status")?;
-
-    let mut request = client.get(endpoint.clone());
-    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
-    if let Some(token) = api_token {
-        request = request.header("x-api-token", token);
-    }
-
-    let response = request
-        .send()
-        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .wrap_err("failed to read Torii model host status response body")?;
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&body);
-        return Err(eyre!(
-            "Torii /v1/soracloud/model-host/status returned {}: {}",
-            status,
-            body_text
-        ));
-    }
-
-    let payload: norito::json::Value = json::from_slice(&body)
-        .wrap_err("failed to decode Torii model host status JSON payload")?;
-    Ok((endpoint.to_string(), payload))
+    fetch_torii_soracloud_authenticated_json(
+        endpoint,
+        api_token,
+        timeout_secs,
+        "Torii Soracloud model-host status",
+    )
 }
 
 fn require_torii_url<'a>(torii_url: Option<&'a str>) -> Result<&'a str> {
@@ -23039,6 +22795,12 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         });
     }
 
+    fn install_mock_protected_read_signer() {
+        let key_pair = soracloud_fixture_key_pair(0x2f);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        install_mock_submission_config(&authority, &key_pair);
+    }
+
     fn mock_control_plane_status_payload(service_names: &[&str]) -> norito::json::Value {
         norito::json!({
             "schema_version": 1,
@@ -23393,6 +23155,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             },
         )]));
 
+        install_mock_protected_read_signer();
         let output = StatusArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
@@ -23517,6 +23280,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             },
         )]));
 
+        install_mock_protected_read_signer();
         let output = ConfigStatusArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
@@ -23594,6 +23358,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             },
         )]));
 
+        install_mock_protected_read_signer();
         let output = SecretStatusArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
@@ -23978,6 +23743,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             },
         )]));
 
+        install_mock_protected_read_signer();
         let output = HfStatusArgs {
             repo_id: "openai/gpt-oss".to_owned(),
             revision: None,
@@ -24408,6 +24174,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             },
         )]));
 
+        install_mock_protected_read_signer();
         let output = TrainingJobStatusArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
@@ -24527,6 +24294,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             },
         )]));
 
+        install_mock_protected_read_signer();
         let output = ModelArtifactStatusArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
@@ -24765,6 +24533,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             },
         )]));
 
+        install_mock_protected_read_signer();
         let output = ModelWeightStatusArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
@@ -24822,6 +24591,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             },
         )]));
 
+        install_mock_protected_read_signer();
         let output = ModelUploadStatusArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
@@ -31573,6 +31343,7 @@ main().catch((error) => {
             },
         )]));
 
+        install_mock_protected_read_signer();
         let output = AppStatusArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some(server.base_url.clone()),
@@ -31785,6 +31556,7 @@ main().catch((error) => {
             },
         )]));
 
+        install_mock_protected_read_signer();
         let output = AppStatusArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some(server.base_url.clone()),
@@ -31886,6 +31658,7 @@ main().catch((error) => {
             },
         )]));
 
+        install_mock_protected_read_signer();
         let output = AppStatusArgs {
             manifest: dir.join("app_manifest.json"),
             torii_url: Some(server.base_url.clone()),

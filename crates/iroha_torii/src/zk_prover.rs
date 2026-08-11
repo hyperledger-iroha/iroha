@@ -5,7 +5,13 @@
 //!   `{ id, ok, error, content_type, size, created_ms, processed_ms, latency_ms }`.
 //!   Bounded query metadata is persisted independently under
 //!   `zk_prover/report_index/<id>.json`, so saving one report never rewrites
-//!   metadata for every other report.
+//!   metadata for every other report. Report maintenance streams those shards
+//!   one at a time; configured count and aggregate-byte retention limits evict
+//!   the oldest reports deterministically before a new report is committed.
+//!   Attachment discovery likewise retains only a scan-budget-derived window,
+//!   resumes its directory cursor across cycles, and canonically orders each
+//!   window instead of collecting and sorting the complete tenant population;
+//!   unscheduled locations remain in a retry queue with the same hard cap.
 //! - This module is strictly app-facing and non-forking. It must not affect consensus.
 //! - Enabled and paced via `iroha_config` (torii.zk_prover_enabled, torii.zk_prover_scan_period_secs).
 //!
@@ -13,9 +19,11 @@
 //! using core backend verifiers and records per-proof metadata. It never mutates WSV.
 
 #[cfg(test)]
+use std::collections::BTreeMap;
+#[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BinaryHeap, HashSet},
     fs,
     io::Read as _,
     io::{Error as IoError, ErrorKind as IoErrorKind},
@@ -180,6 +188,8 @@ struct ProverCfg {
     enabled: bool,
     scan_period_secs: u64,
     reports_ttl_secs: u64,
+    reports_max_count: u64,
+    reports_max_bytes: u64,
     max_inflight: usize,
     max_scan_bytes: u64,
     max_scan_millis: u64,
@@ -201,12 +211,14 @@ static TEST_MAX_SCAN_MILLIS_OVERRIDE: AtomicU64 = AtomicU64::new(0);
 #[cfg(test)]
 static MAX_INFLIGHT_OBSERVED: AtomicUsize = AtomicUsize::new(0);
 
-/// Configure prover enable, scan period (seconds), and reports TTL (seconds) from Torii config.
+/// Configure prover scheduling, bounded report retention, verifier scope, and telemetry.
 #[allow(clippy::too_many_arguments)]
 pub fn configure(
     enabled: bool,
     scan_period_secs: u64,
     reports_ttl_secs: u64,
+    reports_max_count: u64,
+    reports_max_bytes: u64,
     max_inflight: usize,
     max_scan_bytes: u64,
     max_scan_millis: u64,
@@ -216,10 +228,20 @@ pub fn configure(
     state: Option<Arc<CoreState>>,
     telemetry: MaybeTelemetry,
 ) {
+    assert!(
+        reports_max_count > 0,
+        "prover report retention count must be greater than zero"
+    );
+    assert!(
+        reports_max_bytes >= REPORT_FILE_MAX_BYTES.saturating_add(REPORT_SUMMARY_FILE_MAX_BYTES),
+        "prover report retention bytes must fit one maximum-size report and summary"
+    );
     let cfg = ProverCfg {
         enabled,
         scan_period_secs,
         reports_ttl_secs,
+        reports_max_count,
+        reports_max_bytes,
         max_inflight,
         max_scan_bytes,
         max_scan_millis,
@@ -259,6 +281,16 @@ fn cfg_scan_period() -> Duration {
 
 fn cfg_reports_ttl_secs() -> u64 {
     with_cfg(|c| c.reports_ttl_secs).unwrap_or(7 * 24 * 60 * 60)
+}
+
+fn cfg_reports_max_count() -> u64 {
+    with_cfg(|c| c.reports_max_count)
+        .unwrap_or(iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT)
+}
+
+fn cfg_reports_max_bytes() -> u64 {
+    with_cfg(|c| c.reports_max_bytes)
+        .unwrap_or(iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_BYTES)
 }
 
 fn cfg_max_inflight() -> usize {
@@ -342,168 +374,51 @@ const ATTACHMENT_ID_HEX_LEN: usize = 64;
 const TENANT_KEY_HEX_LEN: usize = 64;
 const PROOF_ATTACHMENT_BODY_MAX_BYTES_V1: u64 =
     iroha_config::parameters::defaults::torii::ZK_PROVER_ATTACHMENT_BODY_MAX_BYTES_V1;
-const REPORT_FILE_MAX_BYTES: u64 = 8 * 1024 * 1024;
-const REPORT_SUMMARY_FILE_MAX_BYTES: u64 = 64 * 1024;
+const REPORT_FILE_MAX_BYTES: u64 =
+    iroha_config::parameters::defaults::torii::ZK_PROVER_REPORT_MAX_BYTES_V1;
+const REPORT_SUMMARY_FILE_MAX_BYTES: u64 =
+    iroha_config::parameters::defaults::torii::ZK_PROVER_REPORT_SUMMARY_MAX_BYTES_V1;
 const REPORT_SUMMARY_ERROR_MAX_BYTES: usize = 4 * 1024;
 const REPORT_SUMMARY_CONTENT_TYPE_MAX_BYTES: usize = 256;
 const REPORT_SUMMARY_TAG_MAX_BYTES: usize = 32;
+const REPORT_RETENTION_EVICTION_BATCH: usize = 128;
+// A discovery slot owns two fixed-length path components plus Vec/HashSet and
+// allocator overhead. Charging a conservative 512 bytes of the configured scan
+// byte geometry per slot keeps discovery memory proportional to the operator's
+// existing scan budget without changing the attachment-body byte accounting.
+const ATTACHMENT_DISCOVERY_BYTES_PER_LOCATION: u64 = 512;
+const ATTACHMENT_DISCOVERY_MAX_LOCATIONS: u64 = 4_096;
+// Directory entries include tenant directories, files, and end-of-directory
+// transitions. Eight work items per retained location permit ordinary
+// one-file tenant layouts to make progress while bounding hostile namespaces.
+const ATTACHMENT_DISCOVERY_WORK_PER_LOCATION: u64 = 8;
+const ATTACHMENT_DISCOVERY_MAX_WORK_ITEMS: u64 =
+    ATTACHMENT_DISCOVERY_MAX_LOCATIONS * ATTACHMENT_DISCOVERY_WORK_PER_LOCATION;
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
+const REPORT_QUERY_DEFAULT_LIMIT: usize = 100;
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
+const REPORT_QUERY_MAX_LIMIT: usize = 1_000;
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
+const REPORT_QUERY_MAX_OFFSET: usize = 10_000;
+#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
+const REPORT_QUERY_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 static REPORT_SUMMARY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static ATTACHMENT_DISCOVERY_STATE: OnceLock<Mutex<Option<AttachmentDiscoveryState>>> =
+    OnceLock::new();
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct AttachmentLocation {
-    tenant_key: String,
-    id: String,
-}
+include!("zk_prover/attachment_discovery_and_report_storage.rs");
 
-fn sanitize_attachment_id(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.len() != ATTACHMENT_ID_HEX_LEN {
-        return None;
-    }
-    if trimmed.bytes().any(|b| !b.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(trimmed.to_ascii_lowercase())
-}
-
-fn sanitize_report_id(raw: &str) -> Option<String> {
-    sanitize_attachment_id(raw)
-}
-
-fn sanitize_tenant_key(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.len() != TENANT_KEY_HEX_LEN {
-        return None;
-    }
-    if trimmed.bytes().any(|b| !b.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(trimmed.to_ascii_lowercase())
-}
-
-fn attachments_root_dir() -> PathBuf {
-    super::zk_attachments::base_dir().join("zk_attachments")
-}
-
-fn attachment_meta_path(tenant_key: &str, id: &str) -> PathBuf {
-    attachments_root_dir()
-        .join(tenant_key)
-        .join(format!("{}.json", id))
-}
-
-fn attachment_bin_path(tenant_key: &str, id: &str) -> PathBuf {
-    attachments_root_dir()
-        .join(tenant_key)
-        .join(format!("{}.bin", id))
-}
-
-fn report_path_from_sanitized(id: &str) -> PathBuf {
-    reports_dir().join(format!("{}.json", id))
-}
-
-fn report_index_dir() -> PathBuf {
-    prover_dir().join("report_index")
-}
-
-fn report_summary_path_from_sanitized(id: &str) -> PathBuf {
-    report_index_dir().join(format!("{id}.json"))
-}
-
-fn report_summary_lock() -> &'static Mutex<()> {
-    REPORT_SUMMARY_LOCK.get_or_init(|| Mutex::new(()))
-}
-
-fn bounded_summary_text(value: &str, max_bytes: usize) -> String {
-    if value.len() <= max_bytes {
-        return value.to_owned();
-    }
-    let marker = "...";
-    let mut end = max_bytes.saturating_sub(marker.len());
-    while end > 0 && !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut bounded = value[..end].to_owned();
-    bounded.push_str(marker);
-    bounded
-}
-
-fn report_summary_from_report(report: &ProverReport) -> ProverReportSummary {
-    let zk1_tags = report.zk1_tags.as_ref().and_then(|tags| {
-        let mut bounded = Vec::new();
-        for tag in tags.iter().take(ZK1_MAX_TLV_COUNT) {
-            let tag = bounded_summary_text(tag, REPORT_SUMMARY_TAG_MAX_BYTES);
-            if !bounded.contains(&tag) {
-                bounded.push(tag);
-            }
-        }
-        (!bounded.is_empty()).then_some(bounded)
-    });
-    ProverReportSummary {
-        id: report.id.clone(),
-        ok: report.ok,
-        error: report
-            .error
-            .as_deref()
-            .map(|error| bounded_summary_text(error, REPORT_SUMMARY_ERROR_MAX_BYTES)),
-        content_type: bounded_summary_text(
-            &report.content_type,
-            REPORT_SUMMARY_CONTENT_TYPE_MAX_BYTES,
-        ),
-        processed_ms: report.processed_ms,
-        zk1_tags,
-    }
-}
-
-fn normalize_report_summaries(raw: Vec<ProverReportSummary>) -> Vec<ProverReportSummary> {
-    let mut by_id: BTreeMap<String, ProverReportSummary> = BTreeMap::new();
-    for mut summary in raw {
-        let Some(clean) = sanitize_report_id(&summary.id) else {
-            continue;
-        };
-        summary.id = clean.clone();
-        by_id.insert(clean, summary);
-    }
-    by_id.into_values().collect()
-}
-
-fn persist_report_summary_locked(summary: &ProverReportSummary) -> std::io::Result<()> {
-    let Some(id) = sanitize_report_id(&summary.id) else {
-        return Err(IoError::new(
-            IoErrorKind::InvalidInput,
-            "invalid prover report summary id",
-        ));
-    };
-    ensure_dirs();
-    fs::create_dir_all(report_index_dir())?;
-    let path = report_summary_path_from_sanitized(&id);
-    let tmp_dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
-    let mut normalized = summary.clone();
-    normalized.id = id;
-    let body = norito::json::to_json(&normalized)
-        .map_err(|error| IoError::new(IoErrorKind::InvalidData, error.to_string()))?;
-    if body.len() as u64 > REPORT_SUMMARY_FILE_MAX_BYTES {
-        return Err(IoError::new(
-            IoErrorKind::InvalidData,
-            "prover report summary exceeds the hard size limit",
-        ));
-    }
-    use std::io::Write as _;
-    tmp.write_all(body.as_bytes())?;
-    tmp.flush()?;
-    tmp.persist(&path).map(|_| ()).map_err(|e| e.error)
-}
-
+#[cfg(test)]
 fn persist_report_summaries_locked(summaries: &[ProverReportSummary]) -> std::io::Result<()> {
     ensure_dirs();
     fs::create_dir_all(report_index_dir())?;
-    let normalized = normalize_report_summaries(summaries.to_vec());
-    let desired: HashSet<String> = normalized
-        .iter()
-        .map(|summary| summary.id.clone())
-        .collect();
-    for summary in &normalized {
-        persist_report_summary_locked(summary)?;
+    for summary in summaries {
+        let Some(id) = sanitize_report_id(&summary.id) else {
+            continue;
+        };
+        let mut normalized = summary.clone();
+        normalized.id = id;
+        persist_report_summary_locked(&normalized)?;
     }
     for entry in fs::read_dir(report_index_dir())? {
         let entry = entry?;
@@ -514,7 +429,12 @@ fn persist_report_summaries_locked(summaries: &[ProverReportSummary]) -> std::io
             .file_name()
             .to_str()
             .and_then(|name| name.strip_suffix(".json"))
-            .is_some_and(|id| desired.contains(id));
+            .is_some_and(|id| {
+                summaries
+                    .iter()
+                    .filter_map(|summary| sanitize_report_id(&summary.id))
+                    .any(|desired| desired == id)
+            });
         if !keep {
             let _ = fs::remove_file(entry.path());
         }
@@ -522,193 +442,328 @@ fn persist_report_summaries_locked(summaries: &[ProverReportSummary]) -> std::io
     Ok(())
 }
 
-fn read_report_summaries_locked() -> Option<Vec<ProverReportSummary>> {
-    let entries = fs::read_dir(report_index_dir()).ok()?;
-    let mut summaries = Vec::new();
-    for entry in entries {
-        let entry = entry.ok()?;
-        if !entry.file_type().ok()?.is_file() {
-            continue;
-        }
-        let name = entry.file_name();
-        let name = name.to_str()?;
-        let Some(raw_id) = name.strip_suffix(".json") else {
-            continue;
-        };
-        let id = sanitize_report_id(raw_id)?;
-        if raw_id != id {
-            return None;
-        }
-        let file_len = entry.metadata().ok()?.len();
-        if file_len > REPORT_SUMMARY_FILE_MAX_BYTES {
-            return None;
-        }
-        let mut reader = fs::File::open(entry.path())
-            .ok()?
-            .take(REPORT_SUMMARY_FILE_MAX_BYTES.saturating_add(1));
-        let mut buf = Vec::new();
-        reader.read_to_end(&mut buf).ok()?;
-        if buf.len() as u64 > REPORT_SUMMARY_FILE_MAX_BYTES {
-            return None;
-        }
-        let s = std::str::from_utf8(&buf).ok()?;
-        let mut summary = norito::json::from_json::<ProverReportSummary>(s).ok()?;
-        summary.id = id;
-        summaries.push(summary);
+fn read_report_summary_locked(id: &str) -> Option<ProverReportSummary> {
+    let clean = sanitize_report_id(id)?;
+    let path = report_summary_path_from_sanitized(&clean);
+    let metadata = fs::symlink_metadata(&path).ok()?;
+    if !metadata.file_type().is_file() || metadata.len() > REPORT_SUMMARY_FILE_MAX_BYTES {
+        return None;
     }
-    Some(normalize_report_summaries(summaries))
+    let mut reader = fs::File::open(path)
+        .ok()?
+        .take(REPORT_SUMMARY_FILE_MAX_BYTES.saturating_add(1));
+    let mut buf = Vec::new();
+    reader.read_to_end(&mut buf).ok()?;
+    if buf.len() as u64 > REPORT_SUMMARY_FILE_MAX_BYTES {
+        return None;
+    }
+    let s = std::str::from_utf8(&buf).ok()?;
+    let mut summary = norito::json::from_json::<ProverReportSummary>(s).ok()?;
+    summary.id = clean;
+    Some(bound_persisted_report_summary(summary))
 }
 
-fn rebuild_report_summaries_locked() -> Vec<ProverReportSummary> {
-    let mut summaries = Vec::new();
-    for id in list_report_ids() {
-        if let Some(report) = load_report(&id) {
-            summaries.push(report_summary_from_report(&report));
+fn report_id_from_entry(entry: &fs::DirEntry) -> Option<String> {
+    if !entry.file_type().ok()?.is_file() {
+        return None;
+    }
+    let name = entry.file_name();
+    let raw_id = name.to_str()?.strip_suffix(".json")?;
+    let clean = sanitize_report_id(raw_id)?;
+    (raw_id == clean).then_some(clean)
+}
+
+fn visit_report_ids(mut visitor: impl FnMut(String) -> bool) {
+    let Ok(entries) = fs::read_dir(reports_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(id) = report_id_from_entry(&entry) else {
+            continue;
+        };
+        if !visitor(id) {
+            break;
         }
     }
-    let _ = persist_report_summaries_locked(&summaries);
+}
+
+fn load_or_repair_report_summary_locked(id: &str) -> Option<ProverReportSummary> {
+    let clean = sanitize_report_id(id)?;
+    if !report_path_from_sanitized(&clean).is_file() {
+        let _ = fs::remove_file(report_summary_path_from_sanitized(&clean));
+        return None;
+    }
+    if let Some(summary) = read_report_summary_locked(&clean) {
+        return Some(summary);
+    }
+    let report = load_report(&clean)?;
+    let summary = report_summary_from_report(&report);
+    let _ = persist_report_summary_locked(&summary);
+    Some(summary)
+}
+
+fn visit_report_summaries_locked(mut visitor: impl FnMut(ProverReportSummary) -> bool) {
+    visit_report_ids(|id| {
+        if let Some(summary) = load_or_repair_report_summary_locked(&id) {
+            visitor(summary)
+        } else {
+            true
+        }
+    });
+}
+
+fn prune_stale_report_summaries_locked() {
+    let Ok(entries) = fs::read_dir(report_index_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Some(id) = report_id_from_entry(&entry) else {
+            continue;
+        };
+        if !report_path_from_sanitized(&id).is_file() {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+#[cfg(test)]
+fn read_report_summaries_locked() -> Vec<ProverReportSummary> {
+    let mut summaries = Vec::new();
+    visit_report_summaries_locked(|summary| {
+        if summaries.len()
+            >= usize::try_from(
+                iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT,
+            )
+            .unwrap_or(usize::MAX)
+        {
+            return false;
+        }
+        summaries.push(summary);
+        true
+    });
+    summaries.sort_by(|left, right| left.id.cmp(&right.id));
     summaries
 }
 
+#[cfg(test)]
 fn load_report_summaries() -> Vec<ProverReportSummary> {
     let _guard = report_summary_lock().lock();
-    let mut summaries =
-        read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
-    let mut changed = false;
-    let before = summaries.len();
-    summaries.retain(|summary| report_path_from_sanitized(&summary.id).exists());
-    if summaries.len() != before {
-        changed = true;
-    }
-    let mut indexed: HashSet<String> = summaries.iter().map(|summary| summary.id.clone()).collect();
-    for id in list_report_ids() {
-        if indexed.insert(id.clone())
-            && let Some(report) = load_report(&id)
-        {
-            summaries.push(report_summary_from_report(&report));
-            changed = true;
-        }
-    }
-    if changed {
-        let _ = persist_report_summaries_locked(&summaries);
-    }
-    normalize_report_summaries(summaries)
+    prune_stale_report_summaries_locked();
+    read_report_summaries_locked()
 }
 
-fn upsert_report_summary(report: &ProverReport) -> std::io::Result<()> {
-    let _guard = report_summary_lock().lock();
-    let summary = report_summary_from_report(report);
-    persist_report_summary_locked(&summary)
-}
-
-fn remove_report_summary(id: &str) {
+#[cfg(test)]
+fn remove_report_summary_locked(id: &str) {
     let Some(clean) = sanitize_report_id(id) else {
         return;
     };
-    let _guard = report_summary_lock().lock();
     let _ = fs::remove_file(report_summary_path_from_sanitized(&clean));
 }
 
-#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
-fn filter_report_summary(
-    summary: &ProverReportSummary,
-    q: &ProverListQuery,
-    requested_id: Option<&str>,
-    ok_req: bool,
-    failed_req: bool,
-) -> bool {
-    if let Some(req_id) = requested_id {
-        if summary.id != req_id {
-            return false;
-        }
-    }
-    if let Some(ct) = q.content_type.as_deref() {
-        if !summary.content_type.contains(ct) {
-            return false;
-        }
-    }
-    if let Some(tag) = q.has_tag.as_deref() {
-        let has_tag = summary
-            .zk1_tags
-            .as_ref()
-            .map(|tags| tags.iter().any(|existing| existing == tag))
-            .unwrap_or(false);
-        if !has_tag {
-            return false;
-        }
-    }
-    if !q.since_ms.map_or(true, |th| summary.processed_ms >= th) {
-        return false;
-    }
-    if !q.before_ms.map_or(true, |th| summary.processed_ms <= th) {
-        return false;
-    }
-    match (ok_req, failed_req) {
-        (true, false) => summary.ok,
-        (false, true) => !summary.ok,
-        _ => true,
-    }
+#[cfg(test)]
+fn remove_report_summary(id: &str) {
+    let _guard = report_summary_lock().lock();
+    remove_report_summary_locked(id);
 }
 
-#[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
-fn validate_zk1_tag_filter(q: &ProverListQuery) -> Result<(), &'static str> {
-    let Some(tag) = q.has_tag.as_deref() else {
-        return Ok(());
-    };
-    if tag.len() == 4 && tag.as_bytes().iter().all(u8::is_ascii_graphic) {
-        Ok(())
-    } else {
-        Err("invalid ZK1 tag filter (expected exactly four printable ASCII characters)")
-    }
+include!("zk_prover/report_query.rs");
+
+fn scan_deadline_reached(start: std::time::Instant, max_millis: u64) -> bool {
+    start.elapsed() >= Duration::from_millis(max_millis)
 }
 
-fn list_attachment_locations() -> Vec<AttachmentLocation> {
-    let mut locs = Vec::new();
-    if let Ok(rd) = fs::read_dir(attachments_root_dir()) {
-        for e in rd.flatten() {
-            let Ok(ft) = e.file_type() else { continue };
-            let file_name = e.file_name();
-            let Some(name) = file_name.to_str() else {
-                continue;
-            };
-            if !ft.is_dir() {
-                continue;
-            }
-            let Some(tenant_key) = sanitize_tenant_key(name) else {
-                continue;
-            };
-            if let Ok(trd) = fs::read_dir(attachments_root_dir().join(&tenant_key)) {
-                for te in trd.flatten() {
-                    if !te.file_type().is_ok_and(|file_type| file_type.is_file()) {
-                        continue;
-                    }
-                    let file_name = te.file_name();
-                    let Some(tname) = file_name.to_str() else {
-                        continue;
-                    };
-                    let Some(id) = tname.strip_suffix(".json") else {
-                        continue;
-                    };
-                    let Some(clean) = sanitize_attachment_id(id) else {
-                        continue;
-                    };
-                    locs.push(AttachmentLocation {
-                        tenant_key: tenant_key.clone(),
-                        id: clean,
-                    });
+fn canonicalize_attachment_locations(locations: &mut Vec<AttachmentLocation>) {
+    locations.sort_unstable();
+    let mut seen_ids = HashSet::with_capacity(locations.len());
+    locations.retain(|location| seen_ids.insert(location.id.clone()));
+}
+
+fn discover_attachment_window(
+    stream: &mut AttachmentDirectoryStream,
+    geometry: AttachmentDiscoveryGeometry,
+    start: std::time::Instant,
+    max_millis: u64,
+    mut include: impl FnMut(&AttachmentLocation) -> bool,
+) -> AttachmentDiscovery {
+    let mut discovery = AttachmentDiscovery::default();
+
+    loop {
+        if discovery.locations.len() >= geometry.max_locations {
+            discovery.work_exhausted = true;
+            break;
+        }
+        if discovery.work_items >= geometry.max_work_items {
+            discovery.work_exhausted = true;
+            break;
+        }
+        if scan_deadline_reached(start, max_millis) {
+            discovery.time_exhausted = true;
+            break;
+        }
+
+        let step = stream.step();
+        discovery.work_items = discovery.work_items.saturating_add(1);
+        match step {
+            AttachmentDirectoryStep::Advanced => {}
+            AttachmentDirectoryStep::Location(location) => {
+                if include(&location) {
+                    discovery.locations.push(location);
                 }
             }
+            AttachmentDirectoryStep::Complete => {
+                discovery.sweep_complete = true;
+                break;
+            }
+        }
+        if scan_deadline_reached(start, max_millis) {
+            discovery.time_exhausted = true;
+            break;
         }
     }
-    locs.sort();
-    locs
+
+    // Directory order is platform-local and non-consensus. Canonical ordering
+    // inside each bounded window keeps scheduling and tests reproducible without
+    // retaining the complete attachment population merely to sort it.
+    canonicalize_attachment_locations(&mut discovery.locations);
+    discovery
+}
+
+fn attachment_discovery_state() -> &'static Mutex<Option<AttachmentDiscoveryState>> {
+    ATTACHMENT_DISCOVERY_STATE.get_or_init(|| Mutex::new(None))
+}
+
+fn discover_pending_attachment_locations(
+    geometry: AttachmentDiscoveryGeometry,
+    start: std::time::Instant,
+    max_millis: u64,
+) -> AttachmentDiscovery {
+    let root = attachments_root_dir();
+    let mut state_guard = attachment_discovery_state().lock();
+    let root_changed = state_guard
+        .as_ref()
+        .is_some_and(|state| state.root.as_path() != root.as_path());
+    if root_changed || state_guard.is_none() {
+        *state_guard = Some(AttachmentDiscoveryState {
+            root: root.clone(),
+            stream: None,
+            retry_locations: Vec::new(),
+        });
+    }
+    let state = state_guard.as_mut().expect("initialized above");
+    let mut discovery = AttachmentDiscovery::default();
+
+    if !state.retry_locations.is_empty() {
+        let mut retry_locations = std::mem::take(&mut state.retry_locations)
+            .into_iter()
+            .peekable();
+        loop {
+            if retry_locations.peek().is_none() {
+                break;
+            }
+            if discovery.locations.len() >= geometry.max_locations
+                || discovery.work_items >= geometry.max_work_items
+            {
+                discovery.work_exhausted = true;
+                break;
+            }
+            if scan_deadline_reached(start, max_millis) {
+                discovery.time_exhausted = true;
+                break;
+            }
+            let location = retry_locations.next().expect("peeked above");
+            discovery.work_items = discovery.work_items.saturating_add(1);
+            if !report_path_from_sanitized(&location.id).exists() {
+                discovery.locations.push(location);
+            }
+            if scan_deadline_reached(start, max_millis) {
+                discovery.time_exhausted = true;
+                break;
+            }
+        }
+        state.retry_locations.extend(retry_locations);
+        if discovery.work_exhausted || discovery.time_exhausted {
+            canonicalize_attachment_locations(&mut discovery.locations);
+            return discovery;
+        }
+    }
+
+    if state.stream.is_none() {
+        let Ok(stream) = AttachmentDirectoryStream::open(root) else {
+            discovery.sweep_complete = true;
+            canonicalize_attachment_locations(&mut discovery.locations);
+            return discovery;
+        };
+        state.stream = Some(stream);
+    }
+
+    let remaining_geometry = AttachmentDiscoveryGeometry {
+        max_locations: geometry
+            .max_locations
+            .saturating_sub(discovery.locations.len()),
+        max_work_items: geometry.max_work_items.saturating_sub(discovery.work_items),
+    };
+    let streamed = discover_attachment_window(
+        state.stream.as_mut().expect("initialized above"),
+        remaining_geometry,
+        start,
+        max_millis,
+        |location| !report_path_from_sanitized(&location.id).exists(),
+    );
+    discovery.locations.extend(streamed.locations);
+    discovery.work_items = discovery.work_items.saturating_add(streamed.work_items);
+    discovery.sweep_complete = streamed.sweep_complete;
+    discovery.work_exhausted = streamed.work_exhausted;
+    discovery.time_exhausted = streamed.time_exhausted;
+    if discovery.sweep_complete {
+        state.stream = None;
+    }
+    canonicalize_attachment_locations(&mut discovery.locations);
+    discovery
+}
+
+fn retry_pending_attachment_locations(locations: Vec<AttachmentLocation>) {
+    if locations.is_empty() {
+        return;
+    }
+    let root = attachments_root_dir();
+    let mut state_guard = attachment_discovery_state().lock();
+    let root_changed = state_guard
+        .as_ref()
+        .is_some_and(|state| state.root.as_path() != root.as_path());
+    if root_changed || state_guard.is_none() {
+        *state_guard = Some(AttachmentDiscoveryState {
+            root,
+            stream: None,
+            retry_locations: Vec::new(),
+        });
+    }
+    let state = state_guard.as_mut().expect("initialized above");
+    let hard_cap = usize::try_from(ATTACHMENT_DISCOVERY_MAX_LOCATIONS)
+        .expect("the hard attachment discovery cap fits usize");
+    // Callers can return at most one bounded discovery window. Merge before
+    // truncation so concurrent scans retain the canonical lowest locations,
+    // independent of completion order.
+    state.retry_locations.extend(locations);
+    canonicalize_attachment_locations(&mut state.retry_locations);
+    state.retry_locations.truncate(hard_cap);
 }
 
 fn find_attachment_location(id: &str) -> Option<AttachmentLocation> {
     let clean = sanitize_attachment_id(id)?;
-    list_attachment_locations()
-        .into_iter()
-        .find(|location| location.id == clean)
+    let mut stream = AttachmentDirectoryStream::open(attachments_root_dir()).ok()?;
+    let mut found: Option<AttachmentLocation> = None;
+    loop {
+        match stream.step() {
+            AttachmentDirectoryStep::Advanced => {}
+            AttachmentDirectoryStep::Location(location) => {
+                if location.id == clean && found.as_ref().is_none_or(|current| &location < current)
+                {
+                    found = Some(location);
+                }
+            }
+            AttachmentDirectoryStep::Complete => return found,
+        }
+    }
 }
 
 fn load_attachment_meta(loc: &AttachmentLocation) -> Option<super::zk_attachments::AttachmentMeta> {
@@ -847,7 +902,146 @@ fn load_attachment_snapshot(
     Some(snapshot_load)
 }
 
-fn save_report(rep: &ProverReport) -> std::io::Result<()> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReportRetentionCandidate {
+    processed_ms: u64,
+    id: String,
+    retained_bytes: u64,
+}
+
+impl Ord for ReportRetentionCandidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.processed_ms, &self.id, self.retained_bytes).cmp(&(
+            other.processed_ms,
+            &other.id,
+            other.retained_bytes,
+        ))
+    }
+}
+
+impl PartialOrd for ReportRetentionCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[derive(Default)]
+struct ReportStoreScan {
+    count: u64,
+    retained_bytes: u64,
+    oldest: BinaryHeap<ReportRetentionCandidate>,
+}
+
+fn scan_report_store_locked(exclude_id: &str) -> ReportStoreScan {
+    let mut scan = ReportStoreScan::default();
+    visit_report_ids(|id| {
+        if id == exclude_id {
+            return true;
+        }
+        let report_path = report_path_from_sanitized(&id);
+        let Ok(report_metadata) = fs::symlink_metadata(&report_path) else {
+            return true;
+        };
+        if !report_metadata.file_type().is_file() {
+            return true;
+        }
+        let processed_ms =
+            load_or_repair_report_summary_locked(&id).map_or(0, |summary| summary.processed_ms);
+        let summary_bytes = fs::symlink_metadata(report_summary_path_from_sanitized(&id))
+            .ok()
+            .filter(|metadata| metadata.file_type().is_file())
+            .map_or(0, |metadata| metadata.len());
+        let retained_bytes = report_metadata.len().saturating_add(summary_bytes);
+        scan.count = scan.count.saturating_add(1);
+        scan.retained_bytes = scan.retained_bytes.saturating_add(retained_bytes);
+
+        let candidate = ReportRetentionCandidate {
+            processed_ms,
+            id,
+            retained_bytes,
+        };
+        if scan.oldest.len() < REPORT_RETENTION_EVICTION_BATCH {
+            scan.oldest.push(candidate);
+        } else if scan
+            .oldest
+            .peek()
+            .is_some_and(|newest_old| candidate < *newest_old)
+        {
+            let _ = scan.oldest.pop();
+            scan.oldest.push(candidate);
+        }
+        true
+    });
+    scan
+}
+
+fn report_store_fits(count: u64, retained_bytes: u64, max_count: u64, max_bytes: u64) -> bool {
+    count <= max_count && retained_bytes <= max_bytes
+}
+
+fn remove_file_if_present(path: &Path) -> std::io::Result<bool> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == IoErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn delete_report_files_locked(id: &str) -> std::io::Result<bool> {
+    let Some(clean) = sanitize_report_id(id) else {
+        return Ok(false);
+    };
+    let removed = remove_file_if_present(&report_path_from_sanitized(&clean))?;
+    let _ = remove_file_if_present(&report_summary_path_from_sanitized(&clean))?;
+    Ok(removed)
+}
+
+fn enforce_report_store_capacity_locked(
+    exclude_id: &str,
+    added_count: u64,
+    added_bytes: u64,
+    max_count: u64,
+    max_bytes: u64,
+) -> std::io::Result<usize> {
+    if added_count > max_count || added_bytes > max_bytes {
+        return Err(IoError::new(
+            IoErrorKind::InvalidInput,
+            "prover report retention geometry cannot admit the report",
+        ));
+    }
+    prune_stale_report_summaries_locked();
+    let mut evicted = 0usize;
+    loop {
+        let scan = scan_report_store_locked(exclude_id);
+        let mut projected_count = scan.count.saturating_add(added_count);
+        let mut projected_bytes = scan.retained_bytes.saturating_add(added_bytes);
+        if report_store_fits(projected_count, projected_bytes, max_count, max_bytes) {
+            return Ok(evicted);
+        }
+
+        let candidates = scan.oldest.into_sorted_vec();
+        if candidates.is_empty() {
+            return Err(IoError::other(
+                "prover report retention geometry cannot admit the report",
+            ));
+        }
+        for candidate in candidates {
+            delete_report_files_locked(&candidate.id)?;
+            evicted = evicted.saturating_add(1);
+            projected_count = projected_count.saturating_sub(1);
+            projected_bytes = projected_bytes.saturating_sub(candidate.retained_bytes);
+            if report_store_fits(projected_count, projected_bytes, max_count, max_bytes) {
+                return Ok(evicted);
+            }
+        }
+    }
+}
+
+fn save_report_with_limits(
+    rep: &ProverReport,
+    max_count: u64,
+    max_bytes: u64,
+) -> std::io::Result<()> {
     let Some(id) = sanitize_report_id(&rep.id) else {
         return Err(IoError::new(
             IoErrorKind::InvalidInput,
@@ -855,16 +1049,39 @@ fn save_report(rep: &ProverReport) -> std::io::Result<()> {
         ));
     };
     ensure_dirs();
+    let body = norito::json::to_json_pretty(rep)
+        .map_err(|error| IoError::new(IoErrorKind::InvalidData, error.to_string()))?;
+    if body.len() as u64 > REPORT_FILE_MAX_BYTES {
+        return Err(IoError::new(
+            IoErrorKind::InvalidData,
+            "prover report exceeds the hard size limit",
+        ));
+    }
+    let summary = report_summary_from_report(rep);
+    let summary_body = norito::json::to_json(&summary)
+        .map_err(|error| IoError::new(IoErrorKind::InvalidData, error.to_string()))?;
+    if summary_body.len() as u64 > REPORT_SUMMARY_FILE_MAX_BYTES {
+        return Err(IoError::new(
+            IoErrorKind::InvalidData,
+            "prover report summary exceeds the hard size limit",
+        ));
+    }
+    let incoming_bytes = (body.len() as u64).saturating_add(summary_body.len() as u64);
+    let _guard = report_summary_lock().lock();
+    enforce_report_store_capacity_locked(&id, 1, incoming_bytes, max_count, max_bytes)?;
     let path = report_path_from_sanitized(&id);
     let tmp_dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut tmp = tempfile::NamedTempFile::new_in(tmp_dir)?;
-    let s = norito::json::to_json_pretty(rep).unwrap_or_else(|_| "{}".into());
     use std::io::Write as _;
-    tmp.write_all(s.as_bytes())?;
+    tmp.write_all(body.as_bytes())?;
     tmp.flush()?;
     tmp.persist(&path).map(|_| ()).map_err(|e| e.error)?;
-    upsert_report_summary(rep)?;
+    persist_report_summary_locked(&summary)?;
     Ok(())
+}
+
+fn save_report(rep: &ProverReport) -> std::io::Result<()> {
+    save_report_with_limits(rep, cfg_reports_max_count(), cfg_reports_max_bytes())
 }
 
 fn load_report(id: &str) -> Option<ProverReport> {
@@ -900,27 +1117,9 @@ fn load_report(id: &str) -> Option<ProverReport> {
     Some(report)
 }
 
-fn list_report_ids() -> Vec<String> {
-    let mut ids = Vec::new();
-    if let Ok(rd) = fs::read_dir(reports_dir()) {
-        for e in rd.flatten() {
-            if let Some(name) = e.file_name().to_str() {
-                if let Some(id) = name.strip_suffix(".json") {
-                    if let Some(clean) = sanitize_report_id(id) {
-                        ids.push(clean);
-                    }
-                }
-            }
-        }
-    }
-    ids
-}
-
 fn delete_report_files(id: &str) {
-    if let Some(clean) = sanitize_report_id(id) {
-        let _ = fs::remove_file(report_path_from_sanitized(&clean));
-        remove_report_summary(&clean);
-    }
+    let _guard = report_summary_lock().lock();
+    let _ = delete_report_files_locked(id);
 }
 
 fn record_prover_metrics(report: &ProverReport) {
@@ -944,13 +1143,26 @@ pub fn gc_reports_once() -> usize {
     let ttl_ms = ttl.as_millis() as u64;
     let mut deleted = 0usize;
     let _guard = report_summary_lock().lock();
-    let summaries = read_report_summaries_locked().unwrap_or_else(rebuild_report_summaries_locked);
-    for summary in summaries {
+    visit_report_summaries_locked(|summary| {
         let age_ms = now.saturating_sub(summary.processed_ms);
         if age_ms > ttl_ms {
-            let _ = fs::remove_file(report_path_from_sanitized(&summary.id));
-            let _ = fs::remove_file(report_summary_path_from_sanitized(&summary.id));
-            deleted += 1;
+            if delete_report_files_locked(&summary.id).unwrap_or(false) {
+                deleted = deleted.saturating_add(1);
+            }
+        }
+        true
+    });
+    prune_stale_report_summaries_locked();
+    match enforce_report_store_capacity_locked(
+        "",
+        0,
+        0,
+        cfg_reports_max_count(),
+        cfg_reports_max_bytes(),
+    ) {
+        Ok(evicted) => deleted = deleted.saturating_add(evicted),
+        Err(error) => {
+            iroha_logger::warn!(%error, "Failed to enforce prover report retention geometry");
         }
     }
     if deleted > 0 {
@@ -1405,7 +1617,7 @@ fn process_attachment_snapshot_at(
     Some(rep)
 }
 
-/// Scan all known attachments once, generating missing reports.
+/// Scan one bounded attachment-discovery window, generating missing reports.
 #[derive(Debug, Clone, Default)]
 struct ScanStats {
     processed_reports: usize,
@@ -1418,34 +1630,36 @@ struct ScanStats {
 async fn run_budgeted_scan() -> ScanStats {
     ensure_dirs();
     let telemetry = telemetry_handle();
-    let mut pending: Vec<AttachmentLocation> = Vec::new();
-    let mut seen_ids: HashSet<String> = HashSet::new();
-    for loc in list_attachment_locations() {
-        if report_path_from_sanitized(&loc.id).exists() {
-            continue;
-        }
-        if seen_ids.insert(loc.id.clone()) {
-            pending.push(loc);
-        }
-    }
-
-    let mut remaining = pending.len() as u64;
-    telemetry.with_metrics(|tel| tel.set_torii_zk_prover_pending(remaining));
-
     let max_bytes = cfg_max_scan_bytes();
     let max_millis = cfg_max_scan_millis();
     let max_inflight = cfg_max_inflight();
+    let start = std::time::Instant::now();
+    // Reserve half of the wall-clock budget for loading and scheduling the
+    // bounded window. Otherwise a large directory can consume the entire
+    // deadline repeatedly without allowing any discovered item to progress.
+    let discovery_max_millis = max_millis.div_ceil(2).max(1);
+    let discovery = discover_pending_attachment_locations(
+        AttachmentDiscoveryGeometry::from_scan_bytes(max_bytes),
+        start,
+        discovery_max_millis,
+    );
+    let mut remaining = discovery.pending_estimate();
+    let discovery_budget_reason = discovery.budget_reason();
+    let discovery_work_exhausted = discovery_budget_reason == Some("work");
+    let discovery_time_exhausted = discovery_budget_reason == Some("time");
+    let mut budget_reason = scan_deadline_reached(start, max_millis).then_some("time");
+    let mut pending = discovery.locations.into_iter();
+    telemetry.with_metrics(|tel| tel.set_torii_zk_prover_pending(remaining));
 
     let semaphore = Arc::new(Semaphore::new(max_inflight));
     let inflight = Arc::new(AtomicU64::new(0));
-    let start = std::time::Instant::now();
-    let mut budget_reason: Option<&'static str> = None;
     let mut byte_deferred = false;
     let mut bytes_processed = 0u64;
     let mut processed_reports = 0usize;
     let mut join_set = JoinSet::new();
+    let mut retry_locations = Vec::new();
 
-    for loc in pending {
+    while let Some(loc) = pending.next() {
         while join_set.len() >= max_inflight {
             let Some(res) = join_set.join_next().await else {
                 break;
@@ -1460,16 +1674,20 @@ async fn run_budgeted_scan() -> ScanStats {
                     iroha_logger::warn!(%err, "Background prover task join failed");
                 }
             }
-            if start.elapsed().as_millis() as u64 >= max_millis {
+            if scan_deadline_reached(start, max_millis) {
                 budget_reason = Some("time");
                 break;
             }
         }
         if budget_reason.is_some() {
+            retry_locations.push(loc);
+            retry_locations.extend(pending);
             break;
         }
-        if start.elapsed().as_millis() as u64 >= max_millis {
+        if scan_deadline_reached(start, max_millis) {
             budget_reason = Some("time");
+            retry_locations.push(loc);
+            retry_locations.extend(pending);
             break;
         }
 
@@ -1483,15 +1701,17 @@ async fn run_budgeted_scan() -> ScanStats {
             Ok(snapshot_load) => snapshot_load,
             Err(error) => {
                 iroha_logger::warn!(%error, "Background prover snapshot load failed");
+                retry_locations.push(loc);
                 continue;
             }
         };
-        let crossed_time_budget = start.elapsed().as_millis() as u64 >= max_millis;
+        let crossed_time_budget = scan_deadline_reached(start, max_millis);
         let Some(snapshot_load) = snapshot_load else {
             remaining = remaining.saturating_sub(1);
             telemetry.with_metrics(|tel| tel.set_torii_zk_prover_pending(remaining));
             if crossed_time_budget {
                 budget_reason = Some("time");
+                retry_locations.extend(pending);
                 break;
             }
             continue;
@@ -1501,8 +1721,10 @@ async fn run_budgeted_scan() -> ScanStats {
             AttachmentSnapshotLoad::DeferredForByteBudget { required_bytes } => {
                 let _ = required_bytes;
                 byte_deferred = true;
+                retry_locations.push(loc);
                 if crossed_time_budget {
                     budget_reason = Some("time");
+                    retry_locations.extend(pending);
                     break;
                 }
                 // Do not let one large entry head-of-line block smaller later
@@ -1518,6 +1740,7 @@ async fn run_budgeted_scan() -> ScanStats {
                 "bounded attachment snapshot exceeded its assigned read budget"
             );
             byte_deferred = true;
+            retry_locations.push(loc);
             continue;
         }
 
@@ -1527,7 +1750,11 @@ async fn run_budgeted_scan() -> ScanStats {
 
         let permit = match semaphore.clone().acquire_owned().await {
             Ok(permit) => permit,
-            Err(_) => break,
+            Err(_) => {
+                retry_locations.push(loc);
+                retry_locations.extend(pending);
+                break;
+            }
         };
         let inflight = inflight.clone();
         let telemetry_clone = telemetry.clone();
@@ -1552,9 +1779,12 @@ async fn run_budgeted_scan() -> ScanStats {
             // The body bytes have already been read and charged. Complete
             // this immutable snapshot once, then stop scheduling new work.
             budget_reason = Some("time");
+            retry_locations.extend(pending);
             break;
         }
     }
+
+    retry_pending_attachment_locations(retry_locations);
 
     while let Some(res) = join_set.join_next().await {
         match res {
@@ -1569,8 +1799,14 @@ async fn run_budgeted_scan() -> ScanStats {
         }
     }
 
-    if budget_reason.is_none() && byte_deferred {
-        budget_reason = Some("bytes");
+    if budget_reason.is_none() {
+        if byte_deferred {
+            budget_reason = Some("bytes");
+        } else if discovery_time_exhausted {
+            budget_reason = Some("time");
+        } else if discovery_work_exhausted {
+            budget_reason = Some("work");
+        }
     }
 
     telemetry.with_metrics(|tel| {
@@ -1657,7 +1893,8 @@ pub fn start_worker() {
 // tests without shipping an unauthenticated administrative surface. The
 // adapters compile only for unit tests or the explicit integration-test
 // feature. Any future report API must be declared in the route catalog with
-// `RequiredApiToken` before it is compiled for production.
+// one exact, replay-protected authentication policy before it is compiled for
+// production.
 
 #[cfg(all(feature = "app_api", any(test, feature = "ws_integration_tests")))]
 #[derive(
@@ -1675,7 +1912,7 @@ pub struct ProverListQuery {
     pub content_type: Option<String>,
     /// Require a ZK1 TLV tag to be present. Must be exactly four printable ASCII bytes (e.g., "PROF").
     pub has_tag: Option<String>,
-    /// Maximum number of results to return.
+    /// Maximum number of results to return (default 100, hard maximum 1000).
     pub limit: Option<u32>,
     /// Return only reports with processed_ms >= since_ms.
     pub since_ms: Option<u64>,
@@ -1685,7 +1922,7 @@ pub struct ProverListQuery {
     pub ids_only: Option<bool>,
     /// Result ordering: "asc" (default) or "desc" by processed_ms.
     pub order: Option<String>,
-    /// Offset to apply after ordering and filtering (server-side paging).
+    /// Offset to apply after ordering and filtering (hard maximum 10000).
     pub offset: Option<u32>,
     /// Convenience: alias for `failed_only=true` (errors are reports with ok=false).
     pub errors_only: Option<bool>,
@@ -1720,41 +1957,10 @@ pub async fn handle_list_reports(
         None
     };
 
-    let mut filtered: Vec<ProverReportSummary> = load_report_summaries()
-        .into_iter()
-        .filter(|summary| {
-            filter_report_summary(summary, &q, requested_id.as_deref(), ok_req, failed_req)
-        })
-        .collect();
-    filtered.sort_by_key(|summary| summary.processed_ms);
-    // latest=true overrides order/offset/limit: pick the last (max processed_ms)
-    if q.latest.unwrap_or(false) {
-        if let Some(last) = filtered.pop() {
-            filtered = vec![last];
-        } else {
-            filtered.clear();
-        }
-    } else {
-        // Apply ordering
-        if matches!(q.order.as_deref(), Some("desc" | "DESC" | "Desc")) {
-            filtered.reverse();
-        }
-        // Apply offset then limit
-        if let Some(off) = q.offset {
-            let off = off as usize;
-            if off < filtered.len() {
-                filtered = filtered.split_off(off);
-            } else {
-                filtered.clear();
-            }
-        }
-        if let Some(lim) = q.limit {
-            let cap = lim.min(1000) as usize; // safety cap
-            if filtered.len() > cap {
-                filtered.truncate(cap);
-            }
-        }
-    }
+    let filtered = match select_report_summaries(&q, requested_id.as_deref(), ok_req, failed_req) {
+        Ok(filtered) => filtered,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
     // If ids_only requested, project to ids only
     let s = if q.ids_only.unwrap_or(false) {
         let ids: Vec<String> = filtered.iter().map(|summary| summary.id.clone()).collect();
@@ -1779,11 +1985,12 @@ pub async fn handle_list_reports(
             .collect();
         norito::json::to_json_pretty(&msgs).unwrap_or_else(|_| "[]".into())
     } else {
-        let reports: Vec<ProverReport> = filtered
-            .into_iter()
-            .filter_map(|summary| load_report(&summary.id))
-            .collect();
-        norito::json::to_json_pretty(&reports).unwrap_or_else(|_| "[]".into())
+        match encode_full_report_page(filtered) {
+            Ok(body) => body,
+            Err(message) => {
+                return (StatusCode::PAYLOAD_TOO_LARGE, message).into_response();
+            }
+        }
     };
     axum::response::Response::builder()
         .header(axum::http::header::CONTENT_TYPE, "application/json")
@@ -1814,12 +2021,7 @@ pub async fn handle_count_reports(
         None
     };
 
-    let count = load_report_summaries()
-        .into_iter()
-        .filter(|summary| {
-            filter_report_summary(summary, &q, requested_id.as_deref(), ok_req, failed_req)
-        })
-        .count() as u64;
+    let count = count_report_summaries(&q, requested_id.as_deref(), ok_req, failed_req);
     let body = norito::json::to_json_pretty(&crate::json_object(vec![("count", count)]))
         .unwrap_or_else(|_| "{}".into());
     axum::response::Response::builder()
@@ -1850,18 +2052,20 @@ pub async fn handle_delete_reports(
     } else {
         None
     };
-    let matches: Vec<String> = load_report_summaries()
-        .into_iter()
-        .filter(|summary| {
-            filter_report_summary(summary, &q, requested_id.as_deref(), ok_req, failed_req)
-        })
-        .map(|summary| summary.id)
-        .collect();
+    let mut delete_query = q.clone();
+    if delete_query.limit.is_none() {
+        delete_query.limit = Some(REPORT_QUERY_MAX_LIMIT as u32);
+    }
+    let matches =
+        match select_report_summaries(&delete_query, requested_id.as_deref(), ok_req, failed_req) {
+            Ok(matches) => matches,
+            Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+        };
 
     let mut deleted_ids = Vec::new();
-    for id in matches {
-        delete_report_files(&id);
-        deleted_ids.push(id);
+    for summary in matches {
+        delete_report_files(&summary.id);
+        deleted_ids.push(summary.id);
     }
     let deleted_count = deleted_ids.len() as u64;
     let body = norito::json::to_json_pretty(&crate::json_object(vec![
@@ -1941,11 +2145,15 @@ mod tests {
 
     fn configure_test_cfg(allowed_circuits: Vec<String>) {
         let fixture_len = fixture_attachment_bytes().len() as u64;
-        let max_scan_bytes = fixture_len.saturating_add(TEST_SCAN_BUDGET_MARGIN_BYTES);
+        let max_scan_bytes = fixture_len
+            .saturating_add(TEST_SCAN_BUDGET_MARGIN_BYTES)
+            .max(ATTACHMENT_DISCOVERY_BYTES_PER_LOCATION.saturating_mul(8));
         let _ = super::configure(
             true,
             1,
             7 * 24 * 60 * 60,
+            iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_COUNT,
+            iroha_config::parameters::defaults::torii::ZK_PROVER_REPORTS_MAX_BYTES,
             2,
             max_scan_bytes,
             5_000,
@@ -2779,6 +2987,134 @@ mod tests {
     }
 
     #[test]
+    fn persisted_report_summary_is_rebounded_after_decode() {
+        let summary = bound_persisted_report_summary(ProverReportSummary {
+            id: "aa".repeat(32),
+            ok: false,
+            error: Some("é".repeat(REPORT_SUMMARY_ERROR_MAX_BYTES)),
+            content_type: "x".repeat(REPORT_SUMMARY_CONTENT_TYPE_MAX_BYTES + 1),
+            processed_ms: 1,
+            zk1_tags: Some(
+                (0..=ZK1_MAX_TLV_COUNT)
+                    .map(|index| format!("{index:04}{}", "x".repeat(REPORT_SUMMARY_TAG_MAX_BYTES)))
+                    .collect(),
+            ),
+        });
+
+        assert!(
+            summary.error.as_deref().expect("bounded error").len()
+                <= REPORT_SUMMARY_ERROR_MAX_BYTES
+        );
+        assert!(summary.content_type.len() <= REPORT_SUMMARY_CONTENT_TYPE_MAX_BYTES);
+        assert_eq!(
+            summary.zk1_tags.as_ref().expect("bounded tags").len(),
+            ZK1_MAX_TLV_COUNT
+        );
+    }
+
+    fn encoded_report_store_bytes(report: &ProverReport) -> u64 {
+        let report_bytes = norito::json::to_json_pretty(report)
+            .expect("encode report")
+            .len() as u64;
+        let summary_bytes = norito::json::to_json(&report_summary_from_report(report))
+            .expect("encode summary")
+            .len() as u64;
+        report_bytes.saturating_add(summary_bytes)
+    }
+
+    #[test]
+    fn report_store_count_limit_evicts_the_oldest_report_on_append() {
+        let _env = TestDataDirGuard::new();
+        let first = sample_report("a4".repeat(32), true, None, "application/json", 1);
+        let second = sample_report("a5".repeat(32), true, None, "application/json", 2);
+        let third = sample_report("a6".repeat(32), true, None, "application/json", 3);
+
+        save_report_with_limits(&first, 2, u64::MAX).expect("save first report");
+        save_report_with_limits(&second, 2, u64::MAX).expect("save second report");
+        save_report_with_limits(&third, 2, u64::MAX).expect("save third report");
+
+        assert!(
+            load_report(&first.id).is_none(),
+            "oldest report must be evicted"
+        );
+        assert!(load_report(&second.id).is_some());
+        assert!(load_report(&third.id).is_some());
+    }
+
+    #[test]
+    fn report_store_byte_limit_evicts_before_persisting_the_new_report() {
+        let _env = TestDataDirGuard::new();
+        let first = sample_report("a7".repeat(32), true, None, "application/json", 1);
+        let mut second = sample_report("a8".repeat(32), false, None, "application/json", 2);
+        second.error = Some("bounded verifier failure".repeat(16));
+        let byte_limit = encoded_report_store_bytes(&first)
+            .saturating_add(encoded_report_store_bytes(&second))
+            .saturating_sub(1);
+
+        save_report_with_limits(&first, 10, byte_limit).expect("save first report");
+        save_report_with_limits(&second, 10, byte_limit).expect("save second report");
+
+        assert!(
+            load_report(&first.id).is_none(),
+            "old bytes must be reclaimed"
+        );
+        assert!(load_report(&second.id).is_some());
+    }
+
+    #[test]
+    fn report_store_rejects_an_item_larger_than_its_byte_geometry() {
+        let _env = TestDataDirGuard::new();
+        let report = sample_report("a9".repeat(32), true, None, "application/json", 1);
+        let required = encoded_report_store_bytes(&report);
+
+        let error = save_report_with_limits(&report, 1, required.saturating_sub(1))
+            .expect_err("an individually impossible report must be rejected");
+
+        assert_eq!(error.kind(), IoErrorKind::InvalidInput);
+        assert!(!report_path_from_sanitized(&report.id).exists());
+    }
+
+    #[test]
+    fn bounded_report_key_selection_never_retains_more_than_the_requested_window() {
+        let mut keys = BoundedReportKeys::new(false);
+        for processed_ms in (0..10_000_u64).rev() {
+            keys.consider(
+                ReportOrderKey {
+                    processed_ms,
+                    id: format!("{processed_ms:064x}"),
+                },
+                3,
+            );
+        }
+        let selected = keys.into_ordered();
+        assert_eq!(selected.len(), 3);
+        assert_eq!(selected[0].processed_ms, 0);
+        assert_eq!(selected[2].processed_ms, 2);
+    }
+
+    #[test]
+    fn report_query_window_caps_limit_and_rejects_offset_overflow() {
+        assert_eq!(
+            report_query_window(&ProverListQuery::default()).expect("default window"),
+            (0, REPORT_QUERY_DEFAULT_LIMIT)
+        );
+        let capped = report_query_window(&ProverListQuery {
+            limit: Some(u32::MAX),
+            offset: Some(REPORT_QUERY_MAX_OFFSET as u32),
+            ..Default::default()
+        })
+        .expect("maximum supported offset");
+        assert_eq!(capped, (REPORT_QUERY_MAX_OFFSET, REPORT_QUERY_MAX_LIMIT));
+
+        let error = report_query_window(&ProverListQuery {
+            offset: Some(REPORT_QUERY_MAX_OFFSET as u32 + 1),
+            ..Default::default()
+        })
+        .expect_err("offset beyond the bounded selection window must fail");
+        assert!(error.contains("pagination ceiling"));
+    }
+
+    #[test]
     fn delete_report_files_prunes_stale_index_entry_when_file_is_missing() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
@@ -2796,7 +3132,7 @@ mod tests {
 
         delete_report_files(&id);
 
-        let persisted = read_report_summaries_locked().expect("read report index");
+        let persisted = read_report_summaries_locked();
         assert!(persisted.is_empty(), "stale summary should be removed");
     }
 
@@ -2937,7 +3273,7 @@ mod tests {
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, report.id);
 
-        let persisted = read_report_summaries_locked().expect("rebuilt index");
+        let persisted = read_report_summaries_locked();
         assert_eq!(persisted.len(), 1);
         assert_eq!(persisted[0].id, report.id);
     }
@@ -2950,7 +3286,7 @@ mod tests {
         let summaries = load_report_summaries();
         assert!(summaries.is_empty());
 
-        let persisted = read_report_summaries_locked().expect("persisted empty index");
+        let persisted = read_report_summaries_locked();
         assert!(persisted.is_empty());
     }
 
@@ -2981,7 +3317,7 @@ mod tests {
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, keep_id);
 
-        let persisted = read_report_summaries_locked().expect("read cleaned index");
+        let persisted = read_report_summaries_locked();
         assert_eq!(persisted.len(), 1);
         assert_eq!(persisted[0].id, keep_id);
     }
@@ -3034,7 +3370,7 @@ mod tests {
             Some(&["PROF".to_string()][..])
         );
 
-        let persisted = read_report_summaries_locked().expect("read normalized index");
+        let persisted = read_report_summaries_locked();
         assert_eq!(persisted.len(), 1);
         assert_eq!(persisted[0].id, id);
     }
@@ -3142,7 +3478,7 @@ mod tests {
     }
 
     #[test]
-    fn list_report_ids_ignores_invalid_entries_and_normalizes_case() {
+    fn report_id_visitor_ignores_invalid_entries() {
         init_test_cfg();
         let _env = TestDataDirGuard::new();
         ensure_dirs();
@@ -3153,7 +3489,11 @@ mod tests {
         fs::write(reports_dir().join("bad.json"), b"{}").expect("write invalid report id");
         fs::write(reports_dir().join("not-a-report.txt"), b"{}").expect("write non-report file");
 
-        let ids = list_report_ids();
+        let mut ids = Vec::new();
+        visit_report_ids(|id| {
+            ids.push(id);
+            true
+        });
         assert_eq!(ids, vec![clean_id]);
     }
 

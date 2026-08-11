@@ -32,11 +32,17 @@ use sorafs_node::evidence_viewer::EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1;
 
 use crate::utils;
 
+mod account_faucet_paths;
+mod account_faucet_schemas;
+mod canonical_account_operations;
 mod connect_openapi;
 mod iso20022;
 mod mcp_openapi;
 mod sorafs_evidence;
 
+use canonical_account_operations::{
+    insert_private_no_store_response_contract, private_no_store_response_headers,
+};
 use connect_openapi::{connect_paths, insert_connect_schemas};
 use iso20022::{
     operator_parameters as iso_operator_parameters,
@@ -1244,10 +1250,15 @@ fn offline_recipient_lineage_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Validate one canonical device-signed KagemushaRecipientPaymentRequestV2 and return the unique current-policy, unexpired on-chain P-256 registration together with its exact committed transaction, bounded entrypoint/result Merkle proofs, admission block header, and independently verifiable historical Sumeragi-v2 finality artifact. Policy rotation, expiry, ambiguous registrations, incomplete history, and proof gaps fail closed."
+            "Authenticate the exact method, path, and canonical selector body with a fresh NetworkId-bound account signature or multisig witness, then return the unique current-policy, unexpired on-chain P-256 registration together with its exact committed transaction, bounded entrypoint/result Merkle proofs, admission block header, and independently verifiable historical Sumeragi-v2 finality artifact. The querying account need not be the recipient because senders prefetch this public proof, but anonymous and replayed proof construction is rejected before decoding. Policy rotation, expiry, ambiguous registrations, incomplete history, and proof gaps fail closed."
                 .to_owned(),
         ),
     );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(canonical_request_auth_header_parameters()),
+    );
+    insert_canonical_request_auth_contract(&mut operation);
     operation.insert(
         "requestBody".into(),
         Value::Object(offline_typed_request_body(
@@ -1266,7 +1277,7 @@ fn offline_recipient_lineage_operation() -> Map {
     responses.insert(
         "400".to_owned(),
         dual_format_error_response_with_reject_codes(
-            "The signed receiver request is malformed, expired, or targets another network.",
+            "The receiver-lineage selector is malformed or targets another network.",
             "Exact receiver-lineage request validation code.",
             &[
                 "offline_receiver_lineage_request_invalid",
@@ -1277,7 +1288,7 @@ fn offline_recipient_lineage_operation() -> Map {
     responses.insert(
         "404".to_owned(),
         dual_format_error_response_with_reject_codes(
-            "No exact on-chain registration matches the signed receiver request.",
+            "No exact on-chain registration matches the authenticated receiver selector.",
             "Exact receiver-registration resource code.",
             &["offline_receiver_not_registered"],
         ),
@@ -1290,7 +1301,14 @@ fn offline_recipient_lineage_operation() -> Map {
             &["offline_receiver_registration_inactive"],
         ),
     );
-    responses.insert("401".to_owned(), api_token_unauthorized_response());
+    responses.insert(
+        "401".to_owned(),
+        dual_format_error_response_with_reject_codes(
+            "Canonical account authentication is missing.",
+            "Exact canonical-account authentication code.",
+            &["canonical_authentication_required"],
+        ),
+    );
     responses.insert("406".to_owned(), offline_not_acceptable_response());
     responses.insert(
         "429".to_owned(),
@@ -1307,6 +1325,7 @@ fn offline_recipient_lineage_operation() -> Map {
         ),
     );
     operation.insert("responses".into(), Value::Object(responses));
+    insert_private_no_store_response_contract(&mut operation);
     let mut methods = Map::new();
     methods.insert("post".to_owned(), Value::Object(operation));
     methods
@@ -2306,13 +2325,19 @@ fn system_paths() -> Map {
     );
     paths.insert(
         uri::PEERS.to_owned(),
-        Value::Object(json_get_operation(
-            "System",
-            "List online peers.",
-            "Return the peers snapshot as a list of peer ids.",
-            "#/components/schemas/PeerIdList",
-            Vec::new(),
-        )),
+        Value::Object({
+            let mut methods = json_get_operation(
+                "System",
+                "List node-local online peers as an operator.",
+                "Return the node-local peers snapshot as a list of peer ids. This operator-only route requires a fresh canonical request signature bound to the exact NetworkId, GET method, path, empty query, and empty body.",
+                "#/components/schemas/PeerIdList",
+                operator_signature_header_parameters(),
+            );
+            if let Some(Value::Object(operation)) = methods.get_mut("get") {
+                insert_operator_signature_auth_contract(operation);
+            }
+            methods
+        }),
     );
     paths.insert(
         uri::CONFIGURATION.to_owned(),
@@ -2406,22 +2431,29 @@ fn system_paths() -> Map {
     }
     paths.insert(
         "/v1/policy".to_owned(),
-        Value::Object(json_get_operation(
-            "System",
-            "Fetch node policy snapshot.",
-            "Return the current node policy and limits.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object({
+            let mut methods = json_get_operation(
+                "System",
+                "Fetch the node-local policy snapshot as an operator.",
+                "Return the current node policy and limits. This operator-only route requires a fresh canonical request signature bound to the exact NetworkId, GET method, path, empty query, and empty body.",
+                "#/components/schemas/JsonValue",
+                operator_signature_header_parameters(),
+            );
+            if let Some(Value::Object(operation)) = methods.get_mut("get") {
+                insert_operator_signature_auth_contract(operation);
+            }
+            methods
+        }),
     );
     let mut pipeline_preflight = json_get_operation(
         "System",
-        "Fetch pipeline preflight diagnostics.",
-        "Return transaction admission, queue, fee, and consensus liveness budgets used by clients before submitting transactions. Defaults to application/x-norito when Accept is omitted or */*; application/json returns the same typed payload encoded as JSON.",
+        "Fetch node-local pipeline preflight diagnostics as an operator.",
+        "Return transaction admission, queue, fee, token, and consensus liveness budgets. This operator-only route requires a fresh canonical request signature bound to the exact NetworkId, GET method, path, empty query, and empty body. Defaults to application/x-norito when Accept is omitted or */*; application/json returns the same typed payload encoded as JSON.",
         "#/components/schemas/PipelinePreflightResponse",
-        Vec::new(),
+        operator_signature_header_parameters(),
     );
     if let Some(Value::Object(get_op)) = pipeline_preflight.get_mut("get") {
+        insert_operator_signature_auth_contract(get_op);
         if let Some(Value::Object(responses)) = get_op.get_mut("responses") {
             responses.insert(
                 "200".to_owned(),
@@ -2440,17 +2472,26 @@ fn system_paths() -> Map {
     );
     paths.insert(
         "/v1/pipeline/recovery/{height}".to_owned(),
-        Value::Object(json_get_operation(
-            "System",
-            "Fetch pipeline recovery metadata.",
-            "Return pipeline recovery metadata for the given height.",
-            "#/components/schemas/JsonValue",
-            vec![integer_path_param(
-                "height",
-                "Block height to inspect.",
-                Some("uint64"),
-            )],
-        )),
+        Value::Object({
+            let mut methods = json_get_operation(
+                "System",
+                "Fetch node-local pipeline recovery metadata as an operator.",
+                "Return pipeline recovery metadata for the given height. This operator-only route requires a fresh canonical request signature bound to the exact NetworkId, GET method, encoded path, empty query, and empty body.",
+                "#/components/schemas/JsonValue",
+                vec![integer_path_param(
+                    "height",
+                    "Block height to inspect.",
+                    Some("uint64"),
+                )]
+                .into_iter()
+                .chain(operator_signature_header_parameters())
+                .collect(),
+            );
+            if let Some(Value::Object(operation)) = methods.get_mut("get") {
+                insert_operator_signature_auth_contract(operation);
+            }
+            methods
+        }),
     );
     paths.insert(
         iroha_torii_shared::uri::PIPELINE_FASTPQ_PROOFS.to_owned(),
@@ -2632,10 +2673,10 @@ fn transaction_paths() -> Map {
     );
     paths.insert(
         "/v1/transactions/query".to_owned(),
-        Value::Object(json_post_operation(
+        Value::Object(canonical_account_operations::json_post(
             "Transactions",
             "Query committed transactions.",
-            "Query committed transactions with the structured QueryEnvelope filter, sort, projection, and pagination shape. This global endpoint is intended for privileged operators and developer tooling.",
+            "Authenticate the exact method, path, and query envelope with a fresh NetworkId-bound account signature or multisig witness before decoding, then query committed transactions with the structured filter, sort, projection, and pagination shape.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -2643,10 +2684,10 @@ fn transaction_paths() -> Map {
     );
     paths.insert(
         "/v1/transactions/visible/query".to_owned(),
-        Value::Object(json_post_operation(
+        Value::Object(canonical_account_operations::json_post(
             "Transactions",
             "Query visible transactions.",
-            "Query committed transactions visible to the authenticated viewer. Torii derives viewer scope from Authorization headers before applying the QueryEnvelope filter, sort, projection, and pagination shape.",
+            "Authenticate the exact method, path, and query envelope with a fresh NetworkId-bound account signature or multisig witness before decoding, then query committed transactions visible to that canonical account.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -2868,17 +2909,55 @@ fn transaction_paths() -> Map {
 
 fn query_paths() -> Map {
     let mut paths = Map::new();
-    paths.insert(
-        uri::QUERY.to_owned(),
-        Value::Object(versioned_dual_format_post_operation(
-            "Queries",
-            "Submit a signed query.",
-            "Submit a SignedQuery encoded as Norito bytes or as canonical Norito JSON.",
-            "#/components/schemas/VersionedSignedQueryJson",
-            "#/components/schemas/JsonValue",
-            200,
-        )),
+    let mut operation = versioned_dual_format_post_operation(
+        "Queries",
+        "Submit a signed query.",
+        "Submit a versioned SignedQuery using application/x-norito. JSON request bodies are rejected before collection because the JSON decoder cannot enforce the signed-query allocation envelope. Successful single-route responses remain negotiable as Norito or JSON. Bounded cross-dataspace iterable fanout requires Norito and supports only boxed, unfiltered, unsorted identity FindRoleIds and FindActiveTriggerIds queries; fast-DSL predicate/selector classification and other unsupported iterable shapes fail before route execution.",
+        "#/components/schemas/VersionedSignedQueryJson",
+        "#/components/schemas/JsonValue",
+        200,
     );
+    operation
+        .get_mut("post")
+        .and_then(Value::as_object_mut)
+        .and_then(|post| post.get_mut("requestBody"))
+        .and_then(Value::as_object_mut)
+        .and_then(|body| body.get_mut("content"))
+        .and_then(Value::as_object_mut)
+        .expect("signed-query request content exists")
+        .remove("application/json");
+    let responses = operation
+        .get_mut("post")
+        .and_then(Value::as_object_mut)
+        .and_then(|post| post.get_mut("responses"))
+        .and_then(Value::as_object_mut)
+        .expect("signed-query response map exists");
+    for (status, description) in [
+        (
+            "409",
+            "The authenticated query shape is not supported by bounded routed fanout.",
+        ),
+        (
+            "413",
+            "The request, decode allocation, or response phase exceeds its admitted memory envelope.",
+        ),
+        (
+            "429",
+            "Signed-query ingress or fanout memory capacity is exhausted.",
+        ),
+        (
+            "502",
+            "An authoritative route returned an invalid response.",
+        ),
+        ("503", "No authoritative route is currently available."),
+        ("504", "The authoritative route timed out."),
+    ] {
+        responses.insert(
+            status.to_owned(),
+            dual_format_response(description, "#/components/schemas/ErrorEnvelope"),
+        );
+    }
+    paths.insert(uri::QUERY.to_owned(), Value::Object(operation));
     paths
 }
 
@@ -3052,13 +3131,32 @@ fn proof_paths() -> Map {
     );
     paths.insert(
         "/v1/proofs/retention".to_owned(),
-        Value::Object(json_get_operation(
-            "Proofs",
-            "Fetch proof retention status.",
-            "Return proof retention configuration and counters.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object({
+            let mut methods = json_get_operation(
+                "Proofs",
+                "Fetch node-local proof retention status as an operator.",
+                &format!(
+                    "Return proof retention configuration and counters. This operator-only route requires a fresh canonical request signature bound to the exact NetworkId, GET method, path, empty query, and empty body. Aggregation fails closed with HTTP 422 before inserting more than {} distinct backend summaries.",
+                    iroha_torii_shared::PROOF_RETENTION_STATUS_MAX_BACKENDS
+                ),
+                "#/components/schemas/JsonValue",
+                operator_signature_header_parameters(),
+            );
+            if let Some(Value::Object(operation)) = methods.get_mut("get") {
+                insert_operator_signature_auth_contract(operation);
+                if let Some(Value::Object(responses)) = operation.get_mut("responses") {
+                    insert_operator_signature_error_responses(responses);
+                    responses.insert(
+                        "422".to_owned(),
+                        dual_format_response(
+                            "The proof registry exceeds the hard distinct-backend status cap.",
+                            "#/components/schemas/ErrorEnvelope",
+                        ),
+                    );
+                }
+            }
+            methods
+        }),
     );
     paths.insert(
         "/v1/proofs/query".to_owned(),
@@ -4745,10 +4843,10 @@ fn account_paths() -> Map {
     );
     paths.insert(
         "/v1/accounts/query".to_owned(),
-        Value::Object(json_post_operation(
+        Value::Object(canonical_account_operations::json_post(
             "Accounts",
             "Query accounts.",
-            "Query accounts with JSON envelope. `id` filters accept canonical I105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form; responses always render canonical I105 account ids.",
+            "Authenticate the exact method, path, and JSON envelope with a fresh NetworkId-bound account signature or multisig witness before decoding. `id` filters accept canonical I105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form; responses always render canonical I105 account ids.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/AccountQueryResponse",
             Vec::new(),
@@ -4797,33 +4895,13 @@ fn account_paths() -> Map {
         "/v1/accounts/{account_id}".to_owned(),
         Value::Object(account_get),
     );
-    paths.insert(
-        "/v1/accounts/faucet/puzzle".to_owned(),
-        Value::Object(json_get_operation(
-            "Accounts",
-            "Fetch the faucet proof-of-work puzzle.",
-            "Return the current decentralized faucet proof-of-work puzzle, anchored to recent committed block data; difficulty adapts to recent committed and queued faucet claim volume, the work predicate is memory-hard scrypt, and finalized VRF seed material is required in the challenge when that mode is enabled.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/accounts/faucet".to_owned(),
-        Value::Object(json_post_operation(
-            "Accounts",
-            "Request faucet funds.",
-            "Transfer a fixed amount of testnet funds to an existing account when the configured faucet is enabled, the account has no positive balance for the configured asset, and a valid memory-hard scrypt proof-of-work solution for the returned queue-aware puzzle is supplied when required.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
+    account_faucet_paths::insert(&mut paths);
     paths.insert(
         "/v1/accounts/{account_id}/transactions/query".to_owned(),
-        Value::Object(json_post_operation(
+        Value::Object(canonical_account_operations::json_post(
             "Accounts",
             "Query account transactions.",
-            "Query transactions for a specific account. Results are merged across the caller-visible dataspaces only; private dataspace history the caller cannot read is silently omitted.",
+            "Authenticate the exact method, substituted account path, and query envelope with a fresh NetworkId-bound account signature or multisig witness before decoding. Results are merged across the caller-visible dataspaces only.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             vec![string_path_param(
@@ -4851,10 +4929,10 @@ fn account_paths() -> Map {
     );
     paths.insert(
         "/v1/accounts/{account_id}/assets/query".to_owned(),
-        Value::Object(json_post_operation(
+        Value::Object(canonical_account_operations::json_post(
             "Accounts",
             "Query account assets.",
-            "Query assets held by an account. Results are ingress-independent and merged across the caller-visible dataspaces; balances remain separated by their existing `scope` values instead of being summed across dataspaces.",
+            "Authenticate the exact method, substituted account path, and query envelope with a fresh NetworkId-bound account signature or multisig witness before decoding. Results are ingress-independent and merged across the caller-visible dataspaces; balances remain separated by scope.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/AccountAssetQueryResponse",
             vec![string_path_param(
@@ -5101,10 +5179,10 @@ fn identifier_paths() -> Map {
     );
     paths.insert(
         "/v1/identifiers/resolve".to_owned(),
-        Value::Object(json_post_operation(
+        Value::Object(canonical_account_operations::json_post(
             "Identifiers",
             "Resolve an identifier.",
-            "Resolve an encrypted identifier input under a hidden-function policy using a verified RAM-LFE output opening, then return the bound canonical account target when a live claim exists.",
+            "Resolve an encrypted identifier input under a hidden-function policy using a verified RAM-LFE output opening, then return the bound canonical account target when a live claim exists. Exact-NetworkId canonical account authentication is required before cryptographic work.",
             "#/components/schemas/IdentifierResolveRequest",
             "#/components/schemas/IdentifierResolveResponse",
             Vec::new(),
@@ -5133,10 +5211,10 @@ fn identifier_paths() -> Map {
                 "account_id",
                 "Canonical target account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace` for the claim receipt.",
             )];
-            json_post_operation(
+            canonical_account_operations::json_post(
                 "Identifiers",
                 "Issue an identifier claim receipt.",
-                "Issue an attested identifier claim receipt from encrypted input and a verified RAM-LFE output opening that can be embedded into `ClaimIdentifier`.",
+                "Issue an attested identifier claim receipt from encrypted input and a verified RAM-LFE output opening that can be embedded into `ClaimIdentifier`. The exact-NetworkId authenticated account must equal the resolved account path.",
                 "#/components/schemas/IdentifierResolveRequest",
                 "#/components/schemas/IdentifierResolveResponse",
                 params,
@@ -5165,10 +5243,10 @@ fn ram_lfe_paths() -> Map {
                 "program_id",
                 "RAM-LFE program identifier.",
             )];
-            json_post_operation(
+            canonical_account_operations::json_post(
                 "RamLfe",
                 "Execute a RAM-LFE program.",
-                "Execute a RAM-LFE program from a BFV ciphertext envelope and return the encrypted output ciphertext plus stateless execution receipt.",
+                "Execute a RAM-LFE program from a BFV ciphertext envelope and return the encrypted output ciphertext plus stateless execution receipt. Exact-NetworkId canonical account authentication is required before cryptographic work.",
                 "#/components/schemas/RamLfeExecuteRequest",
                 "#/components/schemas/RamLfeExecuteResponse",
                 params,
@@ -5177,10 +5255,10 @@ fn ram_lfe_paths() -> Map {
     );
     paths.insert(
         "/v1/ram-lfe/receipts/verify".to_owned(),
-        Value::Object(json_post_operation(
+        Value::Object(canonical_account_operations::json_post(
             "RamLfe",
             "Verify a RAM-LFE receipt.",
-            "Validate a stateless RAM-LFE execution receipt against the published on-chain program policy and optionally compare a caller-supplied output blob to the receipt output hash.",
+            "Validate a stateless RAM-LFE execution receipt against the published on-chain program policy and optionally compare a caller-supplied output blob to the receipt output hash. Exact-NetworkId canonical account authentication is required before proof verification.",
             "#/components/schemas/RamLfeReceiptVerifyRequest",
             "#/components/schemas/RamLfeReceiptVerifyResponse",
             Vec::new(),
@@ -5203,10 +5281,10 @@ fn domain_paths() -> Map {
     );
     paths.insert(
         "/v1/domains/query".to_owned(),
-        Value::Object(json_post_operation(
+        Value::Object(canonical_account_operations::json_post(
             "Domains",
             "Query domains.",
-            "Query domains with JSON envelope.",
+            "Authenticate the exact method, path, and JSON envelope with a fresh NetworkId-bound account signature or multisig witness before decoding, then query domains.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/DomainQueryResponse",
             Vec::new(),
@@ -5242,10 +5320,10 @@ fn asset_paths() -> Map {
     );
     paths.insert(
         "/v1/assets/definitions/query".to_owned(),
-        Value::Object(json_post_operation(
+        Value::Object(canonical_account_operations::json_post(
             "Assets",
             "Query asset definitions.",
-            "Query asset definitions with a JSON envelope and full asset-definition objects in the response, including `alias_binding` lease metadata when present.",
+            "Authenticate the exact method, path, and JSON envelope with a fresh NetworkId-bound account signature or multisig witness before decoding, then return full asset-definition objects including `alias_binding` lease metadata when present.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/AssetDefinitionQueryResponse",
             Vec::new(),
@@ -5270,10 +5348,10 @@ fn asset_paths() -> Map {
     );
     paths.insert(
         "/v1/assets/{definition_id}/holders/query".to_owned(),
-        Value::Object(json_post_operation(
+        Value::Object(canonical_account_operations::json_post(
             "Assets",
             "Query asset holders.",
-            "Query holders for an asset definition. `account_id` filters accept canonical I105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form. Aggregate mode supports exact PAYNET-style PKR directory queries such as grouping by `primary_alias_domain` with `distinct_count(account_id)` and `sum(quantity)`. In production aggregate mode Torii serves published DA projection shards from local cache/storage (`query_source=projection_da_cache`) and hydrates missing shards from approved SoraFS providers on demand (`query_source=projection_da_hydrated`). Incomplete projections return `projection_archive_unavailable` instead of scanning live holders. `live_debug` requires an explicit debug opt-in.",
+            "Authenticate the exact method, substituted asset-definition path, and JSON envelope with a fresh NetworkId-bound account signature or multisig witness before decoding. `account_id` filters accept canonical I105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form. Production aggregate mode uses published DA projection shards; incomplete projections fail closed instead of scanning live holders.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/AssetHolderQueryResponse",
             vec![string_path_param(
@@ -5312,10 +5390,10 @@ fn nft_paths() -> Map {
     );
     paths.insert(
         "/v1/nfts/query".to_owned(),
-        Value::Object(json_post_operation(
+        Value::Object(canonical_account_operations::json_post(
             "NFTs",
             "Query NFTs.",
-            "Query NFTs with JSON envelope.",
+            "Authenticate the exact method, path, and JSON envelope with a fresh NetworkId-bound account signature or multisig witness before decoding, then query NFTs.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/NftQueryResponse",
             Vec::new(),
@@ -5338,10 +5416,10 @@ fn rwa_paths() -> Map {
     );
     paths.insert(
         "/v1/rwas/query".to_owned(),
-        Value::Object(json_post_operation(
+        Value::Object(canonical_account_operations::json_post(
             "RWAs",
             "Query RWA lots.",
-            "Query RWA lots with JSON envelope.",
+            "Authenticate the exact method, path, and JSON envelope with a fresh NetworkId-bound account signature or multisig witness before decoding, then query RWA lots.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/RwaQueryResponse",
             Vec::new(),
@@ -5377,7 +5455,7 @@ fn subscription_paths() -> Map {
         "Validate and quote a plan-registration request and return a canonical unsigned transaction payload for local signing. Torii does not accept a private key or submit the draft.",
         "#/components/schemas/SubscriptionPlanDraftRequestV1",
         "#/components/schemas/SubscriptionPlanDraftResponseV1",
-        Vec::new(),
+        canonical_request_auth_header_parameters(),
     ));
     paths.insert("/v1/subscriptions/plans".to_owned(), Value::Object(plans));
 
@@ -5414,7 +5492,7 @@ fn subscription_paths() -> Map {
         "Validate a subscription creation request and return exact authority-bound instructions for local signing. Torii does not sign or queue the draft.",
         "#/components/schemas/SubscriptionCreateDraftRequestV1",
         "#/components/schemas/SubscriptionCreateDraftResponseV1",
-        Vec::new(),
+        canonical_request_auth_header_parameters(),
     ));
     paths.insert("/v1/subscriptions".to_owned(), Value::Object(subs));
 
@@ -5464,7 +5542,10 @@ fn subscription_paths() -> Map {
                 "Validate the exact action request and return authority-bound canonical instructions for local signing. Torii does not sign or queue the draft.",
                 request_schema,
                 "#/components/schemas/SubscriptionActionDraftResponseV1",
-                vec![sub_param.clone()],
+                vec![sub_param.clone()]
+                    .into_iter()
+                    .chain(canonical_request_auth_header_parameters())
+                    .collect(),
             )),
         );
     }
@@ -5476,7 +5557,10 @@ fn subscription_paths() -> Map {
             "Validate and quote a usage-trigger request and return a canonical unsigned transaction payload for local signing. Torii does not accept a private key or submit the draft.",
             "#/components/schemas/SubscriptionUsageDraftRequestV1",
             "#/components/schemas/SubscriptionUsageDraftResponseV1",
-            vec![sub_param],
+            vec![sub_param]
+                .into_iter()
+                .chain(canonical_request_auth_header_parameters())
+                .collect(),
         )),
     );
     paths
@@ -5497,52 +5581,7 @@ fn parameter_paths() -> Map {
     paths
 }
 
-fn space_directory_paths() -> Map {
-    let mut paths = Map::new();
-    paths.insert(
-        "/v1/space-directory/manifests".to_owned(),
-        Value::Object(json_post_operation(
-            "SpaceDirectory",
-            "Build a manifest-publication transaction draft.",
-            "Validate and quote a manifest publication and return a canonical unsigned transaction payload for local signing. Torii does not accept a private key or submit the draft.",
-            "#/components/schemas/SpaceDirectoryManifestPublishDraftRequestV1",
-            "#/components/schemas/AppApiTransactionDraftV1",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/space-directory/manifests/revoke".to_owned(),
-        Value::Object(json_post_operation(
-            "SpaceDirectory",
-            "Build a manifest-revocation transaction draft.",
-            "Validate and quote a manifest revocation and return a canonical unsigned transaction payload for local signing. Torii does not accept a private key or submit the draft.",
-            "#/components/schemas/SpaceDirectoryManifestRevokeDraftRequestV1",
-            "#/components/schemas/AppApiTransactionDraftV1",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/space-directory/uaids/{uaid}".to_owned(),
-        Value::Object(json_get_operation(
-            "SpaceDirectory",
-            "Fetch space directory bindings.",
-            "Fetch bindings for a user account identifier.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("uaid", "User account identifier.")],
-        )),
-    );
-    paths.insert(
-        "/v1/space-directory/uaids/{uaid}/manifests".to_owned(),
-        Value::Object(json_get_operation(
-            "SpaceDirectory",
-            "Fetch space directory manifests.",
-            "Fetch manifests registered for a user account identifier.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("uaid", "User account identifier.")],
-        )),
-    );
-    paths
-}
+include!("openapi/space_directory_paths.rs");
 
 fn explorer_paths() -> Map {
     let mut paths = Map::new();
@@ -5796,7 +5835,7 @@ fn explorer_paths() -> Map {
         Value::Object(json_get_operation(
             "Explorer",
             "Fetch asset definition econometrics (explorer).",
-            "Fetch econometrics aggregates (velocity/issuance windows) for an asset definition.",
+            "Fetch econometrics aggregates (velocity/issuance windows) for an asset definition. The fixed 30-day scan retains at most 65,536 distinct transfer-participant identities across all windows; larger histories fail closed with `explorer_econometrics_participant_limit_exceeded`.",
             "#/components/schemas/JsonValue",
             vec![string_path_param(
                 "definition_id",
@@ -5809,7 +5848,7 @@ fn explorer_paths() -> Map {
         Value::Object(json_get_operation(
             "Explorer",
             "Fetch asset definition snapshot (explorer).",
-            "Fetch econometrics snapshot (holders + distribution metrics) for an asset definition.",
+            "Fetch an exact econometrics snapshot (holders + distribution metrics) for an asset definition when no more than the first-release ceiling of 65,536 holders is examined; larger definitions fail closed with `explorer_snapshot_holder_limit_exceeded`.",
             "#/components/schemas/JsonValue",
             vec![string_path_param(
                 "definition_id",
@@ -6343,31 +6382,6 @@ fn gateway_compliance_post_operation(
         }
     }
     methods
-}
-
-fn operator_signature_header_parameters() -> Vec<Value> {
-    vec![
-        string_header_param(
-            "X-Iroha-Operator-Public-Key",
-            "Iroha multihash public key of the canonical request signer.",
-            true,
-        ),
-        string_header_param(
-            "X-Iroha-Operator-Timestamp-Ms",
-            "Unix timestamp in milliseconds bound into the operator request signature.",
-            true,
-        ),
-        string_header_param(
-            "X-Iroha-Operator-Nonce",
-            "Fresh caller-chosen nonce bound into the operator request signature.",
-            true,
-        ),
-        string_header_param(
-            "X-Iroha-Operator-Signature",
-            "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce.",
-            true,
-        ),
-    ]
 }
 
 fn pop_authorization_header_parameters() -> Vec<Value> {
@@ -8101,9 +8115,9 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "List aliases.",
-            "List SoraFS aliases.",
+            "List SoraFS aliases from the legacy committed-registry projection. A fresh canonical account signature is required before the node materializes and attests the inventory.",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            canonical_request_auth_header_parameters(),
         )),
     );
     paths.insert(
@@ -8111,7 +8125,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "List replication orders.",
-            "Return a fresh committed registry projection with exact canonical order bytes, the decoded V1 order, assignment revision, provider-owner signer-policy identity/revision/digest chain, and the finalized block anchor carried by every completion. Filters are canonical and case-sensitive; unknown, duplicate, empty, aliased, or out-of-range selectors are rejected.",
+            "Return a fresh committed registry projection with exact canonical order bytes, the decoded V1 order, assignment revision, provider-owner signer-policy identity/revision/digest chain, and the finalized block anchor carried by every completion. A fresh canonical account signature is verified before this legacy full-registry projection is materialized. Filters are canonical and case-sensitive; unknown, duplicate, empty, aliased, or out-of-range selectors are rejected.",
             "#/components/schemas/SorafsReplicationListResponseV1",
             vec![
                 bounded_integer_query_param(
@@ -8137,7 +8151,10 @@ fn sorafs_paths() -> Map {
                     "manifest_digest",
                     "Optional exact non-zero lowercase manifest digest.",
                 ),
-            ],
+            ]
+            .into_iter()
+            .chain(canonical_request_auth_header_parameters())
+            .collect(),
         )),
     );
     paths.insert(
@@ -8209,31 +8226,28 @@ fn sorafs_paths() -> Map {
             Vec::new(),
         )),
     );
+    let mut storage_token_parameters = operator_signature_header_parameters();
+    storage_token_parameters.extend([
+        string_header_param(
+            "X-SoraFS-Client",
+            "Required visible-ASCII diagnostic client label; not an authentication or quota identity.",
+            true,
+        ),
+        string_header_param(
+            "X-SoraFS-Nonce",
+            "Required visible-ASCII correlation nonce echoed in the response.",
+            true,
+        ),
+    ]);
     paths.insert(
         "/v1/sorafs/storage/token".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Request storage token.",
-            "Request a storage access token. Exactly one configured Torii API token is required even when listener-wide API-token enforcement is disabled; the client label is diagnostic and does not define the issuance quota.",
+            "Request a storage access token. A fresh exact-network operator signature authenticates the request and defines the issuance quota subject; the client label is diagnostic only.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            vec![
-                string_header_param(
-                    "X-API-Token",
-                    "Required Torii API credential used as the stream-token issuance quota subject.",
-                    true,
-                ),
-                string_header_param(
-                    "X-SoraFS-Client",
-                    "Required visible-ASCII diagnostic client label; not an authentication or quota identity.",
-                    true,
-                ),
-                string_header_param(
-                    "X-SoraFS-Nonce",
-                    "Required visible-ASCII correlation nonce echoed in the response.",
-                    true,
-                ),
-            ],
+            storage_token_parameters,
         )),
     );
     paths.insert(
@@ -8250,14 +8264,45 @@ fn sorafs_paths() -> Map {
             );
             operation.insert(
                 "description".into(),
-                Value::String("Fetch CAR bytes for a manifest.".to_owned()),
+                Value::String(
+                    "Fetch a bounded CAR range for a manifest after validating the request-bound SoraFS stream token, nonce, and range capability."
+                        .to_owned(),
+                ),
             );
+            let mut parameters = vec![string_path_param(
+                "manifest_id",
+                "Manifest identifier.",
+            )];
+            parameters.extend([
+                string_header_param(
+                    "X-SoraFS-Stream-Token",
+                    "Required request-bound stream capability issued by the storage-token endpoint.",
+                    true,
+                ),
+                string_header_param(
+                    "X-SoraFS-Nonce",
+                    "Required visible-ASCII nonce bound into the stream token request context.",
+                    true,
+                ),
+                string_header_param(
+                    "Range",
+                    "Required bounded byte range covered by the stream capability.",
+                    true,
+                ),
+                string_header_param(
+                    "X-SoraFS-Chunker",
+                    "Required chunk profile handle for the stored manifest.",
+                    true,
+                ),
+                string_header_param(
+                    "Sora-Dag-Scope",
+                    "Required trustless range scope; must equal `block`.",
+                    true,
+                ),
+            ]);
             operation.insert(
                 "parameters".into(),
-                Value::Array(vec![string_path_param(
-                    "manifest_id",
-                    "Manifest identifier.",
-                )]),
+                Value::Array(parameters),
             );
             let mut responses = Map::new();
             responses.insert("200".to_owned(), binary_response("CAR payload."));
@@ -8281,13 +8326,26 @@ fn sorafs_paths() -> Map {
             );
             operation.insert(
                 "description".into(),
-                Value::String("Fetch a storage chunk by digest.".to_owned()),
+                Value::String(
+                    "Fetch one stored chunk after validating the request-bound SoraFS stream token and nonce."
+                        .to_owned(),
+                ),
             );
             operation.insert(
                 "parameters".into(),
                 Value::Array(vec![
                     string_path_param("manifest_id", "Manifest identifier."),
                     string_path_param("chunk_digest", "Chunk digest (hex)."),
+                    string_header_param(
+                        "X-SoraFS-Stream-Token",
+                        "Required request-bound stream capability issued by the storage-token endpoint.",
+                        true,
+                    ),
+                    string_header_param(
+                        "X-SoraFS-Nonce",
+                        "Required visible-ASCII nonce bound into the stream token request context.",
+                        true,
+                    ),
                 ]),
             );
             let mut responses = Map::new();
@@ -8432,10 +8490,10 @@ fn soracloud_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
         "/v1/soracloud/status".to_owned(),
-        Value::Object(json_get_operation(
+        Value::Object(canonical_account_operations::json_get(
             "Soracloud",
             "Fetch Soracloud status.",
-            "Fetch Soracloud service health, resource pressure, runtime manager, control-plane, and routing status. The routing section reports `configured_lane_count`/legacy `lane_count`, `declared_lane_count`, active lane ids/count, and autoscale-capacity lane ids/count separately.",
+            "Fetch the private Soracloud service health, resource pressure, runtime manager, control-plane, and routing status with exact-network canonical account authentication. The routing section reports `configured_lane_count`/legacy `lane_count`, `declared_lane_count`, active lane ids/count, and autoscale-capacity lane ids/count separately. Responses are private and non-storable.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -8475,10 +8533,10 @@ fn soracloud_paths() -> Map {
     );
     paths.insert(
         "/v1/soracloud/model/upload/private/receipts".to_owned(),
-        Value::Object(json_get_operation(
+        Value::Object(canonical_account_operations::json_get(
             "Soracloud",
             "List private uploaded-model receipts.",
-            "List committed private uploaded-model execution receipts. `count_mode=bounded` is the default; `count_mode=exact` opts into an exact total.",
+            "List committed private uploaded-model execution receipts with exact-network canonical account authentication. `count_mode=bounded` is the default; `count_mode=exact` opts into an exact total. Responses are private and non-storable.",
             "#/components/schemas/PrivateUploadedModelReceiptListResponse",
             vec![
                 string_query_param("receipt_id", "Optional receipt hash filter."),
@@ -8687,10 +8745,10 @@ fn soranet_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraNet",
             "Submit a privacy event.",
-            "Submit one bounded SoraNet privacy event. Torii authenticates the configured collector source namespace and optional dedicated token before decoding the request body; disabled or empty-allowlist deployments fail closed.",
+            "Submit one bounded SoraNet privacy event. Torii verifies an exact NetworkId-bound operator signature before decoding, then enforces the configured collector source namespace and per-operator rate budget; disabled or empty-allowlist deployments fail closed.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            operator_signature_header_parameters(),
         )),
     );
     paths.insert(
@@ -8698,10 +8756,10 @@ fn soranet_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraNet",
             "Submit a privacy share payload.",
-            "Submit one bounded SoraNet privacy collector share. Torii authenticates the configured collector source namespace and optional dedicated token before decoding the request body; disabled or empty-allowlist deployments fail closed.",
+            "Submit one bounded SoraNet privacy collector share. Torii verifies an exact NetworkId-bound operator signature before decoding, then enforces the configured collector source namespace and per-operator rate budget; disabled or empty-allowlist deployments fail closed.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            operator_signature_header_parameters(),
         )),
     );
     paths
@@ -8786,48 +8844,7 @@ fn push_paths() -> Map {
     paths
 }
 
-fn webhook_paths() -> Map {
-    let mut paths = Map::new();
-    paths.insert(
-        "/v1/webhooks".to_owned(),
-        Value::Object({
-            let get_op = json_get_operation(
-                "Webhooks",
-                "List webhooks.",
-                "List registered webhooks.",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            );
-            let post_op = json_post_operation(
-                "Webhooks",
-                "Create a webhook.",
-                "Create a webhook subscription.",
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            );
-            let mut methods = Map::new();
-            if let Some(get_value) = get_op.get("get") {
-                methods.insert("get".to_owned(), get_value.clone());
-            }
-            if let Some(post_value) = post_op.get("post") {
-                methods.insert("post".to_owned(), post_value.clone());
-            }
-            methods
-        }),
-    );
-    paths.insert(
-        "/v1/webhooks/{id}".to_owned(),
-        Value::Object(json_delete_operation(
-            "Webhooks",
-            "Delete a webhook.",
-            "Delete a webhook subscription.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("id", "Webhook identifier.")],
-        )),
-    );
-    paths
-}
+include!("openapi/application_webhook_paths.rs");
 
 fn kaigi_paths() -> Map {
     let mut paths = Map::new();
@@ -8912,257 +8929,7 @@ fn nexus_lane_lifecycle_operation() -> Map {
     methods
 }
 
-fn sumeragi_paths() -> Map {
-    let mut paths = Map::new();
-    paths.insert(
-        "/v1/sumeragi/evidence/count".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Count evidence entries.",
-            "Return the total number of evidence entries.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/evidence".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "List evidence entries.",
-            "List evidence entries recorded by the node.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/status".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch authoritative Sumeragi v2 status.",
-            "Return the exact reducer-owned Sumeragi v2 status snapshot.",
-            "#/components/schemas/SumeragiStatusResponse",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/diagnostics".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch Sumeragi operator diagnostics.",
-            "Return non-authoritative pipeline, queue, NPoS election, and Nexus lane diagnostics. Reducer phase, height, view, leader, and certificates are available only from the status endpoint.",
-            "#/components/schemas/SumeragiDiagnosticsResponse",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/status/sse".to_owned(),
-        Value::Object(event_stream_get_operation(
-            "Sumeragi",
-            "Stream Sumeragi status.",
-            "Stream Sumeragi status via SSE.",
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/leader".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch current leader.",
-            "Return the current Sumeragi leader snapshot.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/bls-keys".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch consensus BLS keys.",
-            "Return the consensus BLS key set.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/qc".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch QC snapshots.",
-            "Return quorum certificate snapshots.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/checkpoints".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch checkpoint snapshots.",
-            "Return checkpoint snapshots.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/consensus-keys".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch consensus keys.",
-            "Return consensus key material snapshot.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/commit-certificates".to_owned(),
-        Value::Object(sumeragi_commit_qcs_operation()),
-    );
-    paths.insert(
-        "/v1/sumeragi/pacemaker".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch pacemaker status.",
-            "Return pacemaker status snapshot.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/phases".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch phase status.",
-            "Return consensus phase status snapshot.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/bridge/finality/{height}".to_owned(),
-        Value::Object(bridge_finality_operation()),
-    );
-    paths.insert(
-        "/v1/bridge/finality/attestation/{height}".to_owned(),
-        Value::Object(bridge_finality_attestation_operation()),
-    );
-    paths.insert(
-        "/v1/bridge/finality/bundle/{height}".to_owned(),
-        Value::Object(bridge_finality_bundle_operation()),
-    );
-    paths.insert(
-        "/v1/sccp/proofs/message/{message_id}".to_owned(),
-        Value::Object(sccp_message_bundle_operation()),
-    );
-    paths.insert(
-        "/v1/sccp/capabilities".to_owned(),
-        Value::Object(sccp_capabilities_operation()),
-    );
-    paths.insert(
-        "/v1/sccp/registry".to_owned(),
-        Value::Object(sccp_registry_operation()),
-    );
-    paths.insert(
-        "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"
-            .to_owned(),
-        Value::Object(sccp_sora_outbound_material_operation()),
-    );
-    paths.insert(
-        "/v1/sccp/proof-requests/{message_id}".to_owned(),
-        Value::Object(sccp_proof_request_operation()),
-    );
-    paths.insert(
-        "/v1/bridge/proofs/submit".to_owned(),
-        Value::Object(sccp_bridge_submit_operation(
-            "bridgeProofSubmit",
-            "Prepare or submit an SCCP destination-proof transaction.",
-            "The JSON-only request carries a canonical destination proof. Preparation provides neither detached-signing value (the optional fields may be absent or null); direct submission must provide both `signature_b64` and the byte-identical prepared `transaction_payload_b64`, together with the exact positive `creation_time_ms` returned by preparation.",
-            "#/components/schemas/SccpBridgeProofSubmitRequest",
-        )),
-    );
-    paths.insert(
-        "/v1/bridge/messages".to_owned(),
-        Value::Object(sccp_bridge_submit_operation(
-            "bridgeMessageSubmit",
-            "Prepare or submit a protocol-native SCCP admission transaction.",
-            "The JSON-only request carries one canonical native proof. Preparation provides neither detached-signing value (the optional fields may be absent or null); direct submission must provide both `signature_b64` and the byte-identical prepared `transaction_payload_b64`, together with the exact positive `creation_time_ms` returned by preparation.",
-            "#/components/schemas/SccpBridgeMessageSubmitRequest",
-        )),
-    );
-    paths.insert(
-        "/v1/sccp/messages/recent".to_owned(),
-        Value::Object(sccp_recent_messages_operation()),
-    );
-    paths.insert(
-        "/v1/sumeragi/validator-sets".to_owned(),
-        Value::Object(sumeragi_validator_sets_operation()),
-    );
-    paths.insert(
-        "/v1/sumeragi/validator-sets/{height}".to_owned(),
-        Value::Object(sumeragi_validator_set_by_height_operation()),
-    );
-    paths.insert(
-        "/v1/sumeragi/key-lifecycle".to_owned(),
-        Value::Object(sumeragi_key_lifecycle_operation()),
-    );
-    paths.insert(
-        "/v1/sumeragi/telemetry".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch Sumeragi telemetry.",
-            "Return Sumeragi telemetry snapshot.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/params".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch Sumeragi parameters.",
-            "Return Sumeragi consensus parameters.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/commit-qcs/{block_hash}".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch commit QC.",
-            "Fetch commit QC by block hash.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("block_hash", "Block hash (hex).")],
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/vrf/penalties/{epoch}".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch VRF penalties.",
-            "Fetch VRF penalties for an epoch.",
-            "#/components/schemas/JsonValue",
-            vec![integer_path_param(
-                "epoch",
-                "Epoch identifier.",
-                Some("uint64"),
-            )],
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/vrf/epoch/{epoch}".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch VRF epoch data.",
-            "Fetch VRF epoch data.",
-            "#/components/schemas/JsonValue",
-            vec![integer_path_param(
-                "epoch",
-                "Epoch identifier.",
-                Some("uint64"),
-            )],
-        )),
-    );
-    paths
-}
+include!("openapi/sumeragi_paths.rs");
 
 fn sumeragi_commit_qcs_operation() -> Map {
     let mut operation = Map::new();
@@ -10109,34 +9876,14 @@ fn repo_agreements_get_operation() -> Map {
 }
 
 fn repo_agreements_query_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Settlement".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Query repo agreements with JSON envelope".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String("Structured query endpoint accepting a JSON envelope with pagination, sort, and filter fields.".to_owned()),
-    );
-    operation.insert(
-        "requestBody".into(),
-        Value::Object(json_request_body(
-            "#/components/schemas/RepoAgreementsQueryRequest",
-        )),
-    );
-    operation.insert(
-        "responses".into(),
-        Value::Object(single_json_response(
-            "#/components/schemas/RepoAgreementListResponse",
-        )),
-    );
-    let mut methods = Map::new();
-    methods.insert("post".to_owned(), Value::Object(operation));
-    methods
+    canonical_account_operations::json_post(
+        "Settlement",
+        "Query repo agreements with JSON envelope",
+        "Authenticate the exact method, path, and structured pagination, sort, and filter envelope with a fresh NetworkId-bound account signature or multisig witness before decoding.",
+        "#/components/schemas/RepoAgreementsQueryRequest",
+        "#/components/schemas/RepoAgreementListResponse",
+        Vec::new(),
+    )
 }
 
 fn query_param(name: &str, param_type: &str, description: &str) -> Value {
@@ -10468,20 +10215,6 @@ fn insert_canonical_request_auth_contract(operation: &mut Map) {
     );
 }
 
-fn insert_private_no_store_response_contract(operation: &mut Map) {
-    let Some(Value::Object(responses)) = operation.get_mut("responses") else {
-        return;
-    };
-    for response in responses.values_mut() {
-        if let Value::Object(response) = response {
-            response.insert(
-                "headers".into(),
-                Value::Object(private_no_store_response_headers()),
-            );
-        }
-    }
-}
-
 fn reputation_cache_response_headers() -> Map {
     let mut headers = Map::new();
     headers.insert(
@@ -10512,33 +10245,6 @@ fn reputation_cache_response_headers() -> Map {
         "Vary".into(),
         norito::json!({
             "description": "Canonical authentication headers selecting the private representation.",
-            "required": true,
-            "schema": {
-                "type": "string",
-                "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-            }
-        }),
-    );
-    headers
-}
-
-fn private_no_store_response_headers() -> Map {
-    let mut headers = Map::new();
-    headers.insert(
-        "Cache-Control".into(),
-        norito::json!({
-            "description": "Authenticated responses which must never be retained.",
-            "required": true,
-            "schema": {
-                "type": "string",
-                "const": "private, no-store"
-            }
-        }),
-    );
-    headers.insert(
-        "Vary".into(),
-        norito::json!({
-            "description": "Canonical authentication headers selecting the private response.",
             "required": true,
             "schema": {
                 "type": "string",
@@ -11480,53 +11186,6 @@ fn transaction_submission_retryable_error_response(
     response
 }
 
-fn kaigi_relays_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Kaigi".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("List registered Kaigi relays with their latest health sample.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Returns relay identifiers, domains, bandwidth classes, HPKE fingerprints, \
-             and the freshest health report (if available)."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("kaigiRelaysList".to_owned()),
-    );
-    operation.insert("responses".into(), Value::Object(kaigi_relays_responses()));
-    let mut methods = Map::new();
-    methods.insert("get".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn kaigi_relays_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        dual_format_response(
-            "Relay summaries retrieved.",
-            "#/components/schemas/KaigiRelaySummaryList",
-        ),
-    );
-    responses.insert(
-        "503".to_owned(),
-        dual_format_response(
-            "Telemetry profile does not permit relay telemetry.",
-            "#/components/schemas/ErrorEnvelope",
-        ),
-    );
-    responses
-}
-
 fn nexus_public_lane_validators_operation() -> Map {
     let mut operation = Map::new();
     operation.insert(
@@ -11784,7 +11443,10 @@ fn kaigi_relay_detail_operation() -> Map {
         "description".into(),
         Value::String(
             "Returns relay registration metadata, base64 HPKE key material, \
-             latest health report context, and aggregated per-domain counters."
+             latest health report context, and aggregated per-domain counters. This bounded \
+             operator-only read requires a fresh one-shot signature bound to the exact \
+             NetworkId, GET method, relay path, sorted query, and empty body; redirects and \
+             retries are forbidden."
                 .to_owned(),
         ),
     );
@@ -11794,8 +11456,13 @@ fn kaigi_relay_detail_operation() -> Map {
     );
     operation.insert(
         "parameters".into(),
-        Value::Array(vec![Value::Object(kaigi_relay_id_parameter())]),
+        Value::Array(
+            std::iter::once(Value::Object(kaigi_relay_id_parameter()))
+                .chain(operator_signature_header_parameters())
+                .collect(),
+        ),
     );
+    insert_operator_signature_auth_contract(&mut operation);
     operation.insert(
         "responses".into(),
         Value::Object(kaigi_relay_detail_responses()),
@@ -11813,7 +11480,7 @@ fn kaigi_relay_id_parameter() -> Map {
     param.insert(
         "description".into(),
         Value::String(
-            "Relay account identifier encoded as a canonical I105 account literal or on-chain alias `name@domain.dataspace` / `name@dataspace`."
+            "Relay account identifier encoded as its exact canonical I105 account literal."
                 .to_owned(),
         ),
     );
@@ -11839,59 +11506,10 @@ fn kaigi_relay_detail_responses() -> Map {
             "#/components/schemas/ErrorEnvelope",
         ),
     );
+    insert_operator_signature_error_responses(&mut responses);
     responses.insert(
         "404".to_owned(),
         dual_format_response("Relay not found.", "#/components/schemas/ErrorEnvelope"),
-    );
-    responses.insert(
-        "503".to_owned(),
-        dual_format_response(
-            "Telemetry profile does not permit relay telemetry.",
-            "#/components/schemas/ErrorEnvelope",
-        ),
-    );
-    responses
-}
-
-fn kaigi_relays_health_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Kaigi".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Aggregate Kaigi relay health counters across the network.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Returns totals for healthy/degraded/unavailable relays along with \
-             registrations, failovers, and per-domain counters."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("kaigiRelayHealth".to_owned()),
-    );
-    operation.insert(
-        "responses".into(),
-        Value::Object(kaigi_relays_health_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("get".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn kaigi_relays_health_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        dual_format_response(
-            "Relay health snapshot retrieved.",
-            "#/components/schemas/KaigiRelayHealthSnapshot",
-        ),
     );
     responses.insert(
         "503".to_owned(),
@@ -12953,7 +12571,7 @@ fn retail_recipient_lookup_operation() -> Map {
     responses.insert(
         "502".to_owned(),
         json_response(
-            "Configured bank recipient lookup route returned an invalid response.",
+            "Configured bank recipient lookup route returned an invalid response or exceeded the fixed 64 KiB decoded-body limit.",
             error_schema_reference(),
         ),
     );
@@ -13390,13 +13008,18 @@ fn time_status_operation() -> Map {
     );
     operation.insert(
         "summary".into(),
-        Value::String("Inspect network time diagnostics.".to_owned()),
+        Value::String("Inspect node-local network time diagnostics as an operator.".to_owned()),
     );
     operation.insert(
         "description".into(),
-        Value::String("Provides peer sampling metadata, RTT histogram buckets, and running totals gathered by the network time service.".to_owned()),
+        Value::String("Provides node clock state, peer sampling metadata, RTT histogram buckets, and running totals gathered by the network time service. This operator-only route requires a fresh canonical request signature bound to the exact NetworkId, GET method, path, empty query, and empty body.".to_owned()),
     );
     operation.insert("operationId".into(), Value::String("timeStatus".to_owned()));
+    operation.insert(
+        "parameters".into(),
+        Value::Array(operator_signature_header_parameters()),
+    );
+    insert_operator_signature_auth_contract(&mut operation);
     operation.insert("responses".into(), Value::Object(time_status_responses()));
     let mut methods = Map::new();
     methods.insert("get".to_owned(), Value::Object(operation));
@@ -26293,6 +25916,7 @@ fn insert_openapi_schemas_part_2(schemas: &mut Map) {
             }
         }),
     );
+    account_faucet_schemas::insert(schemas);
     schemas.insert(
         "AccountReadResponse".to_owned(),
         norito::json!({
@@ -28830,6 +28454,7 @@ fn insert_openapi_schemas_part_2(schemas: &mut Map) {
             }
         }),
     );
+    let max_kaigi_relays = crate::routing::KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS as u64;
     schemas.insert(
         "KaigiRelayStatus".to_owned(),
         norito::json!({
@@ -28887,10 +28512,12 @@ fn insert_openapi_schemas_part_2(schemas: &mut Map) {
                 "total": {
                     "type": "integer",
                     "format": "uint64",
+                    "maximum": max_kaigi_relays,
                     "description": "Total number of relay entries returned."
                 },
                 "items": {
                     "type": "array",
+                    "maxItems": max_kaigi_relays,
                     "description": "Relay summaries.",
                     "items": {
                         "$ref": "#/components/schemas/KaigiRelaySummary"
@@ -29041,6 +28668,7 @@ fn insert_openapi_schemas_part_2(schemas: &mut Map) {
                 },
                 "domains": {
                     "type": "array",
+                    "maxItems": max_kaigi_relays,
                     "description": "Per-domain relay metrics.",
                     "items": {
                         "$ref": "#/components/schemas/KaigiRelayDomainMetrics"
@@ -29260,6 +28888,26 @@ fn canonical_request_security_schemes() -> Map {
             "X-Iroha-Witness",
             "Canonical Norito multisig witness used instead of the single-signature quartet.",
         ),
+        (
+            "IrohaOperatorPublicKey",
+            "X-Iroha-Operator-Public-Key",
+            "Canonical Iroha public-key multihash for the operator request signer.",
+        ),
+        (
+            "IrohaOperatorTimestampMs",
+            "X-Iroha-Operator-Timestamp-Ms",
+            "Fresh Unix timestamp bound into the exact-network operator signature.",
+        ),
+        (
+            "IrohaOperatorNonce",
+            "X-Iroha-Operator-Nonce",
+            "Fresh replay nonce bound into the exact-network operator signature.",
+        ),
+        (
+            "IrohaOperatorSignature",
+            "X-Iroha-Operator-Signature",
+            "Base64 signature over the exact NetworkId, request target, empty body, timestamp, and nonce.",
+        ),
     ] {
         schemes.insert(
             name.to_owned(),
@@ -29284,6 +28932,8 @@ fn canonical_request_security_schemes() -> Map {
     );
     schemes
 }
+
+include!("openapi/operator_auth.rs");
 
 fn components_section() -> Value {
     let mut components = Map::new();
@@ -30301,6 +29951,8 @@ mod tests {
             assert!(component_schemas(&document).contains_key(required));
         }
     }
+
+    include!("openapi/tests/account_faucet.rs");
 
     #[test]
     fn bootle_lantern_issuance_openapi_is_canonical_and_exact() {
@@ -37181,6 +36833,8 @@ mod tests {
         );
     }
 
+    include!("openapi/tests/sumeragi_operator_reads.rs");
+
     #[test]
     fn pipeline_status_documents_not_found_response() {
         let doc = generate_spec();
@@ -37349,7 +37003,7 @@ mod tests {
             .and_then(Value::as_object)
             .expect("paths section");
 
-        for path in [uri::TRANSACTION, uri::TRANSACTION_ENTRYPOINT, uri::QUERY] {
+        for path in [uri::TRANSACTION, uri::TRANSACTION_ENTRYPOINT] {
             let path_item = paths
                 .get(path)
                 .and_then(Value::as_object)
@@ -37391,6 +37045,33 @@ mod tests {
                 assert_eq!(schema_ref, Some("#/components/schemas/ErrorEnvelope"));
             }
         }
+
+        let query_post = paths
+            .get(uri::QUERY)
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("signed-query post operation");
+        let query_request_content = query_post
+            .get("requestBody")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("content"))
+            .and_then(Value::as_object)
+            .expect("signed-query request content");
+        assert_eq!(
+            query_request_content
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["application/x-norito"],
+            "the bounded signed-query extractor rejects JSON before body collection"
+        );
+        assert!(
+            query_post
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|description| description.contains("JSON request bodies are rejected"))
+        );
     }
 
     #[test]
@@ -37533,36 +37214,6 @@ mod tests {
                     .collect::<Vec<_>>(),
                 expected
             );
-        }
-    }
-
-    #[test]
-    fn kaigi_typed_routes_document_dual_responses() {
-        let doc = generate_spec();
-        let paths = doc
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("paths section");
-
-        for path in [
-            "/v1/kaigi/relays",
-            "/v1/kaigi/relays/{relay_id}",
-            "/v1/kaigi/relays/health",
-        ] {
-            let content = paths
-                .get(path)
-                .and_then(Value::as_object)
-                .and_then(|path_item| path_item.get("get"))
-                .and_then(Value::as_object)
-                .and_then(|operation| operation.get("responses"))
-                .and_then(Value::as_object)
-                .and_then(|responses| responses.get("200"))
-                .and_then(Value::as_object)
-                .and_then(|response| response.get("content"))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("{path} 200 response content"));
-            assert!(content.contains_key("application/json"));
-            assert!(content.contains_key("application/x-norito"));
         }
     }
 
@@ -38510,6 +38161,12 @@ mod tests {
     }
 
     include!("openapi/tests/finality_app_contracts.rs");
+
+    include!("openapi/tests/application_api_auth.rs");
+    include!("openapi/tests/operator_core_auth.rs");
+    include!("openapi/tests/query_memory.rs");
+    include!("openapi/tests/kaigi_operator_auth.rs");
+    include!("openapi/tests/soranet_privacy_auth.rs");
 
     include!("openapi/tests/iso20022_auth.rs");
 

@@ -46,18 +46,21 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, NoReturn, Optional, Sequence
 
 try:
     from scripts import build_privacy_v1_boi_handoff as boi_handoff
+    from scripts.operator_http_headers import load_operator_context_from_file
     from scripts import taira_rollout_admission as rollout_admission
     from scripts import taira_constants
 except ModuleNotFoundError as error:
     if error.name != "scripts":
         raise
     import build_privacy_v1_boi_handoff as boi_handoff
+    from operator_http_headers import load_operator_context_from_file
     import taira_rollout_admission as rollout_admission
     import taira_constants
 
@@ -2812,6 +2815,55 @@ def http_ok(url: str, timeout: float = 2.0) -> None:
         fail(f"health endpoint response exceeds {MAX_HTTP_BYTES} bytes: {url}")
 
 
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Prevent replay of a fresh operator signature at a redirected target."""
+
+    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+        del request, file_pointer, code, message, headers, new_url
+        return None
+
+
+def build_operator_http_getter(network_id: str, private_key_file: Path) -> HttpGetter:
+    """Build a token-free, no-redirect getter with a fresh signature per request."""
+
+    context = load_operator_context_from_file(network_id, private_key_file)
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _RejectRedirects(),
+    )
+
+    def operator_http_json(url: str, timeout: float = 2.0) -> dict[str, Any]:
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.path != "/v1/sumeragi/status":
+            return http_json(url, timeout)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+        ):
+            fail("operator endpoint must be an absolute credential-free HTTP(S) URL")
+        target = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+        headers = context.headers("GET", target, b"")
+        headers.update(
+            {"Accept": "application/json", "User-Agent": "taira-v21-reset/1"}
+        )
+        request = urllib.request.Request(url, method="GET", headers=headers)
+        try:
+            with opener.open(request, timeout=timeout) as response:
+                if response.status != 200:
+                    fail(f"operator endpoint returned HTTP {response.status}: {url}")
+                body = response.read(MAX_HTTP_BYTES + 1)
+        except (OSError, urllib.error.URLError, TimeoutError) as error:
+            raise DeploymentError(f"operator endpoint is unavailable: {url}") from error
+        if len(body) > MAX_HTTP_BYTES:
+            fail(f"operator endpoint response exceeds {MAX_HTTP_BYTES} bytes: {url}")
+        return parse_json_bytes(body, f"operator response from {url}")
+
+    return operator_http_json
+
+
 def require_uint(value: object, label: str, *, positive: bool = False) -> int:
     """Require one non-boolean unsigned JSON integer."""
 
@@ -4060,6 +4112,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_MAXIMUM_FSYNC_LATENCY_MS,
     )
+    parser.add_argument("--operator-network-id")
+    parser.add_argument("--operator-private-key-file", type=Path)
     parser.add_argument(
         "--allow-absent-old-child",
         action="store_true",
@@ -4125,6 +4179,15 @@ def validate_arguments(args: argparse.Namespace) -> None:
         fail(f"--minimum-free-bytes may not be below {DEFAULT_MINIMUM_FREE_BYTES}")
     if not 1 <= args.maximum_fsync_latency_ms <= DEFAULT_MAXIMUM_FSYNC_LATENCY_MS:
         fail("--maximum-fsync-latency-ms must be positive and may not exceed 250")
+    if args.apply:
+        operator_network_id = getattr(args, "operator_network_id", None)
+        operator_private_key_file = getattr(args, "operator_private_key_file", None)
+        if not operator_network_id or operator_private_key_file is None:
+            fail(
+                "--apply requires --operator-network-id and --operator-private-key-file"
+            )
+        if not operator_private_key_file.is_absolute():
+            fail("--operator-private-key-file must be an absolute runtime-only path")
 
 
 def require_sealed_external_tool_identity() -> Optional[tuple[int, int]]:
@@ -4228,6 +4291,10 @@ def _execute_after_provisioned_authority_contracts(
         require_admission_archive_unchanged(locked_admission)
         require_admission_bound_inputs_unchanged(bundle, sources, locked_admission)
         old_cohort = capture_old_cohort(system_ops, **capture_options)
+        operator_getter = build_operator_http_getter(
+            args.operator_network_id,
+            args.operator_private_key_file,
+        )
         require_admission_bound_inputs_unchanged(bundle, sources, locked_admission)
         require_admission_archive_unchanged(locked_admission)
         with consume_admission_receipt(locked_admission) as consumption:
@@ -4238,6 +4305,7 @@ def _execute_after_provisioned_authority_contracts(
                 old_cohort,
                 rollout_starter=consumption.mark_rollout_started,
                 ops=system_ops,
+                getter=operator_getter,
             )
         report.update(
             {

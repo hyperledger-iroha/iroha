@@ -16069,68 +16069,8 @@ mod kagemusha_bridge_tests {
         checkpoint
     }
 
-    fn fixture_hex(bytes: &[u8]) -> String {
-        use std::fmt::Write as _;
-
-        let mut encoded = String::with_capacity(bytes.len() * 2 + bytes.len() / 32 + 1);
-        for chunk in bytes.chunks(32) {
-            for byte in chunk {
-                write!(encoded, "{byte:02x}").expect("write fixture hex");
-            }
-            encoded.push('\n');
-        }
-        encoded
-    }
-
-    #[test]
-    #[ignore = "fixture regeneration is an explicit maintainer action"]
-    fn regenerate_recipient_receive_offer_v2_fixtures() {
-        let offer = realistic_recipient_receive_offer_v2(1);
-        let fresh_amount_request = recipient_offer_fresh_amount_request_v2(&offer);
-        let publisher_key_pair = receiver_offer_publisher_key_pair_v1();
-        let publisher_public_key = publisher_key_pair.public_key().to_bytes().1.to_vec();
-        let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures");
-        let fixtures = [
-            (
-                "offline_recipient_receive_offer_v2.hex",
-                norito::to_bytes(&offer).expect("encode receiver offer"),
-            ),
-            (
-                "offline_recipient_payment_request_v2.hex",
-                norito::to_bytes(&offer.request).expect("encode recipient request"),
-            ),
-            (
-                "offline_recipient_payment_request_v2_fresh_amount.hex",
-                norito::to_bytes(&fresh_amount_request)
-                    .expect("encode fresh-amount recipient request"),
-            ),
-            (
-                "offline_recipient_registration_lineage_v2.hex",
-                norito::to_bytes(&offer.lineage).expect("encode recipient lineage"),
-            ),
-            (
-                "offline_recipient_checkpoint_envelope.hex",
-                offer
-                    .publisher_checkpoint_envelope
-                    .clone()
-                    .expect("receiver offer publisher envelope"),
-            ),
-            (
-                "offline_recipient_checkpoint_publisher_public_key.hex",
-                publisher_public_key,
-            ),
-            (
-                "offline_recipient_trusted_checkpoint_v2.hex",
-                recipient_offer_trusted_checkpoint_v2(&offer).to_vec(),
-            ),
-        ];
-        for (name, bytes) in fixtures {
-            std::fs::write(fixture_dir.join(name), fixture_hex(&bytes))
-                .expect("write receiver-offer fixture");
-        }
-    }
+    #[path = "tests/recipient_fixture_owner.rs"]
+    mod recipient_fixture_owner;
 
     #[test]
     fn receiver_offer_size_budget_covers_one_realistic_finality_proof() {

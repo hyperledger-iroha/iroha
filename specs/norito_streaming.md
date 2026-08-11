@@ -124,6 +124,17 @@ recorded or restored: DATAGRAM-enabled state requires a nonzero DATAGRAM size,
 while stream fallback state must carry zero DATAGRAM size. Snapshots are written to
 `kura/store_dir/streaming_sessions/sessions.norito` and are encrypted with
 ChaCha20-Poly1305 using a key derived from the node's Ed25519 identity.
+Snapshot format v1 is a bounded recovery protocol: one file may contain at most
+4,096 viewer-plus-publisher entries, at most 16 MiB of canonical plaintext, and
+at most 16 MiB plus the 28-byte ChaCha20-Poly1305 nonce/tag envelope on disk.
+The decoder applies a 4,096-element per-sequence ceiling and a 64 MiB cumulative
+allocation budget before reconstructing owned values. GCKs remain exactly 32
+bytes, while local and remote ML-KEM public-key fields may not exceed the
+ML-KEM-1024 public-key width. Recovery opens only direct regular files without
+following links, reads at most the ciphertext ceiling plus one byte, and handles
+the temporary and main candidates sequentially; an unusable temporary candidate
+is dropped before the main file is read. Persistence enforces the same entry,
+field, plaintext, and ciphertext ceilings before replacing the durable file.
 - Deterministic session lifecycle — `StreamingSession::snapshot_state` persists `{session_id,
   key_counter, sts_root}` together with the negotiated suite, optional Kyber fingerprints, and the
   cadence tracker so restarts can resume without replaying earlier `KeyUpdate` frames. Restores

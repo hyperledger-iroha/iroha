@@ -13,6 +13,10 @@ final class ConnectClientTests: XCTestCase {
         )
     }
 
+    private func credential(_ byte: UInt8) -> String {
+        connectBase64URL(Data(repeating: byte, count: 32))
+    }
+
     func testStartResumesOnlyOnce() async {
         let stub = StubWebSocketTask()
         let client = ConnectClient(url: URL(string: "wss://example.test")!,
@@ -133,15 +137,16 @@ final class ConnectClientTests: XCTestCase {
 
     func testBuildsConnectWebSocketURL() throws {
         let base = URL(string: "https://torii.example/api")!
+        let sid = credential(0x41)
         let url = try ConnectClient.makeWebSocketURL(baseURL: base,
-                                                     sid: "session-123",
+                                                     sid: sid,
                                                      role: .app)
         let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
         XCTAssertEqual(components.scheme, "wss")
         XCTAssertEqual(components.host, "torii.example")
         XCTAssertEqual(components.path, "/api/v1/connect/ws")
         let items = try XCTUnwrap(components.queryItems)
-        XCTAssertTrue(items.contains(where: { $0.name == "sid" && $0.value == "session-123" }))
+        XCTAssertTrue(items.contains(where: { $0.name == "sid" && $0.value == sid }))
         XCTAssertTrue(items.contains(where: { $0.name == "role" && $0.value == "app" }))
         XCTAssertFalse(items.contains(where: { $0.name == "token" }))
     }
@@ -158,12 +163,33 @@ final class ConnectClientTests: XCTestCase {
 
     func testBuildsConnectWebSocketRequestAddsAuthorization() throws {
         let base = URL(string: "https://torii.example")!
+        let sid = credential(0x42)
+        let token = credential(0x52)
         let request = try ConnectClient.makeWebSocketRequest(baseURL: base,
-                                                             sid: "session-abc",
+                                                             sid: sid,
                                                              role: .wallet,
-                                                             token: "token-xyz")
+                                                             token: token)
         let auth = request.value(forHTTPHeaderField: "Authorization")
-        XCTAssertEqual(auth, "Bearer token-xyz")
+        XCTAssertEqual(auth, "Bearer \(token)")
+        XCTAssertFalse(try XCTUnwrap(request.url?.absoluteString).contains(token))
+    }
+
+    func testBuildsConnectWebSocketRequestRejectsNonCanonicalCredentials() {
+        let base = URL(string: "https://torii.example")!
+        let sid = credential(0x43)
+        let token = credential(0x53)
+
+        XCTAssertThrowsError(try ConnectClient.makeWebSocketURL(baseURL: base,
+                                                                sid: sid + "=",
+                                                                role: .app))
+        XCTAssertThrowsError(try ConnectClient.makeWebSocketRequest(baseURL: base,
+                                                                    sid: connectBase64URL(Data(repeating: 0x43, count: 31)),
+                                                                    role: .app,
+                                                                    token: token))
+        XCTAssertThrowsError(try ConnectClient.makeWebSocketRequest(baseURL: base,
+                                                                    sid: sid,
+                                                                    role: .app,
+                                                                    token: token + "="))
     }
 
     func testBuildsConnectWebSocketRequestRejectsEmptyToken() {
@@ -179,9 +205,9 @@ final class ConnectClientTests: XCTestCase {
 
     func testBuildsConnectWebSocketRequestRejectsInsecureTransport() {
         XCTAssertThrowsError(try ConnectClient.makeWebSocketRequest(baseURL: URL(string: "http://localhost")!,
-                                                                    sid: "session-123",
+                                                                    sid: credential(0x44),
                                                                     role: .app,
-                                                                    token: "token-xyz")) { error in
+                                                                    token: credential(0x54))) { error in
             guard case let ToriiClientError.invalidPayload(reason) = error else {
                 return XCTFail("expected invalidPayload, got \(error)")
             }

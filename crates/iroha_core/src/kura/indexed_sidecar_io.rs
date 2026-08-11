@@ -336,7 +336,7 @@ impl Kura {
         let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
         let json_sidecar_path = dir.join(format!("block_{height}.json"));
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let Some(mut sidecar) = self.read_indexed_sidecar(
+        let Some(mut sidecar) = self.read_pipeline_sidecar(
             height,
             PIPELINE_SIDECARS_DATA_FILE,
             PIPELINE_SIDECARS_INDEX_FILE,
@@ -597,7 +597,7 @@ impl Kura {
             if self.prune_recovery_is_required() {
                 return None;
             }
-            self.read_indexed_sidecar(
+            self.read_pipeline_sidecar(
                 height,
                 PIPELINE_SIDECARS_DATA_FILE,
                 PIPELINE_SIDECARS_INDEX_FILE,
@@ -4363,7 +4363,7 @@ impl Kura {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn read_indexed_sidecar<T, F>(
+    fn read_pipeline_sidecar<T, F>(
         &self,
         height: u64,
         data_file: &str,
@@ -4379,7 +4379,17 @@ impl Kura {
         let data_path = dir.join(data_file);
         let index_path = dir.join(index_file);
 
-        Self::read_indexed_sidecar_from_paths(height, &data_path, &index_path, decoder, kind)
+        let entry_byte_limit =
+            u64::try_from(MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES).unwrap_or(u64::MAX);
+        Self::read_indexed_sidecar_from_paths_with_recovery_and_limit(
+            height,
+            &data_path,
+            &index_path,
+            decoder,
+            kind,
+            true,
+            entry_byte_limit,
+        )
     }
 
     #[allow(clippy::too_many_lines)]
@@ -4410,6 +4420,30 @@ impl Kura {
     where
         F: Fn(&[u8]) -> Result<T, norito::Error>,
     {
+        Self::read_indexed_sidecar_from_paths_with_recovery_and_limit(
+            height,
+            data_path,
+            index_path,
+            decoder,
+            kind,
+            recover,
+            STRICT_INIT_MAX_BLOCK_BYTES,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn read_indexed_sidecar_from_paths_with_recovery_and_limit<T, F>(
+        height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        decoder: F,
+        kind: &str,
+        recover: bool,
+        entry_byte_limit: u64,
+    ) -> Option<T>
+    where
+        F: Fn(&[u8]) -> Result<T, norito::Error>,
+    {
         if height == 0 {
             return None;
         }
@@ -4420,8 +4454,15 @@ impl Kura {
 
         let mut index = std::fs::File::open(index_path).ok()?;
         let mut data = std::fs::File::open(data_path).ok()?;
-        Self::read_indexed_sidecar_from_open_files(
-            height, &mut data, &mut index, data_path, index_path, decoder, kind,
+        Self::read_indexed_sidecar_from_open_files_with_limit(
+            height,
+            &mut data,
+            &mut index,
+            data_path,
+            index_path,
+            decoder,
+            kind,
+            entry_byte_limit,
         )
     }
 
@@ -4434,6 +4475,32 @@ impl Kura {
         index_path: &Path,
         decoder: F,
         kind: &str,
+    ) -> Option<T>
+    where
+        F: Fn(&[u8]) -> Result<T, norito::Error>,
+    {
+        Self::read_indexed_sidecar_from_open_files_with_limit(
+            height,
+            data,
+            index,
+            data_path,
+            index_path,
+            decoder,
+            kind,
+            STRICT_INIT_MAX_BLOCK_BYTES,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn read_indexed_sidecar_from_open_files_with_limit<T, F>(
+        height: u64,
+        data: &mut std::fs::File,
+        index: &mut std::fs::File,
+        data_path: &Path,
+        index_path: &Path,
+        decoder: F,
+        kind: &str,
+        entry_byte_limit: u64,
     ) -> Option<T>
     where
         F: Fn(&[u8]) -> Result<T, norito::Error>,
@@ -4483,11 +4550,11 @@ impl Kura {
             iroha_logger::debug!(height, ?index_path, kind, "empty sidecar length; skipping");
             return None;
         }
-        if entry.len > STRICT_INIT_MAX_BLOCK_BYTES {
+        if entry.len > entry_byte_limit {
             iroha_logger::warn!(
                 height,
                 len = entry.len,
-                limit = STRICT_INIT_MAX_BLOCK_BYTES,
+                limit = entry_byte_limit,
                 ?index_path,
                 kind,
                 "sidecar length exceeds limit; skipping"

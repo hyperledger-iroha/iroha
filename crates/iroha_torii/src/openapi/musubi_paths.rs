@@ -94,9 +94,10 @@ fn musubi_paths() -> Map {
             description,
             &request_schema,
             &response_schema,
-            Vec::new(),
+            canonical_request_auth_header_parameters(),
         );
         if let Some(operation) = methods.get_mut("post").and_then(Value::as_object_mut) {
+            insert_canonical_request_auth_contract(operation);
             operation.insert(
                 "x-iroha-norito-request-type".to_owned(),
                 Value::String(request_type.to_owned()),
@@ -213,9 +214,10 @@ fn musubi_paths() -> Map {
             "Return one deterministic unsigned, versioned instruction envelope for local signing; Torii never accepts private keys.",
             &request_schema,
             "#/components/schemas/MusubiInstructionEnvelopeV1",
-            Vec::new(),
+            canonical_request_auth_header_parameters(),
         );
         if let Some(operation) = methods.get_mut("post").and_then(Value::as_object_mut) {
+            insert_canonical_request_auth_contract(operation);
             operation.insert(
                 "x-iroha-norito-request-type".to_owned(),
                 Value::String(request_type.to_owned()),
@@ -228,4 +230,63 @@ fn musubi_paths() -> Map {
         paths.insert(path.to_owned(), Value::Object(methods));
     }
     paths
+}
+
+#[cfg(test)]
+#[test]
+fn musubi_operations_document_exact_canonical_account_authentication() {
+    let document = generate_spec();
+    let paths = document
+        .get("paths")
+        .and_then(Value::as_object)
+        .expect("OpenAPI paths");
+    let expected = [
+        "X-Iroha-Account",
+        "X-Iroha-Signature",
+        "X-Iroha-Timestamp-Ms",
+        "X-Iroha-Nonce",
+        "X-Iroha-Witness",
+    ];
+
+    for route in musubi_routes::ROUTES {
+        let operation = paths
+            .get(route.path())
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("Musubi POST operation {}", route.path()));
+        let actual = operation
+            .get("parameters")
+            .and_then(Value::as_array)
+            .expect("Musubi authentication parameters")
+            .iter()
+            .filter_map(|parameter| {
+                (parameter.get("in").and_then(Value::as_str) == Some("header"))
+                    .then(|| parameter.get("name").and_then(Value::as_str))
+                    .flatten()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "{} authentication headers", route.path());
+        assert_eq!(
+            operation.get("security"),
+            Some(&norito::json!([
+                {
+                    "IrohaCanonicalAccount": [],
+                    "IrohaCanonicalSignature": [],
+                    "IrohaCanonicalTimestampMs": [],
+                    "IrohaCanonicalNonce": []
+                },
+                {
+                    "IrohaCanonicalWitness": []
+                }
+            ])),
+            "{} canonical authentication alternatives",
+            route.path()
+        );
+        assert!(
+            operation.get("x-iroha-canonical-auth-v1").is_some(),
+            "{} canonical authentication contract",
+            route.path()
+        );
+    }
 }

@@ -1,9 +1,16 @@
 //! Best-effort Torii push notification bridge.
+//!
+//! Local device, delivery, and provider-credential files are consumed through
+//! bounded direct-file reads. Startup enumeration and dispatch are likewise
+//! count-bounded so corrupted local persistence cannot determine peak memory.
+//! Remote provider bodies are streamed under one source-coupled ceiling, and
+//! successful delivery responses are not buffered.
 
 #[cfg(test)]
 use std::sync::Mutex;
 use std::{
-    fs, io,
+    fs,
+    io::{self, Read as _, Write as _},
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
@@ -12,7 +19,7 @@ use std::{
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD};
-use dashmap::{DashMap, mapref::entry::Entry};
+use dashmap::DashMap;
 use iroha_config::parameters::actual;
 use iroha_core::{EventsSender, kura::Kura};
 use iroha_crypto::HashOf;
@@ -28,6 +35,7 @@ use iroha_data_model::{
 use jsonwebtoken::{Algorithm, EncodingKey};
 #[cfg(test)]
 use nonzero_ext::nonzero;
+use parking_lot::Mutex as StorageMutex;
 use reqwest::StatusCode as HttpStatusCode;
 use sha2::{Digest as _, Sha256};
 
@@ -43,6 +51,51 @@ const APNS_PRODUCTION_ENDPOINT: &str = "https://api.push.apple.com";
 const INITIAL_BACKOFF: Duration = Duration::from_secs(30);
 const MAX_BACKOFF: Duration = Duration::from_secs(60 * 60);
 const DISPATCH_TICK: Duration = Duration::from_secs(5);
+
+// Push persistence is local best-effort state, but every record remains resident
+// after startup. These source-local ceilings bound both directory work and the
+// retained maps; field validation keeps a maximum-count set from amplifying its
+// bounded on-disk representation into unbounded strings or collections.
+const MAX_PUSH_DEVICES: usize = 4 * 1024;
+const MAX_PUSH_QUEUE_JOBS: usize = 4 * MAX_PUSH_DEVICES;
+const MAX_PUSH_DEVICE_ACCOUNT_ENTRIES: usize = MAX_PUSH_DEVICES;
+const MAX_PUSH_DEVICE_RECORD_BYTES: usize = 64 * 1024;
+const MAX_PUSH_QUEUE_JOB_BYTES: usize = 16 * 1024;
+const MAX_PUSH_TOKEN_BYTES: usize = 8 * 1024;
+// `torii.push.max_topics_per_device` may lower, but never raise, this invariant.
+const MAX_PUSH_TOPICS: usize = 256;
+const MAX_PUSH_TOPIC_BYTES: usize = 256;
+const MAX_PUSH_TOPIC_BYTES_PER_DEVICE: usize = 8 * 1024;
+const MAX_PUSH_ACTIVITY_KIND_BYTES: usize = 256;
+const MAX_PUSH_TX_HASH_BYTES: usize = 256;
+const MAX_PUSH_DIRECTION_BYTES: usize = 64;
+const MAX_FCM_SERVICE_ACCOUNT_BYTES: usize = 64 * 1024;
+const MAX_APNS_PRIVATE_KEY_BYTES: usize = 16 * 1024;
+// FCM OAuth/send and APNs responses are small, fixed-schema JSON envelopes.
+// Keep one local ceiling for every provider-controlled response body so a
+// proxy, chunked sender, or future transparent decompressor cannot grow a
+// dispatch task's retained buffer without bound.
+const MAX_PUSH_PROVIDER_RESPONSE_BYTES: usize = 64 * 1024;
+const PUSH_DISPATCH_BATCH_SIZE: usize = 256;
+
+#[derive(Clone, Copy, Debug)]
+struct PushStorageLimits {
+    max_devices: usize,
+    max_queue_jobs: usize,
+    max_device_account_entries: usize,
+    max_device_record_bytes: usize,
+    max_queue_job_bytes: usize,
+    dispatch_batch_size: usize,
+}
+
+const PUSH_STORAGE_LIMITS: PushStorageLimits = PushStorageLimits {
+    max_devices: MAX_PUSH_DEVICES,
+    max_queue_jobs: MAX_PUSH_QUEUE_JOBS,
+    max_device_account_entries: MAX_PUSH_DEVICE_ACCOUNT_ENTRIES,
+    max_device_record_bytes: MAX_PUSH_DEVICE_RECORD_BYTES,
+    max_queue_job_bytes: MAX_PUSH_QUEUE_JOB_BYTES,
+    dispatch_batch_size: PUSH_DISPATCH_BATCH_SIZE,
+};
 
 /// Logical push notification target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -233,6 +286,8 @@ pub struct PushBridge {
     devices: Arc<DashMap<String, DeviceRecord>>,
     queue: Arc<DashMap<String, DeliveryJob>>,
     data_dir: Arc<PathBuf>,
+    storage_limits: PushStorageLimits,
+    mutation_guard: Arc<StorageMutex<()>>,
 }
 
 impl PushBridge {
@@ -241,6 +296,14 @@ impl PushBridge {
     }
 
     pub fn with_dispatcher(config: actual::Push, dispatcher: Arc<dyn PushDispatcher>) -> Self {
+        Self::with_dispatcher_and_limits(config, dispatcher, PUSH_STORAGE_LIMITS)
+    }
+
+    fn with_dispatcher_and_limits(
+        config: actual::Push,
+        dispatcher: Arc<dyn PushDispatcher>,
+        storage_limits: PushStorageLimits,
+    ) -> Self {
         let settings = DispatchSettings {
             connect_timeout: config.connect_timeout,
             request_timeout: config.request_timeout,
@@ -253,6 +316,8 @@ impl PushBridge {
             devices: Arc::new(DashMap::new()),
             queue: Arc::new(DashMap::new()),
             data_dir,
+            storage_limits,
+            mutation_guard: Arc::new(StorageMutex::new(())),
         };
         bridge.load_from_disk();
         bridge
@@ -267,15 +332,20 @@ impl PushBridge {
         if !self.has_credentials(platform) {
             return Err(PushError::MissingCredentials { platform });
         }
-        let token = request.token.trim().to_owned();
+        let token = request.token.trim();
         if token.is_empty() {
             return Err(PushError::EmptyToken);
         }
-        let topics = normalize_topics(request.topics);
-        let max_topics = self.config.max_topics_per_device.get();
-        if topics.len() > max_topics {
-            return Err(PushError::TooManyTopics { max: max_topics });
+        if token.len() > MAX_PUSH_TOKEN_BYTES {
+            return Err(storage_limit_error(
+                "device token bytes",
+                token.len(),
+                MAX_PUSH_TOKEN_BYTES,
+            ));
         }
+        let max_topics = self.config.max_topics_per_device.get().min(MAX_PUSH_TOPICS);
+        let topics = normalize_topics(request.topics, max_topics)?;
+        let token = token.to_owned();
 
         let token_fingerprint = fingerprint(token.as_bytes());
         let record = DeviceRecord {
@@ -287,9 +357,21 @@ impl PushBridge {
             updated_at_ms: now_ms(),
         };
 
-        if let Some(old) = self.devices.get(&token_fingerprint) {
+        let _mutation = self.mutation_guard.lock();
+        let old = self
+            .devices
+            .get(&token_fingerprint)
+            .map(|entry| entry.clone());
+        if old.is_none() && self.devices.len() >= self.storage_limits.max_devices {
+            return Err(storage_limit_error(
+                "registered device count",
+                self.devices.len().saturating_add(1),
+                self.storage_limits.max_devices,
+            ));
+        }
+        if let Some(old) = old {
             let old_path = self.device_path(&old.account_id, &token_fingerprint);
-            remove_file_if_exists(&old_path).map_err(storage_error)?;
+            remove_device_file(&old_path).map_err(storage_error)?;
         }
         self.persist_device(&record)?;
         self.devices.insert(token_fingerprint, record);
@@ -305,6 +387,10 @@ impl PushBridge {
         let token = request.token.trim();
         if token.is_empty() {
             return Err(PushError::EmptyToken);
+        }
+        if token.len() > MAX_PUSH_TOKEN_BYTES {
+            // Registration rejects such tokens, so no persisted record can match.
+            return Ok(());
         }
         let token_fingerprint = fingerprint(token.as_bytes());
         let Some(record) = self
@@ -356,14 +442,20 @@ impl PushBridge {
                 created_at_ms: now_ms(),
                 updated_at_ms: now_ms(),
             };
-            match self.queue.entry(dedupe_key) {
-                Entry::Occupied(_) => {}
-                Entry::Vacant(entry) => {
-                    self.persist_job(&job)?;
-                    entry.insert(job);
-                    queued += 1;
-                }
+            let _mutation = self.mutation_guard.lock();
+            if self.queue.contains_key(&dedupe_key) {
+                continue;
             }
+            if self.queue.len() >= self.storage_limits.max_queue_jobs {
+                return Err(storage_limit_error(
+                    "push queue job count",
+                    self.queue.len().saturating_add(1),
+                    self.storage_limits.max_queue_jobs,
+                ));
+            }
+            self.persist_job(&job)?;
+            self.queue.insert(dedupe_key, job);
+            queued += 1;
         }
         Ok(queued)
     }
@@ -378,6 +470,7 @@ impl PushBridge {
             .iter()
             .filter(|entry| entry.next_attempt_ms <= now)
             .map(|entry| entry.key().clone())
+            .take(self.storage_limits.dispatch_batch_size)
             .collect();
         for key in keys {
             let Some(job) = self.queue.get(&key).map(|entry| entry.clone()) else {
@@ -536,6 +629,16 @@ impl PushBridge {
         let backoff = retry_backoff(job.attempts);
         job.next_attempt_ms = now_ms().saturating_add(duration_ms(backoff));
         job.updated_at_ms = now_ms();
+        let _mutation = self.mutation_guard.lock();
+        if !self.queue.contains_key(&job.dedupe_key)
+            && self.queue.len() >= self.storage_limits.max_queue_jobs
+        {
+            iroha_logger::warn!(
+                maximum = self.storage_limits.max_queue_jobs,
+                "dropping push retry because the hard queue capacity is full"
+            );
+            return;
+        }
         if let Err(error) = self.persist_job(&job) {
             iroha_logger::warn!(?error, "failed to persist push retry");
         }
@@ -598,19 +701,22 @@ impl PushBridge {
             .iter()
             .filter(|entry| entry.account_id == account_id)
             .map(|entry| entry.clone())
+            .take(self.storage_limits.max_devices)
             .collect()
     }
 
     fn remove_device_by_fingerprint(&self, token_fingerprint: &str) -> Result<(), PushError> {
+        let _mutation = self.mutation_guard.lock();
         let Some((_, record)) = self.devices.remove(token_fingerprint) else {
             return Ok(());
         };
-        remove_file_if_exists(&self.device_path(&record.account_id, token_fingerprint))
+        remove_device_file(&self.device_path(&record.account_id, token_fingerprint))
             .map_err(storage_error)?;
         Ok(())
     }
 
     fn remove_job(&self, dedupe_key: &str) {
+        let _mutation = self.mutation_guard.lock();
         self.queue.remove(dedupe_key);
         if let Err(error) = remove_file_if_exists(&self.job_path(dedupe_key)) {
             iroha_logger::warn!(?error, "failed to remove push queue file");
@@ -618,15 +724,23 @@ impl PushBridge {
     }
 
     fn persist_device(&self, record: &DeviceRecord) -> Result<(), PushError> {
+        validate_device_record(record, self.effective_max_topics()).map_err(storage_error)?;
         write_json_atomic(
             &self.device_path(&record.account_id, &record.token_fingerprint),
             record,
+            self.storage_limits.max_device_record_bytes,
         )
         .map_err(storage_error)
     }
 
     fn persist_job(&self, job: &DeliveryJob) -> Result<(), PushError> {
-        write_json_atomic(&self.job_path(&job.dedupe_key), job).map_err(storage_error)
+        validate_delivery_job(job).map_err(storage_error)?;
+        write_json_atomic(
+            &self.job_path(&job.dedupe_key),
+            job,
+            self.storage_limits.max_queue_job_bytes,
+        )
+        .map_err(storage_error)
     }
 
     fn load_from_disk(&self) {
@@ -636,22 +750,98 @@ impl PushBridge {
 
     fn load_devices(&self) {
         let root = self.data_dir.join(DEVICES_DIR);
-        let Ok(accounts) = fs::read_dir(&root) else {
-            return;
+        let accounts = match read_direct_directory(&root) {
+            Ok(accounts) => accounts,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+            Err(error) => {
+                iroha_logger::warn!(?error, path = %root.display(), "failed to enumerate push device accounts");
+                return;
+            }
         };
-        for account_dir in accounts.flatten().filter(|entry| entry.path().is_dir()) {
-            let Ok(files) = fs::read_dir(account_dir.path()) else {
-                continue;
+        let mut account_entries = 0_usize;
+        let mut device_entries = 0_usize;
+        'accounts: for account_dir in accounts {
+            account_entries = account_entries.saturating_add(1);
+            if account_entries > self.storage_limits.max_device_account_entries {
+                iroha_logger::warn!(
+                    maximum = self.storage_limits.max_device_account_entries,
+                    "push device account directory entry limit reached"
+                );
+                break;
+            }
+            let account_dir = match account_dir {
+                Ok(entry) => entry,
+                Err(error) => {
+                    iroha_logger::warn!(?error, path = %root.display(), "failed to inspect push device account entry");
+                    continue;
+                }
             };
-            for file in files.flatten().filter(|entry| entry.path().is_file()) {
-                match read_json::<DeviceRecord>(&file.path()) {
-                    Ok(record) if Platform::from_stored(&record.platform).is_some() => {
+            let account_path = account_dir.path();
+            let account_type = match account_dir.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) => {
+                    iroha_logger::warn!(?error, path = %account_path.display(), "failed to inspect push device account type");
+                    continue;
+                }
+            };
+            if account_type.is_symlink() || !account_type.is_dir() {
+                continue;
+            }
+            let files = match read_direct_directory(&account_path) {
+                Ok(files) => files,
+                Err(error) => {
+                    iroha_logger::warn!(?error, path = %account_path.display(), "failed to enumerate push device files");
+                    continue;
+                }
+            };
+            for file in files {
+                device_entries = device_entries.saturating_add(1);
+                if device_entries > self.storage_limits.max_devices {
+                    iroha_logger::warn!(
+                        maximum = self.storage_limits.max_devices,
+                        "push device file entry limit reached"
+                    );
+                    break 'accounts;
+                }
+                let file = match file {
+                    Ok(entry) => entry,
+                    Err(error) => {
+                        iroha_logger::warn!(?error, path = %account_path.display(), "failed to inspect push device file entry");
+                        continue;
+                    }
+                };
+                let path = file.path();
+                let file_type = match file.file_type() {
+                    Ok(file_type) => file_type,
+                    Err(error) => {
+                        iroha_logger::warn!(?error, path = %path.display(), "failed to inspect push device file type");
+                        continue;
+                    }
+                };
+                if file_type.is_symlink() || !file_type.is_file() {
+                    continue;
+                }
+                match read_json::<DeviceRecord>(&path, self.storage_limits.max_device_record_bytes)
+                {
+                    Ok(record) => {
+                        if let Err(error) = validate_device_record(&record, MAX_PUSH_TOPICS) {
+                            iroha_logger::warn!(?error, path = %path.display(), "invalid persisted push device");
+                            continue;
+                        }
+                        if self.devices.len() >= self.storage_limits.max_devices
+                            && !self.devices.contains_key(&record.token_fingerprint)
+                        {
+                            iroha_logger::warn!(
+                                maximum = self.storage_limits.max_devices,
+                                "push device capacity reached while loading"
+                            );
+                            break 'accounts;
+                        }
                         self.devices
                             .insert(record.token_fingerprint.clone(), record);
                     }
-                    Ok(_) => {}
                     Err(error) => {
-                        iroha_logger::warn!(?error, path = %file.path().display(), "failed to load push device")
+                        iroha_logger::warn!(?error, path = %path.display(), "failed to load push device")
                     }
                 }
             }
@@ -660,19 +850,68 @@ impl PushBridge {
 
     fn load_queue(&self) {
         let root = self.data_dir.join(QUEUE_DIR);
-        let Ok(files) = fs::read_dir(&root) else {
-            return;
+        let files = match read_direct_directory(&root) {
+            Ok(files) => files,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+            Err(error) => {
+                iroha_logger::warn!(?error, path = %root.display(), "failed to enumerate push queue");
+                return;
+            }
         };
-        for file in files.flatten().filter(|entry| entry.path().is_file()) {
-            match read_json::<DeliveryJob>(&file.path()) {
+        let mut queue_entries = 0_usize;
+        for file in files {
+            queue_entries = queue_entries.saturating_add(1);
+            if queue_entries > self.storage_limits.max_queue_jobs {
+                iroha_logger::warn!(
+                    maximum = self.storage_limits.max_queue_jobs,
+                    "push queue file entry limit reached"
+                );
+                break;
+            }
+            let file = match file {
+                Ok(entry) => entry,
+                Err(error) => {
+                    iroha_logger::warn!(?error, path = %root.display(), "failed to inspect push queue entry");
+                    continue;
+                }
+            };
+            let path = file.path();
+            let file_type = match file.file_type() {
+                Ok(file_type) => file_type,
+                Err(error) => {
+                    iroha_logger::warn!(?error, path = %path.display(), "failed to inspect push queue file type");
+                    continue;
+                }
+            };
+            if file_type.is_symlink() || !file_type.is_file() {
+                continue;
+            }
+            match read_json::<DeliveryJob>(&path, self.storage_limits.max_queue_job_bytes) {
                 Ok(job) => {
+                    if let Err(error) = validate_delivery_job(&job) {
+                        iroha_logger::warn!(?error, path = %path.display(), "invalid persisted push queue job");
+                        continue;
+                    }
+                    if self.queue.len() >= self.storage_limits.max_queue_jobs
+                        && !self.queue.contains_key(&job.dedupe_key)
+                    {
+                        iroha_logger::warn!(
+                            maximum = self.storage_limits.max_queue_jobs,
+                            "push queue capacity reached while loading"
+                        );
+                        break;
+                    }
                     self.queue.insert(job.dedupe_key.clone(), job);
                 }
                 Err(error) => {
-                    iroha_logger::warn!(?error, path = %file.path().display(), "failed to load push queue job")
+                    iroha_logger::warn!(?error, path = %path.display(), "failed to load push queue job")
                 }
             }
         }
+    }
+
+    fn effective_max_topics(&self) -> usize {
+        self.config.max_topics_per_device.get().min(MAX_PUSH_TOPICS)
     }
 
     fn device_path(&self, account_id: &str, token_fingerprint: &str) -> PathBuf {
@@ -741,15 +980,134 @@ fn canonical_account(account_id: &str) -> Result<AccountId, PushError> {
         .map_err(|_| PushError::InvalidAccount(account_id.to_owned()))
 }
 
-fn normalize_topics(topics: Option<Vec<String>>) -> Vec<String> {
+fn validate_device_record(record: &DeviceRecord, max_topics: usize) -> io::Result<()> {
+    let account = canonical_account(&record.account_id)
+        .map_err(|_| invalid_data("persisted push device has an invalid account id"))?;
+    if account.to_string() != record.account_id {
+        return Err(invalid_data(
+            "persisted push device account id is not canonical",
+        ));
+    }
+    if Platform::from_stored(&record.platform).is_none() {
+        return Err(invalid_data(
+            "persisted push device has an invalid platform",
+        ));
+    }
+    if record.token.is_empty()
+        || record.token.trim() != record.token
+        || record.token.len() > MAX_PUSH_TOKEN_BYTES
+    {
+        return Err(invalid_data(
+            "persisted push device token violates the byte or whitespace bound",
+        ));
+    }
+    if record.token_fingerprint != fingerprint(record.token.as_bytes()) {
+        return Err(invalid_data(
+            "persisted push device token fingerprint does not match its token",
+        ));
+    }
+    if record.topics.len() > max_topics.min(MAX_PUSH_TOPICS) {
+        return Err(invalid_data(
+            "persisted push device topic count exceeds the configured hard bound",
+        ));
+    }
+    let mut topic_bytes = 0_usize;
+    for (index, topic) in record.topics.iter().enumerate() {
+        if topic.is_empty() || topic.trim() != topic || topic.len() > MAX_PUSH_TOPIC_BYTES {
+            return Err(invalid_data(
+                "persisted push device topic violates the byte or whitespace bound",
+            ));
+        }
+        if record.topics[..index].contains(topic) {
+            return Err(invalid_data(
+                "persisted push device contains duplicate topics",
+            ));
+        }
+        topic_bytes = topic_bytes
+            .checked_add(topic.len())
+            .ok_or_else(|| invalid_data("persisted push device topic bytes overflow"))?;
+        if topic_bytes > MAX_PUSH_TOPIC_BYTES_PER_DEVICE {
+            return Err(invalid_data(
+                "persisted push device aggregate topic bytes exceed the hard bound",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_delivery_job(job: &DeliveryJob) -> io::Result<()> {
+    let account = canonical_account(&job.account_id)
+        .map_err(|_| invalid_data("persisted push job has an invalid account id"))?;
+    if account.to_string() != job.account_id || job.payload.account_id != job.account_id {
+        return Err(invalid_data(
+            "persisted push job account id is non-canonical or inconsistent",
+        ));
+    }
+    if !is_lower_hex_fingerprint(&job.token_fingerprint) {
+        return Err(invalid_data(
+            "persisted push job has an invalid token fingerprint",
+        ));
+    }
+    if job.payload.activity_kind.len() > MAX_PUSH_ACTIVITY_KIND_BYTES
+        || job.payload.tx_hash.len() > MAX_PUSH_TX_HASH_BYTES
+        || job.payload.direction.len() > MAX_PUSH_DIRECTION_BYTES
+    {
+        return Err(invalid_data(
+            "persisted push job payload field exceeds its hard byte bound",
+        ));
+    }
+    if job.dedupe_key != delivery_dedupe_key(&job.payload, &job.token_fingerprint) {
+        return Err(invalid_data(
+            "persisted push job dedupe key does not match its payload",
+        ));
+    }
+    Ok(())
+}
+
+fn is_lower_hex_fingerprint(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn normalize_topics(
+    topics: Option<Vec<String>>,
+    max_topics: usize,
+) -> Result<Vec<String>, PushError> {
     let mut out = Vec::new();
+    let mut topic_bytes = 0_usize;
     for topic in topics.unwrap_or_default() {
         let topic = topic.trim();
         if !topic.is_empty() && !out.iter().any(|seen| seen == topic) {
+            if out.len() >= max_topics {
+                return Err(PushError::TooManyTopics { max: max_topics });
+            }
+            if topic.len() > MAX_PUSH_TOPIC_BYTES {
+                return Err(storage_limit_error(
+                    "push topic bytes",
+                    topic.len(),
+                    MAX_PUSH_TOPIC_BYTES,
+                ));
+            }
+            topic_bytes = topic_bytes.checked_add(topic.len()).ok_or_else(|| {
+                storage_limit_error(
+                    "aggregate push topic bytes",
+                    usize::MAX,
+                    MAX_PUSH_TOPIC_BYTES_PER_DEVICE,
+                )
+            })?;
+            if topic_bytes > MAX_PUSH_TOPIC_BYTES_PER_DEVICE {
+                return Err(storage_limit_error(
+                    "aggregate push topic bytes",
+                    topic_bytes,
+                    MAX_PUSH_TOPIC_BYTES_PER_DEVICE,
+                ));
+            }
             out.push(topic.to_owned());
         }
     }
-    out
+    Ok(out)
 }
 
 fn trim_ref(value: Option<&str>) -> Option<&str> {
@@ -803,27 +1161,247 @@ fn storage_error(error: io::Error) -> PushError {
     PushError::Storage(error.to_string())
 }
 
-fn write_json_atomic<T>(path: &Path, value: &T) -> io::Result<()>
+fn storage_limit_error(label: &str, actual: usize, maximum: usize) -> PushError {
+    PushError::Storage(format!(
+        "{label} {actual} exceeds the push storage maximum {maximum}"
+    ))
+}
+
+fn invalid_data(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+fn write_json_atomic<T>(path: &Path, value: &T, maximum: usize) -> io::Result<()>
 where
     T: norito::json::JsonSerialize + ?Sized,
 {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
+        let metadata = fs::symlink_metadata(parent)?;
+        if push_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_dir() {
+            return Err(invalid_data("push output parent is not a direct directory"));
+        }
     }
     let bytes = norito::json::to_vec(value)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
+    if bytes.len() > maximum {
+        return Err(invalid_data(format!(
+            "push JSON has {} bytes, exceeding the maximum {maximum}",
+            bytes.len()
+        )));
+    }
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, bytes)?;
+    write_direct_regular_file(&tmp, &bytes)?;
     fs::rename(tmp, path)
 }
 
-fn read_json<T>(path: &Path) -> io::Result<T>
+fn read_json<T>(path: &Path, maximum: usize) -> io::Result<T>
 where
     T: norito::json::JsonDeserialize,
 {
-    let bytes = fs::read(path)?;
+    let bytes = read_bounded_stable_file(path, maximum)?;
     norito::json::from_slice(&bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))
+}
+
+fn read_direct_directory(path: &Path) -> io::Result<fs::ReadDir> {
+    let metadata = fs::symlink_metadata(path)?;
+    if push_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_dir() {
+        return Err(invalid_data(
+            "push persistence path is not a direct directory",
+        ));
+    }
+    fs::read_dir(path)
+}
+
+fn read_bounded_stable_file(path: &Path, maximum: usize) -> io::Result<Vec<u8>> {
+    read_bounded_stable_file_with(path, maximum, || Ok(()))
+}
+
+fn read_bounded_stable_file_with(
+    path: &Path,
+    maximum: usize,
+    after_open: impl FnOnce() -> io::Result<()>,
+) -> io::Result<Vec<u8>> {
+    let named_before = fs::symlink_metadata(path)?;
+    if push_metadata_is_symlink_or_reparse(&named_before) || !named_before.is_file() {
+        return Err(invalid_data("push input must be a direct regular file"));
+    }
+    let maximum_u64 = u64::try_from(maximum).unwrap_or(u64::MAX);
+    if named_before.len() > maximum_u64 {
+        return Err(invalid_data(format!(
+            "push input has {} bytes, exceeding the maximum {maximum}",
+            named_before.len()
+        )));
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    set_no_follow_open_options(&mut options);
+    let mut file = options.open(path)?;
+    let opened_before = file.metadata()?;
+    if push_metadata_is_symlink_or_reparse(&opened_before) || !opened_before.is_file() {
+        return Err(invalid_data(
+            "opened push input is not a direct regular file",
+        ));
+    }
+    if opened_before.len() > maximum_u64 {
+        return Err(invalid_data(format!(
+            "opened push input has {} bytes, exceeding the maximum {maximum}",
+            opened_before.len()
+        )));
+    }
+    if !push_file_metadata_unchanged(&named_before, &opened_before) {
+        return Err(invalid_data("push input changed identity while opening"));
+    }
+
+    after_open()?;
+    let capacity = usize::try_from(opened_before.len())
+        .unwrap_or(maximum)
+        .min(maximum);
+    let mut bytes = Vec::with_capacity(capacity);
+    file.by_ref()
+        .take(maximum_u64.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > maximum {
+        return Err(invalid_data(format!(
+            "push input exceeds the maximum {maximum} bytes"
+        )));
+    }
+
+    let opened_after = file.metadata()?;
+    let named_after = fs::symlink_metadata(path)?;
+    if push_metadata_is_symlink_or_reparse(&named_after)
+        || !named_after.is_file()
+        || !push_file_metadata_unchanged(&opened_before, &opened_after)
+        || !push_file_metadata_unchanged(&opened_after, &named_after)
+        || opened_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+    {
+        return Err(invalid_data("push input changed while reading"));
+    }
+    Ok(bytes)
+}
+
+fn write_direct_regular_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if push_metadata_is_symlink_or_reparse(&metadata) || !metadata.is_file() => {
+            return Err(invalid_data(
+                "push temporary output path is not a direct regular file",
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    set_no_follow_open_options(&mut options);
+    let mut file = options.open(path)?;
+    let opened_before = file.metadata()?;
+    if push_metadata_is_symlink_or_reparse(&opened_before) || !opened_before.is_file() {
+        return Err(invalid_data(
+            "push temporary output is not a direct regular file",
+        ));
+    }
+    file.write_all(bytes)?;
+    let opened_after = file.metadata()?;
+    let named_after = fs::symlink_metadata(path)?;
+    let expected = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if push_metadata_is_symlink_or_reparse(&named_after)
+        || !named_after.is_file()
+        || !push_file_metadata_same_identity(&opened_before, &opened_after)
+        || !push_file_metadata_same_identity(&opened_after, &named_after)
+        || opened_after.len() != expected
+        || named_after.len() != expected
+    {
+        return Err(invalid_data("push temporary output changed while writing"));
+    }
+    Ok(())
+}
+
+fn set_no_follow_open_options(options: &mut fs::OpenOptions) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        options.custom_flags(
+            (rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::NOCTTY)
+                .bits() as i32,
+        );
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+}
+
+fn push_metadata_is_symlink_or_reparse(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+#[cfg(unix)]
+fn push_file_metadata_same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(windows)]
+fn push_file_metadata_same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+
+    left.volume_serial_number().is_some()
+        && left.file_index().is_some()
+        && left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn push_file_metadata_same_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn push_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    push_file_metadata_same_identity(left, right)
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(windows)]
+fn push_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+
+    push_file_metadata_same_identity(left, right)
+        && left.file_size() == right.file_size()
+        && left.last_write_time() == right.last_write_time()
+        && left.creation_time() == right.creation_time()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn push_file_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 
 fn remove_file_if_exists(path: &Path) -> io::Result<()> {
@@ -831,6 +1409,28 @@ fn remove_file_if_exists(path: &Path) -> io::Result<()> {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
+    }
+}
+
+fn remove_device_file(path: &Path) -> io::Result<()> {
+    remove_file_if_exists(path)?;
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    match fs::remove_dir(parent) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::DirectoryNotEmpty
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => {
+            iroha_logger::warn!(?error, path = %parent.display(), "failed to remove empty push device account directory");
+            Ok(())
+        }
     }
 }
 
@@ -1021,12 +1621,59 @@ fn encode_jwt_claims(
     Ok(format!("{message}.{signature}"))
 }
 
+async fn read_push_provider_response_bounded(
+    mut response: reqwest::Response,
+    source: &'static str,
+) -> Result<Vec<u8>, String> {
+    let maximum = u64::try_from(MAX_PUSH_PROVIDER_RESPONSE_BYTES)
+        .map_err(|_| "push provider response ceiling does not fit u64".to_string())?;
+    let declared = response.content_length();
+    if let Some(length) = declared
+        && length > maximum
+    {
+        return Err(format!(
+            "{source} declared a {length}-byte response, exceeding the {MAX_PUSH_PROVIDER_RESPONSE_BYTES}-byte ceiling"
+        ));
+    }
+
+    let initial_capacity = declared
+        .and_then(|length| usize::try_from(length).ok())
+        .unwrap_or(0)
+        .min(MAX_PUSH_PROVIDER_RESPONSE_BYTES);
+    let mut body = Vec::new();
+    body.try_reserve_exact(initial_capacity)
+        .map_err(|error| format!("failed to reserve {source} response buffer: {error}"))?;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("failed to stream {source} response: {error}"))?
+    {
+        // The streamed count is authoritative for chunked responses and for
+        // bodies that grow after transparent decompression. Stop at max + 1
+        // before copying an oversized chunk into the retained buffer.
+        let next_len = body
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| format!("{source} response length overflowed"))?;
+        if next_len > MAX_PUSH_PROVIDER_RESPONSE_BYTES {
+            return Err(format!(
+                "{source} response exceeded the {MAX_PUSH_PROVIDER_RESPONSE_BYTES}-byte ceiling while streaming"
+            ));
+        }
+        body.try_reserve_exact(chunk.len())
+            .map_err(|error| format!("failed to grow {source} response buffer: {error}"))?;
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 async fn mint_fcm_access_token(
     client: &reqwest::Client,
     service_account_path: &Path,
     settings: &DispatchSettings,
 ) -> Result<String, String> {
-    let bytes = fs::read(service_account_path).map_err(|error| error.to_string())?;
+    let bytes = read_bounded_stable_file(service_account_path, MAX_FCM_SERVICE_ACCOUNT_BYTES)
+        .map_err(|error| error.to_string())?;
     let value: norito::json::Value =
         norito::json::from_slice(&bytes).map_err(|error| error.to_string())?;
     let client_email = json_string_field(&value, "client_email")?;
@@ -1061,13 +1708,12 @@ async fn mint_fcm_access_token(
         .await
         .map_err(|error| error.to_string())?;
     let status = response.status();
-    let bytes = response.bytes().await.map_err(|error| error.to_string())?;
     if !status.is_success() {
-        return Err(format!(
-            "FCM token endpoint returned {status}: {}",
-            String::from_utf8_lossy(&bytes)
-        ));
+        // OAuth failure semantics depend only on the status. Avoid retaining
+        // an attacker- or proxy-controlled diagnostic body.
+        return Err(format!("FCM token endpoint returned {status}"));
     }
+    let bytes = read_push_provider_response_bounded(response, "FCM token endpoint").await?;
     let value: norito::json::Value =
         norito::json::from_slice(&bytes).map_err(|error| error.to_string())?;
     json_string_field(&value, "access_token")
@@ -1078,7 +1724,8 @@ fn mint_apns_provider_token(
     key_id: &str,
     private_key_path: &Path,
 ) -> Result<String, String> {
-    let private_key = fs::read(private_key_path).map_err(|error| error.to_string())?;
+    let private_key = read_bounded_stable_file(private_key_path, MAX_APNS_PRIVATE_KEY_BYTES)
+        .map_err(|error| error.to_string())?;
     let issued_at = now_ms() / 1000;
     let mut claims = norito::json::Map::new();
     claims.insert("iss".to_string(), norito::json::Value::from(team_id));
@@ -1145,21 +1792,25 @@ fn push_data(payload: &PushActivityPayload) -> norito::json::Value {
 
 async fn classify_fcm_response(response: reqwest::Response) -> DispatchOutcome {
     let status = response.status();
-    let body = response
-        .bytes()
+    if status.is_success() {
+        return DispatchOutcome::Sent;
+    }
+    let body = read_push_provider_response_bounded(response, "FCM send endpoint")
         .await
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .unwrap_or_default();
+        .unwrap_or_else(|error| format!("response body unavailable: {error}"));
     classify_fcm_status_body(status, &body)
 }
 
 async fn classify_apns_response(response: reqwest::Response) -> DispatchOutcome {
     let status = response.status();
-    let body = response
-        .bytes()
+    if status.is_success() {
+        return DispatchOutcome::Sent;
+    }
+    let body = read_push_provider_response_bounded(response, "APNs send endpoint")
         .await
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .unwrap_or_default();
+        .unwrap_or_else(|error| format!("response body unavailable: {error}"));
     classify_apns_status_body(status, &body)
 }
 
@@ -1201,8 +1852,45 @@ mod tests {
     use super::*;
     use crate::data_dir::OverrideGuard;
     use base64::Engine as _;
+    use tokio::{
+        io::{AsyncReadExt as _, AsyncWriteExt as _},
+        net::TcpListener,
+    };
 
     const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
+
+    async fn raw_provider_response(response: Vec<u8>) -> reqwest::Response {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind push provider response listener");
+        let address = listener
+            .local_addr()
+            .expect("push provider response address");
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept provider request");
+            let mut request = [0_u8; 1024];
+            let _ = socket.read(&mut request).await;
+            socket
+                .write_all(&response)
+                .await
+                .expect("write provider response");
+        });
+        reqwest::Client::new()
+            .get(format!("http://{address}/push-provider"))
+            .send()
+            .await
+            .expect("receive provider response headers")
+    }
+
+    fn chunked_provider_response(status: &str, body_len: usize) -> Vec<u8> {
+        let mut response = format!(
+            "HTTP/1.1 {status}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{body_len:X}\r\n"
+        )
+        .into_bytes();
+        response.resize(response.len() + body_len, b'x');
+        response.extend_from_slice(b"\r\n0\r\n\r\n");
+        response
+    }
 
     fn test_bridge_config() -> actual::Push {
         actual::Push {
@@ -1210,6 +1898,47 @@ mod tests {
             fcm_project_id: Some("project".to_string()),
             fcm_service_account_path: Some(PathBuf::from("/tmp/service-account.json")),
             ..Default::default()
+        }
+    }
+
+    fn test_storage_limits(max_devices: usize, max_queue_jobs: usize) -> PushStorageLimits {
+        PushStorageLimits {
+            max_devices,
+            max_queue_jobs,
+            max_device_account_entries: max_devices,
+            dispatch_batch_size: max_queue_jobs,
+            ..PUSH_STORAGE_LIMITS
+        }
+    }
+
+    fn register_request(token: &str) -> RegisterDeviceRequest {
+        RegisterDeviceRequest {
+            account_id: TEST_ACCOUNT_I105.to_string(),
+            platform: "FCM".to_string(),
+            token: token.to_string(),
+            topics: None,
+        }
+    }
+
+    fn test_job(index: usize) -> DeliveryJob {
+        let token_fingerprint = fingerprint(format!("token-{index}").as_bytes());
+        let payload = PushActivityPayload {
+            account_id: TEST_ACCOUNT_I105.to_string(),
+            activity_kind: "Transfer".to_string(),
+            tx_hash: format!("tx-{index}"),
+            block_height: 7,
+            instruction_index: u64::try_from(index).expect("test index fits u64"),
+            direction: "incoming".to_string(),
+        };
+        DeliveryJob {
+            dedupe_key: delivery_dedupe_key(&payload, &token_fingerprint),
+            account_id: TEST_ACCOUNT_I105.to_string(),
+            token_fingerprint,
+            payload,
+            attempts: 0,
+            next_attempt_ms: 0,
+            created_at_ms: 0,
+            updated_at_ms: 0,
         }
     }
 
@@ -1259,6 +1988,216 @@ mod tests {
             )
             .expect("signature should verify")
         );
+    }
+
+    #[test]
+    fn bounded_push_file_read_accepts_exact_limit_and_rejects_limit_plus_one() {
+        let directory = tempfile::tempdir().expect("push read directory");
+        let path = directory.path().join("input.json");
+        fs::write(&path, b"12345678").expect("write bounded input");
+
+        assert_eq!(
+            read_bounded_stable_file(&path, 8).expect("exact byte limit"),
+            b"12345678"
+        );
+        let error = read_bounded_stable_file(&path, 7)
+            .expect_err("one byte beyond the limit must fail before allocation");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
+    async fn provider_response_reader_accepts_exact_limit_and_rejects_max_plus_one() {
+        let declared = raw_provider_response(
+            format!(
+                "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                MAX_PUSH_PROVIDER_RESPONSE_BYTES + 1
+            )
+            .into_bytes(),
+        )
+        .await;
+        let declared_error = read_push_provider_response_bounded(declared, "test provider")
+            .await
+            .expect_err("oversized Content-Length must fail before body allocation");
+        assert!(declared_error.contains("declared"));
+
+        let exact = raw_provider_response(chunked_provider_response(
+            "400 Bad Request",
+            MAX_PUSH_PROVIDER_RESPONSE_BYTES,
+        ))
+        .await;
+        assert_eq!(
+            read_push_provider_response_bounded(exact, "test provider")
+                .await
+                .expect("the exact provider response ceiling is accepted")
+                .len(),
+            MAX_PUSH_PROVIDER_RESPONSE_BYTES
+        );
+
+        let streamed = raw_provider_response(chunked_provider_response(
+            "400 Bad Request",
+            MAX_PUSH_PROVIDER_RESPONSE_BYTES + 1,
+        ))
+        .await;
+        let streamed_error = read_push_provider_response_bounded(streamed, "test provider")
+            .await
+            .expect_err("chunked max plus one must fail while streaming");
+        assert!(streamed_error.contains("while streaming"));
+    }
+
+    #[tokio::test]
+    async fn successful_provider_responses_skip_oversized_bodies() {
+        let oversized_success = || {
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                MAX_PUSH_PROVIDER_RESPONSE_BYTES + 1
+            )
+            .into_bytes()
+        };
+        assert_eq!(
+            classify_fcm_response(raw_provider_response(oversized_success()).await).await,
+            DispatchOutcome::Sent
+        );
+        assert_eq!(
+            classify_apns_response(raw_provider_response(oversized_success()).await).await,
+            DispatchOutcome::Sent
+        );
+    }
+
+    #[test]
+    fn bounded_json_write_rejects_oversize_before_creating_temp_file() {
+        let directory = tempfile::tempdir().expect("push write directory");
+        let path = directory.path().join("record.json");
+        let error = write_json_atomic(&path, &"x".repeat(32), 8)
+            .expect_err("oversized JSON must not reach the filesystem");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(!path.exists());
+        assert!(!path.with_extension("json.tmp").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_push_file_read_rejects_path_replacement_race() {
+        let directory = tempfile::tempdir().expect("push race directory");
+        let path = directory.path().join("input.json");
+        let replacement = directory.path().join("replacement.json");
+        fs::write(&path, b"old").expect("write original input");
+        fs::write(&replacement, b"replacement").expect("write replacement input");
+
+        let error = read_bounded_stable_file_with(&path, 32, || fs::rename(&replacement, &path))
+            .expect_err("path replacement after open must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_push_file_read_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("push symlink directory");
+        let target = directory.path().join("target.json");
+        let link = directory.path().join("link.json");
+        fs::write(&target, b"{}").expect("write symlink target");
+        symlink(&target, &link).expect("create push symlink");
+
+        assert!(read_bounded_stable_file(&link, 32).is_err());
+    }
+
+    #[test]
+    fn write_side_device_capacity_is_hard() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(temp.path());
+        let bridge = PushBridge::with_dispatcher_and_limits(
+            test_bridge_config(),
+            Arc::new(RealPushDispatcher),
+            test_storage_limits(1, 1),
+        );
+        bridge
+            .register_device(register_request("token-1"))
+            .expect("first device fits");
+        let error = bridge
+            .register_device(register_request("token-2"))
+            .expect_err("second device must cross the hard capacity");
+        assert!(matches!(error, PushError::Storage(_)));
+        assert_eq!(bridge.device_count(), 1);
+    }
+
+    #[test]
+    fn startup_queue_enumeration_stops_at_hard_candidate_count() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(temp.path());
+        let queue_root = temp.path().join(PUSH_DIR).join(QUEUE_DIR);
+        for index in 0..3 {
+            let job = test_job(index);
+            write_json_atomic(
+                &queue_root.join(format!("{}.json", job.dedupe_key)),
+                &job,
+                MAX_PUSH_QUEUE_JOB_BYTES,
+            )
+            .expect("write queue fixture");
+        }
+
+        let bridge = PushBridge::with_dispatcher_and_limits(
+            test_bridge_config(),
+            Arc::new(RealPushDispatcher),
+            test_storage_limits(1, 2),
+        );
+        assert_eq!(bridge.queued_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn due_queue_dispatch_collects_only_one_bounded_batch() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(temp.path());
+        let mut limits = test_storage_limits(1, 2);
+        limits.dispatch_batch_size = 1;
+        let bridge = PushBridge::with_dispatcher_and_limits(
+            test_bridge_config(),
+            Arc::new(RealPushDispatcher),
+            limits,
+        );
+        for index in 0..2 {
+            let job = test_job(index);
+            bridge.queue.insert(job.dedupe_key.clone(), job);
+        }
+
+        bridge.dispatch_due_once().await;
+        assert_eq!(
+            bridge.queued_count(),
+            1,
+            "one dispatch pass must consume at most one configured batch"
+        );
+    }
+
+    #[test]
+    fn write_side_queue_capacity_is_hard() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(temp.path());
+        let bridge = PushBridge::with_dispatcher_and_limits(
+            test_bridge_config(),
+            Arc::new(RealPushDispatcher),
+            test_storage_limits(2, 1),
+        );
+        bridge
+            .register_device(register_request("token-1"))
+            .expect("first device");
+        bridge
+            .register_device(register_request("token-2"))
+            .expect("second device");
+        let account = AccountId::parse_encoded(TEST_ACCOUNT_I105)
+            .expect("account")
+            .into_account_id();
+        let error = bridge
+            .enqueue_activity(
+                &account,
+                "tx-hash",
+                7,
+                0,
+                "Transfer",
+                AccountActivityRole::Incoming,
+            )
+            .expect_err("second fan-out job must cross the hard queue capacity");
+        assert!(matches!(error, PushError::Storage(_)));
+        assert_eq!(bridge.queued_count(), 1);
     }
 
     #[test]

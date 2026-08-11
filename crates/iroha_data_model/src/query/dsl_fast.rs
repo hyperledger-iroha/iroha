@@ -277,7 +277,7 @@ impl PredicateJsonPayload {
 
 impl<T> PartialEq for CompoundPredicate<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.to_wire() == other.to_wire()
+        self.wire_ref() == other.wire_ref()
     }
 }
 
@@ -298,6 +298,13 @@ impl<T> CompoundPredicate<T> {
         payload: None,
         marker: PhantomData,
     };
+
+    /// Return whether this is the allocation-free pass-through predicate.
+    #[inline]
+    #[must_use]
+    pub const fn is_pass(&self) -> bool {
+        self.payload.is_none()
+    }
 
     #[inline]
     #[must_use]
@@ -476,6 +483,21 @@ impl<T> CompoundPredicate<T> {
         CompoundPredicateWire::Pass
     }
 
+    fn wire_ref(&self) -> CompoundPredicateWireRef<'_> {
+        const REJECT: CommittedTxPredicate = CommittedTxPredicate::Const(false);
+
+        if let Some(payload) = self.payload.as_ref() {
+            if let Some(tree) = payload.downcast_ref::<CommittedTxPredicate>() {
+                return CompoundPredicateWireRef::TxPredicate(tree);
+            }
+            if let Some(json) = payload.downcast_ref::<PredicateJsonPayload>() {
+                return CompoundPredicateWireRef::Json(json.as_str());
+            }
+            return CompoundPredicateWireRef::TxPredicate(&REJECT);
+        }
+        CompoundPredicateWireRef::Pass
+    }
+
     fn from_wire(wire: CompoundPredicateWire) -> Result<Self, norito::core::Error>
     where
         T: 'static,
@@ -515,18 +537,78 @@ enum CompoundPredicateWire {
     TxPredicate(CommittedTxPredicate),
 }
 
-impl<T> norito::core::NoritoSerialize for CompoundPredicate<T> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompoundPredicateWireRef<'a> {
+    Pass,
+    Json(&'a str),
+    TxPredicate(&'a CommittedTxPredicate),
+}
+
+impl norito::core::NoritoSerialize for CompoundPredicateWireRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
-        let wire = self.to_wire();
-        norito::core::NoritoSerialize::serialize(&wire, writer)
+        let mut field = norito::core::DeriveSmallBuf::new();
+        match self {
+            Self::Pass => norito::core::NoritoSerialize::serialize(&0_u32, writer),
+            Self::Json(raw) => {
+                norito::core::NoritoSerialize::serialize(&1_u32, writer)?;
+                if norito::core::use_packed_struct() {
+                    norito::core::NoritoSerialize::serialize(raw, writer)
+                } else {
+                    norito::core::write_len_prefixed_exact(writer, raw, &mut field)
+                }
+            }
+            Self::TxPredicate(tree) => {
+                norito::core::NoritoSerialize::serialize(&2_u32, writer)?;
+                norito::core::write_len_prefixed_exact(writer, *tree, &mut field)
+            }
+        }
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        self.to_wire().encoded_len_hint()
+        match self {
+            Self::Pass => Some(4),
+            Self::Json(raw) => {
+                norito::core::NoritoSerialize::encoded_len_hint(raw)?.checked_add(12)
+            }
+            Self::TxPredicate(tree) => {
+                norito::core::NoritoSerialize::encoded_len_hint(*tree)?.checked_add(12)
+            }
+        }
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        self.to_wire().encoded_len_exact()
+        match self {
+            Self::Pass => Some(4),
+            Self::Json(raw) => {
+                let payload = norito::core::NoritoSerialize::encoded_len_exact(raw)?;
+                let outer = if norito::core::use_packed_struct() {
+                    0
+                } else {
+                    norito::core::len_prefix_len(payload)
+                };
+                4_usize.checked_add(outer)?.checked_add(payload)
+            }
+            Self::TxPredicate(tree) => {
+                let payload = norito::core::NoritoSerialize::encoded_len_exact(*tree)?;
+                4_usize
+                    .checked_add(norito::core::len_prefix_len(payload))?
+                    .checked_add(payload)
+            }
+        }
+    }
+}
+
+impl<T> norito::core::NoritoSerialize for CompoundPredicate<T> {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
+        norito::core::NoritoSerialize::serialize(&self.wire_ref(), writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_hint(&self.wire_ref())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        norito::core::NoritoSerialize::encoded_len_exact(&self.wire_ref())
     }
 }
 
@@ -988,6 +1070,14 @@ mod codec_tests {
         trigger,
     };
 
+    fn bare_bytes(value: &dyn NoritoSerialize) -> Vec<u8> {
+        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let mut bytes = Vec::new();
+        let mut encoder = norito::core::Encoder::for_buffer(&mut bytes);
+        value.serialize(&mut encoder).expect("encode bare value");
+        bytes
+    }
+
     #[allow(clippy::needless_pass_by_value)]
     fn expect_committed_tx_tree(predicate: CompoundPredicate<query::CommittedTransaction>) -> P {
         match predicate.to_wire() {
@@ -1080,9 +1170,11 @@ mod codec_tests {
     fn compound_predicate_norito_roundtrip_preserves_pass_variant() {
         let predicate = CompoundPredicate::<Domain>::PASS;
         let wire = predicate.to_wire();
+        assert!(predicate.is_pass());
         assert!(matches!(wire, CompoundPredicateWire::Pass));
         assert_eq!(predicate.encoded_len_hint(), wire.encoded_len_hint());
         assert_eq!(predicate.encoded_len_exact(), wire.encoded_len_exact());
+        assert_eq!(bare_bytes(&predicate), bare_bytes(&wire));
 
         let bytes = norito::to_bytes(&predicate).expect("encode pass predicate");
         let decoded: CompoundPredicate<Domain> =
@@ -1096,9 +1188,11 @@ mod codec_tests {
     fn compound_predicate_norito_roundtrip_preserves_json_variant() {
         let predicate = CompoundPredicate::<Domain>::build(|p| p.exists("id"));
         let wire = predicate.to_wire();
+        assert!(!predicate.is_pass());
         assert!(matches!(wire, CompoundPredicateWire::Json(_)));
         assert_eq!(predicate.encoded_len_hint(), wire.encoded_len_hint());
         assert_eq!(predicate.encoded_len_exact(), wire.encoded_len_exact());
+        assert_eq!(bare_bytes(&predicate), bare_bytes(&wire));
 
         let bytes = norito::to_bytes(&predicate).expect("encode json predicate");
         let decoded: CompoundPredicate<Domain> =
@@ -1196,6 +1290,12 @@ mod codec_tests {
             P::TsGte(10),
         );
         assert_ne!(successful, recent);
+
+        let unknown =
+            CompoundPredicate::<query::CommittedTransaction>::with_payload(Arc::new(17_u8));
+        let reject = CompoundPredicate::from_committed_tx_predicate(P::Const(false));
+        assert_eq!(unknown, reject);
+        assert_ne!(CompoundPredicate::PASS, unknown);
     }
 
     #[test]
@@ -1284,6 +1384,7 @@ mod codec_tests {
         assert!(matches!(wire, CompoundPredicateWire::TxPredicate(_)));
         assert_eq!(predicate.encoded_len_hint(), wire.encoded_len_hint());
         assert_eq!(predicate.encoded_len_exact(), wire.encoded_len_exact());
+        assert_eq!(bare_bytes(&predicate), bare_bytes(&wire));
 
         let bytes = norito::to_bytes(&predicate).expect("encode tree predicate");
         let decoded: CompoundPredicate<query::CommittedTransaction> =

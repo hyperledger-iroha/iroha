@@ -103,7 +103,7 @@ use iroha_data_model::{
     nft::NftId,
     parameter::Parameter,
     permission::Permission,
-    prelude::{AccountId, ChainId},
+    prelude::AccountId,
     privacy::{
         IrohaZkAmsProofV1, IrohaZkAmsStatementV1, IrohaZkX509StarkP256StatementV1,
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
@@ -459,11 +459,6 @@ fn keypair_to_py(py: Python<'_>, key_pair: KeyPair) -> PyResult<(Py<PyBytes>, Py
     let private = Py::from(PyBytes::new(py, private_bytes.as_slice()));
     private_bytes.fill(0);
     Ok((private, public))
-}
-
-fn parse_chain_id(value: &str) -> PyResult<ChainId> {
-    ChainId::from_str(value)
-        .map_err(|err| PyValueError::new_err(format!("invalid chain id: {err}")))
 }
 
 fn require_non_blank_unpadded(value: &str, field: &str) -> PyResult<()> {
@@ -985,6 +980,7 @@ fn parse_u128_text(value: &str, context: &str) -> PyResult<u128> {
     })
 }
 
+#[cfg(test)]
 fn parse_canonical_u128_text(value: &str, context: &str) -> PyResult<u128> {
     if value.is_empty()
         || value.len() > 39
@@ -997,17 +993,6 @@ fn parse_canonical_u128_text(value: &str, context: &str) -> PyResult<u128> {
     }
     value.parse::<u128>().map_err(|err| {
         PyValueError::new_err(format!("{context} must be an unsigned integer: {err}"))
-    })
-}
-
-fn parse_canonical_public_balance_scope_py(
-    value: &str,
-    context: &str,
-) -> PyResult<AssetBalanceScope> {
-    crate::privacy_native_actions::parse_canonical_public_balance_scope_v1(value).ok_or_else(|| {
-        PyValueError::new_err(format!(
-            "{context} must be exactly `global` or `dataspace:<canonical positive u64>`"
-        ))
     })
 }
 
@@ -12342,7 +12327,7 @@ impl SignedTransactionEnvelope {
         ];
         if let Some(field) = RETIRED_NETWORK_FIELDS
             .iter()
-            .find(|field| obj.contains_key(*field))
+            .find(|field| obj.contains_key(**field))
         {
             return Err(PyValueError::new_err(format!(
                 "retired `{field}` envelope field is not accepted"
@@ -13652,7 +13637,7 @@ fn privacy_exact12_action_driver_signing_seed_v1(
     hash.update(candidate_binding_sha256);
     hash.update(request_id);
     hash.update([0]);
-    let mut seed = Zeroizing::new(hash.finalize().into());
+    let mut seed: Zeroizing<[u8; 32]> = Zeroizing::new(hash.finalize().into());
     if seed.iter().all(|byte| *byte == 0) {
         seed[0] = 1;
     }
@@ -14231,14 +14216,12 @@ fn inspect_signed_privacy_vega_action_v1_py(
 fn inspect_signed_privacy_zk_x509_identity_presentation_action_v1_py(
     py: Python<'_>,
     signed_transaction_versioned: &[u8],
-    canonical_genesis_hash: &[u8],
+    network_id: &PyNetworkId,
 ) -> PyResult<Py<PyDict>> {
-    let canonical_genesis_hash =
-        python_nonzero_privacy_digest_v1(canonical_genesis_hash, "canonical_genesis_hash")?;
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
     crate::privacy_native_actions::inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
         &signed,
-        canonical_genesis_hash,
+        *network_id.inner.as_bytes(),
     )
     .map_err(|error| {
         PyValueError::new_err(format!(

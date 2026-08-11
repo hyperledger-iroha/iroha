@@ -124,7 +124,8 @@ sealed (manifest loaded) and ready for traffic. The summary view prints one row
 per lane:
 
 ```bash
-iroha_cli app nexus lane-report --summary --only-missing --fail-on-sealed
+iroha_cli --operator-private-key-file /absolute/runtime/operator.key \
+  app nexus lane-report --summary --only-missing --fail-on-sealed
 ```
 
 Example output:
@@ -140,14 +141,15 @@ If the default lane shows `sealed`, follow the lane governance runbook before
 allowing external traffic. The `--fail-on-sealed` flag is handy for CI.
 
 After lane governance is ready, run the Nexus lane smoke helper (shipped under
-`scripts/nexus_lane_smoke.py`) to validate `/v1/sumeragi/status` plus the
-Prometheus exports. Lanes flagged as `manifest_required=true` now need a
-non-empty `manifest_path` in the status payload—the helper fails if the manifest
-reference is missing so release bundles always capture the signed artefact path:
+`scripts/nexus_lane_smoke.py`) to validate the bounded public
+`/v1/nexus/lifecycle` projection plus the Prometheus exports. Lanes flagged as
+`manifest_required=true` need a non-empty `manifest_path` in that lifecycle
+payload—the helper fails if the manifest reference is missing so release
+bundles always capture the signed artefact path:
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-url https://torii.example.org/v1/sumeragi/status \
+  --lifecycle-url https://torii.example.org/v1/nexus/lifecycle \
   --metrics-url https://torii.example.org/metrics \
   --lane-alias core \
   --expected-lane-count 3 \

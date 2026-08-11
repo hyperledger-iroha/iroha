@@ -8,7 +8,12 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 
-/** Lightweight Torii client for confidential-asset query endpoints. */
+/**
+ * Exact-network Torii client for authenticated confidential-asset query endpoints.
+ *
+ * Every request is signed over its POST method, resolved path, and exact JSON body, and is marked
+ * one-shot so transports cannot redirect or retry the signature.
+ */
 class ConfidentialAssetToriiClient private constructor(builder: Builder) {
 
     private val executor: HttpTransportExecutor = builder.executor

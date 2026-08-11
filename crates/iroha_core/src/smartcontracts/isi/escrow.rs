@@ -2480,8 +2480,8 @@ impl ValidSingularQuery for FindAssetEscrowById {
             .world()
             .asset_escrows()
             .get(&self.escrow_id)
-            .cloned()
             .ok_or_else(|| QueryExecutionFail::Find(FindError::AssetEscrow(self.escrow_id)))
+            .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
     }
 }
 

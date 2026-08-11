@@ -53,6 +53,100 @@ fn encoder_erased_sink_propagates_write_errors() {
 }
 
 #[test]
+fn fixed_array_decode_builds_in_place_without_heap_staging() {
+    reset_decode_state();
+    let value = [0x1234_u16, 0x5678_u16];
+    let mut bytes = Vec::new();
+    serialize_to_buffer(&value, &mut bytes).expect("serialize fixed array payload");
+    let limits = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+
+    let (decoded, usage) = with_decode_limits_measured(limits, || {
+        <[u16; 2] as DecodeFromSlice>::decode_from_slice(&bytes)
+    });
+
+    assert_eq!(decoded.expect("fixed array decode").0, value);
+    assert_eq!(usage.total_allocated_bytes(), 0);
+    reset_decode_state();
+}
+
+#[test]
+fn fixed_array_initializer_drops_completed_elements_after_an_error() {
+    static DROPS: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Debug)]
+    struct DropProbe;
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            DROPS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    DROPS.store(0, Ordering::Relaxed);
+    let mut calls = 0;
+    let error = try_decode_array::<DropProbe, 4>(|| {
+        calls += 1;
+        if calls == 3 {
+            Err(Error::LengthMismatch)
+        } else {
+            Ok(DropProbe)
+        }
+    })
+    .expect_err("third element must fail");
+
+    assert!(matches!(error, Error::LengthMismatch));
+    assert_eq!(DROPS.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn owned_pointer_decoders_charge_their_wrapper_allocations() {
+    fn limits_below(bytes: usize) -> DecodeLimits {
+        DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes - 1, usize::MAX)
+    }
+
+    reset_decode_state();
+    let mut bytes = Vec::new();
+    serialize_to_buffer(&Box::new(7_u32), &mut bytes).expect("serialize Box");
+    let box_bytes = owned_box_allocation_bytes::<u32>();
+    let error = with_decode_limits(limits_below(box_bytes), || {
+        <Box<u32> as DecodeFromSlice>::decode_from_slice(&bytes).map(|_| ())
+    })
+    .expect_err("Box allocation must be charged");
+    assert!(matches!(
+        error,
+        Error::TotalAllocationExceeded { attempted, limit }
+            if attempted == box_bytes as u64 && limit == (box_bytes - 1) as u64
+    ));
+
+    bytes.clear();
+    serialize_to_buffer(&Rc::new(7_u32), &mut bytes).expect("serialize Rc");
+    let rc_bytes = owned_rc_allocation_bytes::<u32>().expect("Rc layout must fit");
+    let error = with_decode_limits(limits_below(rc_bytes), || {
+        <Rc<u32> as DecodeFromSlice>::decode_from_slice(&bytes).map(|_| ())
+    })
+    .expect_err("Rc allocation must be charged");
+    assert!(matches!(
+        error,
+        Error::TotalAllocationExceeded { attempted, limit }
+            if attempted == rc_bytes as u64 && limit == (rc_bytes - 1) as u64
+    ));
+
+    bytes.clear();
+    serialize_to_buffer(&Arc::new(7_u32), &mut bytes).expect("serialize Arc");
+    let arc_bytes = owned_arc_allocation_bytes::<u32>().expect("Arc layout must fit");
+    let error = with_decode_limits(limits_below(arc_bytes), || {
+        <Arc<u32> as DecodeFromSlice>::decode_from_slice(&bytes).map(|_| ())
+    })
+    .expect_err("Arc allocation must be charged");
+    assert!(matches!(
+        error,
+        Error::TotalAllocationExceeded { attempted, limit }
+            if attempted == arc_bytes as u64 && limit == (arc_bytes - 1) as u64
+    ));
+    reset_decode_state();
+}
+
+#[test]
 fn owned_value_decode_depth_guard_is_bounded_and_restores() {
     let guards = (0..MAX_OWNED_VALUE_DECODE_DEPTH)
         .map(|_| OwnedValueDecodeDepthGuard::enter().expect("depth within codec limit"))
@@ -828,6 +922,41 @@ impl<'a> DecodeFromSlice<'a> for BadExactLen {
     }
 }
 
+const HOSTILE_GROWTH_CHUNK_BYTES: usize = 4 * 1024;
+const HOSTILE_GROWTH_WRITES: usize = 256;
+
+struct HostileGrowingSecondPass(std::cell::Cell<usize>);
+
+impl NoritoSerialize for HostileGrowingSecondPass {
+    fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
+        let pass = self.0.get();
+        self.0.set(pass + 1);
+        writer.write_all(&[0x11])?;
+        if pass != 0 {
+            for _ in 0..HOSTILE_GROWTH_WRITES {
+                writer.write_all(&[0x22; HOSTILE_GROWTH_CHUNK_BYTES])?;
+            }
+        }
+        Ok(())
+    }
+}
+
+struct HostileBadExactLen;
+
+impl NoritoSerialize for HostileBadExactLen {
+    fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
+        writer.write_all(&[0x11])?;
+        for _ in 0..HOSTILE_GROWTH_WRITES {
+            writer.write_all(&[0x22; HOSTILE_GROWTH_CHUNK_BYTES])?;
+        }
+        Ok(())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(1)
+    }
+}
+
 #[test]
 fn decode_field_canonical_ignores_bad_encoded_len_exact() {
     let value = BadExactLen(0xAABBCCDD);
@@ -857,6 +986,93 @@ fn encoded_payload_len_ignores_bad_encoded_len_exact() {
 }
 
 #[test]
+fn bounded_frame_matches_canonical_bytes_at_exact_limit() {
+    let value = vec![1_u64, 2, 3, 5, 8, 13];
+    let canonical = to_bytes(&value).expect("encode canonical frame");
+    let bounded =
+        to_bytes_bounded(&value, canonical.len()).expect("encode canonical frame at exact bound");
+    assert_eq!(bounded, canonical);
+}
+
+#[test]
+fn bounded_frame_rejects_one_byte_below_real_count_before_second_pass() {
+    use std::cell::Cell;
+
+    struct CountCalls(Cell<usize>);
+
+    impl NoritoSerialize for CountCalls {
+        fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
+            self.0.set(self.0.get() + 1);
+            writer.write_all(&[0xA5])?;
+            Ok(())
+        }
+    }
+
+    let value = CountCalls(Cell::new(0));
+    let exact = Header::SIZE + payload_alignment_padding_for::<CountCalls>() + 1;
+    assert!(matches!(
+        to_bytes_bounded(&value, exact - 1),
+        Err(BoundedEncodeError::FrameTooLarge {
+            encoded_bytes,
+            max_bytes,
+        }) if encoded_bytes == exact && max_bytes == exact - 1
+    ));
+    assert_eq!(
+        value.0.get(),
+        1,
+        "oversized frames must not run an output pass"
+    );
+}
+
+#[test]
+fn bounded_frame_rejects_second_pass_growth_past_counted_capacity() {
+    use std::cell::Cell;
+
+    struct GrowingSecondPass(Cell<usize>);
+
+    impl NoritoSerialize for GrowingSecondPass {
+        fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
+            let pass = self.0.get();
+            self.0.set(pass + 1);
+            writer.write_all(if pass == 0 { &[0x11] } else { &[0x11, 0x22] })?;
+            Ok(())
+        }
+    }
+
+    let value = GrowingSecondPass(Cell::new(0));
+    let exact = Header::SIZE + payload_alignment_padding_for::<GrowingSecondPass>() + 1;
+    assert!(matches!(
+        to_bytes_bounded(&value, exact),
+        Err(BoundedEncodeError::Serialization(Error::LengthMismatch))
+    ));
+    assert_eq!(value.0.get(), 2);
+}
+
+#[test]
+fn bounded_frame_rejects_second_pass_shrinkage() {
+    use std::cell::Cell;
+
+    struct ShrinkingSecondPass(Cell<usize>);
+
+    impl NoritoSerialize for ShrinkingSecondPass {
+        fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
+            let pass = self.0.get();
+            self.0.set(pass + 1);
+            writer.write_all(if pass == 0 { &[0x11, 0x22] } else { &[0x11] })?;
+            Ok(())
+        }
+    }
+
+    let value = ShrinkingSecondPass(Cell::new(0));
+    let exact = Header::SIZE + payload_alignment_padding_for::<ShrinkingSecondPass>() + 2;
+    assert!(matches!(
+        to_bytes_bounded(&value, exact),
+        Err(BoundedEncodeError::Serialization(Error::LengthMismatch))
+    ));
+    assert_eq!(value.0.get(), 2);
+}
+
+#[test]
 fn write_len_prefixed_uses_actual_length() {
     let value = BadExactLen(0xDEADBEEF);
     let mut out = Vec::new();
@@ -865,6 +1081,84 @@ fn write_len_prefixed_uses_actual_length() {
     write_len_prefixed(&mut encoder, &value, &mut tmp).expect("write len prefixed");
     let (len, hdr) = read_len_from_slice(&out).expect("read len");
     assert_eq!(len, out.len() - hdr);
+}
+
+#[test]
+fn write_len_prefixed_does_not_materialize_an_unhinted_field() {
+    struct UnhintedField(Vec<u8>);
+
+    impl NoritoSerialize for UnhintedField {
+        fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
+            writer.write_all(&self.0)?;
+            Ok(())
+        }
+    }
+
+    let value = UnhintedField(vec![0x5a; DERIVE_SMALLBUF_SIZE * 4]);
+    let mut out = Vec::new();
+    let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
+    let mut encoder = Encoder::for_buffer(&mut out);
+    write_len_prefixed(&mut encoder, &value, &mut tmp).expect("write unhinted field");
+    let (len, header_bytes) = read_len_from_slice(&out).expect("read field length");
+    assert_eq!(len, value.0.len());
+    assert_eq!(&out[header_bytes..], value.0.as_slice());
+    assert!(
+        !tmp.spilled && tmp.spill.capacity() == 0,
+        "count-first direct serialization must not retain a field-sized spill buffer"
+    );
+}
+
+#[test]
+fn write_len_prefixed_rejects_a_changed_second_pass() {
+    let value = HostileGrowingSecondPass(std::cell::Cell::new(0));
+    let mut out = Vec::with_capacity(32);
+    let initial_capacity = out.capacity();
+    let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
+    let error = {
+        let mut encoder = Encoder::for_buffer(&mut out);
+        write_len_prefixed(&mut encoder, &value, &mut tmp)
+            .expect_err("second-pass growth must fail")
+    };
+    assert!(matches!(error, Error::LengthMismatch));
+    assert_eq!(value.0.get(), 2);
+    let (declared, header_bytes) = read_len_from_slice(&out).expect("declared field length");
+    assert_eq!(declared, 1);
+    assert_eq!(&out[header_bytes..], &[0x11]);
+    assert_eq!(out.capacity(), initial_capacity);
+}
+
+#[test]
+fn serialize_to_writer_exact_rejects_growth_before_forwarding_it() {
+    let value = HostileGrowingSecondPass(std::cell::Cell::new(0));
+    let expected = encoded_payload_len(&value).expect("count hostile payload");
+    assert_eq!(expected, 1);
+
+    let mut out = Vec::with_capacity(8);
+    let initial_capacity = out.capacity();
+    assert!(matches!(
+        serialize_to_writer_exact(&value, &mut out, expected),
+        Err(Error::LengthMismatch)
+    ));
+    assert_eq!(value.0.get(), 2);
+    assert_eq!(out, [0x11]);
+    assert_eq!(out.capacity(), initial_capacity);
+}
+
+#[test]
+fn write_len_prefixed_exact_caps_an_incorrect_exact_implementation() {
+    let mut out = Vec::with_capacity(32);
+    let initial_capacity = out.capacity();
+    let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
+    let error = {
+        let mut encoder = Encoder::for_buffer(&mut out);
+        write_len_prefixed_exact(&mut encoder, &HostileBadExactLen, &mut tmp)
+            .expect_err("incorrect exact length must fail")
+    };
+    assert!(matches!(error, Error::LengthMismatch));
+    let (declared, header_bytes) = read_len_from_slice(&out).expect("declared exact length");
+    assert_eq!(declared, 1);
+    assert_eq!(&out[header_bytes..], &[0x11]);
+    assert_eq!(out.capacity(), initial_capacity);
 }
 
 #[test]
@@ -891,21 +1185,17 @@ enum BadExactEnum {
 }
 
 #[test]
-fn derived_struct_uses_actual_length_prefix() {
+fn derived_struct_rejects_incorrect_exact_field_length() {
     let value = BadExactWrapper {
         inner: BadExactLen(0xAABBCCDD),
     };
-    let bytes = encode_adaptive(&value);
-    let decoded: BadExactWrapper = codec::decode_adaptive(&bytes).expect("decode wrapper");
-    assert_eq!(decoded, value);
+    assert!(matches!(to_bytes(&value), Err(Error::LengthMismatch)));
 }
 
 #[test]
-fn derived_enum_uses_actual_length_prefix() {
+fn derived_enum_rejects_incorrect_exact_field_length() {
     let value = BadExactEnum::One(BadExactLen(0x11223344));
-    let bytes = encode_adaptive(&value);
-    let decoded: BadExactEnum = codec::decode_adaptive(&bytes).expect("decode enum");
-    assert_eq!(decoded, value);
+    assert!(matches!(to_bytes(&value), Err(Error::LengthMismatch)));
 }
 
 #[test]

@@ -68,39 +68,67 @@ class HttpClientTransportTest {
         AccountAddress.fromAccount(TestEd25519Keys.publicKey(seed), "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
-    private fun noncanonicalStandardBase64PadBitAlias(encoded: String): String {
-        require(encoded.endsWith("==")) { "64-byte signatures encode with == padding" }
-        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-        val chars = encoded.toCharArray()
-        val index = chars.size - 3
-        val value = alphabet.indexOf(chars[index])
-        require(value >= 0) { "standard base64 alphabet" }
-        chars[index] = alphabet[value xor 0x01]
-        return String(chars)
-    }
-
     @Test
-    fun issueIdentifierClaimReceiptForwardsAccountAliasPathLiteral() {
+    fun issueIdentifierClaimReceiptBindsCanonicalPathAccount() {
         val executor = CapturingExecutor()
+        val accountId = testAccountId(0x33)
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            config = signedClientConfig("https://torii.example/api"),
         )
 
         transport.issueIdentifierClaimReceipt(
-            "alice@wonderland.dataspace",
+            accountId,
             IdentifierResolveRequest.encrypted("phone#retail", "abcd", sampleOpening()),
+            applicationAuth(accountId),
         ).join()
 
         assertEquals(
-            "https://torii.example/api/v1/accounts/alice%40wonderland.dataspace/identifiers/claim-receipt",
-            executor.lastRequest.uri.toString(),
+            "/api/v1/accounts/$accountId/identifiers/claim-receipt",
+            executor.lastRequest.uri.path,
+        )
+        assertEquals(accountId, executor.lastRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single())
+        assertEquals(
+            org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy.ONE_SHOT,
+            executor.lastRequest.replayPolicy,
         )
         @Suppress("UNCHECKED_CAST")
         val body = JsonParser.parse(readBody(executor.lastRequest)) as Map<String, Any?>
         assertEquals("phone#retail", body["policy_id"])
         assertEquals("abcd", body["encrypted_input"])
         assertTrue(body["output_opening"] is Map<*, *>)
+    }
+
+    @Test
+    fun applicationPostsRejectPathSubstitutionAndPrecomputedAuthBeforeDispatch() {
+        val executor = CapturingExecutor()
+        val accountId = testAccountId(0x33)
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = signedClientConfig("https://torii.example"),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            transport.issueIdentifierClaimReceipt(
+                accountId,
+                IdentifierResolveRequest.encrypted("phone#retail", "abcd", sampleOpening()),
+                applicationAuth(testAccountId(0x34)),
+            )
+        }
+        val injected = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = signedClientConfig("https://torii.example").toBuilder()
+                .putDefaultHeader(CanonicalRequestSigner.HEADER_SIGNATURE, "precomputed")
+                .build(),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            injected.resolveIdentifier(
+                IdentifierResolveRequest.encrypted("phone#retail", "abcd", sampleOpening()),
+                applicationAuth(),
+            )
+        }
+
+        assertEquals(0, executor.requestCount)
     }
 
     @Test
@@ -1604,11 +1632,15 @@ class HttpClientTransportTest {
         )
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+            config = signedClientConfig("https://torii.example"),
         )
 
         val response = transport
-            .executeRamLfeProgram("identifier_lookup_retail", RamLfeExecuteRequest.encrypted("0xABCD"))
+            .executeRamLfeProgram(
+                "identifier_lookup_retail",
+                RamLfeExecuteRequest.encrypted("0xABCD"),
+                applicationAuth(),
+            )
             .join()
 
         assertTrue(response.isPresent)
@@ -1636,11 +1668,15 @@ class HttpClientTransportTest {
         )
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+            config = signedClientConfig("https://torii.example"),
         )
 
         val response = transport
-            .executeRamLfeProgram("identifier_lookup_retail", RamLfeExecuteRequest.encrypted("ABCD"))
+            .executeRamLfeProgram(
+                "identifier_lookup_retail",
+                RamLfeExecuteRequest.encrypted("ABCD"),
+                applicationAuth(),
+            )
             .join()
 
         assertFalse(response.isPresent)
@@ -1657,7 +1693,7 @@ class HttpClientTransportTest {
         )
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            config = signedClientConfig("https://torii.example/api"),
         )
         val receipt = linkedMapOf<String, Any>(
             "payload" to linkedMapOf<String, Any?>(
@@ -1673,7 +1709,7 @@ class HttpClientTransportTest {
             "signature" to "aa".repeat(64),
         )
 
-        val response = transport.verifyRamLfeReceipt(receipt, "C0FFEE").join()
+        val response = transport.verifyRamLfeReceipt(receipt, "C0FFEE", applicationAuth()).join()
 
         assertTrue(response.valid)
         assertEquals("identifier_lookup_retail", response.programId)
@@ -1764,48 +1800,6 @@ class HttpClientTransportTest {
             )
         }
     }
-
-    private fun ramLfeExecuteResponseJson(): String =
-        """
-            {
-              "program_id": "identifier_lookup_retail",
-              "opaque_hash": "${"11".repeat(32)}",
-              "receipt_hash": "${"22".repeat(32)}",
-              "output_ciphertext": "abcd",
-              "output_hash": "${"44".repeat(32)}",
-              "associated_data_hash": "${"55".repeat(32)}",
-              "executed_at_ms": 42,
-              "expires_at_ms": 142,
-              "backend": "bfv-programmed-sha3-256-v1",
-              "verification_mode": "signed",
-              "receipt": {
-                "payload": {
-                  "program_id": {"name": "identifier_lookup_retail"},
-                  "program_digest": "hash:${"11".repeat(32).uppercase()}#ABCD",
-                  "backend": "bfv-programmed-sha3-256-v1",
-                  "verification_mode": {"mode": "Signed", "value": null},
-                  "output_hash": "hash:${"22".repeat(32).uppercase()}#BCDE",
-                  "associated_data_hash": "hash:${"33".repeat(32).uppercase()}#CDEF",
-                  "executed_at_ms": 42,
-                  "expires_at_ms": 142
-                },
-                "signature": "${"aa".repeat(64)}"
-              }
-            }
-        """.trimIndent()
-
-    private fun ramLfeReceiptVerifyResponseJson(): String =
-        """
-            {
-              "valid": true,
-              "program_id": "identifier_lookup_retail",
-              "backend": "bfv-programmed-sha3-256-v1",
-              "verification_mode": "signed",
-              "output_hash": "${"44".repeat(32)}",
-              "associated_data_hash": "${"55".repeat(32)}",
-              "output_hash_matches": true
-            }
-        """.trimIndent()
 
     @Test
     fun createVpnQuoteSignsCanonicalBodyAndParsesOpenLeaseInstruction() {

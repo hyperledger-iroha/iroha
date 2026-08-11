@@ -38,8 +38,8 @@ incident retrospectives.
   reconcile the finalized task/event projection before storage work. Provider
   owners may delegate/revoke the permission, and there is no admin-only repair
   override.
-- SoraNet privacy ingest: `/v1/soranet/privacy/{event,share}` stays disabled until `torii.soranet_privacy_ingest.enabled=true`. Tokens must match `torii.soranet_privacy_ingest.tokens` (`X-SoraNet-Privacy-Token` or `X-API-Token`), submitters must come from `allow_cidrs` (empty list denies), and rate limits apply via `rate_per_sec`/`burst`; rejects emit `soranet_privacy_ingest_reject_total{endpoint,reason}`.
-- Operations: when rotating submitter tokens/allow-lists, update `torii.soranet_privacy_ingest.*` and `gov.sorafs_telemetry` maps together, deploy the config bundle, and confirm a test submission succeeds while rejects counters reset; rotate provider ownership only through the native Parliament proposal/enactment lifecycle before issuing new orders or telemetry.
+- SoraNet privacy ingest: `/v1/soranet/privacy/{event,share}` stays disabled until `torii.soranet_privacy_ingest.enabled=true`. Every request requires a fresh exact NetworkId-bound operator signature from an allow-listed key; submitters must also come from `allow_cidrs` (empty list denies), and per-operator limits apply via `rate_per_sec`/`burst`. Bearer collector/API tokens are retired; rejects emit `soranet_privacy_ingest_reject_total{endpoint,reason}`.
+- Operations: when rotating submitter keys/allow-lists, update `torii.operator_signatures`, `torii.soranet_privacy_ingest`, and `gov.sorafs_telemetry` together, deploy the config bundle, and confirm a signed test submission succeeds while unsigned/replayed/wrong-network samples fail; rotate provider ownership only through the native Parliament proposal/enactment lifecycle before issuing new orders or telemetry.
 
 ## Escalation Matrix
 

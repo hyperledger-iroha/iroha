@@ -233,11 +233,15 @@ crates:
 
 The helper executes `cargo check`/`cargo test` for `mochi-core`, `mochi-ui`, and
 `mochi-integration`, which catches fixture drift (canonical block/event captures) and egui harness
-regressions in one shot. If the script reports stale fixtures, rerun the ignored regeneration tests,
-for example:
+regressions in one shot. The ignored fixture owners are read-only unless an explicit private
+external stage is supplied. Check the tracked captures with:
 
 ```bash
-cargo test -p mochi-core regenerate_block_wire_fixture -- --ignored
+CARGO_TARGET_DIR="${IROHA_MOCHI_CANONICAL_FIXTURE_CARGO_TARGET_DIR:?set a private external Cargo target directory}" env -u IROHA_MOCHI_CANONICAL_FIXTURE_STAGE cargo test --locked --offline -p mochi-core --lib canonical_torii_binary_fixture_owner -- --ignored
+CARGO_TARGET_DIR="${IROHA_MOCHI_REPLAY_FIXTURE_CARGO_TARGET_DIR:?set a private external Cargo target directory}" env -u IROHA_MOCHI_REPLAY_FIXTURE_STAGE cargo test --locked --offline -p mochi-integration --lib torii_replay_fixture_owner -- --ignored
 ```
 
-Re-running the gate after regenerating ensures the updated bytes stay consistent before you push.
+For regeneration, use the external-stage commands registered under
+`mochi-canonical-torii-binary-fixtures` and `mochi-torii-replay-fixtures` in
+`generated-files.toml`; inspect each complete staged tree before publishing it. Re-running the gate
+after publication ensures the updated bytes stay consistent before you push.

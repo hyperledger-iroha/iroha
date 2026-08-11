@@ -4,25 +4,35 @@
 //! shard-aligned lane along with the block height that advanced it. This index
 //! is rebuilt from the Kura block log on startup so it remains consistent with
 //! committed history even without a dedicated column family.
+//! Durable candidates are rejected before allocation when their encoded size,
+//! collection cardinality, or Norito decode budget exceeds protocol bounds.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{self, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
 };
 
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_data_model::{
     da::commitment::{DaCommitmentBundle, DaCommitmentRecord},
-    nexus::{LaneId, ShardId},
+    nexus::{LaneId, MAX_ACTIVE_EXECUTION_LANES, ShardId},
 };
 use iroha_logger::warn;
 use norito::{
+    DecodeLimits,
     codec::{Decode, Encode},
-    decode_from_bytes, to_bytes,
+    decode_from_bytes_with_limits, to_bytes,
 };
 use thiserror::Error;
+
+/// First-release ceiling for cursor/reset records in one durable journal.
+const SHARD_CURSOR_JOURNAL_MAX_ENTRIES: usize = MAX_ACTIVE_EXECUTION_LANES;
+/// First-release encoded ceiling for one cursor journal candidate.
+const SHARD_CURSOR_JOURNAL_MAX_BYTES: usize = 512 * 1024;
+const SHARD_CURSOR_JOURNAL_MAX_DECODE_ALLOCATED_BYTES: usize = 1024 * 1024;
+const SHARD_CURSOR_JOURNAL_MAX_DECODE_DEPTH: usize = 32;
 
 /// Cursor describing the latest DA commitment accepted for a shard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -762,6 +772,11 @@ impl DaShardCursorJournal {
     /// Returns [`ShardCursorJournalError::Write`] when the journal cannot be written or
     /// [`ShardCursorJournalError::Encode`] when encoding fails.
     pub fn persist(&self) -> Result<(), ShardCursorJournalError> {
+        Self::validate_entry_counts(
+            &self.path,
+            self.cursors.len(),
+            self.canonical_reset_heights.len(),
+        )?;
         let entries: Vec<_> = self.cursors.values().copied().collect();
         let payload = PersistedShardCursors {
             version: Self::JOURNAL_VERSION,
@@ -769,6 +784,16 @@ impl DaShardCursorJournal {
             entries,
         };
         let bytes = to_bytes(&payload).map_err(ShardCursorJournalError::Encode)?;
+        if bytes.len() > SHARD_CURSOR_JOURNAL_MAX_BYTES {
+            return Err(ShardCursorJournalError::InvalidEntry {
+                path: self.path.clone(),
+                reason: format!(
+                    "encoded journal is {} bytes (maximum {})",
+                    bytes.len(),
+                    SHARD_CURSOR_JOURNAL_MAX_BYTES
+                ),
+            });
+        }
 
         Self::create_journal_parent_no_follow(&self.path)?;
         let tmp_path = Self::temp_path(&self.path);
@@ -976,8 +1001,35 @@ impl DaShardCursorJournal {
                 ),
             });
         }
-        let bytes = match fs::read(path) {
-            Ok(bytes) => bytes,
+        if metadata.len() > u64::try_from(SHARD_CURSOR_JOURNAL_MAX_BYTES).unwrap_or(u64::MAX) {
+            return Err(ShardCursorJournalError::Read {
+                path: path.to_path_buf(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "DA shard cursor journal exceeds its {}-byte hard limit",
+                        SHARD_CURSOR_JOURNAL_MAX_BYTES
+                    ),
+                ),
+            });
+        }
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            let nofollow = i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits())
+                .expect("NOFOLLOW flag bits fit the platform custom-flags type");
+            options.custom_flags(nofollow);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt as _;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        let mut file = match options.open(path) {
+            Ok(file) => file,
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(source) => {
                 return Err(ShardCursorJournalError::Read {
@@ -986,12 +1038,54 @@ impl DaShardCursorJournal {
                 });
             }
         };
+        let opened_metadata = file
+            .metadata()
+            .map_err(|source| ShardCursorJournalError::Read {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if !opened_metadata.is_file() || opened_metadata.len() != metadata.len() {
+            return Err(ShardCursorJournalError::Read {
+                path: path.to_path_buf(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "DA shard cursor journal changed while opening",
+                ),
+            });
+        }
+        let mut bytes = Vec::with_capacity(
+            usize::try_from(opened_metadata.len())
+                .unwrap_or(SHARD_CURSOR_JOURNAL_MAX_BYTES)
+                .min(SHARD_CURSOR_JOURNAL_MAX_BYTES),
+        );
+        Read::by_ref(&mut file)
+            .take(
+                u64::try_from(SHARD_CURSOR_JOURNAL_MAX_BYTES)
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(1),
+            )
+            .read_to_end(&mut bytes)
+            .map_err(|source| ShardCursorJournalError::Read {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if bytes.len() > SHARD_CURSOR_JOURNAL_MAX_BYTES {
+            return Err(ShardCursorJournalError::Read {
+                path: path.to_path_buf(),
+                source: io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "DA shard cursor journal grew beyond its hard byte limit while reading",
+                ),
+            });
+        }
         Self::revalidate_persisted_read(path, &metadata, bytes.len())?;
 
         let persisted: PersistedShardCursors =
-            decode_from_bytes(&bytes).map_err(|source| ShardCursorJournalError::Decode {
-                path: path.to_path_buf(),
-                source,
+            decode_from_bytes_with_limits(&bytes, Self::decode_limits()).map_err(|source| {
+                ShardCursorJournalError::Decode {
+                    path: path.to_path_buf(),
+                    source,
+                }
             })?;
 
         if persisted.version != Self::JOURNAL_VERSION {
@@ -1042,6 +1136,11 @@ impl DaShardCursorJournal {
         path: &Path,
         persisted: &PersistedShardCursors,
     ) -> Result<(), ShardCursorJournalError> {
+        Self::validate_entry_counts(
+            path,
+            persisted.entries.len(),
+            persisted.canonical_reset_heights.len(),
+        )?;
         let mut seen = BTreeSet::new();
         let mut previous_key = None;
         for (index, entry) in persisted.entries.iter().enumerate() {
@@ -1065,6 +1164,40 @@ impl DaShardCursorJournal {
             previous_key = Some(key);
         }
         Ok(())
+    }
+
+    fn validate_entry_counts(
+        path: &Path,
+        entries: usize,
+        reset_heights: usize,
+    ) -> Result<(), ShardCursorJournalError> {
+        if entries > SHARD_CURSOR_JOURNAL_MAX_ENTRIES {
+            return Err(ShardCursorJournalError::InvalidEntry {
+                path: path.to_path_buf(),
+                reason: format!(
+                    "journal contains {entries} cursor entries (maximum {SHARD_CURSOR_JOURNAL_MAX_ENTRIES})"
+                ),
+            });
+        }
+        if reset_heights > SHARD_CURSOR_JOURNAL_MAX_ENTRIES {
+            return Err(ShardCursorJournalError::InvalidEntry {
+                path: path.to_path_buf(),
+                reason: format!(
+                    "journal contains {reset_heights} reset heights (maximum {SHARD_CURSOR_JOURNAL_MAX_ENTRIES})"
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn decode_limits() -> DecodeLimits {
+        DecodeLimits::new(
+            SHARD_CURSOR_JOURNAL_MAX_ENTRIES,
+            SHARD_CURSOR_JOURNAL_MAX_BYTES,
+            SHARD_CURSOR_JOURNAL_MAX_ENTRIES.saturating_mul(4),
+            SHARD_CURSOR_JOURNAL_MAX_DECODE_ALLOCATED_BYTES,
+            SHARD_CURSOR_JOURNAL_MAX_DECODE_DEPTH,
+        )
     }
 
     fn compare_journals(
@@ -1971,6 +2104,57 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn journal_resource_limits_reject_first_overflow_without_allocating_it() {
+        let path = Path::new("da-shard-cursors.norito");
+        DaShardCursorJournal::validate_entry_counts(
+            path,
+            SHARD_CURSOR_JOURNAL_MAX_ENTRIES,
+            SHARD_CURSOR_JOURNAL_MAX_ENTRIES,
+        )
+        .expect("exact cursor/reset limits are valid");
+
+        assert!(matches!(
+            DaShardCursorJournal::validate_entry_counts(
+                path,
+                SHARD_CURSOR_JOURNAL_MAX_ENTRIES + 1,
+                0,
+            ),
+            Err(ShardCursorJournalError::InvalidEntry { reason, .. })
+                if reason.contains("cursor entries")
+        ));
+        assert!(matches!(
+            DaShardCursorJournal::validate_entry_counts(
+                path,
+                0,
+                SHARD_CURSOR_JOURNAL_MAX_ENTRIES + 1,
+            ),
+            Err(ShardCursorJournalError::InvalidEntry { reason, .. })
+                if reason.contains("reset heights")
+        ));
+    }
+
+    #[test]
+    fn journal_load_rejects_oversized_sparse_file_before_decode() {
+        let dir = tempdir().expect("tempdir");
+        let config = lane_config_with_mapping(0, 0);
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        fs::File::create(&path)
+            .and_then(|file| {
+                file.set_len(
+                    u64::try_from(SHARD_CURSOR_JOURNAL_MAX_BYTES + 1)
+                        .expect("journal byte limit fits u64"),
+                )
+            })
+            .expect("create oversized sparse cursor journal");
+
+        assert!(matches!(
+            DaShardCursorJournal::load(&config, &path),
+            Err(ShardCursorJournalError::Read { path: failed_path, source })
+                if failed_path == path && source.kind() == io::ErrorKind::InvalidData
+        ));
     }
 
     #[cfg(unix)]

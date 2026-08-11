@@ -1,10 +1,9 @@
 //! Inspect a Norito-framed genesis block for validator and `PoP` registrations.
 
-use std::{collections::BTreeMap, env, fs};
+use std::{env, path::Path};
 
 use eyre::{Result, eyre};
 use iroha_data_model::{
-    block::decode_framed_signed_block,
     isi::{
         register::RegisterPeerWithPop,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
@@ -17,71 +16,103 @@ fn main() -> Result<()> {
     let path = env::args()
         .nth(1)
         .ok_or_else(|| eyre!("usage: genesis_inspect <genesis.nrt>"))?;
-    let bytes = fs::read(&path)?;
-    let block = decode_framed_signed_block(&bytes)?;
+    let block = iroha_genesis::read_signed_genesis(Path::new(&path))?;
 
-    let mut peers = Vec::new();
-    let mut validators = Vec::new();
-    let mut activations = Vec::new();
+    let count_matching = |matches: fn(&iroha_data_model::isi::InstructionBox) -> bool| {
+        block
+            .external_transactions()
+            .filter_map(|transaction| match transaction.instructions() {
+                Executable::Instructions(batch) => Some(batch),
+                _ => None,
+            })
+            .flat_map(|batch| batch.iter())
+            .filter(|instruction| matches(instruction))
+            .count()
+    };
+    let peers = count_matching(|instruction| {
+        instruction
+            .as_any()
+            .downcast_ref::<RegisterPeerWithPop>()
+            .is_some()
+    });
+    let validators = count_matching(|instruction| {
+        instruction
+            .as_any()
+            .downcast_ref::<RegisterPublicLaneValidator>()
+            .is_some()
+    });
+    let activations = count_matching(|instruction| {
+        instruction
+            .as_any()
+            .downcast_ref::<ActivatePublicLaneValidator>()
+            .is_some()
+    });
 
-    for tx in block.external_transactions() {
-        if let Executable::Instructions(batch) = tx.instructions() {
-            for instr in batch {
-                if let Some(peer) = instr.as_any().downcast_ref::<RegisterPeerWithPop>() {
-                    peers.push((
-                        peer.peer.clone(),
-                        peer.pop.len(),
-                        peer.activation_at,
-                        peer.expiry_at,
-                    ));
-                    continue;
-                }
-                if let Some(reg) = instr.as_any().downcast_ref::<RegisterPublicLaneValidator>() {
-                    validators.push((
-                        *reg.lane_id(),
-                        reg.validator().clone(),
-                        reg.stake_account().clone(),
-                        reg.initial_stake().clone(),
-                    ));
-                    continue;
-                }
-                if let Some(act) = instr.as_any().downcast_ref::<ActivatePublicLaneValidator>() {
-                    activations.push((*act.lane_id(), act.validator().clone()));
-                }
+    println!(
+        "event=genesis_inspect peers_with_pop={count}",
+        count = peers
+    );
+    for transaction in block.external_transactions() {
+        let Executable::Instructions(batch) = transaction.instructions() else {
+            continue;
+        };
+        for instruction in batch {
+            if let Some(peer) = instruction.as_any().downcast_ref::<RegisterPeerWithPop>() {
+                println!(
+                    "peer={} pop_len={} activation_at={:?} expiry_at={:?}",
+                    peer.peer,
+                    peer.pop.len(),
+                    peer.activation_at,
+                    peer.expiry_at
+                );
             }
         }
     }
 
     println!(
-        "event=genesis_inspect peers_with_pop={count}",
-        count = peers.len()
-    );
-    for (peer, pop_len, activation_at, expiry_at) in &peers {
-        println!(
-            "peer={peer} pop_len={pop_len} activation_at={activation_at:?} expiry_at={expiry_at:?}"
-        );
-    }
-
-    println!(
         "event=genesis_inspect validators={count}",
-        count = validators.len()
+        count = validators
     );
-    let mut validator_index = BTreeMap::new();
-    for (lane, validator, stake_account, stake) in &validators {
-        println!(
-            "validator={validator} lane={lane} stake_account={stake_account} initial_stake={stake}"
-        );
-        validator_index
-            .entry((*lane, validator.clone()))
-            .or_insert_with(|| (stake_account.clone(), stake.clone()));
+    for transaction in block.external_transactions() {
+        let Executable::Instructions(batch) = transaction.instructions() else {
+            continue;
+        };
+        for instruction in batch {
+            if let Some(registration) = instruction
+                .as_any()
+                .downcast_ref::<RegisterPublicLaneValidator>()
+            {
+                println!(
+                    "validator={} lane={} stake_account={} initial_stake={}",
+                    registration.validator(),
+                    registration.lane_id(),
+                    registration.stake_account(),
+                    registration.initial_stake()
+                );
+            }
+        }
     }
 
     println!(
         "event=genesis_inspect activations={count}",
-        count = activations.len()
+        count = activations
     );
-    for (lane, validator) in &activations {
-        println!("activation lane={lane} validator={validator}");
+    for transaction in block.external_transactions() {
+        let Executable::Instructions(batch) = transaction.instructions() else {
+            continue;
+        };
+        for instruction in batch {
+            if let Some(activation) = instruction
+                .as_any()
+                .downcast_ref::<ActivatePublicLaneValidator>()
+            {
+                println!(
+                    "activation lane={} validator={}",
+                    activation.lane_id(),
+                    activation.validator()
+                );
+            }
+        }
     }
 
     Ok(())

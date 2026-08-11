@@ -114,6 +114,13 @@ impl norito::json::FastJsonWrite for AssetId {
         let literal = self.canonical_literal();
         norito::json::JsonSerialize::json_serialize(&literal, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(&self.canonical_literal(), out)
+    }
 }
 
 #[cfg(feature = "json")]

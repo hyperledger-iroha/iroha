@@ -4,9 +4,7 @@ use thiserror::Error;
 
 use super::{
     VegaT256ScalarV1 as Scalar, VegaTranscriptError, VegaTranscriptV1,
-    algebra::{
-        AlgebraError, decompress_univariate, eq_evals, evaluate_univariate, evaluation_table_size,
-    },
+    algebra::{AlgebraError, decompress_univariate, evaluate_univariate, evaluation_table_size},
 };
 
 /// Failure while replaying a Vega sum-check proof.
@@ -18,6 +16,8 @@ pub(super) enum SumcheckError {
     WrongDegree,
     #[error("Vega sum-check prover claim does not match its evaluation tables")]
     InvalidClaim,
+    #[error("Vega sum-check could not reserve its evaluation table")]
+    ResourceExhausted,
     #[error(transparent)]
     Algebra(#[from] AlgebraError),
     #[error(transparent)]
@@ -52,29 +52,132 @@ pub(super) struct SumcheckProof {
     pub(super) rounds: Vec<CompressedUnivariate>,
 }
 
+/// Move-only owner for one prover table containing witness-derived scalars.
+///
+/// Binding erases the discarded half before shortening the vector, and drop
+/// erases the live half on success, error, or unwind. The scalar type is
+/// `Copy`, so this is a best-effort erasure of the owned heap allocation, not
+/// a claim that compiler-created register or stack copies are erased.
+pub(super) struct SecretScalarTable {
+    values: Vec<Scalar>,
+}
+
+impl SecretScalarTable {
+    #[cfg(test)]
+    pub(super) fn new(values: Vec<Scalar>) -> Self {
+        Self { values }
+    }
+
+    pub(super) fn try_zeroed(len: usize) -> Result<Self, SumcheckError> {
+        let mut values = Vec::new();
+        values
+            .try_reserve_exact(len)
+            .map_err(|_| SumcheckError::ResourceExhausted)?;
+        values.resize(len, Scalar::zero());
+        Ok(Self { values })
+    }
+
+    pub(super) fn try_eq_evals(point: &[Scalar]) -> Result<Self, SumcheckError> {
+        let size = table_size(point.len())?;
+        let mut evaluations = Self::try_zeroed(size)?;
+        evaluations.values[0] = Scalar::one();
+        let mut populated = 1;
+        for coordinate in point.iter().rev().copied() {
+            for index in 0..populated {
+                let selected = evaluations.values[index] * coordinate;
+                evaluations.values[populated + index] = selected;
+                evaluations.values[index] -= selected;
+            }
+            populated *= 2;
+        }
+        Ok(evaluations)
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub(super) fn as_slice(&self) -> &[Scalar] {
+        &self.values
+    }
+
+    pub(super) fn as_mut_slice(&mut self) -> &mut [Scalar] {
+        &mut self.values
+    }
+
+    fn bind_top(&mut self, challenge: Scalar) -> Result<(), SumcheckError> {
+        if self.values.len() < 2 || !self.values.len().is_power_of_two() {
+            return Err(SumcheckError::WrongRoundCount);
+        }
+        let half = self.values.len() / 2;
+        let (lower, upper) = self.values.split_at_mut(half);
+        for index in 0..half {
+            let mut upper_value = upper[index];
+            lower[index] += challenge * (upper_value - lower[index]);
+            upper[index].clear_secret();
+            upper_value.clear_secret();
+        }
+        self.values.truncate(half);
+        Ok(())
+    }
+}
+
+impl Drop for SecretScalarTable {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        let had_values = !self.values.is_empty();
+        let values = core::hint::black_box(&mut self.values);
+        for value in values.iter_mut() {
+            value.clear_secret();
+        }
+        #[cfg(test)]
+        if had_values && values.iter().all(|value| value.is_zero()) {
+            let _ = SECRET_SCALAR_TABLE_ZEROIZED_DROPS.try_with(|drops| {
+                drops.set(drops.get().saturating_add(1));
+            });
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        let _ = core::hint::black_box(&mut *values);
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static SECRET_SCALAR_TABLE_ZEROIZED_DROPS: core::cell::Cell<usize> = const {
+        core::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn secret_scalar_table_zeroized_drop_count() -> usize {
+    SECRET_SCALAR_TABLE_ZEROIZED_DROPS
+        .try_with(core::cell::Cell::get)
+        .unwrap_or(0)
+}
+
 /// Prove the cubic outer Spartan sum-check
 /// `sum_x eq(tau,x) * (A(x) * B(x) - D(x))`.
-pub(super) fn prove_cubic_with_three_inputs(
+pub(super) fn prove_cubic_with_three_inputs_owned(
     initial_claim: Scalar,
-    tau: &[Scalar],
-    a: &[Scalar],
-    b: &[Scalar],
-    d: &[Scalar],
+    round_count: usize,
+    mut eq: SecretScalarTable,
+    mut a: SecretScalarTable,
+    mut b: SecretScalarTable,
+    mut d: SecretScalarTable,
     transcript: &mut VegaTranscriptV1,
 ) -> Result<(SumcheckProof, Vec<Scalar>, [Scalar; 3]), SumcheckError> {
-    let expected = table_size(tau.len())?;
+    let expected = table_size(round_count)?;
     if expected == 0 || a.len() != expected || b.len() != expected || d.len() != expected {
         return Err(SumcheckError::WrongRoundCount);
     }
-    let mut eq = eq_evals(tau)?;
-    let mut a = a.to_vec();
-    let mut b = b.to_vec();
-    let mut d = d.to_vec();
+    if eq.len() != expected {
+        return Err(SumcheckError::WrongRoundCount);
+    }
     let mut claim = initial_claim;
-    let mut rounds = Vec::with_capacity(tau.len());
-    let mut challenges = Vec::with_capacity(tau.len());
+    let mut rounds = Vec::with_capacity(round_count);
+    let mut challenges = Vec::with_capacity(round_count);
 
-    for _ in 0..tau.len() {
+    for _ in 0..round_count {
         let half = a.len() / 2;
         if half == 0 || b.len() != a.len() || d.len() != a.len() || eq.len() != a.len() {
             return Err(SumcheckError::WrongRoundCount);
@@ -84,14 +187,14 @@ pub(super) fn prove_cubic_with_three_inputs(
         let mut evaluation_two = Scalar::zero();
         let mut evaluation_three = Scalar::zero();
         for index in 0..half {
-            let eq_zero = eq[index];
-            let a_zero = a[index];
-            let b_zero = b[index];
-            let d_zero = d[index];
-            let delta_eq = eq[half + index] - eq_zero;
-            let delta_a = a[half + index] - a_zero;
-            let delta_b = b[half + index] - b_zero;
-            let delta_d = d[half + index] - d_zero;
+            let eq_zero = eq.as_slice()[index];
+            let a_zero = a.as_slice()[index];
+            let b_zero = b.as_slice()[index];
+            let d_zero = d.as_slice()[index];
+            let delta_eq = eq.as_slice()[half + index] - eq_zero;
+            let delta_a = a.as_slice()[half + index] - a_zero;
+            let delta_b = b.as_slice()[half + index] - b_zero;
+            let delta_d = d.as_slice()[half + index] - d_zero;
 
             evaluation_zero += eq_zero * (a_zero * b_zero - d_zero);
             evaluation_one +=
@@ -121,31 +224,33 @@ pub(super) fn prove_cubic_with_three_inputs(
         claim = evaluate_univariate(&coefficients, challenge)?;
         challenges.push(challenge);
         rounds.push(compressed);
-        bind_top(&mut eq, challenge)?;
-        bind_top(&mut a, challenge)?;
-        bind_top(&mut b, challenge)?;
-        bind_top(&mut d, challenge)?;
+        eq.bind_top(challenge)?;
+        a.bind_top(challenge)?;
+        b.bind_top(challenge)?;
+        d.bind_top(challenge)?;
     }
     if a.len() != 1 || b.len() != 1 || d.len() != 1 {
         return Err(SumcheckError::WrongRoundCount);
     }
-    Ok((SumcheckProof::new(rounds), challenges, [a[0], b[0], d[0]]))
+    Ok((
+        SumcheckProof::new(rounds),
+        challenges,
+        [a.as_slice()[0], b.as_slice()[0], d.as_slice()[0]],
+    ))
 }
 
 /// Prove the quadratic inner Spartan sum-check `sum_x A(x) * B(x)`.
-pub(super) fn prove_quadratic(
+pub(super) fn prove_quadratic_owned(
     initial_claim: Scalar,
     round_count: usize,
-    a: &[Scalar],
-    b: &[Scalar],
+    mut a: SecretScalarTable,
+    mut b: SecretScalarTable,
     transcript: &mut VegaTranscriptV1,
 ) -> Result<(SumcheckProof, Vec<Scalar>, [Scalar; 2]), SumcheckError> {
     let expected = table_size(round_count)?;
     if expected == 0 || a.len() != expected || b.len() != expected {
         return Err(SumcheckError::WrongRoundCount);
     }
-    let mut a = a.to_vec();
-    let mut b = b.to_vec();
     let mut claim = initial_claim;
     let mut rounds = Vec::with_capacity(round_count);
     let mut challenges = Vec::with_capacity(round_count);
@@ -159,10 +264,10 @@ pub(super) fn prove_quadratic(
         let mut evaluation_one = Scalar::zero();
         let mut evaluation_two = Scalar::zero();
         for index in 0..half {
-            let a_zero = a[index];
-            let b_zero = b[index];
-            let delta_a = a[half + index] - a_zero;
-            let delta_b = b[half + index] - b_zero;
+            let a_zero = a.as_slice()[index];
+            let b_zero = b.as_slice()[index];
+            let delta_a = a.as_slice()[half + index] - a_zero;
+            let delta_b = b.as_slice()[half + index] - b_zero;
             evaluation_zero += a_zero * b_zero;
             evaluation_one += (a_zero + delta_a) * (b_zero + delta_b);
             let two = Scalar::from_u64(2);
@@ -179,30 +284,21 @@ pub(super) fn prove_quadratic(
         claim = evaluate_univariate(&coefficients, challenge)?;
         challenges.push(challenge);
         rounds.push(compressed);
-        bind_top(&mut a, challenge)?;
-        bind_top(&mut b, challenge)?;
+        a.bind_top(challenge)?;
+        b.bind_top(challenge)?;
     }
     if a.len() != 1 || b.len() != 1 {
         return Err(SumcheckError::WrongRoundCount);
     }
-    Ok((SumcheckProof::new(rounds), challenges, [a[0], b[0]]))
+    Ok((
+        SumcheckProof::new(rounds),
+        challenges,
+        [a.as_slice()[0], b.as_slice()[0]],
+    ))
 }
 
 fn table_size(round_count: usize) -> Result<usize, SumcheckError> {
     Ok(evaluation_table_size(round_count)?)
-}
-
-fn bind_top(table: &mut Vec<Scalar>, challenge: Scalar) -> Result<(), SumcheckError> {
-    if table.len() < 2 || !table.len().is_power_of_two() {
-        return Err(SumcheckError::WrongRoundCount);
-    }
-    let half = table.len() / 2;
-    let (lower, upper) = table.split_at_mut(half);
-    for index in 0..half {
-        lower[index] += challenge * (upper[index] - lower[index]);
-    }
-    table.truncate(half);
-    Ok(())
 }
 
 fn interpolate_quadratic(evaluations: [Scalar; 3]) -> Result<[Scalar; 3], SumcheckError> {
@@ -272,7 +368,42 @@ impl SumcheckProof {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vega::algebra::eq_evaluate;
+    use crate::vega::algebra::{eq_evals, eq_evaluate};
+
+    fn prove_cubic_with_three_inputs(
+        initial_claim: Scalar,
+        tau: &[Scalar],
+        a: &[Scalar],
+        b: &[Scalar],
+        d: &[Scalar],
+        transcript: &mut VegaTranscriptV1,
+    ) -> Result<(SumcheckProof, Vec<Scalar>, [Scalar; 3]), SumcheckError> {
+        prove_cubic_with_three_inputs_owned(
+            initial_claim,
+            tau.len(),
+            SecretScalarTable::try_eq_evals(tau)?,
+            SecretScalarTable::new(a.to_vec()),
+            SecretScalarTable::new(b.to_vec()),
+            SecretScalarTable::new(d.to_vec()),
+            transcript,
+        )
+    }
+
+    fn prove_quadratic(
+        initial_claim: Scalar,
+        round_count: usize,
+        a: &[Scalar],
+        b: &[Scalar],
+        transcript: &mut VegaTranscriptV1,
+    ) -> Result<(SumcheckProof, Vec<Scalar>, [Scalar; 2]), SumcheckError> {
+        prove_quadratic_owned(
+            initial_claim,
+            round_count,
+            SecretScalarTable::new(a.to_vec()),
+            SecretScalarTable::new(b.to_vec()),
+            transcript,
+        )
+    }
 
     fn s(value: u64) -> Scalar {
         Scalar::from_u64(value)
@@ -307,12 +438,13 @@ mod tests {
         )
     }
 
-    fn bind_all(mut table: Vec<Scalar>, point: &[Scalar]) -> Scalar {
+    fn bind_all(table: Vec<Scalar>, point: &[Scalar]) -> Scalar {
+        let mut table = SecretScalarTable::new(table);
         for challenge in point {
-            bind_top(&mut table, *challenge).expect("power-of-two table");
+            table.bind_top(*challenge).expect("power-of-two table");
         }
         assert_eq!(table.len(), 1);
-        table[0]
+        table.as_slice()[0]
     }
 
     #[test]
@@ -375,6 +507,137 @@ mod tests {
             ]
         );
         assert_eq!(final_claim, claims[0] * claims[1]);
+    }
+
+    #[test]
+    fn owned_provers_preserve_borrowed_results_and_transcript_schedule() {
+        let tau = [s(13), s(17)];
+        let a = [s(2), s(3), s(5), s(7)];
+        let b = [s(11), s(13), s(17), s(19)];
+        let d = [s(23), s(29), s(31), s(37)];
+        let cubic_claim = eq_evals(&tau)
+            .expect("small equality table")
+            .into_iter()
+            .zip(a)
+            .zip(b.into_iter().zip(d))
+            .fold(Scalar::zero(), |sum, ((eq, a), (b, d))| {
+                sum + eq * (a * b - d)
+            });
+        let mut borrowed_transcript = VegaTranscriptV1::new_neutron_nova();
+        let borrowed =
+            prove_cubic_with_three_inputs(cubic_claim, &tau, &a, &b, &d, &mut borrowed_transcript)
+                .expect("borrowed compatibility path");
+        let mut owned_transcript = VegaTranscriptV1::new_neutron_nova();
+        let owned = prove_cubic_with_three_inputs_owned(
+            cubic_claim,
+            tau.len(),
+            SecretScalarTable::try_eq_evals(&tau).expect("small equality table"),
+            SecretScalarTable::new(a.to_vec()),
+            SecretScalarTable::new(b.to_vec()),
+            SecretScalarTable::new(d.to_vec()),
+            &mut owned_transcript,
+        )
+        .expect("owned path");
+        assert_eq!(owned, borrowed);
+        assert_eq!(
+            owned_transcript.squeeze(b"after").expect("bounded"),
+            borrowed_transcript.squeeze(b"after").expect("bounded")
+        );
+
+        let quadratic_claim = a
+            .iter()
+            .copied()
+            .zip(b.iter().copied())
+            .fold(Scalar::zero(), |sum, (a, b)| sum + a * b);
+        let mut borrowed_transcript = VegaTranscriptV1::new_neutron_nova();
+        let borrowed = prove_quadratic(quadratic_claim, 2, &a, &b, &mut borrowed_transcript)
+            .expect("borrowed compatibility path");
+        let mut owned_transcript = VegaTranscriptV1::new_neutron_nova();
+        let owned = prove_quadratic_owned(
+            quadratic_claim,
+            2,
+            SecretScalarTable::new(a.to_vec()),
+            SecretScalarTable::new(b.to_vec()),
+            &mut owned_transcript,
+        )
+        .expect("owned path");
+        assert_eq!(owned, borrowed);
+        assert_eq!(
+            owned_transcript.squeeze(b"after").expect("bounded"),
+            borrowed_transcript.squeeze(b"after").expect("bounded")
+        );
+    }
+
+    #[test]
+    fn secret_table_owner_zeroizes_success_error_and_unwind() {
+        assert!(matches!(
+            SecretScalarTable::try_zeroed(usize::MAX),
+            Err(SumcheckError::ResourceExhausted)
+        ));
+        let before_success = secret_scalar_table_zeroized_drop_count();
+        let a = [s(1), s(2), s(3), s(4)];
+        let b = [s(5), s(6), s(7), s(8)];
+        let claim = a
+            .iter()
+            .copied()
+            .zip(b.iter().copied())
+            .fold(Scalar::zero(), |sum, (a, b)| sum + a * b);
+        prove_quadratic_owned(
+            claim,
+            2,
+            SecretScalarTable::new(a.to_vec()),
+            SecretScalarTable::new(b.to_vec()),
+            &mut VegaTranscriptV1::new_neutron_nova(),
+        )
+        .expect("valid owned proof");
+        assert_eq!(
+            secret_scalar_table_zeroized_drop_count(),
+            before_success + 2
+        );
+
+        let before_error = secret_scalar_table_zeroized_drop_count();
+        assert_eq!(
+            prove_quadratic_owned(
+                Scalar::zero(),
+                2,
+                SecretScalarTable::new(a.to_vec()),
+                SecretScalarTable::new(b.to_vec()),
+                &mut VegaTranscriptV1::new_neutron_nova(),
+            ),
+            Err(SumcheckError::InvalidClaim)
+        );
+        assert_eq!(secret_scalar_table_zeroized_drop_count(), before_error + 2);
+
+        let before_unwind = secret_scalar_table_zeroized_drop_count();
+        let unwind = std::panic::catch_unwind(|| {
+            let _owned = SecretScalarTable::new(vec![s(9), s(10)]);
+            panic!("injected table-owner unwind");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(secret_scalar_table_zeroized_drop_count(), before_unwind + 1);
+    }
+
+    #[test]
+    fn owned_sumcheck_corridor_has_no_borrowed_table_clone() {
+        let source = include_str!("sumcheck.rs");
+        let cubic = source
+            .split("pub(super) fn prove_cubic_with_three_inputs_owned")
+            .nth(1)
+            .expect("owned cubic prover")
+            .split("/// Prove the quadratic inner Spartan sum-check")
+            .next()
+            .expect("cubic boundary");
+        let quadratic = source
+            .split("pub(super) fn prove_quadratic_owned")
+            .nth(1)
+            .expect("owned quadratic prover")
+            .split("fn table_size")
+            .next()
+            .expect("quadratic boundary");
+        assert!(!cubic.contains(".to_vec()"));
+        assert!(!quadratic.contains(".to_vec()"));
+        assert!(source.contains("upper[index].clear_secret()"));
+        assert!(source.contains("impl Drop for SecretScalarTable"));
     }
 
     #[test]

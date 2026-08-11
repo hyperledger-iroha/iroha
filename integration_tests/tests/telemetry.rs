@@ -151,13 +151,35 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             .map(|x| Peer::new(x.p2p_address(), x.id()))
             .collect();
 
-        let response_body = integration_tests::http::client()
-            .get(peer.client().torii_url.join("/v1/peers").unwrap())
+        let peer_client = peer.client();
+        let operator_key_pair = peer_client
+            .operator_key_pair
+            .as_ref()
+            .expect("test-network clients carry the peer operator key");
+        let peers_uri: iroha_torii::Uri = "/v1/peers".parse().expect("static peers URI");
+        let operator_headers = iroha_torii::operator_signed_request_headers(
+            operator_key_pair,
+            &peer_client.network_id,
+            &iroha_torii::Method::GET,
+            &peers_uri,
+            &[],
+        )?;
+        let http_client = reqwest::Client::builder()
+            .timeout(integration_tests::http::request_timeout())
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        let response = http_client
+            .get(peer_client.torii_url.join("/v1/peers").unwrap())
+            .headers(operator_headers)
             .header("Accept", "application/json")
             .send()
-            .await?
-            .text()
             .await?;
+        ensure!(
+            response.status().is_success(),
+            "signed /v1/peers returned {}",
+            response.status()
+        );
+        let response_body = response.text().await?;
         let response: HashSet<Peer> = norito::json::from_str(&response_body)
             .map_err(|err| eyre::Report::msg(format!("decode peers response: {err}")))?;
 

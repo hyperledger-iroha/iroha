@@ -3,6 +3,9 @@
 
 mod algorithm;
 mod confidential;
+#[cfg(not(feature = "ffi_import"))]
+/// Authenticated, process-local spooling for bounded confidential chunks.
+pub mod confidential_spool;
 #[cfg(feature = "bls")]
 /// Verification primitives for drand BLS12-381 randomness beacons.
 pub mod drand;
@@ -1761,14 +1764,18 @@ impl norito::core::NoritoSerialize for PublicKeyCompact {
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        self.validated_full().ok()?;
+        // `algorithm_and_payload` is private and every public constructor and
+        // Norito decoder establishes its validity. Sizing must stay purely
+        // structural: reparsing PQ/SM key material here can allocate before a
+        // caller has admitted the encoded length. `serialize` deliberately
+        // retains its validation as defense in depth for internal malformed
+        // fixtures and unsafe FFI construction.
         <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_hint(
             &self.algorithm_and_payload,
         )
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        self.validated_full().ok()?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_exact(
             &self.algorithm_and_payload,
         )
@@ -2142,6 +2149,15 @@ impl norito::json::JsonSerialize for PublicKey {
         let normalized = self.normalize_lossy();
         norito::json::JsonSerialize::json_serialize(&normalized, out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        // Public-key payloads have a protocol-level maximum, so normalization
+        // uses bounded scalar scratch independent of the enclosing response.
+        norito::json::write_json_string_to(&self.normalize_lossy(), out)
+    }
 }
 
 #[cfg(not(feature = "ffi_import"))]
@@ -2190,14 +2206,14 @@ impl norito::core::NoritoSerialize for PublicKey {
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        self.validated_full().ok()?;
+        // See `PublicKeyCompact`: sizing is structural and allocation-free,
+        // while the serialization path still validates the private invariant.
         <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_hint(
             &self.0.algorithm_and_payload,
         )
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        self.validated_full().ok()?;
         <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_exact(
             &self.0.algorithm_and_payload,
         )
@@ -2634,6 +2650,22 @@ impl norito::json::JsonSerialize for KeyPair {
         );
         json::JsonSerialize::json_serialize(&Value::Object(map), out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        // The legacy `Value::Object` path is a `BTreeMap`, so preserve its
+        // lexicographic key order exactly.
+        out.push_str("{\"private_key\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.private_key, out)?;
+        out.push_str(",\"public_key\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.public_key, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 impl FromStr for PrivateKey {
@@ -2714,6 +2746,13 @@ impl norito::json::JsonSerialize for PrivateKey {
     fn json_serialize(&self, out: &mut String) {
         let redacted = PRIVATE_KEY_REDACTED.to_string();
         norito::json::JsonSerialize::json_serialize(&redacted, out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(PRIVATE_KEY_REDACTED, out)
     }
 }
 
@@ -2805,6 +2844,13 @@ impl norito::json::JsonSerialize for ExposedPrivateKey {
     fn json_serialize(&self, out: &mut String) {
         let normalized = self.normalize();
         norito::json::JsonSerialize::json_serialize(&normalized, out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(&self.normalize(), out)
     }
 }
 

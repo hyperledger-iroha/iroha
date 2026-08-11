@@ -254,15 +254,17 @@ async fn router_builds_under_current_features() {
 
     let resp2 = app
         .clone()
-        .oneshot(
+        .oneshot(fixtures::operator_signed_request(
+            &cfg.common.key_pair,
             Request::builder()
                 .uri(Uri::from_static(iroha_torii_shared::uri::PEERS))
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        )
+            &[],
+        ))
         .await
         .unwrap();
-    // Depending on rate-limits/test timing, allow OK or 429
+    // Depending on rate-limits/test timing, allow OK or 429 after operator admission.
     assert!(matches!(
         resp2.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
@@ -303,13 +305,13 @@ async fn router_builds_under_current_features() {
                 )
                 .await
                 .unwrap();
-            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
         }
     }
 
     #[cfg(feature = "connect")]
     {
-        let resp = app
+        let session = app
             .clone()
             .oneshot(
                 Request::builder()
@@ -319,7 +321,19 @@ async fn router_builds_under_current_features() {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(session.status(), StatusCode::BAD_REQUEST);
+
+        let aggregate = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(Uri::from_static("/v1/connect/status/aggregate"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(aggregate.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[cfg(not(feature = "profiling"))]

@@ -742,6 +742,21 @@ impl norito::json::FastJsonWrite for Mintable {
             }
         }
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        match self {
+            Mintable::Infinitely => norito::json::write_json_string_to("Infinitely", out),
+            Mintable::Once => norito::json::write_json_string_to("Once", out),
+            Mintable::Not => norito::json::write_json_string_to("Not", out),
+            Mintable::Limited(tokens) => norito::json::write_json_string_to(
+                &format!("Limited({})", tokens.value()),
+                out,
+            ),
+        }
+    }
 }
 
 #[cfg(feature = "json")]
@@ -754,6 +769,18 @@ impl norito::json::FastJsonWrite for ConfidentialPolicyMode {
         };
         norito::json::write_json_string(label, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        let label = match self {
+            ConfidentialPolicyMode::TransparentOnly => "TransparentOnly",
+            ConfidentialPolicyMode::ShieldedOnly => "ShieldedOnly",
+            ConfidentialPolicyMode::Convertible => "Convertible",
+        };
+        norito::json::write_json_string_to(label, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -764,6 +791,17 @@ impl norito::json::FastJsonWrite for AssetBalancePolicy {
             AssetBalancePolicy::DataspaceRestricted => "DataspaceRestricted",
         };
         norito::json::write_json_string(label, out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        let label = match self {
+            AssetBalancePolicy::Global => "Global",
+            AssetBalancePolicy::DataspaceRestricted => "DataspaceRestricted",
+        };
+        norito::json::write_json_string_to(label, out)
     }
 }
 

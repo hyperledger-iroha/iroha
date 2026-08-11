@@ -6,7 +6,7 @@ use std::{
     collections::BTreeMap,
     ffi::OsStr,
     fs::{self, File},
-    io::{ErrorKind, Seek, SeekFrom, Write},
+    io::{ErrorKind, Read, Seek, SeekFrom, Write},
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::{
@@ -26,7 +26,7 @@ use norito::{
     to_bytes,
 };
 use parking_lot::{Mutex as NonPoisoningMutex, MutexGuard as NonPoisoningMutexGuard};
-use sorafs_manifest::pdp::PdpCommitmentV1;
+use sorafs_manifest::pdp::{PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1, PdpCommitmentV1};
 
 const CURSOR_FILE_NAME: &str = "replay_cursors.norito.json";
 const CURSOR_JOURNAL_FILE_NAME: &str = "replay_cursors.journal";
@@ -39,6 +39,12 @@ const CURSOR_JOURNAL_DOMAIN: &[u8] = b"iroha.da.replay.cursor.journal.v1";
 const CURSOR_SNAPSHOT_MAX_ENTRY_BYTES: usize = 256;
 const CURSOR_SNAPSHOT_FIXED_OVERHEAD_BYTES: usize = 128;
 const RECEIPT_FILE_PREFIX: &str = "da-receipt";
+/// First-release ceiling for one durable DA receipt, including its PDP commitment and signature.
+const DA_RECEIPT_ARTIFACT_MAX_BYTES_V1: usize = 64 * 1024;
+/// First-release ceiling covering Ed25519, secp256k1, and ML-DSA-65 receipt signatures.
+const DA_RECEIPT_SIGNATURE_MAX_BYTES_V1: usize = 4 * 1024;
+/// First-release ceiling for one canonical DA manifest spool body.
+const DA_MANIFEST_ARTIFACT_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
 const TICKET_ARTIFACTS_DIR: &str = "artifacts";
 const MANIFEST_ARTIFACT_FILE_NAME: &str = "manifest.norito";
 const PDP_COMMITMENT_ARTIFACT_FILE_NAME: &str = "pdp-commitment.norito";
@@ -279,6 +285,14 @@ impl ReplayCursorStore {
             .collect()
     }
 
+    fn highest_sequence(&self, lane_epoch: LaneEpoch) -> Option<u64> {
+        self.lock_state().highest.get(&lane_epoch).copied()
+    }
+
+    const fn max_lane_epochs(&self) -> NonZeroUsize {
+        self.max_lane_epochs
+    }
+
     /// Record a newly observed sequence for the provided `(lane, epoch)` window.
     pub fn record(&self, lane_epoch: LaneEpoch, sequence: u64) -> eyre::Result<()> {
         let mut guard = self.lock_state();
@@ -501,23 +515,10 @@ fn read_cursor_journal(
         ));
     }
 
-    let bytes = fs::read(path)
+    let max_bytes = usize::try_from(max_bytes)
+        .map_err(|_| eyre!("DA replay cursor journal bound does not fit usize"))?;
+    let bytes = read_regular_spool_artifact(path, "DA replay cursor journal", max_bytes)
         .wrap_err_with(|| format!("failed to read DA replay journal at {}", path.display()))?;
-    let current_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
-        format!(
-            "failed to re-inspect DA replay cursor journal at {}",
-            path.display()
-        )
-    })?;
-    if !current_metadata.file_type().is_file()
-        || current_metadata.len() != metadata.len()
-        || u64::try_from(bytes.len()).ok() != Some(metadata.len())
-    {
-        return Err(eyre!(
-            "DA replay cursor journal {} changed while reading",
-            path.display()
-        ));
-    }
 
     let mut records = Vec::new();
     let mut offset = 0usize;
@@ -860,28 +861,10 @@ fn read_cursor_snapshot(
             max_bytes
         ));
     }
-    let data = fs::read(path)
+    let max_bytes = usize::try_from(max_bytes)
+        .map_err(|_| eyre!("DA replay cursor snapshot bound does not fit usize"))?;
+    let data = read_regular_spool_artifact(path, "DA replay cursor snapshot", max_bytes)
         .wrap_err_with(|| format!("failed to read DA replay snapshot at {}", path.display()))?;
-    let current_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
-        format!(
-            "failed to re-inspect DA replay snapshot at {}",
-            path.display()
-        )
-    })?;
-    if !current_metadata.file_type().is_file() {
-        return Err(eyre!(
-            "DA replay snapshot {} changed to a non-regular file while reading",
-            path.display()
-        ));
-    }
-    if current_metadata.len() != metadata.len()
-        || u64::try_from(data.len()).ok() != Some(metadata.len())
-    {
-        return Err(eyre!(
-            "DA replay snapshot {} changed while reading",
-            path.display()
-        ));
-    }
     let snapshot: CursorSnapshot = json::from_slice(&data)
         .wrap_err_with(|| format!("failed to decode DA replay snapshot at {}", path.display()))?;
     validate_cursor_snapshot(path, &snapshot, max_lane_epochs)?;
@@ -1101,14 +1084,127 @@ pub enum ReceiptInsertOutcome {
 }
 
 #[derive(Clone)]
-struct ReceiptMeta {
+struct ReceiptHead {
+    sequence: u64,
     manifest_hash: BlobDigest,
     fingerprint: ReplayFingerprint,
     path: PathBuf,
-    receipt: DaIngestReceipt,
+    receipt_digest: [u8; blake3::OUT_LEN],
 }
 
-type ReceiptIndex = BTreeMap<LaneEpoch, BTreeMap<u64, ReceiptMeta>>;
+type ReceiptIndex = BTreeMap<LaneEpoch, ReceiptHead>;
+
+struct ReceiptScanSummary {
+    count: u64,
+    minimum_sequence: u64,
+    maximum_sequence: u64,
+    sequence_digest_xor: [u8; blake3::OUT_LEN],
+    head: ReceiptHead,
+}
+
+impl ReceiptScanSummary {
+    fn new(sequence: u64, head: ReceiptHead) -> Self {
+        Self {
+            count: 1,
+            minimum_sequence: sequence,
+            maximum_sequence: sequence,
+            sequence_digest_xor: receipt_sequence_digest(sequence),
+            head,
+        }
+    }
+
+    fn observe(&mut self, sequence: u64, head: ReceiptHead) -> eyre::Result<()> {
+        if sequence == self.head.sequence {
+            if head.manifest_hash != self.head.manifest_hash {
+                return Err(eyre!(
+                    "conflicting receipt for sequence {sequence} at {} and {}",
+                    self.head.path.display(),
+                    head.path.display()
+                ));
+            }
+            if head.receipt_digest != self.head.receipt_digest {
+                return Err(eyre!(
+                    "conflicting duplicate DA receipt for sequence {sequence} at {} and {}",
+                    self.head.path.display(),
+                    head.path.display()
+                ));
+            }
+            if head.fingerprint != self.head.fingerprint {
+                return Err(eyre!(
+                    "duplicate DA receipt fingerprint conflict for sequence {sequence} at {} and {}",
+                    self.head.path.display(),
+                    head.path.display()
+                ));
+            }
+            return Err(eyre!(
+                "duplicate DA receipt path for sequence {sequence} at {} and {}",
+                self.head.path.display(),
+                head.path.display()
+            ));
+        }
+        self.count = self
+            .count
+            .checked_add(1)
+            .ok_or_else(|| eyre!("durable DA receipt count overflowed u64"))?;
+        self.minimum_sequence = self.minimum_sequence.min(sequence);
+        self.maximum_sequence = self.maximum_sequence.max(sequence);
+        xor_digest(
+            &mut self.sequence_digest_xor,
+            receipt_sequence_digest(sequence),
+        );
+        if sequence > self.head.sequence {
+            self.head = head;
+        }
+        Ok(())
+    }
+
+    fn validate_contiguous(&self, lane_epoch: LaneEpoch) -> eyre::Result<()> {
+        let expected_count = self
+            .maximum_sequence
+            .checked_sub(self.minimum_sequence)
+            .and_then(|distance| distance.checked_add(1))
+            .ok_or_else(|| {
+                eyre!(
+                    "DA receipt sequence range overflowed for lane {:?}",
+                    lane_epoch
+                )
+            })?;
+        if self.count != expected_count {
+            return Err(eyre!(
+                "missing DA receipt sequence for lane {:?}: {} files cover {}..={}",
+                lane_epoch,
+                self.count,
+                self.minimum_sequence,
+                self.maximum_sequence
+            ));
+        }
+
+        let mut expected_digest = [0_u8; blake3::OUT_LEN];
+        for sequence in self.minimum_sequence..=self.maximum_sequence {
+            xor_digest(&mut expected_digest, receipt_sequence_digest(sequence));
+        }
+        if expected_digest != self.sequence_digest_xor {
+            return Err(eyre!(
+                "duplicate or missing DA receipt sequence in lane {:?}",
+                lane_epoch
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn receipt_sequence_digest(sequence: u64) -> [u8; blake3::OUT_LEN] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"iroha.da.receipt.sequence.v1\0");
+    hasher.update(&sequence.to_be_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+fn xor_digest(target: &mut [u8; blake3::OUT_LEN], value: [u8; blake3::OUT_LEN]) {
+    for (target, value) in target.iter_mut().zip(value) {
+        *target ^= value;
+    }
+}
 
 pub(super) fn unsigned_receipt_bytes(
     receipt: &DaIngestReceipt,
@@ -1147,6 +1243,26 @@ fn verify_receipt_signature(
         .map_err(|err| eyre!(err))
 }
 
+fn validate_receipt_resource_bounds(receipt: &DaIngestReceipt) -> eyre::Result<()> {
+    if receipt
+        .pdp_commitment
+        .as_ref()
+        .is_some_and(|commitment| commitment.len() > PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1)
+    {
+        return Err(eyre!(
+            "DA receipt PDP commitment exceeds the first-release {}-byte limit",
+            PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1
+        ));
+    }
+    if receipt.operator_signature.payload().len() > DA_RECEIPT_SIGNATURE_MAX_BYTES_V1 {
+        return Err(eyre!(
+            "DA receipt signature exceeds the first-release {}-byte limit",
+            DA_RECEIPT_SIGNATURE_MAX_BYTES_V1
+        ));
+    }
+    Ok(())
+}
+
 /// Durable log of DA ingest receipts keyed by `(lane, epoch, sequence)`.
 #[derive(Clone)]
 pub struct DaReceiptLog {
@@ -1154,8 +1270,9 @@ pub struct DaReceiptLog {
     cursor_store: Arc<ReplayCursorStore>,
     signer_public_key: PublicKey,
     // Spool actions are deliberately caught at the worker boundary. A non-poisoning mutex keeps a
-    // caught panic from permanently disabling the receipt log; every durable write below is atomic
-    // and idempotently revalidated before this index is updated.
+    // caught panic from permanently disabling the receipt log and serializes durable appends. The
+    // map contains exactly one compact high-water record per bounded lane/epoch; historical receipt
+    // payloads are loaded directly from their deterministic paths instead of accumulating here.
     index: Arc<NonPoisoningMutex<ReceiptIndex>>,
 }
 
@@ -1172,11 +1289,28 @@ impl DaReceiptLog {
         create_spool_dir_no_follow(&dir)
             .wrap_err_with(|| format!("failed to create DA receipt directory {}", dir.display()))?;
 
-        let (index, highest_map) = Self::load_existing(&dir, &signer_public_key)?;
-        for (lane_epoch, highest) in highest_map {
-            cursor_store.record(lane_epoch, highest).wrap_err_with(|| {
-                format!("failed to seed receipt cursor from disk for {lane_epoch:?}")
-            })?;
+        let index = Self::load_existing(&dir, &signer_public_key, cursor_store.max_lane_epochs())?;
+        let mut known_lane_epochs = BTreeMap::new();
+        for (lane_epoch, _) in cursor_store.highest_sequences() {
+            known_lane_epochs.insert(lane_epoch, ());
+        }
+        for lane_epoch in index.keys().copied() {
+            if !known_lane_epochs.contains_key(&lane_epoch)
+                && known_lane_epochs.len() >= cursor_store.max_lane_epochs().get()
+            {
+                return Err(eyre!(
+                    "durable DA receipt log and replay cursor contain more than {} lane/epoch windows",
+                    cursor_store.max_lane_epochs()
+                ));
+            }
+            known_lane_epochs.insert(lane_epoch, ());
+        }
+        for (lane_epoch, head) in &index {
+            cursor_store
+                .record(*lane_epoch, head.sequence)
+                .wrap_err_with(|| {
+                    format!("failed to seed receipt cursor from disk for {lane_epoch:?}")
+                })?;
         }
 
         Ok(Self {
@@ -1223,14 +1357,16 @@ impl DaReceiptLog {
         }
 
         validate_receipt_fingerprint(&receipt, &fingerprint)?;
+        validate_receipt_resource_bounds(&receipt)?;
         verify_receipt_signature(&receipt, sequence, &self.signer_public_key)
             .wrap_err("DA receipt signature verification failed")?;
+        let encoded = encode_stored_da_receipt(&receipt, sequence).map_err(|err| eyre!(err))?;
+        let receipt_digest = *blake3::hash(&encoded).as_bytes();
         let manifest_hash = receipt.manifest_hash;
         let mut guard = self.lock_index();
-        let lane_index = guard.entry(lane_epoch).or_default();
 
-        if let Some(existing) = lane_index.get(&sequence) {
-            if existing.receipt == receipt {
+        if let Some(existing) = guard.get(&lane_epoch) {
+            if sequence == existing.sequence && existing.receipt_digest == receipt_digest {
                 if existing.fingerprint != fingerprint {
                     return Ok(ReceiptInsertOutcome::DuplicateFingerprintConflict {
                         path: existing.path.clone(),
@@ -1242,18 +1378,38 @@ impl DaReceiptLog {
                     path: existing.path.clone(),
                 });
             }
-            if existing.manifest_hash == manifest_hash {
+            if sequence == existing.sequence && existing.manifest_hash == manifest_hash {
                 return Ok(ReceiptInsertOutcome::ReceiptConflict {
                     path: existing.path.clone(),
                 });
             }
-            return Ok(ReceiptInsertOutcome::ManifestConflict {
-                expected: existing.manifest_hash,
-                observed: manifest_hash,
-            });
+            if sequence == existing.sequence {
+                return Ok(ReceiptInsertOutcome::ManifestConflict {
+                    expected: existing.manifest_hash,
+                    observed: manifest_hash,
+                });
+            }
+            if sequence < existing.sequence {
+                return Ok(ReceiptInsertOutcome::StaleSequence {
+                    highest: existing.sequence,
+                });
+            }
+            if let Some(expected_next) = existing.sequence.checked_add(1)
+                && sequence != expected_next
+            {
+                return Ok(ReceiptInsertOutcome::SequenceGap {
+                    expected_next,
+                    observed: sequence,
+                });
+            }
+        } else if guard.len() >= self.cursor_store.max_lane_epochs().get() {
+            return Err(eyre!(
+                "DA receipt lane/epoch capacity {} is exhausted",
+                self.cursor_store.max_lane_epochs()
+            ));
         }
 
-        if let Some((&highest, _)) = lane_index.iter().next_back() {
+        if let Some(highest) = self.cursor_store.highest_sequence(lane_epoch) {
             if sequence <= highest {
                 return Ok(ReceiptInsertOutcome::StaleSequence { highest });
             }
@@ -1267,27 +1423,25 @@ impl DaReceiptLog {
             }
         }
 
-        let path = self.write_receipt_file(&receipt, sequence, &fingerprint)?;
-        let cursor_advanced = lane_index
-            .keys()
-            .last()
-            .copied()
-            .map_or(true, |prev| sequence > prev);
+        let path = self.write_receipt_file(&receipt, sequence, &fingerprint, &encoded)?;
         self.cursor_store
             .record(lane_epoch, sequence)
             .wrap_err("failed to persist receipt cursor")?;
 
-        lane_index.insert(
-            sequence,
-            ReceiptMeta {
+        guard.insert(
+            lane_epoch,
+            ReceiptHead {
+                sequence,
                 manifest_hash,
                 fingerprint,
                 path: path.clone(),
-                receipt: receipt.clone(),
+                receipt_digest,
             },
         );
 
-        Ok(ReceiptInsertOutcome::Stored { cursor_advanced })
+        Ok(ReceiptInsertOutcome::Stored {
+            cursor_advanced: true,
+        })
     }
 
     /// Return a logged durable receipt for an idempotent ingest retry.
@@ -1306,25 +1460,22 @@ impl DaReceiptLog {
             ));
         }
 
-        let (path, receipt) = {
-            let guard = self.lock_index();
-            let Some(meta) = guard
-                .get(&lane_epoch)
-                .and_then(|entries| entries.get(&sequence))
-            else {
-                return Ok(None);
-            };
-            if meta.fingerprint != fingerprint {
-                return Ok(None);
-            }
-            (meta.path.clone(), meta.receipt.clone())
-        };
+        let path = receipt_file_path(&self.dir, lane_epoch, sequence, fingerprint);
+        match fs::symlink_metadata(&path) {
+            Ok(_) => {}
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err.into()),
+        }
 
         let stored = Self::decode_receipt(&path)
             .wrap_err_with(|| format!("failed to reload durable DA receipt {}", path.display()))?;
-        if stored.sequence != sequence || stored.receipt != receipt {
+        if stored.sequence != sequence
+            || stored.receipt.lane_id != lane_epoch.lane_id
+            || stored.receipt.epoch != lane_epoch.epoch
+            || stored.receipt.storage_ticket.as_bytes() != fingerprint.as_bytes()
+        {
             return Err(eyre!(
-                "durable DA receipt {} no longer matches receipt-log index",
+                "durable DA receipt {} no longer matches its requested lane/epoch/sequence/fingerprint",
                 path.display()
             ));
         }
@@ -1336,50 +1487,45 @@ impl DaReceiptLog {
                 )
             })?;
 
-        Ok(Some((path, receipt)))
+        Ok(Some((path, stored.receipt)))
     }
 
     /// Load receipts for a `(lane, epoch)` window in sequence order.
+    #[cfg(test)]
     pub fn receipts_for(&self, lane_epoch: LaneEpoch) -> Vec<DaReceiptLogEntry> {
-        let guard = self.lock_index();
-        let Some(entries) = guard.get(&lane_epoch) else {
-            return Vec::new();
-        };
-
-        let mut out = Vec::with_capacity(entries.len());
-        for (sequence, meta) in entries {
-            out.push(DaReceiptLogEntry {
+        load_da_receipts(&self.dir)
+            .expect("test receipt log must remain readable")
+            .into_iter()
+            .filter(|stored| {
+                stored.receipt.lane_id == lane_epoch.lane_id
+                    && stored.receipt.epoch == lane_epoch.epoch
+            })
+            .map(|stored| DaReceiptLogEntry {
                 lane_epoch,
-                sequence: *sequence,
-                manifest_hash: meta.manifest_hash,
-                receipt: meta.receipt.clone(),
-            });
-        }
-        out
+                sequence: stored.sequence,
+                manifest_hash: stored.receipt.manifest_hash,
+                receipt: stored.receipt,
+            })
+            .collect()
     }
 
     fn load_existing(
         dir: &Path,
         signer_public_key: &PublicKey,
-    ) -> eyre::Result<(ReceiptIndex, BTreeMap<LaneEpoch, u64>)> {
-        let mut index: ReceiptIndex = BTreeMap::new();
-        let mut highest: BTreeMap<LaneEpoch, u64> = BTreeMap::new();
+        max_lane_epochs: NonZeroUsize,
+    ) -> eyre::Result<ReceiptIndex> {
+        let mut summaries: BTreeMap<LaneEpoch, ReceiptScanSummary> = BTreeMap::new();
 
         let Some(dir_entries) = open_spool_dir_no_follow(dir)? else {
-            return Ok((index, highest));
+            return Ok(BTreeMap::new());
         };
 
-        let mut paths = Vec::new();
         for entry in dir_entries {
             let entry = entry?;
             let path = entry.path();
             if !artifact_path_matches(&path, RECEIPT_FILE_PREFIX)? {
                 continue;
             }
-            paths.push(path);
-        }
-        paths.sort();
-        for path in paths {
             if !fs::symlink_metadata(&path)?.file_type().is_file() {
                 return Err(eyre!(
                     "durable DA receipt {} is not a regular file",
@@ -1404,57 +1550,36 @@ impl DaReceiptLog {
                     )
                 })?;
             let lane_epoch = LaneEpoch::new(receipt.lane_id, receipt.epoch);
-            let manifest_hash = receipt.manifest_hash;
-            let lane_map = index.entry(lane_epoch).or_default();
-            if let Some(existing) = lane_map.get(&sequence) {
-                if existing.manifest_hash != manifest_hash {
-                    return Err(eyre!(
-                        "conflicting receipt for lane {:?} seq {} ({} vs {})",
-                        lane_epoch,
-                        sequence,
-                        hex::encode(existing.manifest_hash.as_bytes()),
-                        hex::encode(manifest_hash.as_bytes())
-                    ));
-                }
-                if existing.receipt != receipt {
-                    return Err(eyre!(
-                        "conflicting duplicate receipt for lane {:?} seq {} at {} and {}",
-                        lane_epoch,
-                        sequence,
-                        existing.path.display(),
-                        path.display()
-                    ));
-                }
-                if existing.fingerprint != receipt_key.fingerprint {
-                    return Err(eyre!(
-                        "duplicate receipt fingerprint conflict for lane {:?} seq {} at {} and {}",
-                        lane_epoch,
-                        sequence,
-                        existing.path.display(),
-                        path.display()
-                    ));
-                }
-                continue;
+            if !summaries.contains_key(&lane_epoch) && summaries.len() >= max_lane_epochs.get() {
+                return Err(eyre!(
+                    "durable DA receipt log exceeds lane/epoch capacity {}",
+                    max_lane_epochs
+                ));
             }
-
-            highest
-                .entry(lane_epoch)
-                .and_modify(|current| *current = (*current).max(sequence))
-                .or_insert(sequence);
-            lane_map.insert(
+            let encoded = encode_stored_da_receipt(&receipt, sequence).map_err(|err| eyre!(err))?;
+            let head = ReceiptHead {
                 sequence,
-                ReceiptMeta {
-                    manifest_hash,
-                    fingerprint: receipt_key.fingerprint,
-                    path,
-                    receipt,
-                },
-            );
+                manifest_hash: receipt.manifest_hash,
+                fingerprint: receipt_key.fingerprint,
+                path,
+                receipt_digest: *blake3::hash(&encoded).as_bytes(),
+            };
+            match summaries.entry(lane_epoch) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(ReceiptScanSummary::new(sequence, head));
+                }
+                std::collections::btree_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().observe(sequence, head)?;
+                }
+            }
         }
 
-        validate_receipt_index_contiguous(&index)?;
-
-        Ok((index, highest))
+        let mut index = BTreeMap::new();
+        for (lane_epoch, summary) in summaries {
+            summary.validate_contiguous(lane_epoch)?;
+            index.insert(lane_epoch, summary.head);
+        }
+        Ok(index)
     }
 
     fn lock_index(&self) -> NonPoisoningMutexGuard<'_, ReceiptIndex> {
@@ -1466,12 +1591,13 @@ impl DaReceiptLog {
         receipt: &DaIngestReceipt,
         sequence: u64,
         fingerprint: &ReplayFingerprint,
+        encoded: &[u8],
     ) -> eyre::Result<PathBuf> {
         if self.dir.as_os_str().is_empty() {
             return Ok(PathBuf::new());
         }
 
-        match persist_da_receipt(&self.dir, receipt, sequence, fingerprint) {
+        match persist_encoded_da_receipt(&self.dir, receipt, sequence, fingerprint, encoded) {
             Ok(Some(path)) => Ok(path),
             Ok(None) => Ok(PathBuf::new()),
             Err(err) => Err(err.into()),
@@ -1483,7 +1609,11 @@ impl DaReceiptLog {
     }
 
     fn decode_receipt_with_key(path: &Path) -> eyre::Result<(ReceiptFileKey, StoredDaReceipt)> {
-        let data = read_regular_spool_artifact(path, "durable DA receipt")?;
+        let data = read_regular_spool_artifact(
+            path,
+            "durable DA receipt",
+            DA_RECEIPT_ARTIFACT_MAX_BYTES_V1,
+        )?;
         let stored = decode_from_bytes::<StoredDaReceipt>(&data).map_err(|err| eyre!(err))?;
         if stored.version != STORED_RECEIPT_VERSION {
             return Err(eyre!(
@@ -1492,6 +1622,12 @@ impl DaReceiptLog {
                 STORED_RECEIPT_VERSION
             ));
         }
+        validate_receipt_resource_bounds(&stored.receipt).wrap_err_with(|| {
+            format!(
+                "durable DA receipt {} exceeds resource bounds",
+                path.display()
+            )
+        })?;
         let key = validate_receipt_filename(path, &stored)?;
         Ok((key, stored))
     }
@@ -1504,6 +1640,21 @@ struct ReceiptFileKey {
     sequence: u64,
     storage_ticket: StorageTicketId,
     fingerprint: ReplayFingerprint,
+}
+
+fn receipt_file_path(
+    spool_dir: &Path,
+    lane_epoch: LaneEpoch,
+    sequence: u64,
+    fingerprint: ReplayFingerprint,
+) -> PathBuf {
+    let lane = lane_epoch.lane_id.as_u32();
+    let ticket_hex = hex::encode(fingerprint.as_bytes());
+    let fingerprint_hex = ticket_hex.as_str();
+    spool_dir.join(format!(
+        "{RECEIPT_FILE_PREFIX}-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.norito",
+        epoch = lane_epoch.epoch,
+    ))
 }
 
 fn parse_receipt_file_key(path: &Path) -> eyre::Result<ReceiptFileKey> {
@@ -1641,48 +1792,95 @@ fn validate_receipt_manifest_artifact_if_present(
     Ok(())
 }
 
-fn validate_receipt_index_contiguous(index: &ReceiptIndex) -> eyre::Result<()> {
-    for (lane_epoch, entries) in index {
-        let mut previous: Option<u64> = None;
-        for sequence in entries.keys().copied() {
-            if let Some(prev) = previous
-                && let Some(expected) = prev.checked_add(1)
-                && sequence != expected
-            {
-                return Err(eyre!(
-                    "missing DA receipt sequence for lane {:?}: expected {}, found {}",
-                    lane_epoch,
-                    expected,
-                    sequence
-                ));
-            }
-            previous = Some(sequence);
-        }
-    }
-    Ok(())
-}
-
-fn read_regular_spool_artifact(path: &Path, artifact: &str) -> std::io::Result<Vec<u8>> {
-    let metadata = fs::symlink_metadata(path)?;
-    if !metadata.file_type().is_file() {
+fn read_regular_spool_artifact(
+    path: &Path,
+    artifact: &str,
+    max_bytes: usize,
+) -> std::io::Result<Vec<u8>> {
+    let path_metadata = fs::symlink_metadata(path)?;
+    if !path_metadata.file_type().is_file() {
         return Err(std::io::Error::new(
             ErrorKind::InvalidData,
             format!("{artifact} {} is not a regular file", path.display()),
         ));
     }
-    let bytes = fs::read(path)?;
-    let current_metadata = fs::symlink_metadata(path)?;
-    if !current_metadata.file_type().is_file() {
+    let max_bytes_u64 = u64::try_from(max_bytes).unwrap_or(u64::MAX);
+    if path_metadata.len() > max_bytes_u64 {
         return Err(std::io::Error::new(
             ErrorKind::InvalidData,
             format!(
-                "{artifact} {} changed to a non-regular file while reading",
-                path.display()
+                "{artifact} {} is {} bytes, exceeding the {max_bytes}-byte limit",
+                path.display(),
+                path_metadata.len()
             ),
         ));
     }
-    if current_metadata.len() != metadata.len()
-        || u64::try_from(bytes.len()).ok() != Some(metadata.len())
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    let mut file = options.open(path)?;
+    let opened_metadata = file.metadata()?;
+    if !opened_metadata.is_file() || opened_metadata.len() != path_metadata.len() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("{artifact} {} changed while it was opened", path.display()),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        if opened_metadata.dev() != path_metadata.dev()
+            || opened_metadata.ino() != path_metadata.ino()
+        {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "{artifact} {} changed identity while opening",
+                    path.display()
+                ),
+            ));
+        }
+    }
+
+    let expected_len = usize::try_from(opened_metadata.len()).map_err(|_| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("{artifact} {} length does not fit usize", path.display()),
+        )
+    })?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(expected_len).map_err(|_| {
+        std::io::Error::new(
+            ErrorKind::OutOfMemory,
+            format!(
+                "failed to reserve {expected_len} bytes for {artifact} {}",
+                path.display()
+            ),
+        )
+    })?;
+    bytes.resize(expected_len, 0);
+    file.read_exact(&mut bytes)?;
+    let mut growth_probe = [0_u8; 1];
+    if file.read(&mut growth_probe)? != 0 {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "{artifact} {} grew beyond its admitted {expected_len}-byte length while reading",
+                path.display(),
+            ),
+        ));
+    }
+    let final_metadata = file.metadata()?;
+    if !final_metadata.is_file()
+        || final_metadata.len() != opened_metadata.len()
+        || u64::try_from(bytes.len()).ok() != Some(opened_metadata.len())
     {
         return Err(std::io::Error::new(
             ErrorKind::InvalidData,
@@ -1768,7 +1966,7 @@ fn existing_artifact_path_if_matching(
         ));
     }
 
-    let existing = fs::read(target_path)?;
+    let existing = read_regular_spool_artifact(target_path, artifact, expected.len())?;
     if existing == expected {
         return Ok(Some(target_path.to_path_buf()));
     }
@@ -2240,6 +2438,100 @@ mod temp_artifact_tests {
             .expect("durable receipt should be recoverable");
         assert_eq!(recovered, receipt);
     }
+
+    fn receipt_head(sequence: u64, seed: u8) -> ReceiptHead {
+        ReceiptHead {
+            sequence,
+            manifest_hash: BlobDigest::new([seed; blake3::OUT_LEN]),
+            fingerprint: test_fingerprint(seed),
+            path: PathBuf::from(format!("receipt-{sequence}")),
+            receipt_digest: [seed.wrapping_add(1); blake3::OUT_LEN],
+        }
+    }
+
+    #[test]
+    fn receipt_scan_summary_is_constant_size_and_rejects_gaps_and_duplicates() {
+        let lane_epoch = LaneEpoch::new(LaneId::new(8), 21);
+        let mut valid = ReceiptScanSummary::new(1, receipt_head(1, 1));
+        valid.observe(2, receipt_head(2, 2)).expect("observe two");
+        valid.observe(3, receipt_head(3, 3)).expect("observe three");
+        valid
+            .validate_contiguous(lane_epoch)
+            .expect("contiguous receipt summary");
+        assert_eq!(valid.head.sequence, 3);
+
+        let mut corrupt = ReceiptScanSummary::new(1, receipt_head(1, 1));
+        assert!(
+            corrupt.observe(1, receipt_head(1, 4)).is_err(),
+            "duplicate sequence must reject without growing retained state"
+        );
+        let mut corrupt = ReceiptScanSummary::new(1, receipt_head(1, 1));
+        corrupt.observe(3, receipt_head(3, 3)).expect("observe gap");
+        assert!(
+            corrupt.validate_contiguous(lane_epoch).is_err(),
+            "a duplicate must not conceal a missing sequence"
+        );
+    }
+
+    #[test]
+    fn bounded_spool_reader_rejects_oversize_before_reading_body() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("oversize.norito");
+        fs::write(&path, [0_u8; 17]).expect("write oversize fixture");
+
+        let err = read_regular_spool_artifact(&path, "test artifact", 16)
+            .expect_err("oversize artifact must reject");
+
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(err.to_string().contains("exceeding the 16-byte limit"));
+    }
+
+    #[test]
+    fn bounded_spool_reader_accepts_the_exact_file_length() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("exact.norito");
+        let expected = [0xA5_u8; 16];
+        fs::write(&path, expected).expect("write exact fixture");
+
+        let observed = read_regular_spool_artifact(&path, "test artifact", expected.len())
+            .expect("read exact-size artifact");
+
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn receipt_log_retains_only_one_head_per_lane() {
+        let dir = tempdir().expect("tempdir");
+        let cursor_store =
+            Arc::new(ReplayCursorStore::empty(dir.path().join("cursors")).expect("cursor store"));
+        let signer = checked_random_keypair("bounded DA receipt head fixture");
+        let log = DaReceiptLog::open(
+            dir.path().join("receipts"),
+            cursor_store,
+            signer.public_key().clone(),
+        )
+        .expect("receipt log");
+        let lane_epoch = LaneEpoch::new(LaneId::new(5), 12);
+
+        for (sequence, seed) in [(1, 0x31), (2, 0x32)] {
+            let receipt = test_receipt(
+                &signer,
+                lane_epoch.lane_id,
+                lane_epoch.epoch,
+                sequence,
+                seed,
+            );
+            assert!(matches!(
+                log.append(lane_epoch, sequence, receipt, test_fingerprint(seed))
+                    .expect("append receipt"),
+                ReceiptInsertOutcome::Stored { .. }
+            ));
+        }
+
+        let index = log.lock_index();
+        assert_eq!(index.len(), 1);
+        assert_eq!(index.get(&lane_epoch).map(|head| head.sequence), Some(2));
+    }
 }
 
 pub(super) fn persist_da_receipt(
@@ -2247,6 +2539,42 @@ pub(super) fn persist_da_receipt(
     receipt: &DaIngestReceipt,
     sequence: u64,
     fingerprint: &ReplayFingerprint,
+) -> std::io::Result<Option<PathBuf>> {
+    if spool_dir.as_os_str().is_empty() {
+        return Ok(None);
+    }
+    validate_receipt_resource_bounds(receipt)
+        .map_err(|err| std::io::Error::new(ErrorKind::InvalidInput, err.to_string()))?;
+    let encoded = encode_stored_da_receipt(receipt, sequence)?;
+    persist_encoded_da_receipt(spool_dir, receipt, sequence, fingerprint, &encoded)
+}
+
+fn encode_stored_da_receipt(receipt: &DaIngestReceipt, sequence: u64) -> std::io::Result<Vec<u8>> {
+    let encoded = to_bytes(&StoredDaReceipt {
+        version: STORED_RECEIPT_VERSION,
+        sequence,
+        receipt: receipt.clone(),
+    })
+    .map_err(|err| std::io::Error::new(ErrorKind::Other, err))?;
+    if encoded.len() > DA_RECEIPT_ARTIFACT_MAX_BYTES_V1 {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "DA receipt is {} bytes, exceeding the first-release {}-byte limit",
+                encoded.len(),
+                DA_RECEIPT_ARTIFACT_MAX_BYTES_V1
+            ),
+        ));
+    }
+    Ok(encoded)
+}
+
+fn persist_encoded_da_receipt(
+    spool_dir: &Path,
+    receipt: &DaIngestReceipt,
+    sequence: u64,
+    fingerprint: &ReplayFingerprint,
+    encoded: &[u8],
 ) -> std::io::Result<Option<PathBuf>> {
     if spool_dir.as_os_str().is_empty() {
         return Ok(None);
@@ -2264,22 +2592,28 @@ pub(super) fn persist_da_receipt(
         ));
     }
 
+    if encoded.len() > DA_RECEIPT_ARTIFACT_MAX_BYTES_V1 {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "DA receipt is {} bytes, exceeding the first-release {}-byte limit",
+                encoded.len(),
+                DA_RECEIPT_ARTIFACT_MAX_BYTES_V1
+            ),
+        ));
+    }
+
     let lane = receipt.lane_id.as_u32();
     let ticket_hex = hex::encode(receipt.storage_ticket.as_ref());
     let fingerprint_hex = hex::encode(fingerprint.as_bytes());
-    let file_name = format!(
-        "{RECEIPT_FILE_PREFIX}-{lane:08x}-{epoch:016x}-{sequence:016x}-{ticket_hex}-{fingerprint_hex}.norito",
-        epoch = receipt.epoch,
-    );
-    let target_path = spool_dir.join(&file_name);
-    let encoded = to_bytes(&StoredDaReceipt {
-        version: STORED_RECEIPT_VERSION,
+    let target_path = receipt_file_path(
+        spool_dir,
+        LaneEpoch::new(receipt.lane_id, receipt.epoch),
         sequence,
-        receipt: receipt.clone(),
-    })
-    .map_err(|err| std::io::Error::new(ErrorKind::Other, err))?;
+        *fingerprint,
+    );
     if let Some(path) =
-        existing_artifact_path_if_matching(&target_path, &encoded, "DA receipt artifact")?
+        existing_artifact_path_if_matching(&target_path, encoded, "DA receipt artifact")?
     {
         return Ok(Some(path));
     }
@@ -2291,12 +2625,12 @@ pub(super) fn persist_da_receipt(
     );
     let tmp_path = spool_dir.join(tmp_name);
 
-    match write_temp_artifact(&tmp_path, &encoded) {
+    match write_temp_artifact(&tmp_path, encoded) {
         Ok(()) => {}
         Err(err) => return Err(temp_artifact_write_error(&tmp_path, err)),
     }
 
-    install_artifact_without_overwrite(&tmp_path, &target_path, &encoded, "DA receipt artifact")?;
+    install_artifact_without_overwrite(&tmp_path, &target_path, encoded, "DA receipt artifact")?;
 
     debug!(
         path = ?target_path,
@@ -2390,6 +2724,7 @@ fn existing_ticket_artifact_dir(
     Ok(Some(ticket_dir))
 }
 
+#[cfg(test)]
 pub(super) fn load_da_receipts(spool_dir: &Path) -> std::io::Result<Vec<StoredDaReceipt>> {
     if spool_dir.as_os_str().is_empty() {
         return Ok(Vec::new());
@@ -2498,7 +2833,11 @@ pub(super) fn load_manifest_artifact_from_spool(
         "manifest spool directory is not configured",
         "manifest not found for storage ticket",
     )?;
-    let bytes = read_regular_spool_artifact(&path, "DA manifest artifact")?;
+    let bytes = read_regular_spool_artifact(
+        &path,
+        "DA manifest artifact",
+        DA_MANIFEST_ARTIFACT_MAX_BYTES_V1,
+    )?;
     let (manifest, _) = decode_manifest_spool_body(&bytes)?;
     if manifest.storage_ticket != *ticket {
         return Err(std::io::Error::new(
@@ -2525,7 +2864,11 @@ pub(super) fn load_pdp_commitment_from_spool(
         "PDP spool directory is not configured",
         "PDP commitment not found for storage ticket",
     )?;
-    let bytes = read_regular_spool_artifact(&path, "PDP commitment artifact")?;
+    let bytes = read_regular_spool_artifact(
+        &path,
+        "PDP commitment artifact",
+        PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
+    )?;
     validate_pdp_commitment_spool_body(&bytes)?;
     Ok(bytes)
 }
@@ -2542,7 +2885,11 @@ pub(super) fn load_pdp_commitment_for_manifest_artifact(
         "PDP spool directory is not configured",
         "PDP commitment not found for manifest artifact",
     )?;
-    let bytes = read_regular_spool_artifact(&path, "PDP commitment artifact")?;
+    let bytes = read_regular_spool_artifact(
+        &path,
+        "PDP commitment artifact",
+        PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
+    )?;
     validate_pdp_commitment_spool_body_for_manifest(&bytes, manifest_hash)?;
     Ok(bytes)
 }
@@ -2854,6 +3201,16 @@ pub(super) fn persist_manifest_for_sorafs(
 ) -> std::io::Result<Option<PathBuf>> {
     if spool_dir.as_os_str().is_empty() {
         return Ok(None);
+    }
+    if manifest_bytes.len() > DA_MANIFEST_ARTIFACT_MAX_BYTES_V1 {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "DA manifest is {} bytes, exceeding the first-release {}-byte limit",
+                manifest_bytes.len(),
+                DA_MANIFEST_ARTIFACT_MAX_BYTES_V1
+            ),
+        ));
     }
     validate_manifest_artifact_inputs(
         manifest_bytes,

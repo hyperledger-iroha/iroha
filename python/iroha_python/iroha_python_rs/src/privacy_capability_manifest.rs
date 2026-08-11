@@ -28,7 +28,8 @@ use pyo3::{
 #[pyclass(
     name = "PrivacyExact12CapabilityManifestV1",
     frozen,
-    module = "iroha_python._crypto"
+    module = "iroha_python._crypto",
+    from_py_object
 )]
 #[derive(Clone)]
 pub(crate) struct PyPrivacyExact12CapabilityManifestV1 {

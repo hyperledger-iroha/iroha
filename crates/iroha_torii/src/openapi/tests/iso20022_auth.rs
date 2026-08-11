@@ -14,20 +14,28 @@ fn iso20022_operations_require_fresh_operator_signatures() {
             CatalogHttpMethod::Post => "post",
             other => panic!("unexpected ISO 20022 method: {other:?}"),
         };
-        let headers =
-            operation_header_requirements(openapi_operation(&document, descriptor.path(), method))
-                .into_iter()
-                .filter_map(|(name, required)| {
-                    name.starts_with("X-Iroha-Operator-").then(|| {
-                        assert!(
-                            required,
-                            "{method} {} {name} must be required",
-                            descriptor.path()
-                        );
-                        name
-                    })
+        let all_headers =
+            operation_header_requirements(openapi_operation(&document, descriptor.path(), method));
+        assert!(
+            all_headers
+                .iter()
+                .all(|(name, _)| name != "X-Iroha-Iso-Profile"),
+            "{method} {} retains the unsigned profile selector",
+            descriptor.path()
+        );
+        let headers = all_headers
+            .into_iter()
+            .filter_map(|(name, required)| {
+                name.starts_with("X-Iroha-Operator-").then(|| {
+                    assert!(
+                        required,
+                        "{method} {} {name} must be required",
+                        descriptor.path()
+                    );
+                    name
                 })
-                .collect::<BTreeSet<_>>();
+            })
+            .collect::<BTreeSet<_>>();
         assert_eq!(headers, expected, "{method} {}", descriptor.path());
     }
 }

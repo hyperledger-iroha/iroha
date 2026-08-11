@@ -1,4 +1,4 @@
-use iroha_crypto::SignatureOf;
+use iroha_crypto::{MerkleTree as CanonMerkleTree, SignatureOf};
 use iroha_data_model::{
     account::AccountId,
     block::{BlockHeader, BlockPayload, BlockResult, BlockSignature},

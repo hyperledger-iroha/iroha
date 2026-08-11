@@ -1179,9 +1179,13 @@ fn open_regular_bounded(
 
 fn read_regular_bounded(root: &Path, name: &str, max_bytes: usize, label: &str) -> Result<Vec<u8>> {
     let mut opened = open_regular_bounded(root, name, max_bytes, label)?;
-    let mut bytes = Vec::with_capacity(opened.length);
+    let mut bytes = Vec::with_capacity(opened.length.saturating_add(1));
     Read::by_ref(&mut opened.file)
-        .take(u64::try_from(max_bytes).expect("file bound fits u64") + 1)
+        .take(
+            u64::try_from(opened.length)
+                .expect("opened file length fits u64")
+                .saturating_add(1),
+        )
         .read_to_end(&mut bytes)
         .wrap_err_with(|| format!("failed to read {label}"))?;
     if bytes.len() != opened.length || bytes.len() > max_bytes {
@@ -2196,7 +2200,7 @@ impl VerificationReportV4 {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, collections::BTreeSet, rc::Rc};
+    use std::{cell::Cell, collections::BTreeSet, fs, rc::Rc};
 
     use iroha_data_model::offline::{
         KagemushaStepCircuitParamsV4, OfflineAndroidAppAttestationPolicy,
@@ -2209,7 +2213,7 @@ mod tests {
         RELEASE_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4, RELEASE_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
         REPORT_ARTIFACT_PURPOSES_V4, REPORT_ROSTER_PURPOSE, insert_expected_release_file_v4,
         parse_manifest_sha256, parse_nonzero_canonical_u64, prepare_release_circuit_params_v4,
-        roster_release_generations_match_v4, validate_artifacts_sequentially,
+        read_regular_bounded, roster_release_generations_match_v4, validate_artifacts_sequentially,
         validate_device_attestation_policy_for_atomic_activation,
     };
 
@@ -2283,6 +2287,23 @@ mod tests {
         for invalid in ["", "0", "01", "+1", "-1", "1 ", "18446744073709551616"] {
             assert!(parse_nonzero_canonical_u64(invalid).is_err(), "{invalid:?}");
         }
+    }
+
+    #[test]
+    fn bounded_artifact_reader_accepts_exact_limit_and_rejects_overflow() {
+        let root = tempfile::tempdir().expect("temporary bounded-artifact root");
+        fs::write(root.path().join("exact.bin"), [0x5A; 32]).expect("write exact bounded artifact");
+        assert_eq!(
+            read_regular_bounded(root.path(), "exact.bin", 32, "test artifact")
+                .expect("read exact bounded artifact"),
+            vec![0x5A; 32]
+        );
+
+        fs::write(root.path().join("oversized.bin"), [0xA5; 33])
+            .expect("write oversized bounded artifact");
+        let error = read_regular_bounded(root.path(), "oversized.bin", 32, "test artifact")
+            .expect_err("oversized bounded artifact must fail closed");
+        assert!(error.to_string().contains("size bound"));
     }
 
     #[cfg(unix)]

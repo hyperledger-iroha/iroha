@@ -1187,6 +1187,25 @@ pub mod query {
         }
     }
 
+    fn singular_account_from_entry(
+        world: &impl WorldReadOnly,
+        account_id: &AccountId,
+        account_value: &AccountValue,
+    ) -> Result<Account, Error> {
+        let details = account_value.as_ref();
+        let no_label = None::<AccountAlias>;
+        crate::smartcontracts::isi::query::own_singular_query_struct::<Account, 5>(
+            [
+                account_id,
+                &details.metadata,
+                &no_label,
+                &details.uaid,
+                &details.opaque_ids,
+            ],
+            || account_from_entry(world, account_id, account_value),
+        )
+    }
+
     fn latest_ledger_time_ms(state_ro: &impl StateReadOnly) -> u64 {
         state_ro.latest_block().map_or(0, |block| {
             u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
@@ -2002,7 +2021,7 @@ pub mod query {
                 .accounts()
                 .get_key_value(self.account_id())
                 .ok_or_else(|| Error::Find(FindError::Account(self.account_id().clone())))?;
-            Ok(account_from_entry(world, account_id, account_value))
+            singular_account_from_entry(world, account_id, account_value)
         }
     }
 
@@ -2025,7 +2044,7 @@ pub mod query {
                 .accounts()
                 .get_key_value(&account_id)
                 .ok_or_else(|| Error::Find(FindError::Account(account_id.clone())))?;
-            Ok(account_from_entry(world, account_id, account_value))
+            singular_account_from_entry(world, account_id, account_value)
         }
     }
 
@@ -2079,9 +2098,10 @@ pub mod query {
                 .world()
                 .account_aliases_by_account()
                 .get(account_id)
-                .cloned()
+                .map(Vec::as_slice)
                 .unwrap_or_default();
-            let mut records = Vec::with_capacity(labels.len());
+            let mut records =
+                crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(labels.len())?;
             for label in labels {
                 if dataspace_filter.is_some_and(|dataspace| label.dataspace != dataspace)
                     || domain_filter
@@ -2133,7 +2153,7 @@ pub mod query {
                         .map_err(|err| {
                             Error::Conversion(format!("invalid account alias lease record: {err}"))
                         })?;
-                records.push(AccountAliasBindingRecord {
+                records.try_push(AccountAliasBindingRecord {
                     account_id: account_id.clone(),
                     alias,
                     dataspace,
@@ -2143,9 +2163,9 @@ pub mod query {
                     lease_expiry_ms: Some(record.expires_at_ms),
                     grace_until_ms: Some(record.grace_expires_at_ms),
                     bound_at_ms: record.registered_at_ms,
-                });
+                })?;
             }
-            Ok(records)
+            Ok(records.into_vec())
         }
     }
 
@@ -2157,8 +2177,8 @@ pub mod query {
                 .world()
                 .account_recovery_policies()
                 .get(self.alias())
-                .cloned()
                 .ok_or(Error::NotFound)
+                .and_then(crate::smartcontracts::isi::query::own_singular_query_value)
         }
     }
 
@@ -2170,12 +2190,11 @@ pub mod query {
                 .world()
                 .account_recovery_requests()
                 .get(self.alias())
-                .cloned()
                 .ok_or(Error::NotFound)?;
-            if !recovery_request_matches_current_lineage(state_ro, &request, &current_account) {
+            if !recovery_request_matches_current_lineage(state_ro, request, &current_account) {
                 return Err(Error::NotFound);
             }
-            Ok(request)
+            crate::smartcontracts::isi::query::own_singular_query_value(request)
         }
     }
 

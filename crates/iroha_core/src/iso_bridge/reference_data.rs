@@ -4,7 +4,10 @@
 //! and securities ledger crosswalks from operator-provided snapshots, captures
 //! provenance metadata, and exposes ready-to-query maps for the Torii ISO bridge
 //! runtime. Each dataset is tagged with refresh metadata and emits Prometheus
-//! metrics so operators can monitor staleness or ingestion failures.
+//! metrics so operators can monitor staleness or ingestion failures. Loading is
+//! record-streamed under fixed source-byte, record, string, and retained-index
+//! budgets so malformed operator snapshots cannot scale startup memory without
+//! bound.
 
 use core::convert::TryFrom;
 use std::{
@@ -26,6 +29,98 @@ use thiserror::Error;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::profiles::ReferenceDatasetRequirement;
+
+/// Maximum encoded size of one first-release reference-data snapshot.
+const REFERENCE_DATA_MAX_DATASET_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum encoded bytes examined across one six-dataset refresh.
+const REFERENCE_DATA_MAX_TOTAL_INPUT_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum records retained across one six-dataset refresh.
+const REFERENCE_DATA_MAX_TOTAL_RECORDS: usize = 65_536;
+/// Conservative retained-memory budget for all crosswalk indexes.
+const REFERENCE_DATA_MAX_RETAINED_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum decoded bytes accepted for one metadata or record string.
+const REFERENCE_DATA_MAX_STRING_BYTES: usize = 4 * 1024;
+/// Conservative per-record accounting for tree nodes, vectors, and allocators.
+const REFERENCE_DATA_RECORD_OVERHEAD_BYTES: usize = 1024;
+/// Multiplier covering normalized keys and reverse-index string copies.
+const REFERENCE_DATA_STRING_ACCOUNTING_MULTIPLIER: usize = 4;
+
+#[derive(Debug)]
+struct ReferenceDataLoadBudget {
+    remaining_input_bytes: usize,
+    remaining_records: usize,
+    remaining_retained_bytes: usize,
+}
+
+impl Default for ReferenceDataLoadBudget {
+    fn default() -> Self {
+        Self {
+            remaining_input_bytes: REFERENCE_DATA_MAX_TOTAL_INPUT_BYTES,
+            remaining_records: REFERENCE_DATA_MAX_TOTAL_RECORDS,
+            remaining_retained_bytes: REFERENCE_DATA_MAX_RETAINED_BYTES,
+        }
+    }
+}
+
+impl ReferenceDataLoadBudget {
+    fn charge_input(&mut self, kind: DatasetKind, bytes: usize) -> eyre::Result<()> {
+        if bytes > self.remaining_input_bytes {
+            eyre::bail!(
+                "{} dataset would exceed the {}-byte aggregate input budget",
+                kind.label(),
+                REFERENCE_DATA_MAX_TOTAL_INPUT_BYTES
+            );
+        }
+        self.remaining_input_bytes -= bytes;
+        Ok(())
+    }
+
+    fn charge_record(&mut self, kind: DatasetKind) -> eyre::Result<()> {
+        if self.remaining_records == 0 {
+            eyre::bail!(
+                "{} dataset would exceed the {REFERENCE_DATA_MAX_TOTAL_RECORDS}-record aggregate limit",
+                kind.label()
+            );
+        }
+        self.remaining_records -= 1;
+        Ok(())
+    }
+
+    fn charge_retained_strings<'a>(
+        &mut self,
+        kind: DatasetKind,
+        strings: impl IntoIterator<Item = &'a str>,
+    ) -> eyre::Result<()> {
+        let string_bytes = strings.into_iter().try_fold(0usize, |total, value| {
+            if value.len() > REFERENCE_DATA_MAX_STRING_BYTES {
+                eyre::bail!(
+                    "{} dataset string is {} bytes (maximum {})",
+                    kind.label(),
+                    value.len(),
+                    REFERENCE_DATA_MAX_STRING_BYTES
+                );
+            }
+            total
+                .checked_add(value.len())
+                .ok_or_else(|| eyre::eyre!("{} dataset string-byte total overflowed", kind.label()))
+        })?;
+        let charge = string_bytes
+            .checked_mul(REFERENCE_DATA_STRING_ACCOUNTING_MULTIPLIER)
+            .and_then(|bytes| bytes.checked_add(REFERENCE_DATA_RECORD_OVERHEAD_BYTES))
+            .ok_or_else(|| {
+                eyre::eyre!("{} dataset retained-byte charge overflowed", kind.label())
+            })?;
+        if charge > self.remaining_retained_bytes {
+            eyre::bail!(
+                "{} dataset would exceed the {}-byte retained-index budget",
+                kind.label(),
+                REFERENCE_DATA_MAX_RETAINED_BYTES
+            );
+        }
+        self.remaining_retained_bytes -= charge;
+        Ok(())
+    }
+}
 
 /// Dataset kinds tracked by the ISO bridge reference-data loader.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -294,6 +389,21 @@ impl<T> DatasetSnapshot<T> {
     }
 }
 
+fn load_configured_dataset<T>(
+    path: Option<&Path>,
+    kind: DatasetKind,
+    budget: &mut ReferenceDataLoadBudget,
+    loader: impl FnOnce(&Path, &mut ReferenceDataLoadBudget) -> eyre::Result<(SnapshotMetadata, T)>,
+) -> DatasetSnapshot<T> {
+    let Some(path) = path else {
+        return DatasetSnapshot::missing(kind);
+    };
+    match loader(path, budget) {
+        Ok((metadata, records)) => DatasetSnapshot::loaded(kind, path, metadata, records),
+        Err(err) => DatasetSnapshot::failed(kind, path, &err),
+    }
+}
+
 /// In-memory snapshot cache for ISO 20022 reference data.
 #[derive(Debug, Clone)]
 pub struct ReferenceDataSnapshots {
@@ -319,65 +429,48 @@ impl ReferenceDataSnapshots {
     /// Build snapshots from the provided configuration.
     pub fn from_config(config: &actual::IsoReferenceData) -> Self {
         let now = OffsetDateTime::now_utc();
+        let mut budget = ReferenceDataLoadBudget::default();
 
-        let isin_snapshot = config.isin_crosswalk_path.as_deref().map_or_else(
-            || DatasetSnapshot::missing(DatasetKind::IsinCusip),
-            |path| match load_isin_crosswalk(path) {
-                Ok((meta, records)) => {
-                    DatasetSnapshot::loaded(DatasetKind::IsinCusip, path, meta, records)
-                }
-                Err(err) => DatasetSnapshot::failed(DatasetKind::IsinCusip, path, &err),
-            },
+        let isin_snapshot = load_configured_dataset(
+            config.isin_crosswalk_path.as_deref(),
+            DatasetKind::IsinCusip,
+            &mut budget,
+            load_isin_crosswalk,
         );
 
-        let bic_lei_snapshot = config.bic_lei_path.as_deref().map_or_else(
-            || DatasetSnapshot::missing(DatasetKind::BicLei),
-            |path| match load_bic_lei_crosswalk(path) {
-                Ok((meta, records)) => {
-                    DatasetSnapshot::loaded(DatasetKind::BicLei, path, meta, records)
-                }
-                Err(err) => DatasetSnapshot::failed(DatasetKind::BicLei, path, &err),
-            },
+        let bic_lei_snapshot = load_configured_dataset(
+            config.bic_lei_path.as_deref(),
+            DatasetKind::BicLei,
+            &mut budget,
+            load_bic_lei_crosswalk,
         );
 
-        let mic_snapshot = config.mic_directory_path.as_deref().map_or_else(
-            || DatasetSnapshot::missing(DatasetKind::MicDirectory),
-            |path| match load_mic_directory(path) {
-                Ok((meta, records)) => {
-                    DatasetSnapshot::loaded(DatasetKind::MicDirectory, path, meta, records)
-                }
-                Err(err) => DatasetSnapshot::failed(DatasetKind::MicDirectory, path, &err),
-            },
+        let mic_snapshot = load_configured_dataset(
+            config.mic_directory_path.as_deref(),
+            DatasetKind::MicDirectory,
+            &mut budget,
+            load_mic_directory,
         );
 
-        let csd_venue_snapshot = config.csd_venue_path.as_deref().map_or_else(
-            || DatasetSnapshot::missing(DatasetKind::CsdVenue),
-            |path| match load_csd_venue_directory(path) {
-                Ok((meta, records)) => {
-                    DatasetSnapshot::loaded(DatasetKind::CsdVenue, path, meta, records)
-                }
-                Err(err) => DatasetSnapshot::failed(DatasetKind::CsdVenue, path, &err),
-            },
+        let csd_venue_snapshot = load_configured_dataset(
+            config.csd_venue_path.as_deref(),
+            DatasetKind::CsdVenue,
+            &mut budget,
+            load_csd_venue_directory,
         );
 
-        let securities_account_snapshot = config.securities_account_path.as_deref().map_or_else(
-            || DatasetSnapshot::missing(DatasetKind::SecuritiesAccount),
-            |path| match load_securities_account_crosswalk(path) {
-                Ok((meta, records)) => {
-                    DatasetSnapshot::loaded(DatasetKind::SecuritiesAccount, path, meta, records)
-                }
-                Err(err) => DatasetSnapshot::failed(DatasetKind::SecuritiesAccount, path, &err),
-            },
+        let securities_account_snapshot = load_configured_dataset(
+            config.securities_account_path.as_deref(),
+            DatasetKind::SecuritiesAccount,
+            &mut budget,
+            load_securities_account_crosswalk,
         );
 
-        let cash_leg_snapshot = config.cash_leg_path.as_deref().map_or_else(
-            || DatasetSnapshot::missing(DatasetKind::CashLeg),
-            |path| match load_cash_leg_crosswalk(path) {
-                Ok((meta, records)) => {
-                    DatasetSnapshot::loaded(DatasetKind::CashLeg, path, meta, records)
-                }
-                Err(err) => DatasetSnapshot::failed(DatasetKind::CashLeg, path, &err),
-            },
+        let cash_leg_snapshot = load_configured_dataset(
+            config.cash_leg_path.as_deref(),
+            DatasetKind::CashLeg,
+            &mut budget,
+            load_cash_leg_crosswalk,
         );
 
         let snapshots = Self {
@@ -1089,11 +1182,15 @@ pub struct BicLeiCrosswalk {
 }
 
 impl BicLeiCrosswalk {
-    fn insert(&mut self, bic: &str, lei: &str) {
+    fn insert(&mut self, bic: &str, lei: &str) -> eyre::Result<()> {
         let bic_key = normalise_upper_ascii(bic);
         let lei_key = normalise_upper_ascii(lei);
+        if let Some(existing) = self.bic_to_lei.get(&bic_key) {
+            eyre::bail!("duplicate BIC entry encountered: {bic_key} (already maps to {existing})");
+        }
         self.bic_to_lei.insert(bic_key.clone(), lei_key.clone());
         self.lei_to_bic.entry(lei_key).or_default().push(bic_key);
+        Ok(())
     }
 
     /// Number of BIC ↔ LEI pairs loaded.
@@ -1327,326 +1424,525 @@ impl CashLegCrosswalk {
     }
 }
 
-fn load_isin_crosswalk(path: &Path) -> eyre::Result<(SnapshotMetadata, InstrumentCrosswalk)> {
-    let root = read_json(path)?;
-    let mut metadata = parse_metadata(DatasetKind::IsinCusip, &root)?;
-    let entries = root
-        .as_object()
-        .and_then(|obj| obj.get("entries"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| eyre::eyre!("isin_cusip snapshot missing `entries` array"))?;
-
-    let mut crosswalk = InstrumentCrosswalk::default();
-    for entry in entries {
-        let obj = entry
-            .as_object()
-            .ok_or_else(|| eyre::eyre!("isin_cusip entry must be an object"))?;
-        let isin = obj
-            .get("isin")
-            .and_then(Value::as_str)
-            .ok_or_else(|| eyre::eyre!("isin_cusip entry missing `isin`"))?
-            .trim()
-            .to_ascii_uppercase();
-        if !iso20022::validate_identifier(IdentifierKind::Isin, &isin) {
-            eyre::bail!("isin_cusip entry contains invalid ISIN `{isin}`");
-        }
-        let cusip = obj
-            .get("cusip")
-            .and_then(Value::as_str)
-            .map(|s| s.trim().to_ascii_uppercase())
-            .filter(|s| !s.is_empty());
-        if let Some(ref cusip) = cusip
-            && !iso20022::validate_identifier(IdentifierKind::Cusip, cusip)
-        {
-            eyre::bail!("isin_cusip entry contains invalid CUSIP `{cusip}`");
-        }
-        let asset_definition_id = obj
-            .get("asset_definition_id")
-            .and_then(Value::as_str)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        let asset_id = obj
-            .get("asset_id")
-            .and_then(Value::as_str)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-
-        let record = InstrumentRecord {
-            isin,
-            cusip,
-            asset_definition_id,
-            asset_id,
-        };
-        crosswalk.insert(record)?;
-    }
-
-    metadata.record_count = crosswalk.len();
-    Ok((metadata, crosswalk))
+fn load_isin_crosswalk(
+    path: &Path,
+    budget: &mut ReferenceDataLoadBudget,
+) -> eyre::Result<(SnapshotMetadata, InstrumentCrosswalk)> {
+    load_dataset_streaming(
+        path,
+        DatasetKind::IsinCusip,
+        budget,
+        InstrumentCrosswalk::len,
+        |crosswalk, entry, budget| {
+            let mut obj = take_entry_object(entry, "isin_cusip")?;
+            let mut isin = take_required_string(&mut obj, "isin", "isin_cusip")?;
+            isin.make_ascii_uppercase();
+            if !iso20022::validate_identifier(IdentifierKind::Isin, &isin) {
+                eyre::bail!("isin_cusip entry contains invalid ISIN `{isin}`");
+            }
+            let mut cusip = take_optional_string(&mut obj, "cusip", "isin_cusip")?;
+            if let Some(value) = cusip.as_mut() {
+                value.make_ascii_uppercase();
+                if !iso20022::validate_identifier(IdentifierKind::Cusip, value) {
+                    eyre::bail!("isin_cusip entry contains invalid CUSIP `{value}`");
+                }
+            }
+            let asset_definition_id =
+                take_optional_string(&mut obj, "asset_definition_id", "isin_cusip")?;
+            let asset_id = take_optional_string(&mut obj, "asset_id", "isin_cusip")?;
+            budget.charge_retained_strings(
+                DatasetKind::IsinCusip,
+                std::iter::once(isin.as_str())
+                    .chain(cusip.iter().map(String::as_str))
+                    .chain(asset_definition_id.iter().map(String::as_str))
+                    .chain(asset_id.iter().map(String::as_str)),
+            )?;
+            crosswalk.insert(InstrumentRecord {
+                isin,
+                cusip,
+                asset_definition_id,
+                asset_id,
+            })
+        },
+    )
 }
 
-fn load_bic_lei_crosswalk(path: &Path) -> eyre::Result<(SnapshotMetadata, BicLeiCrosswalk)> {
-    let root = read_json(path)?;
-    let mut metadata = parse_metadata(DatasetKind::BicLei, &root)?;
-    let entries = root
-        .as_object()
-        .and_then(|obj| obj.get("entries"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| eyre::eyre!("bic_lei snapshot missing `entries` array"))?;
-
-    let mut crosswalk = BicLeiCrosswalk::default();
-    for entry in entries {
-        let obj = entry
-            .as_object()
-            .ok_or_else(|| eyre::eyre!("bic_lei entry must be an object"))?;
-        let bic = obj
-            .get("bic")
-            .and_then(Value::as_str)
-            .ok_or_else(|| eyre::eyre!("bic_lei entry missing `bic`"))?
-            .trim()
-            .to_ascii_uppercase();
-        if !iso20022::validate_identifier(IdentifierKind::Bic, &bic) {
-            eyre::bail!("bic_lei entry contains invalid BIC `{bic}`");
-        }
-        let lei = obj
-            .get("lei")
-            .and_then(Value::as_str)
-            .ok_or_else(|| eyre::eyre!("bic_lei entry missing `lei`"))?
-            .trim()
-            .to_ascii_uppercase();
-        if !iso20022::validate_identifier(IdentifierKind::Lei, &lei) {
-            eyre::bail!("bic_lei entry contains invalid LEI `{lei}`");
-        }
-        crosswalk.insert(&bic, &lei);
-    }
-
-    metadata.record_count = crosswalk.len();
-    Ok((metadata, crosswalk))
+fn load_bic_lei_crosswalk(
+    path: &Path,
+    budget: &mut ReferenceDataLoadBudget,
+) -> eyre::Result<(SnapshotMetadata, BicLeiCrosswalk)> {
+    load_dataset_streaming(
+        path,
+        DatasetKind::BicLei,
+        budget,
+        BicLeiCrosswalk::len,
+        |crosswalk, entry, budget| {
+            let mut obj = take_entry_object(entry, "bic_lei")?;
+            let mut bic = take_required_string(&mut obj, "bic", "bic_lei")?;
+            bic.make_ascii_uppercase();
+            if !iso20022::validate_identifier(IdentifierKind::Bic, &bic) {
+                eyre::bail!("bic_lei entry contains invalid BIC `{bic}`");
+            }
+            let mut lei = take_required_string(&mut obj, "lei", "bic_lei")?;
+            lei.make_ascii_uppercase();
+            if !iso20022::validate_identifier(IdentifierKind::Lei, &lei) {
+                eyre::bail!("bic_lei entry contains invalid LEI `{lei}`");
+            }
+            budget.charge_retained_strings(DatasetKind::BicLei, [bic.as_str(), lei.as_str()])?;
+            crosswalk.insert(&bic, &lei)
+        },
+    )
 }
 
-fn load_mic_directory(path: &Path) -> eyre::Result<(SnapshotMetadata, MicDirectory)> {
-    let root = read_json(path)?;
-    let mut metadata = parse_metadata(DatasetKind::MicDirectory, &root)?;
-    let entries = root
-        .as_object()
-        .and_then(|obj| obj.get("entries"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| eyre::eyre!("mic_directory snapshot missing `entries` array"))?;
-
-    let mut directory = MicDirectory::default();
-    for entry in entries {
-        let obj = entry
-            .as_object()
-            .ok_or_else(|| eyre::eyre!("mic_directory entry must be an object"))?;
-        let mic = obj
-            .get("mic")
-            .and_then(Value::as_str)
-            .ok_or_else(|| eyre::eyre!("mic_directory entry missing `mic`"))?
-            .trim()
-            .to_ascii_uppercase();
-        if !iso20022::validate_identifier(IdentifierKind::Mic, &mic) {
-            eyre::bail!("mic_directory entry contains invalid MIC `{mic}`");
-        }
-        let market_name = obj
-            .get("market_name")
-            .and_then(Value::as_str)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-        let country = obj
-            .get("country")
-            .and_then(Value::as_str)
-            .map(|s| s.trim().to_ascii_uppercase())
-            .filter(|s| !s.is_empty());
-        let status = obj
-            .get("status")
-            .and_then(Value::as_str)
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
-
-        let record = MicRecord {
-            mic,
-            market_name,
-            country,
-            status,
-        };
-        directory.insert(record)?;
-    }
-
-    metadata.record_count = directory.len();
-    Ok((metadata, directory))
+fn load_mic_directory(
+    path: &Path,
+    budget: &mut ReferenceDataLoadBudget,
+) -> eyre::Result<(SnapshotMetadata, MicDirectory)> {
+    load_dataset_streaming(
+        path,
+        DatasetKind::MicDirectory,
+        budget,
+        MicDirectory::len,
+        |directory, entry, budget| {
+            let mut obj = take_entry_object(entry, "mic_directory")?;
+            let mut mic = take_required_string(&mut obj, "mic", "mic_directory")?;
+            mic.make_ascii_uppercase();
+            if !iso20022::validate_identifier(IdentifierKind::Mic, &mic) {
+                eyre::bail!("mic_directory entry contains invalid MIC `{mic}`");
+            }
+            let market_name = take_optional_string(&mut obj, "market_name", "mic_directory")?;
+            let mut country = take_optional_string(&mut obj, "country", "mic_directory")?;
+            if let Some(value) = country.as_mut() {
+                value.make_ascii_uppercase();
+            }
+            let status = take_optional_string(&mut obj, "status", "mic_directory")?;
+            budget.charge_retained_strings(
+                DatasetKind::MicDirectory,
+                std::iter::once(mic.as_str())
+                    .chain(market_name.iter().map(String::as_str))
+                    .chain(country.iter().map(String::as_str))
+                    .chain(status.iter().map(String::as_str)),
+            )?;
+            directory.insert(MicRecord {
+                mic,
+                market_name,
+                country,
+                status,
+            })
+        },
+    )
 }
 
-fn load_csd_venue_directory(path: &Path) -> eyre::Result<(SnapshotMetadata, CsdVenueDirectory)> {
-    let root = read_json(path)?;
-    let mut metadata = parse_metadata(DatasetKind::CsdVenue, &root)?;
-    let entries = root
-        .as_object()
-        .and_then(|obj| obj.get("entries"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| eyre::eyre!("csd_venue snapshot missing `entries` array"))?;
-
-    let mut directory = CsdVenueDirectory::default();
-    for entry in entries {
-        let obj = entry
-            .as_object()
-            .ok_or_else(|| eyre::eyre!("csd_venue entry must be an object"))?;
-        let mic = obj
-            .get("mic")
-            .and_then(Value::as_str)
-            .ok_or_else(|| eyre::eyre!("csd_venue entry missing `mic`"))?
-            .trim()
-            .to_ascii_uppercase();
-        if !iso20022::validate_identifier(IdentifierKind::Mic, &mic) {
-            eyre::bail!("csd_venue entry contains invalid MIC `{mic}`");
-        }
-        let csd_id = optional_trimmed_string(obj, "csd_id");
-        let ledger_domain_id = optional_trimmed_string(obj, "ledger_domain_id");
-
-        directory.insert(CsdVenueRecord {
-            mic,
-            csd_id,
-            ledger_domain_id,
-        })?;
-    }
-
-    metadata.record_count = directory.len();
-    Ok((metadata, directory))
+fn load_csd_venue_directory(
+    path: &Path,
+    budget: &mut ReferenceDataLoadBudget,
+) -> eyre::Result<(SnapshotMetadata, CsdVenueDirectory)> {
+    load_dataset_streaming(
+        path,
+        DatasetKind::CsdVenue,
+        budget,
+        CsdVenueDirectory::len,
+        |directory, entry, budget| {
+            let mut obj = take_entry_object(entry, "csd_venue")?;
+            let mut mic = take_required_string(&mut obj, "mic", "csd_venue")?;
+            mic.make_ascii_uppercase();
+            if !iso20022::validate_identifier(IdentifierKind::Mic, &mic) {
+                eyre::bail!("csd_venue entry contains invalid MIC `{mic}`");
+            }
+            let csd_id = take_optional_string(&mut obj, "csd_id", "csd_venue")?;
+            let ledger_domain_id = take_optional_string(&mut obj, "ledger_domain_id", "csd_venue")?;
+            budget.charge_retained_strings(
+                DatasetKind::CsdVenue,
+                std::iter::once(mic.as_str())
+                    .chain(csd_id.iter().map(String::as_str))
+                    .chain(ledger_domain_id.iter().map(String::as_str)),
+            )?;
+            directory.insert(CsdVenueRecord {
+                mic,
+                csd_id,
+                ledger_domain_id,
+            })
+        },
+    )
 }
 
 fn load_securities_account_crosswalk(
     path: &Path,
+    budget: &mut ReferenceDataLoadBudget,
 ) -> eyre::Result<(SnapshotMetadata, SecuritiesAccountCrosswalk)> {
-    let root = read_json(path)?;
-    let mut metadata = parse_metadata(DatasetKind::SecuritiesAccount, &root)?;
-    let entries = root
-        .as_object()
-        .and_then(|obj| obj.get("entries"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| eyre::eyre!("securities_account snapshot missing `entries` array"))?;
-
-    let mut crosswalk = SecuritiesAccountCrosswalk::default();
-    for entry in entries {
-        let obj = entry
-            .as_object()
-            .ok_or_else(|| eyre::eyre!("securities_account entry must be an object"))?;
-        let settlement_account = obj
-            .get("settlement_account")
-            .or_else(|| obj.get("account"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| eyre::eyre!("securities_account entry missing `settlement_account`"))?
-            .trim()
-            .to_ascii_uppercase();
-        if settlement_account.is_empty() {
-            eyre::bail!("securities_account entry contains empty settlement account");
-        }
-        let bic = optional_trimmed_string(obj, "bic").map(|value| value.to_ascii_uppercase());
-        if let Some(bic) = bic.as_deref()
-            && !iso20022::validate_identifier(IdentifierKind::Bic, bic)
-        {
-            eyre::bail!("securities_account entry contains invalid BIC `{bic}`");
-        }
-        let account_id = optional_trimmed_string(obj, "account_id");
-
-        crosswalk.insert(SecuritiesAccountRecord {
-            settlement_account,
-            bic,
-            account_id,
-        })?;
-    }
-
-    metadata.record_count = crosswalk.len();
-    Ok((metadata, crosswalk))
+    load_dataset_streaming(
+        path,
+        DatasetKind::SecuritiesAccount,
+        budget,
+        SecuritiesAccountCrosswalk::len,
+        |crosswalk, entry, budget| {
+            let mut obj = take_entry_object(entry, "securities_account")?;
+            let mut settlement_account = if obj.contains_key("settlement_account") {
+                take_required_string(&mut obj, "settlement_account", "securities_account")?
+            } else {
+                take_required_string(&mut obj, "account", "securities_account")?
+            };
+            settlement_account.make_ascii_uppercase();
+            if settlement_account.is_empty() {
+                eyre::bail!("securities_account entry contains empty settlement account");
+            }
+            let mut bic = take_optional_string(&mut obj, "bic", "securities_account")?;
+            if let Some(value) = bic.as_mut() {
+                value.make_ascii_uppercase();
+                if !iso20022::validate_identifier(IdentifierKind::Bic, value) {
+                    eyre::bail!("securities_account entry contains invalid BIC `{value}`");
+                }
+            }
+            let account_id = take_optional_string(&mut obj, "account_id", "securities_account")?;
+            budget.charge_retained_strings(
+                DatasetKind::SecuritiesAccount,
+                std::iter::once(settlement_account.as_str())
+                    .chain(bic.iter().map(String::as_str))
+                    .chain(account_id.iter().map(String::as_str)),
+            )?;
+            crosswalk.insert(SecuritiesAccountRecord {
+                settlement_account,
+                bic,
+                account_id,
+            })
+        },
+    )
 }
 
-fn load_cash_leg_crosswalk(path: &Path) -> eyre::Result<(SnapshotMetadata, CashLegCrosswalk)> {
-    let root = read_json(path)?;
-    let mut metadata = parse_metadata(DatasetKind::CashLeg, &root)?;
-    let entries = root
-        .as_object()
-        .and_then(|obj| obj.get("entries"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| eyre::eyre!("cash_leg snapshot missing `entries` array"))?;
-
-    let mut crosswalk = CashLegCrosswalk::default();
-    for entry in entries {
-        let obj = entry
-            .as_object()
-            .ok_or_else(|| eyre::eyre!("cash_leg entry must be an object"))?;
-        let currency = obj
-            .get("currency")
-            .and_then(Value::as_str)
-            .ok_or_else(|| eyre::eyre!("cash_leg entry missing `currency`"))?
-            .trim()
-            .to_ascii_uppercase();
-        if !iso20022::validate_identifier(IdentifierKind::Currency, &currency) {
-            eyre::bail!("cash_leg entry contains invalid currency `{currency}`");
-        }
-        let payment_type =
-            optional_trimmed_string(obj, "payment_type").map(|value| value.to_ascii_uppercase());
-        let asset_definition_id = optional_trimmed_string(obj, "asset_definition_id");
-
-        crosswalk.insert(CashLegRecord {
-            currency,
-            payment_type,
-            asset_definition_id,
-        })?;
-    }
-
-    metadata.record_count = crosswalk.len();
-    Ok((metadata, crosswalk))
+fn load_cash_leg_crosswalk(
+    path: &Path,
+    budget: &mut ReferenceDataLoadBudget,
+) -> eyre::Result<(SnapshotMetadata, CashLegCrosswalk)> {
+    load_dataset_streaming(
+        path,
+        DatasetKind::CashLeg,
+        budget,
+        CashLegCrosswalk::len,
+        |crosswalk, entry, budget| {
+            let mut obj = take_entry_object(entry, "cash_leg")?;
+            let mut currency = take_required_string(&mut obj, "currency", "cash_leg")?;
+            currency.make_ascii_uppercase();
+            if !iso20022::validate_identifier(IdentifierKind::Currency, &currency) {
+                eyre::bail!("cash_leg entry contains invalid currency `{currency}`");
+            }
+            let mut payment_type = take_optional_string(&mut obj, "payment_type", "cash_leg")?;
+            if let Some(value) = payment_type.as_mut() {
+                value.make_ascii_uppercase();
+            }
+            let asset_definition_id =
+                take_optional_string(&mut obj, "asset_definition_id", "cash_leg")?;
+            budget.charge_retained_strings(
+                DatasetKind::CashLeg,
+                std::iter::once(currency.as_str())
+                    .chain(payment_type.iter().map(String::as_str))
+                    .chain(asset_definition_id.iter().map(String::as_str)),
+            )?;
+            crosswalk.insert(CashLegRecord {
+                currency,
+                payment_type,
+                asset_definition_id,
+            })
+        },
+    )
 }
 
-fn optional_trimmed_string(obj: &json::Map, field: &str) -> Option<String> {
-    obj.get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn read_json(path: &Path) -> eyre::Result<Value> {
-    let raw = fs::read_to_string(path)
-        .wrap_err_with(|| format!("failed to read ISO reference dataset at {}", path.display()))?;
-    norito::json::from_str(&raw).wrap_err_with(|| {
+fn load_dataset_streaming<T: Default>(
+    path: &Path,
+    kind: DatasetKind,
+    budget: &mut ReferenceDataLoadBudget,
+    record_count: impl Fn(&T) -> usize,
+    mut insert: impl FnMut(&mut T, Value, &mut ReferenceDataLoadBudget) -> eyre::Result<()>,
+) -> eyre::Result<(SnapshotMetadata, T)> {
+    let raw = read_dataset_json_bounded(path, kind, budget)?;
+    let mut parser = json::Parser::new(&raw);
+    let mut object = json::MapVisitor::new(&mut parser).wrap_err_with(|| {
         format!(
-            "failed to parse ISO reference dataset JSON at {}",
+            "failed to parse {} reference dataset JSON at {}",
+            kind.label(),
+            path.display()
+        )
+    })?;
+    let mut version = None;
+    let mut source = None;
+    let mut fetched_at: Option<Option<String>> = None;
+    let mut records = None;
+
+    while let Some(key) = object.next_key()? {
+        match key.as_str() {
+            "version" => {
+                if version.is_some() {
+                    return Err(json::Error::duplicate_field("version").into());
+                }
+                let value = object.parse_value::<String>()?;
+                validate_string_bytes(kind, "version", &value)?;
+                version = Some(value.trim().to_owned());
+            }
+            "source" => {
+                if source.is_some() {
+                    return Err(json::Error::duplicate_field("source").into());
+                }
+                let value = object.parse_value::<String>()?;
+                validate_string_bytes(kind, "source", &value)?;
+                source = Some(value.trim().to_owned());
+            }
+            "fetched_at" => {
+                if fetched_at.is_some() {
+                    return Err(json::Error::duplicate_field("fetched_at").into());
+                }
+                let value = object.parse_value::<Option<String>>()?;
+                if let Some(value) = value.as_deref() {
+                    validate_string_bytes(kind, "fetched_at", value)?;
+                }
+                fetched_at = Some(value);
+            }
+            "entries" => {
+                if records.is_some() {
+                    return Err(json::Error::duplicate_field("entries").into());
+                }
+                let mut loaded = T::default();
+                object.parse_value_with_parser(|parser| {
+                    let mut sequence = json::SeqVisitor::new(parser)?;
+                    while !sequence.is_finished() {
+                        budget
+                            .charge_record(kind)
+                            .map_err(|error| json_message(error))?;
+                        let entry = sequence.next_element::<Value>()?.ok_or_else(|| {
+                            json::Error::Message(format!(
+                                "{} entries array ended unexpectedly",
+                                kind.label()
+                            ))
+                        })?;
+                        insert(&mut loaded, entry, budget).map_err(|error| json_message(error))?;
+                    }
+                    sequence.finish()
+                })?;
+                records = Some(loaded);
+            }
+            _ => object.skip_value()?,
+        }
+    }
+    object.finish()?;
+    parser.skip_ws();
+    if !parser.eof() {
+        eyre::bail!(
+            "{} reference dataset contains trailing JSON at byte {}",
+            kind.label(),
+            parser.position()
+        );
+    }
+
+    let records =
+        records.ok_or_else(|| eyre::eyre!("{} snapshot missing `entries` array", kind.label()))?;
+    let version =
+        version.ok_or_else(|| eyre::eyre!("{} snapshot missing `version`", kind.label()))?;
+    let source = source.ok_or_else(|| eyre::eyre!("{} snapshot missing `source`", kind.label()))?;
+    let fetched_at = fetched_at
+        .flatten()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            OffsetDateTime::parse(&value, &Rfc3339)
+                .wrap_err_with(|| format!("invalid RFC3339 timestamp `{value}`"))
+        })
+        .transpose()?;
+    let metadata = SnapshotMetadata {
+        version,
+        source,
+        fetched_at,
+        record_count: record_count(&records),
+    };
+    Ok((metadata, records))
+}
+
+fn take_entry_object(entry: Value, dataset: &str) -> eyre::Result<json::Map> {
+    match entry {
+        Value::Object(obj) => Ok(obj),
+        _ => eyre::bail!("{dataset} entry must be an object"),
+    }
+}
+
+fn take_required_string(
+    obj: &mut json::Map,
+    field: &'static str,
+    dataset: &str,
+) -> eyre::Result<String> {
+    let value = obj
+        .remove(field)
+        .ok_or_else(|| eyre::eyre!("{dataset} entry missing `{field}`"))?;
+    let Value::String(value) = value else {
+        eyre::bail!("{dataset} entry `{field}` must be a string");
+    };
+    validate_string_bytes_by_label(dataset, field, &value)?;
+    Ok(value.trim().to_owned())
+}
+
+fn take_optional_string(
+    obj: &mut json::Map,
+    field: &'static str,
+    dataset: &str,
+) -> eyre::Result<Option<String>> {
+    let Some(value) = obj.remove(field) else {
+        return Ok(None);
+    };
+    match value {
+        Value::Null => Ok(None),
+        Value::String(value) => {
+            validate_string_bytes_by_label(dataset, field, &value)?;
+            let trimmed = value.trim();
+            Ok((!trimmed.is_empty()).then(|| trimmed.to_owned()))
+        }
+        _ => eyre::bail!("{dataset} entry `{field}` must be a string or null"),
+    }
+}
+
+fn validate_string_bytes(kind: DatasetKind, field: &'static str, value: &str) -> eyre::Result<()> {
+    validate_string_bytes_by_label(kind.label(), field, value)
+}
+
+fn validate_string_bytes_by_label(
+    dataset: &str,
+    field: &'static str,
+    value: &str,
+) -> eyre::Result<()> {
+    if value.len() > REFERENCE_DATA_MAX_STRING_BYTES {
+        eyre::bail!(
+            "{dataset} `{field}` is {} bytes (maximum {})",
+            value.len(),
+            REFERENCE_DATA_MAX_STRING_BYTES
+        );
+    }
+    Ok(())
+}
+
+fn json_message(error: impl core::fmt::Display) -> json::Error {
+    json::Error::Message(error.to_string())
+}
+
+fn read_dataset_json_bounded(
+    path: &Path,
+    kind: DatasetKind,
+    budget: &mut ReferenceDataLoadBudget,
+) -> eyre::Result<String> {
+    let initial = fs::symlink_metadata(path).wrap_err_with(|| {
+        format!(
+            "failed to inspect ISO reference dataset at {}",
+            path.display()
+        )
+    })?;
+    if !initial.file_type().is_file() {
+        eyre::bail!(
+            "ISO reference dataset at {} is not a regular file",
+            path.display()
+        );
+    }
+    let initial_len = usize::try_from(initial.len())
+        .map_err(|_| eyre::eyre!("ISO reference dataset length does not fit this platform"))?;
+    if initial_len > REFERENCE_DATA_MAX_DATASET_BYTES {
+        eyre::bail!(
+            "{} dataset is {initial_len} bytes (maximum {})",
+            kind.label(),
+            REFERENCE_DATA_MAX_DATASET_BYTES
+        );
+    }
+    if initial_len > budget.remaining_input_bytes {
+        eyre::bail!(
+            "{} dataset would exceed the {}-byte aggregate input budget",
+            kind.label(),
+            REFERENCE_DATA_MAX_TOTAL_INPUT_BYTES
+        );
+    }
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let nofollow = i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits())
+            .expect("NOFOLLOW flag bits fit the platform custom-flags type");
+        options.custom_flags(nofollow);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut file = options
+        .open(path)
+        .wrap_err_with(|| format!("failed to open ISO reference dataset at {}", path.display()))?;
+    let opened = file
+        .metadata()
+        .wrap_err_with(|| format!("failed to inspect opened ISO dataset at {}", path.display()))?;
+    if !opened.is_file() || !same_dataset_snapshot(&initial, &opened) {
+        eyre::bail!(
+            "ISO reference dataset at {} changed while opening",
+            path.display()
+        );
+    }
+
+    let mut raw = Vec::with_capacity(initial_len);
+    Read::by_ref(&mut file)
+        .take(
+            u64::try_from(REFERENCE_DATA_MAX_DATASET_BYTES)
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+        )
+        .read_to_end(&mut raw)
+        .wrap_err_with(|| format!("failed to read ISO reference dataset at {}", path.display()))?;
+    if raw.len() > REFERENCE_DATA_MAX_DATASET_BYTES {
+        eyre::bail!(
+            "{} dataset grew beyond its {}-byte limit while reading",
+            kind.label(),
+            REFERENCE_DATA_MAX_DATASET_BYTES
+        );
+    }
+    let after_read = file.metadata().wrap_err_with(|| {
+        format!(
+            "failed to re-inspect opened ISO dataset at {}",
+            path.display()
+        )
+    })?;
+    let current = fs::symlink_metadata(path).wrap_err_with(|| {
+        format!(
+            "failed to re-inspect ISO reference dataset at {}",
+            path.display()
+        )
+    })?;
+    if !current.file_type().is_file()
+        || raw.len() != initial_len
+        || !same_dataset_snapshot(&opened, &after_read)
+        || !same_dataset_snapshot(&after_read, &current)
+    {
+        eyre::bail!(
+            "ISO reference dataset at {} changed while reading",
+            path.display()
+        );
+    }
+    budget.charge_input(kind, raw.len())?;
+    String::from_utf8(raw).map_err(|_| {
+        eyre::eyre!(
+            "ISO reference dataset at {} is not valid UTF-8",
             path.display()
         )
     })
 }
 
-fn parse_metadata(kind: DatasetKind, root: &Value) -> eyre::Result<SnapshotMetadata> {
-    let obj = root
-        .as_object()
-        .ok_or_else(|| eyre::eyre!("{} snapshot must be a JSON object", kind.label()))?;
-    let version = obj
-        .get("version")
-        .and_then(Value::as_str)
-        .ok_or_else(|| eyre::eyre!("{} snapshot missing `version`", kind.label()))?
-        .trim()
-        .to_string();
-    let source = obj
-        .get("source")
-        .and_then(Value::as_str)
-        .ok_or_else(|| eyre::eyre!("{} snapshot missing `source`", kind.label()))?
-        .trim()
-        .to_string();
-    let fetched_at = obj
-        .get("fetched_at")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| {
-            OffsetDateTime::parse(s, &Rfc3339)
-                .wrap_err_with(|| format!("invalid RFC3339 timestamp `{s}`"))
-        })
-        .transpose()?;
+#[cfg(unix)]
+fn same_dataset_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
 
-    Ok(SnapshotMetadata {
-        version,
-        source,
-        fetched_at,
-        record_count: 0,
-    })
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(not(unix))]
+fn same_dataset_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 
 fn mic_is_active(status: Option<&str>) -> bool {
@@ -1740,6 +2036,66 @@ mod tests {
             SnapshotState::Missing
         );
         assert_eq!(snapshots.cash_leg().state(), SnapshotState::Missing);
+    }
+
+    #[test]
+    fn oversized_snapshot_is_rejected_before_json_allocation() {
+        let _guard = iso_reference_test_guard();
+        let file = NamedTempFile::new().expect("temp file");
+        file.as_file()
+            .set_len(
+                u64::try_from(REFERENCE_DATA_MAX_DATASET_BYTES + 1)
+                    .expect("dataset byte limit fits u64"),
+            )
+            .expect("create oversized sparse dataset");
+        let config = IsoReferenceData {
+            isin_crosswalk_path: Some(file.path().to_path_buf()),
+            ..IsoReferenceData::default()
+        };
+
+        let snapshots = ReferenceDataSnapshots::from_config(&config);
+        assert_eq!(snapshots.isin_cusip().state(), SnapshotState::Failed);
+        assert!(
+            snapshots
+                .isin_cusip()
+                .diagnostics()
+                .is_some_and(|diagnostics| diagnostics.contains("maximum"))
+        );
+    }
+
+    #[test]
+    fn aggregate_record_limit_is_checked_before_next_entry_decode() {
+        let file = write_snapshot(
+            r#"{
+                "version":"2024-05-01",
+                "source":"bounded test",
+                "entries":[{"isin":42}]
+            }"#,
+        );
+        let mut budget = ReferenceDataLoadBudget::default();
+        budget.remaining_records = 0;
+
+        let error = load_isin_crosswalk(file.path(), &mut budget).unwrap_err();
+        assert!(error.to_string().contains("aggregate limit"));
+    }
+
+    #[test]
+    fn retained_index_budget_rejects_first_overflow() {
+        let mut budget = ReferenceDataLoadBudget::default();
+        let exact_charge =
+            REFERENCE_DATA_RECORD_OVERHEAD_BYTES + REFERENCE_DATA_STRING_ACCOUNTING_MULTIPLIER * 3;
+        budget.remaining_retained_bytes = exact_charge;
+        budget
+            .charge_retained_strings(DatasetKind::CashLeg, ["USD"])
+            .expect("exact retained budget");
+        assert_eq!(budget.remaining_retained_bytes, 0);
+        assert!(
+            budget
+                .charge_retained_strings(DatasetKind::CashLeg, [""])
+                .unwrap_err()
+                .to_string()
+                .contains("retained-index budget")
+        );
     }
 
     #[test]

@@ -2,6 +2,12 @@
 
 Sumeragi evidence audit endpoints.
 
+All finite reads on this page require a fresh allow-listed operator signature
+bound to the node's exact runtime `NetworkId`, method, target, and empty body.
+The maintained CLI accepts that key only through the explicit absolute
+`--operator-private-key-file` runtime option; it never falls back to an account
+key, token, environment variable, or client TOML credential.
+
 - GET `/v1/sumeragi/evidence/count`
   - Returns the number of unique Evidence entries observed by this node.
   - Response (Norito payload): `count: u64`.
@@ -47,14 +53,14 @@ Additional consensus status and commit QC proofs
   - If present, `{ subject_block_hash, commit_qc: { phase, parent_state_root, post_state_root, height, view, epoch, mode_tag, validator_set_hash, validator_set_hash_version, validator_set, signers_bitmap, bls_aggregate_signature } }`.
   - If missing, returns `{ subject_block_hash, commit_qc: null }`.
 
-Example (curl)
+Example (CLI)
 
 ```bash
 # Replace HASH with a real block hash (hex, 32 bytes)
 HASH=BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2
 
-curl -s \
-  http://127.0.0.1:8080/v1/sumeragi/commit-qcs/$HASH | jq .
+iroha --operator-private-key-file /run/secrets/iroha/operator.key \
+  ops sumeragi commit-qc-get --hash "$HASH"
 
 # Example response (when present):
 # {

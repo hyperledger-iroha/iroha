@@ -111,6 +111,13 @@ impl FastJsonWrite for Ipv4Addr {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(&self.to_string(), out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -299,6 +306,13 @@ impl FastJsonWrite for Ipv6Addr {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(&self.to_string(), out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -345,6 +359,16 @@ impl FastJsonWrite for IpAddr {
         match self {
             IpAddr::V4(addr) => addr.write_json(out),
             IpAddr::V6(addr) => addr.write_json(out),
+        }
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        match self {
+            IpAddr::V4(addr) => addr.write_json_to(out),
+            IpAddr::V6(addr) => addr.write_json_to(out),
         }
     }
 }
@@ -438,6 +462,14 @@ impl FastJsonWrite for SocketAddrV4 {
         let literal = format_addr_literal(&SocketAddr::Ipv4(*self));
         json::write_json_string(&literal, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        let literal = format_addr_literal(&SocketAddr::Ipv4(*self));
+        json::write_json_string_to(&literal, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -526,6 +558,14 @@ impl FastJsonWrite for SocketAddrV6 {
         let literal = format_addr_literal(&SocketAddr::Ipv6(*self));
         json::write_json_string(&literal, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        let literal = format_addr_literal(&SocketAddr::Ipv6(*self));
+        json::write_json_string_to(&literal, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -588,6 +628,14 @@ impl FastJsonWrite for SocketAddrHost {
     fn write_json(&self, out: &mut String) {
         let literal = format_addr_literal(&SocketAddr::Host(self.clone()));
         json::write_json_string(&literal, out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        let literal = format_addr_literal(&SocketAddr::Host(self.clone()));
+        json::write_json_string_to(&literal, out)
     }
 }
 
@@ -694,6 +742,13 @@ fn parse_addr_literal(value: &str, field: &str) -> Result<SocketAddr, json::Erro
 impl FastJsonWrite for SocketAddr {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&format_addr_literal(self), out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(&format_addr_literal(self), out)
     }
 }
 

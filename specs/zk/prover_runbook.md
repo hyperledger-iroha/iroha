@@ -16,7 +16,11 @@ profile that exposes Prometheus metrics (`telemetry_profile = "extended"` or
   verifies `ProofAttachment` payloads, and produces JSON reports
   (`/v1/zk/prover/reports`). It enforces resource budgets:
   `torii.zk_prover_max_inflight`, `torii.zk_prover_max_scan_bytes`, and
-  `torii.zk_prover_max_scan_millis`. Backend and circuit scope is governed by
+  `torii.zk_prover_max_scan_millis`. Discovery retains only a bounded,
+  canonically ordered window and resumes its directory cursor across cycles;
+  the byte and time settings derive its location and directory-work ceilings,
+  and discovery reserves the latter half of the deadline for scheduled work.
+  Backend and circuit scope is governed by
   `torii.zk_prover_allowed_backends` and `torii.zk_prover_allowed_circuits`.
   When a registry entry omits embedded VK bytes, the prover loads key bytes from
   `torii.zk_prover_keys_dir` using `<backend>__<name>.vk` naming.
@@ -33,7 +37,7 @@ profile that exposes Prometheus metrics (`telemetry_profile = "extended"` or
 
 | Scenario | Action |
 |----------|--------|
-| `torii_zk_prover_budget_exhausted_total` increases | Inspect budget reason (`bytes` or `time`). Raise limits in configuration or reduce attachment volume. |
+| `torii_zk_prover_budget_exhausted_total` increases | Inspect budget reason (`bytes`, `time`, or discovery `work`). Raise limits in configuration or reduce attachment volume. |
 | `torii_zk_prover_pending` stays above 0 for >10 minutes | Queue congestion: inspect scan metrics, consider scaling inflight cap or pruning attachments. |
 | Attachments not scanned | Ensure worker enabled, check logs for `zk_prover` errors, verify budgets not at zero. |
 | CLI/SDK uploads fail | Check Torii logs for HTTP errors and verify disk quotas. |
@@ -44,9 +48,9 @@ profile that exposes Prometheus metrics (`telemetry_profile = "extended"` or
 | Metric | Description | PromQL / Alert Hint |
 |--------|-------------|----------------------|
 | `torii_zk_prover_inflight` gauge | Attachments currently being processed | `torii_zk_prover_inflight` – page if stuck at max for >10m. |
-| `torii_zk_prover_pending` gauge | Queue length waiting for a worker permit | `avg_over_time(torii_zk_prover_pending[5m]) > 0` indicates backlog. |
+| `torii_zk_prover_pending` gauge | Discovered pending attachments plus one sweep-incomplete sentinel while the cursor has unvisited entries | `avg_over_time(torii_zk_prover_pending[5m]) > 0` indicates backlog. |
 | `torii_zk_prover_last_scan_bytes` / `torii_zk_prover_last_scan_ms` | Size/time of most recent scan cycle | Track with `increase` over time to see regressions. |
-| `torii_zk_prover_budget_exhausted_total{reason}` counter | Budget hits (bytes/time) | `rate(torii_zk_prover_budget_exhausted_total[5m]) > 0` should trigger investigation. |
+| `torii_zk_prover_budget_exhausted_total{reason}` counter | Budget hits (bytes/time/work) | `rate(torii_zk_prover_budget_exhausted_total[5m]) > 0` should trigger investigation. |
 | `torii_zk_prover_attachment_bytes_bucket` histogram | Distribution of attachment sizes, labelled by `content_type` | `histogram_quantile(0.95, sum(rate(torii_zk_prover_attachment_bytes_bucket[5m])) by (le, content_type))` to size proof backlog. |
 | `torii_zk_prover_latency_ms_bucket` histogram | Worker latency per attachment | Alert when p95 exceeds `torii.zk_prover_max_scan_millis`. |
 | `zk_verify_proof_bytes_bucket` / `zk_verify_latency_ms_bucket` | End-to-end proof verification metrics (execution path) | Helps correlate ledger verification spikes with prover ingestion. |
@@ -83,7 +87,7 @@ source UID if necessary.
 ### 1. Budget exhaustion storms
 
 1. Confirm metrics: `torii_zk_prover_budget_exhausted_total{reason}` rising.
-2. Inspect logs for the reported reason (bytes vs time).
+2. Inspect logs for the reported reason (attachment bytes, wall-clock time, or directory work).
 3. Check configuration:
    - `torii.zk_prover_max_scan_bytes`
    - `torii.zk_prover_max_scan_millis`

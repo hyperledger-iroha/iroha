@@ -881,26 +881,35 @@ fn decode_record_for_selector(
     bytes: &[u8],
     selector: &NameSelectorV1,
 ) -> Result<NameRecordV1, SnsError> {
-    let mut slice = bytes;
-    let record = NameRecordV1::decode(&mut slice).map_err(|err| {
-        SnsError::Internal(format!(
-            "failed to decode SNS record `{}`: {err}",
-            selector.normalized_label()
-        ))
-    })?;
-    if !slice.is_empty() {
-        return Err(SnsError::Internal(format!(
-            "SNS record `{}` contains trailing bytes",
-            selector.normalized_label()
-        )));
+    let decode = || {
+        let mut slice = bytes;
+        let record = NameRecordV1::decode(&mut slice)
+            .map_err(|_| SnsError::Internal("failed to decode an SNS record".to_owned()))?;
+        if !slice.is_empty() {
+            return Err(SnsError::Internal(
+                "SNS record contains trailing bytes".to_owned(),
+            ));
+        }
+        if record.selector != *selector || record.name_hash != selector.name_hash() {
+            return Err(SnsError::Internal(
+                "SNS record identity mismatch".to_owned(),
+            ));
+        }
+        Ok(record)
+    };
+    if !crate::smartcontracts::isi::query::singular_query_limits_active() {
+        return decode();
     }
-    if record.selector != *selector || record.name_hash != selector.name_hash() {
-        return Err(SnsError::Internal(format!(
-            "SNS record identity mismatch for `{}`",
-            selector.normalized_label()
-        )));
-    }
-    Ok(record)
+    let elements = bytes
+        .len()
+        .checked_mul(8)
+        .ok_or_else(|| SnsError::Internal("SNS record exceeds query memory limits".to_owned()))?;
+    let limits = crate::smartcontracts::isi::query::singular_query_decode_limits(
+        bytes.len(),
+        norito::DecodeLimits::new(elements, bytes.len(), elements, usize::MAX, 64),
+    )
+    .map_err(|_| SnsError::Internal("SNS record exceeds query memory limits".to_owned()))?;
+    norito::with_decode_limits_scope(limits, decode)
 }
 
 fn decode_policy_for_suffix(bytes: &[u8], suffix_id: SuffixId) -> Result<SuffixPolicyV1, SnsError> {
@@ -2722,61 +2731,111 @@ fn active_dataspace_record_id(record: &NameRecordV1) -> Result<DataSpaceId, SnsE
     })
 }
 
-fn active_dynamic_dataspace_aliases_by_id(
+struct ActiveDataspaceResolution {
+    alias: String,
+}
+
+fn resolve_active_dataspace_by_id(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
     dataspace_id: DataSpaceId,
     now_ms: u64,
-) -> Result<BTreeSet<String>, SnsError> {
+) -> Result<ActiveDataspaceResolution, SnsError> {
     let prefix = StatePath::from_str(&format!("sns/records/{DATASPACE_ALIAS_SUFFIX_ID}/"))
         .expect("static dataspace SNS record prefix is valid");
     let prefix_literal = prefix.as_ref().to_owned();
-    let mut aliases = BTreeSet::new();
+    let mut resolution = catalog
+        .by_id(dataspace_id)
+        .map(|entry| {
+            if entry.alias.len() > iroha_data_model::name::MAX_NAME_BYTES {
+                return Err(SnsError::Conflict(format!(
+                    "{ALIAS_CATALOG_MAPPING_CONFLICT_CODE}: configured dataspace alias exceeds the canonical name limit"
+                )));
+            }
+            Ok(ActiveDataspaceResolution {
+                alias: entry.alias.clone(),
+            })
+        })
+        .transpose()?;
 
     for (storage_key, bytes) in world.smart_contract_state().range(prefix..) {
         if !storage_key.as_ref().starts_with(&prefix_literal) {
             break;
         }
-        let mut slice = bytes.as_slice();
-        let record = NameRecordV1::decode(&mut slice).map_err(|error| {
-            SnsError::Internal(format!(
-                "failed to decode dataspace SNS record `{storage_key}`: {error}"
-            ))
-        })?;
-        if !slice.is_empty() {
-            return Err(SnsError::Internal(format!(
-                "dataspace SNS record `{storage_key}` contains trailing bytes"
-            )));
-        }
-        if record.selector.suffix_id != DATASPACE_ALIAS_SUFFIX_ID
-            || record.name_hash != record.selector.name_hash()
-            || record_storage_key(&record.selector) != storage_key.clone()
-        {
-            return Err(SnsError::Internal(format!(
-                "dataspace SNS record identity mismatch at `{storage_key}`"
-            )));
-        }
-        if !matches!(effective_status(&record, now_ms), NameStatus::Active) {
-            continue;
-        }
+        let decode_candidate = || {
+            let mut slice = bytes.as_slice();
+            let record = NameRecordV1::decode(&mut slice).map_err(|_| {
+                SnsError::Internal("failed to decode a dataspace SNS record".to_owned())
+            })?;
+            if !slice.is_empty() {
+                return Err(SnsError::Internal(
+                    "dataspace SNS record contains trailing bytes".to_owned(),
+                ));
+            }
+            if record.selector.label.len() > iroha_data_model::name::MAX_NAME_BYTES {
+                return Err(SnsError::Internal(
+                    "dataspace SNS record label exceeds the canonical name limit".to_owned(),
+                ));
+            }
+            if record.selector.suffix_id != DATASPACE_ALIAS_SUFFIX_ID
+                || record.name_hash != record.selector.name_hash()
+                || record_storage_key(&record.selector).as_ref() != storage_key.as_ref()
+            {
+                return Err(SnsError::Internal(
+                    "dataspace SNS record identity mismatch".to_owned(),
+                ));
+            }
+            if !matches!(effective_status(&record, now_ms), NameStatus::Active) {
+                return Ok(None);
+            }
 
-        let alias = record.selector.normalized_label();
-        let dynamic_id = active_dataspace_record_id(&record)?;
-        if let Some(static_entry) = catalog.by_alias(alias)
-            && static_entry.id != dynamic_id
-            && (static_entry.id == dataspace_id || dynamic_id == dataspace_id)
-        {
-            return Err(SnsError::Conflict(format!(
-                "{ALIAS_CATALOG_MAPPING_CONFLICT_CODE}: dataspace alias `{alias}` maps to static id {} and active SNS id {dynamic_id}",
-                static_entry.id
-            )));
-        }
-        if dynamic_id == dataspace_id {
-            aliases.insert(alias.to_owned());
+            let dynamic_id = active_dataspace_record_id(&record)?;
+            let alias = record.selector.normalized_label();
+            if let Some(static_entry) = catalog.by_alias(alias)
+                && static_entry.id != dynamic_id
+                && (static_entry.id == dataspace_id || dynamic_id == dataspace_id)
+            {
+                return Err(SnsError::Conflict(format!(
+                    "{ALIAS_CATALOG_MAPPING_CONFLICT_CODE}: active SNS and configured dataspace mappings disagree"
+                )));
+            }
+            if dynamic_id != dataspace_id {
+                return Ok(None);
+            }
+            Ok(Some(record.selector.label))
+        };
+        let candidate = if crate::smartcontracts::isi::query::singular_query_limits_active() {
+            let elements = bytes.len().checked_mul(8).ok_or_else(|| {
+                SnsError::Internal("dataspace SNS record exceeds query memory limits".to_owned())
+            })?;
+            let limits = crate::smartcontracts::isi::query::singular_query_decode_limits(
+                bytes.len(),
+                norito::DecodeLimits::new(elements, bytes.len(), elements, usize::MAX, 64),
+            )
+            .map_err(|_| {
+                SnsError::Internal("dataspace SNS record exceeds query memory limits".to_owned())
+            })?;
+            norito::with_decode_limits_scope(limits, decode_candidate)
+        } else {
+            decode_candidate()
+        }?;
+
+        if let Some(alias) = candidate {
+            match &mut resolution {
+                None => {
+                    resolution = Some(ActiveDataspaceResolution { alias });
+                }
+                Some(existing) if existing.alias == alias => {}
+                Some(_) => {
+                    return Err(SnsError::Conflict(format!(
+                        "{ALIAS_CATALOG_MAPPING_CONFLICT_CODE}: dataspace id maps to multiple active aliases"
+                    )));
+                }
+            }
         }
     }
 
-    Ok(aliases)
+    resolution.ok_or_else(|| SnsError::NotFound(format!("unknown dataspace id `{dataspace_id}`")))
 }
 
 /// Resolve a dataspace alias against both the static catalog and active SNS state.
@@ -2851,24 +2910,8 @@ pub fn resolve_active_dataspace_alias_by_id(
     dataspace_id: DataSpaceId,
     now_ms: u64,
 ) -> Result<String, SnsError> {
-    let mut aliases = active_dynamic_dataspace_aliases_by_id(world, catalog, dataspace_id, now_ms)?;
-    if let Some(static_entry) = catalog.by_id(dataspace_id) {
-        aliases.insert(static_entry.alias.clone());
-    }
-
-    match aliases.len() {
-        0 => Err(SnsError::NotFound(format!(
-            "unknown dataspace id `{dataspace_id}`"
-        ))),
-        1 => Ok(aliases
-            .into_iter()
-            .next()
-            .expect("singleton dataspace alias set contains one value")),
-        _ => Err(SnsError::Conflict(format!(
-            "{ALIAS_CATALOG_MAPPING_CONFLICT_CODE}: dataspace id {dataspace_id} maps to multiple active aliases: {}",
-            aliases.into_iter().collect::<Vec<_>>().join(", ")
-        ))),
-    }
+    resolve_active_dataspace_by_id(world, catalog, dataspace_id, now_ms)
+        .map(|resolution| resolution.alias)
 }
 
 /// Render an account alias with the unique active dataspace name for its numeric id.
@@ -2956,8 +2999,8 @@ pub fn active_dataspace_owner_by_id(
     dataspace_id: DataSpaceId,
     now_ms: u64,
 ) -> Option<AccountId> {
-    let alias = resolve_active_dataspace_alias_by_id(world, catalog, dataspace_id, now_ms).ok()?;
-    active_dataspace_owner_by_alias(world, &alias, now_ms)
+    let resolution = resolve_active_dataspace_by_id(world, catalog, dataspace_id, now_ms).ok()?;
+    active_dataspace_owner_by_alias(world, &resolution.alias, now_ms)
 }
 
 #[cfg(test)]
@@ -3638,18 +3681,6 @@ mod tests {
     }
 
     #[test]
-    fn active_dataspace_id_accepts_static_mapping_without_active_sns_record() {
-        let catalog = dataspace_catalog();
-        let world = World::default();
-
-        assert_eq!(
-            resolve_active_dataspace_id_by_alias(&world.view(), &catalog, "banking", 50)
-                .expect("static mapping"),
-            DataSpaceId::new(7)
-        );
-    }
-
-    #[test]
     fn active_dataspace_id_derives_from_dynamic_sns_alias() {
         let catalog = dataspace_catalog();
         let selector = selector_for_dataspace_alias("alpha").expect("selector");
@@ -3688,45 +3719,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn active_dataspace_alias_by_id_rejects_multiple_dynamic_names() {
-        let catalog = dataspace_catalog();
-        let owner = another_owner();
-        let address = AccountAddress::from_account_id(&owner).expect("account address");
-        let shared_id = DataSpaceId::new(42);
-        let mut world = World::default();
-        for alias in ["alpha", "beta"] {
-            let selector = selector_for_dataspace_alias(alias).expect("selector");
-            let mut record = NameRecordV1::new(
-                selector.clone(),
-                owner.clone(),
-                vec![NameControllerV1::account(&address)],
-                0,
-                10,
-                110,
-                210,
-                310,
-                Metadata::default(),
-            );
-            record.metadata.insert(
-                SNS_DATASPACE_ID_METADATA_KEY
-                    .parse()
-                    .expect("dataspace id metadata key"),
-                IrohaJson::new(shared_id.as_u64()),
-            );
-            world
-                .smart_contract_state_mut_for_testing()
-                .insert(record_storage_key(&selector), record.encode());
-        }
-
-        let error = resolve_active_dataspace_alias_by_id(&world.view(), &catalog, shared_id, 50)
-            .expect_err("one id must not select between multiple active names");
-        assert!(
-            error
-                .to_string()
-                .contains(ALIAS_CATALOG_MAPPING_CONFLICT_CODE),
-            "unexpected error: {error}"
-        );
+    mod active_dataspace_alias_tests {
+        include!("sns/active_dataspace_alias_tests.rs");
     }
 
     #[test]

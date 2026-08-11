@@ -2,7 +2,7 @@
 //! Torii account faucet tests.
 #![cfg(feature = "app_api")]
 
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, num::NonZeroU8, sync::Arc};
 
 use axum::{body::to_bytes, http::Request, response::Response};
 use http::StatusCode;
@@ -236,7 +236,8 @@ fn build_faucet_test_context_with_registration(
             .unwrap_or(canonical_selector.as_str())
             .to_owned(),
         amount: 25_000_u32.into(),
-        pow_difficulty_bits,
+        pow_difficulty_bits: NonZeroU8::new(pow_difficulty_bits)
+            .expect("non-zero faucet pow difficulty"),
         pow_scrypt_log_n,
         pow_scrypt_r,
         pow_scrypt_p,
@@ -328,7 +329,7 @@ fn build_faucet_test_context_with_registration(
     }
 }
 
-const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v2";
+const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v3";
 
 fn leading_zero_bits(bytes: &[u8]) -> u32 {
     let mut total = 0u32;
@@ -402,6 +403,7 @@ fn faucet_pow_challenge(state: &State, account_id: &AccountId, anchor_height: u6
 
     let mut hasher = Sha256::new();
     hasher.update(FAUCET_POW_DOMAIN_SEPARATOR);
+    hasher.update(state.network_id_ref().as_bytes());
     hasher.update(account_id.to_string().as_bytes());
     hasher.update(anchor_height.to_be_bytes());
     hasher.update(anchor_hash.as_ref());
@@ -803,8 +805,16 @@ async fn accounts_faucet_puzzle_exposes_current_anchor() {
         object
             .get("algorithm")
             .and_then(norito::json::Value::as_str),
-        Some("scrypt-leading-zero-bits-v1")
+        Some("scrypt-leading-zero-bits-v2")
     );
+    let expected_network_id = state.network_id_ref().to_string();
+    assert_eq!(
+        object
+            .get("network_id")
+            .and_then(norito::json::Value::as_str),
+        Some(expected_network_id.as_str())
+    );
+    assert!(!object.contains_key("chain_id"));
 }
 
 #[tokio::test]

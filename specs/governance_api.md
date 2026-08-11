@@ -559,10 +559,14 @@ for (expected, kind) in offences.iter().enumerate() {
 
 VRF penalties are enforced automatically after `activation_lag_blocks` (offenders are jailed). Consensus slashing is applied only after the `slashing_delay_blocks` window unless governance cancels the penalty.
 
-Operators and tooling can inspect and re-broadcast payloads through:
+Operators and tooling can inspect the bounded audit projection through:
 
-- Torii: `GET /v1/sumeragi/evidence` and `GET /v1/sumeragi/evidence/count`.
-- CLI: `iroha ops sumeragi evidence list`, `… count`, and `… submit --evidence-hex <payload>`.
+- Torii: exact-`NetworkId` operator-signed `GET /v1/sumeragi/evidence` and
+  `GET /v1/sumeragi/evidence/count`.
+- CLI: `iroha --operator-private-key-file /absolute/runtime/operator.key ops sumeragi evidence list`
+  and `… evidence count`. Torii and the CLI expose no evidence mutation or
+  re-broadcast command; admission remains on the authenticated consensus-peer
+  path.
 
 Governance must treat the evidence bytes as canonical proof:
 

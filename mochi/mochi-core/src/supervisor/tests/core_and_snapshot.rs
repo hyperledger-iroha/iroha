@@ -1093,6 +1093,20 @@ fn builder_creates_peer_configs() {
         !identity_private.is_empty(),
         "identity private key should be populated"
     );
+    let operator_public_keys = value
+        .get("torii")
+        .and_then(toml::Value::as_table)
+        .and_then(|torii| torii.get("operator_signatures"))
+        .and_then(toml::Value::as_table)
+        .and_then(|operator| operator.get("allowed_public_keys"))
+        .and_then(toml::Value::as_array)
+        .expect("managed operator public keys");
+    assert!(
+        operator_public_keys
+            .iter()
+            .any(|value| value.as_str() == Some(identity_public)),
+        "managed streaming identity must be allow-listed for exact-network operator reads"
+    );
 }
 
 #[test]

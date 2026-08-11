@@ -582,6 +582,10 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
         .with_config_layer(|layer| {
             layer
                 .write(["torii", "max_content_len"], TORII_CONTENT_BUDGET_BYTES)
+                .write(
+                    ["torii", "query_fanout_max_retained_bytes"],
+                    TORII_CONTENT_BUDGET_BYTES,
+                )
                 .write(["network", "max_frame_bytes"], NETWORK_FRAME_BUDGET_BYTES)
                 .write(
                     ["network", "max_frame_bytes_consensus"],

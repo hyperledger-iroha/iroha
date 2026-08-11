@@ -947,7 +947,7 @@ fn governance_approval_mode(state: &iroha_core::state::State) -> String {
 pub async fn handle_gov_capabilities(
     state: Arc<iroha_core::state::State>,
 ) -> Result<JsonBody<GovernanceCapabilitiesV1>, crate::Error> {
-    if state.committed_block_hashes_snapshot().first().is_none() {
+    if state.committed_height() == 0 {
         return Err(crate::Error::Query(
             iroha_data_model::ValidationFail::InternalError(
                 "governance capabilities are unavailable before committed genesis".into(),

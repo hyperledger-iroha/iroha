@@ -7,11 +7,14 @@
 //! surface: a relay becomes proof-eligible only when the exact envelope is also
 //! present in State's finality-authenticated lane-relay store. The worker
 //! constructs proofs; normal ISI execution performs their authoritative
-//! verification before any state mutation.
+//! verification before any state mutation. Its retry journal is treated as
+//! untrusted startup input: fixed byte, item, key, and proof budgets are
+//! enforced before decoded state is retained.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::Read,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -42,7 +45,8 @@ use iroha_data_model::{
         AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, DataSpaceId, FeeSponsorAssetBudget,
         FeeSponsorEligibility, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
         FeeSponsorProgramRevisionKey, FeeSponsorVaultAllocationClaim, FeeSponsorVaultKey,
-        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneFastpqProofMaterial, LaneRelayEnvelope, ProofBlob,
+        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneFastpqProofMaterial, LaneRelayEnvelope,
+        MAX_ACTIVE_EXECUTION_LANES, ProofBlob,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
         VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
         VerifiedLaneRelayRecord, fee_sponsor_vault_allocation_claim_digest,
@@ -57,10 +61,21 @@ use iroha_primitives::{
     numeric::{MAX_DECIMAL_SCALE, Numeric, Quantity, RoundingMode},
 };
 use mv::storage::StorageReadOnly;
-use norito::codec::{Decode, Encode};
+use norito::{
+    DecodeLimits,
+    codec::{Decode, Encode},
+};
 
 const WORKER_STATE_FILE: &str = "nexus_fee_relay_worker_state.norito";
 const FEE_SPONSOR_VAULT_ALLOCATION_EFFECT_TYPE: &str = "fee_sponsor_vault_allocation";
+const WORKER_STATE_MAX_ITEMS_PER_KIND: usize = MAX_ACTIVE_EXECUTION_LANES;
+const WORKER_STATE_MAX_BYTES: usize = 64 * 1024 * 1024;
+const WORKER_STATE_MAX_RELAY_BYTES: usize = 16 * 1024 * 1024;
+const WORKER_STATE_MAX_PROOF_BYTES: usize = 16 * 1024 * 1024;
+const WORKER_STATE_MAX_TOTAL_PROOF_BYTES: usize = 32 * 1024 * 1024;
+const WORKER_STATE_MAX_KEY_BYTES: usize = 4 * 1024;
+const WORKER_STATE_MAX_DECODE_ALLOCATED_BYTES: usize = 128 * 1024 * 1024;
+const WORKER_STATE_MAX_DECODE_DEPTH: usize = 32;
 
 #[derive(Clone, Debug, Default, Decode, Encode)]
 struct DurableWorkerState {
@@ -191,17 +206,19 @@ impl NexusFeeRelayWorker {
                 );
             }
         }
+        validate_worker_item_limit(config.max_pending_relays.get())?;
         let state_path = storage_root.join(WORKER_STATE_FILE);
-        let mut durable = load_durable_state(&state_path).unwrap_or_else(|error| {
-            iroha_logger::warn!(
-                ?error,
-                path = %state_path.display(),
-                "failed to load Nexus fee relay worker state; starting with an empty retry set"
-            );
-            DurableWorkerState::default()
-        });
+        let mut durable = load_durable_state(&state_path, config.max_pending_relays.get())
+            .unwrap_or_else(|error| {
+                iroha_logger::warn!(
+                    ?error,
+                    path = %state_path.display(),
+                    "failed to load Nexus fee relay worker state; starting with an empty retry set"
+                );
+                DurableWorkerState::default()
+            });
         if prune_durable_worker_state(&mut durable, config.max_pending_relays.get()) {
-            persist_durable_state(&state_path, &durable)
+            persist_durable_state(&state_path, &durable, config.max_pending_relays.get())
                 .wrap_err("persist bounded Nexus fee relay worker state after startup pruning")?;
         }
 
@@ -275,7 +292,11 @@ impl NexusFeeRelayWorker {
 
     fn persist_bounded_state(&self, durable: &mut DurableWorkerState) -> Result<()> {
         let _ = prune_durable_worker_state(durable, self.config.max_pending_relays.get());
-        persist_durable_state(&self.state_path, durable)
+        persist_durable_state(
+            &self.state_path,
+            durable,
+            self.config.max_pending_relays.get(),
+        )
     }
 
     fn enqueue_status_relays(&self) -> Result<()> {
@@ -296,6 +317,7 @@ impl NexusFeeRelayWorker {
         let mut durable = self.durable.lock();
         for envelope in envelopes {
             let key = relay_work_key(&envelope);
+            validate_relay_work_bounds(&key, &envelope)?;
             if durable.relays.len() >= self.config.max_pending_relays.get()
                 && !durable.relays.contains_key(&key)
             {
@@ -311,12 +333,23 @@ impl NexusFeeRelayWorker {
             if self.verified_relay_exists(&envelope)? {
                 continue;
             }
-            durable.relays.entry(key).or_insert(DurableRelayWork {
-                envelope,
-                status: DurableWorkStatus::Pending,
-                attempts: 0,
-                last_height: self.committed_height(),
-            });
+            if !durable.relays.contains_key(&key) {
+                durable.relays.insert(
+                    key.clone(),
+                    DurableRelayWork {
+                        envelope,
+                        status: DurableWorkStatus::Pending,
+                        attempts: 0,
+                        last_height: self.committed_height(),
+                    },
+                );
+                if let Err(error) =
+                    validate_durable_state_bounds(&durable, self.config.max_pending_relays.get())
+                {
+                    durable.relays.remove(&key);
+                    return Err(error);
+                }
+            }
         }
         self.persist_bounded_state(&mut durable)
     }
@@ -829,6 +862,7 @@ impl NexusFeeRelayWorker {
     }
 
     fn store_allocation_work(&self, key: String, work: DurableAllocationWork) -> Result<bool> {
+        validate_allocation_work_bounds(&key, &work)?;
         let mut durable = self.durable.lock();
         if matches!(
             work.status,
@@ -847,7 +881,20 @@ impl NexusFeeRelayWorker {
             );
             return Ok(false);
         }
-        durable.allocations.insert(key, work);
+        let previous = durable.allocations.insert(key.clone(), work);
+        if let Err(error) =
+            validate_durable_state_bounds(&durable, self.config.max_pending_relays.get())
+        {
+            match previous {
+                Some(previous) => {
+                    durable.allocations.insert(key, previous);
+                }
+                None => {
+                    durable.allocations.remove(&key);
+                }
+            }
+            return Err(error);
+        }
         self.persist_bounded_state(&mut durable)?;
         Ok(true)
     }
@@ -1184,22 +1231,234 @@ fn decode_verified_allocation_record(payload: &[u8]) -> Result<VerifiedFeeSponso
         .wrap_err("decode verified fee sponsor vault allocation")
 }
 
-fn load_durable_state(path: &Path) -> Result<DurableWorkerState> {
-    if !path.exists() {
-        return Ok(DurableWorkerState::default());
+fn validate_worker_item_limit(max_items_per_kind: usize) -> Result<()> {
+    if max_items_per_kind == 0 || max_items_per_kind > WORKER_STATE_MAX_ITEMS_PER_KIND {
+        eyre::bail!(
+            "nexus.relay_worker.max_pending_relays must be within 1..={WORKER_STATE_MAX_ITEMS_PER_KIND}, got {max_items_per_kind}"
+        );
     }
-    let bytes = fs::read(path).wrap_err_with(|| format!("read {}", path.display()))?;
-    norito::decode_from_bytes(&bytes).wrap_err_with(|| format!("decode {}", path.display()))
+    Ok(())
 }
 
-fn persist_durable_state(path: &Path, durable: &DurableWorkerState) -> Result<()> {
+fn validate_relay_work_bounds(key: &str, envelope: &LaneRelayEnvelope) -> Result<()> {
+    validate_relay_resource_lengths(key.len(), envelope.encoded_len())
+}
+
+fn validate_relay_resource_lengths(key_bytes: usize, envelope_bytes: usize) -> Result<()> {
+    if key_bytes > WORKER_STATE_MAX_KEY_BYTES {
+        eyre::bail!(
+            "Nexus fee relay key is {key_bytes} bytes (maximum {WORKER_STATE_MAX_KEY_BYTES})"
+        );
+    }
+    if envelope_bytes > WORKER_STATE_MAX_RELAY_BYTES {
+        eyre::bail!(
+            "Nexus fee relay envelope is {envelope_bytes} bytes (maximum {WORKER_STATE_MAX_RELAY_BYTES})"
+        );
+    }
+    Ok(())
+}
+
+fn validate_allocation_work_bounds(key: &str, work: &DurableAllocationWork) -> Result<()> {
+    validate_allocation_resource_lengths(
+        key.len(),
+        work.proof_blob
+            .as_ref()
+            .map_or(0, |proof| proof.payload.len()),
+    )
+}
+
+fn validate_allocation_resource_lengths(key_bytes: usize, proof_bytes: usize) -> Result<()> {
+    if key_bytes > WORKER_STATE_MAX_KEY_BYTES {
+        eyre::bail!(
+            "Nexus fee relay allocation key is {} bytes (maximum {WORKER_STATE_MAX_KEY_BYTES})",
+            key_bytes
+        );
+    }
+    if proof_bytes > WORKER_STATE_MAX_PROOF_BYTES {
+        eyre::bail!(
+            "Nexus fee relay allocation proof is {} bytes (maximum {WORKER_STATE_MAX_PROOF_BYTES})",
+            proof_bytes
+        );
+    }
+    Ok(())
+}
+
+fn validate_durable_state_bounds(
+    durable: &DurableWorkerState,
+    max_items_per_kind: usize,
+) -> Result<()> {
+    validate_worker_item_limit(max_items_per_kind)?;
+    if durable.relays.len() > max_items_per_kind {
+        eyre::bail!(
+            "Nexus fee relay journal contains {} relay items (configured maximum {max_items_per_kind})",
+            durable.relays.len()
+        );
+    }
+    if durable.allocations.len() > max_items_per_kind {
+        eyre::bail!(
+            "Nexus fee relay journal contains {} allocation items (configured maximum {max_items_per_kind})",
+            durable.allocations.len()
+        );
+    }
+    for (key, work) in &durable.relays {
+        validate_relay_work_bounds(key, &work.envelope)?;
+    }
+    let mut total_proof_bytes = 0usize;
+    for (key, work) in &durable.allocations {
+        validate_allocation_work_bounds(key, work)?;
+        if let Some(proof) = work.proof_blob.as_ref() {
+            total_proof_bytes = total_proof_bytes
+                .checked_add(proof.payload.len())
+                .ok_or_else(|| eyre::eyre!("Nexus fee relay proof-byte total overflowed"))?;
+        }
+    }
+    if total_proof_bytes > WORKER_STATE_MAX_TOTAL_PROOF_BYTES {
+        eyre::bail!(
+            "Nexus fee relay journal retains {total_proof_bytes} proof bytes (maximum {WORKER_STATE_MAX_TOTAL_PROOF_BYTES})"
+        );
+    }
+    let encoded_bytes = durable.encoded_len();
+    if encoded_bytes > WORKER_STATE_MAX_BYTES {
+        eyre::bail!(
+            "encoded Nexus fee relay worker state is {encoded_bytes} bytes (maximum {WORKER_STATE_MAX_BYTES})"
+        );
+    }
+    Ok(())
+}
+
+fn worker_state_decode_limits() -> DecodeLimits {
+    DecodeLimits::new(
+        WORKER_STATE_MAX_PROOF_BYTES,
+        WORKER_STATE_MAX_PROOF_BYTES,
+        WORKER_STATE_MAX_BYTES,
+        WORKER_STATE_MAX_DECODE_ALLOCATED_BYTES,
+        WORKER_STATE_MAX_DECODE_DEPTH,
+    )
+}
+
+fn load_durable_state(path: &Path, max_items_per_kind: usize) -> Result<DurableWorkerState> {
+    validate_worker_item_limit(max_items_per_kind)?;
+    let initial = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DurableWorkerState::default());
+        }
+        Err(error) => return Err(error).wrap_err_with(|| format!("inspect {}", path.display())),
+    };
+    if !initial.file_type().is_file()
+        || initial.len() > u64::try_from(WORKER_STATE_MAX_BYTES).unwrap_or(u64::MAX)
+    {
+        eyre::bail!(
+            "Nexus fee relay worker state at {} is not a regular file within the {WORKER_STATE_MAX_BYTES}-byte limit",
+            path.display()
+        );
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let nofollow = i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits())
+            .expect("NOFOLLOW flag bits fit the platform custom-flags type");
+        options.custom_flags(nofollow);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut file = options
+        .open(path)
+        .wrap_err_with(|| format!("open {}", path.display()))?;
+    let opened = file
+        .metadata()
+        .wrap_err_with(|| format!("inspect opened {}", path.display()))?;
+    if !opened.is_file() || !same_worker_state_snapshot(&initial, &opened) {
+        eyre::bail!(
+            "Nexus fee relay worker state at {} changed while opening",
+            path.display()
+        );
+    }
+    let capacity = usize::try_from(opened.len())
+        .map_err(|_| eyre::eyre!("Nexus fee relay state length is not addressable"))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    Read::by_ref(&mut file)
+        .take(
+            u64::try_from(WORKER_STATE_MAX_BYTES)
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+        )
+        .read_to_end(&mut bytes)
+        .wrap_err_with(|| format!("read {}", path.display()))?;
+    if bytes.len() > WORKER_STATE_MAX_BYTES {
+        eyre::bail!(
+            "Nexus fee relay worker state at {} grew beyond its {WORKER_STATE_MAX_BYTES}-byte limit",
+            path.display()
+        );
+    }
+    let after_read = file
+        .metadata()
+        .wrap_err_with(|| format!("re-inspect opened {}", path.display()))?;
+    let current =
+        fs::symlink_metadata(path).wrap_err_with(|| format!("re-inspect {}", path.display()))?;
+    if !current.file_type().is_file()
+        || bytes.len() != capacity
+        || !same_worker_state_snapshot(&opened, &after_read)
+        || !same_worker_state_snapshot(&after_read, &current)
+    {
+        eyre::bail!(
+            "Nexus fee relay worker state at {} changed while reading",
+            path.display()
+        );
+    }
+    let durable: DurableWorkerState =
+        norito::decode_from_bytes_with_limits(&bytes, worker_state_decode_limits())
+            .wrap_err_with(|| format!("decode {}", path.display()))?;
+    // A configuration decrease is allowed to load an older, still
+    // protocol-bounded journal; the constructor deterministically prunes it to
+    // the configured limit before the worker starts or persists it again.
+    validate_durable_state_bounds(&durable, WORKER_STATE_MAX_ITEMS_PER_KIND)?;
+    Ok(durable)
+}
+
+fn persist_durable_state(
+    path: &Path,
+    durable: &DurableWorkerState,
+    max_items_per_kind: usize,
+) -> Result<()> {
+    validate_durable_state_bounds(durable, max_items_per_kind)?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).wrap_err_with(|| format!("create {}", parent.display()))?;
     }
     let bytes = norito::to_bytes(durable).wrap_err("encode Nexus fee relay worker state")?;
+    if bytes.len() > WORKER_STATE_MAX_BYTES {
+        eyre::bail!(
+            "encoded Nexus fee relay worker state is {} bytes (maximum {WORKER_STATE_MAX_BYTES})",
+            bytes.len()
+        );
+    }
     let tmp = path.with_extension("norito.tmp");
     fs::write(&tmp, bytes).wrap_err_with(|| format!("write {}", tmp.display()))?;
     fs::rename(&tmp, path).wrap_err_with(|| format!("replace {}", path.display()))
+}
+
+#[cfg(unix)]
+fn same_worker_state_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(not(unix))]
+fn same_worker_state_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len() && left.modified().ok() == right.modified().ok()
 }
 
 fn parse_canonical_account_id(raw: &str) -> Result<AccountId> {
@@ -1639,6 +1898,102 @@ mod tests {
             attempts: 1,
             last_height,
         }
+    }
+
+    #[test]
+    fn durable_worker_resource_limits_accept_boundaries_and_reject_first_overflow() {
+        assert!(validate_worker_item_limit(1).is_ok());
+        assert!(validate_worker_item_limit(WORKER_STATE_MAX_ITEMS_PER_KIND).is_ok());
+        assert!(validate_worker_item_limit(0).is_err());
+        assert!(validate_worker_item_limit(WORKER_STATE_MAX_ITEMS_PER_KIND + 1).is_err());
+
+        assert!(
+            validate_relay_resource_lengths(
+                WORKER_STATE_MAX_KEY_BYTES,
+                WORKER_STATE_MAX_RELAY_BYTES,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_relay_resource_lengths(
+                WORKER_STATE_MAX_KEY_BYTES + 1,
+                WORKER_STATE_MAX_RELAY_BYTES,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_relay_resource_lengths(
+                WORKER_STATE_MAX_KEY_BYTES,
+                WORKER_STATE_MAX_RELAY_BYTES + 1,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_allocation_resource_lengths(
+                WORKER_STATE_MAX_KEY_BYTES,
+                WORKER_STATE_MAX_PROOF_BYTES,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_allocation_resource_lengths(
+                WORKER_STATE_MAX_KEY_BYTES + 1,
+                WORKER_STATE_MAX_PROOF_BYTES,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_allocation_resource_lengths(
+                WORKER_STATE_MAX_KEY_BYTES,
+                WORKER_STATE_MAX_PROOF_BYTES + 1,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn durable_worker_journal_rejects_sparse_oversize_file_before_decode() {
+        let directory = tempfile::tempdir().expect("create worker-state test directory");
+        let path = directory.path().join(WORKER_STATE_FILE);
+        let file = fs::File::create(&path).expect("create sparse worker-state file");
+        file.set_len(
+            u64::try_from(WORKER_STATE_MAX_BYTES)
+                .expect("worker-state limit fits u64")
+                .saturating_add(1),
+        )
+        .expect("extend sparse worker-state file");
+
+        let error = load_durable_state(&path, 1).expect_err("oversize journal must fail closed");
+        assert!(
+            error.to_string().contains("not a regular file within"),
+            "unexpected error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn durable_worker_journal_loads_protocol_bound_before_configured_pruning() {
+        let directory = tempfile::tempdir().expect("create worker-state test directory");
+        let path = directory.path().join(WORKER_STATE_FILE);
+        let envelope = sample_envelope([0x40; 32]);
+        let mut durable = DurableWorkerState::default();
+        for key in ["older", "newer"] {
+            durable.relays.insert(
+                key.to_owned(),
+                DurableRelayWork {
+                    envelope: envelope.clone(),
+                    status: DurableWorkStatus::Pending,
+                    attempts: 0,
+                    last_height: u64::from(key == "newer"),
+                },
+            );
+        }
+        persist_durable_state(&path, &durable, 2).expect("persist bounded worker journal");
+
+        let mut loaded = load_durable_state(&path, 1).expect("load protocol-bounded older journal");
+        assert_eq!(loaded.relays.len(), 2);
+        assert!(prune_durable_worker_state(&mut loaded, 1));
+        assert_eq!(loaded.relays.len(), 1);
+        assert!(loaded.relays.contains_key("newer"));
     }
 
     #[test]

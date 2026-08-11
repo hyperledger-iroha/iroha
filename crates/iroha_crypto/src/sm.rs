@@ -1722,6 +1722,13 @@ impl FastJsonWrite for Sm3Digest {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&hex::encode_upper(self.0), out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_upper_hex_json_string_to(&self.0, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -2429,6 +2436,13 @@ impl FromStr for SmIntrinsicPolicy {
 impl JsonSerialize for SmIntrinsicPolicy {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(self.as_str(), out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(self.as_str(), out)
     }
 }
 

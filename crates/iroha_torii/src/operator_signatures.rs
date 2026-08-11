@@ -137,8 +137,9 @@ fn operator_ed25519_compressed_y_is_canonical(
     false
 }
 
+/// Failure to construct or verify an exact-network operator request signature.
 #[derive(Debug, Clone)]
-pub(crate) struct OperatorSignatureError {
+pub struct OperatorSignatureError {
     status: StatusCode,
     code: &'static str,
     message: String,
@@ -255,6 +256,8 @@ impl fmt::Display for OperatorSignatureError {
         formatter.write_str(&self.message)
     }
 }
+
+impl std::error::Error for OperatorSignatureError {}
 
 impl IntoResponse for OperatorSignatureError {
     fn into_response(self) -> Response {
@@ -651,8 +654,9 @@ impl OperatorSignatures {
         req: &axum::http::Request<Body>,
         body_bytes: &[u8],
         receiver_peer_id: &PeerId,
+        max_body_bytes: usize,
     ) -> Result<(), OperatorSignatureError> {
-        if body_bytes.len() > self.max_body_bytes {
+        if body_bytes.len() > max_body_bytes {
             return Err(OperatorSignatureError::payload_too_large());
         }
         self.authorize_torii_proxy_bytes(
@@ -666,7 +670,7 @@ impl OperatorSignatures {
 }
 
 /// Build operator signature headers for an internal Torii request.
-pub(crate) fn signed_request_headers(
+pub fn signed_request_headers(
     key_pair: &KeyPair,
     network_id: &NetworkId,
     method: &crate::Method,
@@ -814,43 +818,49 @@ pub async fn enforce_operator_access(
     req: Request,
     next: Next,
 ) -> Response {
-    if app.operator_signatures.is_enabled() {
-        let (parts, body) = req.into_parts();
-        let body_bytes =
-            match axum::body::to_bytes(body, app.operator_signatures.max_body_bytes).await {
-                Ok(bytes) => bytes,
-                Err(_) => return OperatorSignatureError::payload_too_large().into_response(),
-            };
-        let mut req = axum::http::Request::from_parts(parts, Body::from(body_bytes.clone()));
-        if let Err(err) = app.operator_signatures.authorize_request(&req, &body_bytes) {
-            return err.into_response();
-        }
-        let authenticated_public_key = match OperatorSignatures::request_public_key(req.headers()) {
-            Ok(public_key) => public_key,
-            Err(error) => return error.into_response(),
-        };
-        req.extensions_mut()
-            .insert(AuthenticatedOperatorPublicKey(authenticated_public_key));
-        return next.run(req).await;
+    if !app.operator_signatures.is_enabled() {
+        return OperatorSignatureError::new(
+            StatusCode::FORBIDDEN,
+            "operator_access_disabled",
+            "operator signature authentication is disabled",
+        )
+        .into_response();
     }
 
+    // WebAuthn/mTLS can strengthen operator authentication, but a replayable
+    // session or bootstrap token must never replace the exact request signature
+    // promised by `AuthenticationPolicy::OperatorSignature`.
     if app.operator_auth.is_enabled() {
+        let remote_ip = req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|connect_info| connect_info.0.ip());
         if let Err(err) = app
             .operator_auth
-            .authorize_operator_endpoint(req.headers(), None)
+            .authorize_operator_endpoint(req.headers(), remote_ip)
             .await
         {
             return err.into_response();
         }
-        return next.run(req).await;
     }
 
-    OperatorSignatureError::new(
-        StatusCode::FORBIDDEN,
-        "operator_access_disabled",
-        "operator endpoints are disabled without authentication",
-    )
-    .into_response()
+    let (parts, body) = req.into_parts();
+    let body_bytes = match axum::body::to_bytes(body, app.operator_signatures.max_body_bytes).await
+    {
+        Ok(bytes) => bytes,
+        Err(_) => return OperatorSignatureError::payload_too_large().into_response(),
+    };
+    let mut req = axum::http::Request::from_parts(parts, Body::from(body_bytes.clone()));
+    if let Err(err) = app.operator_signatures.authorize_request(&req, &body_bytes) {
+        return err.into_response();
+    }
+    let authenticated_public_key = match OperatorSignatures::request_public_key(req.headers()) {
+        Ok(public_key) => public_key,
+        Err(error) => return error.into_response(),
+    };
+    req.extensions_mut()
+        .insert(AuthenticatedOperatorPublicKey(authenticated_public_key));
+    next.run(req).await
 }
 
 /// Verify a canonical signed request without applying the operator allow-list.
@@ -906,17 +916,34 @@ pub async fn enforce_torii_proxy_peer_signature(
     let Some(receiver_peer_id) = torii_proxy_receiver_peer_id(&app) else {
         return OperatorSignatureError::torii_proxy_receiver_unavailable().into_response();
     };
+    // The peer signature itself needs the complete raw body. Hold the dedicated
+    // all-variant proxy working-set permit through handler completion; public
+    // signed-query ingress and fanout have separate reservations and cannot be
+    // starved by a slow or faulty peer body.
+    let proxy_memory_permit = match crate::acquire_torii_proxy_memory(&app).await {
+        Ok(permit) => permit,
+        Err(response) => return response,
+    };
+    let ingress_envelope = app.torii_proxy_http_ingress_envelope;
+    let decode_limits = match ingress_envelope.decode_limits() {
+        Ok(limits) => limits,
+        Err(response) => return response,
+    };
     let (parts, body) = req.into_parts();
-    let body_bytes = match axum::body::to_bytes(body, app.operator_signatures.max_body_bytes).await
-    {
+    // This route wraps a configured-size inner request, so its canonical
+    // signed envelope has a separate protocol-bounded framing allowance.
+    let max_body_bytes = ingress_envelope.body_bytes;
+    let body_bytes = match axum::body::to_bytes(body, max_body_bytes).await {
         Ok(bytes) => bytes,
         Err(_) => return OperatorSignatureError::payload_too_large().into_response(),
     };
     let mut req = axum::http::Request::from_parts(parts, Body::from(body_bytes.clone()));
-    if let Err(error) =
-        app.operator_signatures
-            .authorize_torii_proxy_request(&req, &body_bytes, &receiver_peer_id)
-    {
+    if let Err(error) = app.operator_signatures.authorize_torii_proxy_request(
+        &req,
+        &body_bytes,
+        &receiver_peer_id,
+        max_body_bytes,
+    ) {
         return error.into_response();
     }
     let authenticated_public_key = match OperatorSignatures::request_public_key(req.headers()) {
@@ -925,21 +952,46 @@ pub async fn enforce_torii_proxy_peer_signature(
     };
     req.extensions_mut()
         .insert(AuthenticatedOperatorPublicKey(authenticated_public_key));
-    next.run(req).await
+    req.extensions_mut().insert(proxy_memory_permit.clone());
+    req.extensions_mut()
+        .insert(crate::utils::extractors::NoritoIngressLimits {
+            max_body_bytes,
+            decode_limits,
+        });
+    // `Body` owns the sole shared Bytes allocation from here; do not keep an
+    // additional signature-verification handle live across handler execution.
+    drop(body_bytes);
+    let response = next.run(req).await;
+    let (parts, body) = response.into_parts();
+    // A slow authenticated peer can retain the returned body after handler
+    // completion. Capture the permit in the body itself so the next bridge
+    // request is not admitted until this response is drained or dropped.
+    use http_body_util::BodyExt as _;
+    let guarded_body = body.map_frame(move |frame| {
+        let _permit = &proxy_memory_permit;
+        frame
+    });
+    Response::from_parts(parts, Body::new(guarded_body))
 }
 
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
     use std::{
+        collections::HashSet,
         sync::{Arc, Barrier},
         thread,
     };
 
     use super::*;
     use axum::routing::{get, post};
+    use iroha_config::parameters::actual::{
+        OperatorTokenFallback, OperatorTokenSource, OperatorWebAuthnAlgorithm,
+        OperatorWebAuthnConfig, ToriiOperatorAuth,
+    };
     use iroha_crypto::{Algorithm, KeyPair};
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use tower::ServiceExt as _;
+    use url::Url;
 
     struct FailingOperatorNonceRng;
 
@@ -990,6 +1042,38 @@ mod tests {
                 iroha_crypto::Hash::prehashed([0xFE; 32]),
             ),
         )
+    }
+
+    fn legacy_token_operator_auth(
+        token: &str,
+        data_dir: &std::path::Path,
+    ) -> crate::operator_auth::OperatorAuth {
+        let mut config = ToriiOperatorAuth::default();
+        config.enabled = true;
+        config.token_fallback = OperatorTokenFallback::Always;
+        config.token_source = OperatorTokenSource::OperatorTokens;
+        config.tokens = vec![token.to_owned()];
+        config.rate_per_minute = None;
+        config.burst = None;
+        config.webauthn = Some(OperatorWebAuthnConfig {
+            rp_id: "example.com".to_owned(),
+            rp_name: "Iroha Operator".to_owned(),
+            origins: vec![Url::parse("https://example.com").expect("operator origin")],
+            user_id: b"operator".to_vec(),
+            user_name: "operator".to_owned(),
+            user_display_name: "Operator".to_owned(),
+            challenge_ttl: Duration::from_secs(120),
+            session_ttl: Duration::from_secs(600),
+            require_user_verification: true,
+            allowed_algorithms: vec![OperatorWebAuthnAlgorithm::Es256],
+        });
+        crate::operator_auth::OperatorAuth::new(
+            config,
+            Arc::new(HashSet::new()),
+            data_dir.to_path_buf(),
+            crate::routing::MaybeTelemetry::disabled(),
+        )
+        .expect("valid legacy operator-auth fixture")
     }
 
     fn operator_signatures_with_capacity(
@@ -2041,19 +2125,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn operator_middleware_forbids_when_all_operator_auth_is_disabled() {
+    async fn operator_middleware_requires_signature_even_when_legacy_token_is_valid() {
         let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
         assert!(app.operator_signatures.is_enabled());
         assert!(!app.operator_auth.is_enabled());
+
+        let tempdir = tempfile::tempdir().expect("operator auth tempdir");
+        let operator_auth = legacy_token_operator_auth("legacy-token", tempdir.path());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-iroha-operator-token",
+            HeaderValue::from_static("legacy-token"),
+        );
+        operator_auth
+            .authorize_operator_endpoint(&headers, None)
+            .await
+            .expect("fixture token is valid for legacy operator auth");
 
         let node_public_key = app.da_receipt_signer.public_key().clone();
         let network_id = *app.state.network_id_ref();
         let telemetry = app.telemetry.clone();
         let mut cfg = ToriiOperatorSignatures::default();
         cfg.enabled = false;
-        Arc::get_mut(&mut app)
-            .expect("unique app state required")
-            .operator_signatures = Arc::new(
+        let app_mut = Arc::get_mut(&mut app).expect("unique app state required");
+        app_mut.operator_auth = Arc::new(operator_auth);
+        app_mut.operator_signatures = Arc::new(
             OperatorSignatures::new(
                 cfg,
                 node_public_key,
@@ -2064,6 +2160,7 @@ mod tests {
             .expect("valid operator-signature test config"),
         );
         assert!(!app.operator_signatures.is_enabled());
+        assert!(app.operator_auth.is_enabled());
 
         let operator_layer = axum::middleware::from_fn_with_state::<
             _,
@@ -2075,15 +2172,12 @@ mod tests {
             .route("/status", get(|| async { "ok" }))
             .route_layer(operator_layer);
 
-        let response = router
-            .oneshot(
-                axum::http::Request::builder()
-                    .uri("/status")
-                    .body(Body::empty())
-                    .expect("request"),
-            )
-            .await
-            .expect("router response");
+        let mut request = axum::http::Request::builder()
+            .uri("/status")
+            .body(Body::empty())
+            .expect("request");
+        request.headers_mut().extend(headers);
+        let response = router.oneshot(request).await.expect("router response");
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }

@@ -37,7 +37,7 @@ import org.hyperledger.iroha.android.client.MusubiModelsV1.Version;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 
-/** Read-only Torii client for the twelve typed first-release Musubi queries. */
+/** Exact-network authenticated Torii client for the twelve typed Musubi queries. */
 public final class MusubiToriiClientV1 {
   public static final String EXACT_PACKAGE_PATH = "/v1/musubi/queries/exact-package";
   public static final String EXACT_RELEASE_PATH = "/v1/musubi/queries/exact-release";
@@ -59,6 +59,7 @@ public final class MusubiToriiClientV1 {
 
   private final HttpTransportExecutor executor;
   private final URI baseUri;
+  private final LocalSigningContext localSigningContext;
   private final Duration timeout;
   private final Map<String, String> defaultHeaders;
   private final List<ClientObserver> observers;
@@ -66,6 +67,11 @@ public final class MusubiToriiClientV1 {
   private MusubiToriiClientV1(final Builder builder) {
     this.executor = Objects.requireNonNull(builder.executor, "executor");
     this.baseUri = Objects.requireNonNull(builder.baseUri, "baseUri");
+    if (builder.localSigningContext == null) {
+      throw new IllegalStateException(
+          "localSigningContext must be configured before building a Musubi client");
+    }
+    this.localSigningContext = builder.localSigningContext;
     this.timeout = builder.timeout;
     this.defaultHeaders =
         Collections.unmodifiableMap(new LinkedHashMap<>(builder.defaultHeaders));
@@ -75,11 +81,13 @@ public final class MusubiToriiClientV1 {
   public static Builder builder() { return new Builder(); }
 
   /** Fetches one exact structural package record. */
-  public CompletableFuture<PackageRecord> findExactPackage(final ExactPackageQuery request) {
+  public CompletableFuture<PackageRecord> findExactPackage(
+      final ExactPackageQuery request, final ToriiCanonicalRequestAuth canonicalAuth) {
     final ExactPackageQuery checked = required(request);
     return executePost(
         EXACT_PACKAGE_PATH,
         checked.toJsonBytes(),
+        requiredAuth(canonicalAuth),
         payload -> {
           final PackageRecord record = MusubiJsonV1.parseExactPackage(payload);
           record.requireMatches(checked);
@@ -89,11 +97,12 @@ public final class MusubiToriiClientV1 {
 
   /** Fetches paired home and universal projections for one exact release at finality. */
   public CompletableFuture<ExactReleaseSnapshot> findExactRelease(
-      final ExactReleaseQuery request) {
+      final ExactReleaseQuery request, final ToriiCanonicalRequestAuth canonicalAuth) {
     final ExactReleaseQuery checked = required(request);
     return executePost(
         EXACT_RELEASE_PATH,
         checked.toJsonBytes(),
+        requiredAuth(canonicalAuth),
         payload -> {
           final ExactReleaseSnapshot snapshot = MusubiJsonV1.parseExactRelease(payload);
           snapshot.requireMatches(checked);
@@ -103,11 +112,12 @@ public final class MusubiToriiClientV1 {
 
   /** Fetches one immutable provider proof by its archive/order/provider identity. */
   public CompletableFuture<ProviderBundleAttestationRecord> findProviderBundleAttestation(
-      final ProviderBundleAttestationKey request) {
+      final ProviderBundleAttestationKey request, final ToriiCanonicalRequestAuth canonicalAuth) {
     final ProviderBundleAttestationKey checked = required(request);
     return executePost(
         PROVIDER_BUNDLE_ATTESTATION_PATH,
         checked.toJsonBytes(),
+        requiredAuth(canonicalAuth),
         payload -> {
           final ProviderBundleAttestationRecord record =
               MusubiJsonV1.parseProviderBundleAttestation(payload);
@@ -118,11 +128,12 @@ public final class MusubiToriiClientV1 {
 
   /** Reads the finalized universal sparse resolver index. */
   public CompletableFuture<ResolverIndexPage> findResolverIndex(
-      final ResolverIndexQuery request) {
+      final ResolverIndexQuery request, final ToriiCanonicalRequestAuth canonicalAuth) {
     final ResolverIndexQuery checked = required(request);
     return executePost(
         RESOLVER_INDEX_PATH,
         checked.toJsonBytes(),
+        requiredAuth(canonicalAuth),
         payload -> {
           final ResolverIndexPage page = MusubiJsonV1.parseResolverPage(payload);
           page.requireMatches(checked);
@@ -131,11 +142,13 @@ public final class MusubiToriiClientV1 {
   }
 
   /** Lists exact structured versions for a package. */
-  public CompletableFuture<Page<Version>> findVersions(final PackagePageQuery request) {
+  public CompletableFuture<Page<Version>> findVersions(
+      final PackagePageQuery request, final ToriiCanonicalRequestAuth canonicalAuth) {
     final PackagePageQuery checked = required(request);
     return executePost(
         VERSIONS_PATH,
         checked.toJsonBytes(),
+        requiredAuth(canonicalAuth),
         payload -> {
           final Page<Version> page = MusubiJsonV1.parseVersionPage(payload);
           page.requireVersionMatches(checked);
@@ -145,11 +158,12 @@ public final class MusubiToriiClientV1 {
 
   /** Lists accepted owners/maintainers and pending invitations for a package. */
   public CompletableFuture<Page<MaintainerDirectoryEntry>> findMaintainers(
-      final PackagePageQuery request) {
+      final PackagePageQuery request, final ToriiCanonicalRequestAuth canonicalAuth) {
     final PackagePageQuery checked = required(request);
     return executePost(
         MAINTAINERS_PATH,
         checked.toJsonBytes(),
+        requiredAuth(canonicalAuth),
         payload -> {
           final Page<MaintainerDirectoryEntry> page = MusubiJsonV1.parseMaintainerPage(payload);
           page.requireMaintainerMatches(checked);
@@ -159,11 +173,12 @@ public final class MusubiToriiClientV1 {
 
   /** Lists renewable SoraFS locations for an archive. */
   public CompletableFuture<ArchiveLocationPage> findArchiveLocations(
-      final ArchiveLocationQuery request) {
+      final ArchiveLocationQuery request, final ToriiCanonicalRequestAuth canonicalAuth) {
     final ArchiveLocationQuery checked = required(request);
     return executePost(
         ARCHIVE_LOCATIONS_PATH,
         checked.toJsonBytes(),
+        requiredAuth(canonicalAuth),
         payload -> {
           final ArchiveLocationPage page = MusubiJsonV1.parseArchiveLocationPage(payload);
           page.requireMatches(checked);
@@ -173,11 +188,12 @@ public final class MusubiToriiClientV1 {
 
   /** Classifies a bounded exact archive batch for fail-closed cache retention. */
   public CompletableFuture<ArchiveRetentionPage> findArchiveRetention(
-      final ArchiveRetentionQuery request) {
+      final ArchiveRetentionQuery request, final ToriiCanonicalRequestAuth canonicalAuth) {
     final ArchiveRetentionQuery checked = required(request);
     return executePost(
         ARCHIVE_RETENTION_PATH,
         checked.toJsonBytes(),
+        requiredAuth(canonicalAuth),
         payload -> {
           final ArchiveRetentionPage page = MusubiJsonV1.parseArchiveRetentionPage(payload);
           page.requireMatches(checked);
@@ -186,11 +202,13 @@ public final class MusubiToriiClientV1 {
   }
 
   /** Resolves one paid permanent global alias. */
-  public CompletableFuture<AliasRecord> findAlias(final AliasQuery request) {
+  public CompletableFuture<AliasRecord> findAlias(
+      final AliasQuery request, final ToriiCanonicalRequestAuth canonicalAuth) {
     final AliasQuery checked = required(request);
     return executePost(
         ALIAS_PATH,
         checked.toJsonBytes(),
+        requiredAuth(canonicalAuth),
         payload -> {
           final AliasRecord record = MusubiJsonV1.parseAlias(payload);
           record.requireMatches(checked);
@@ -199,11 +217,13 @@ public final class MusubiToriiClientV1 {
   }
 
   /** Lists immutable history for one permanent global alias. */
-  public CompletableFuture<Page<AliasHistoryEntry>> findAliasHistory(final AliasQuery request) {
+  public CompletableFuture<Page<AliasHistoryEntry>> findAliasHistory(
+      final AliasQuery request, final ToriiCanonicalRequestAuth canonicalAuth) {
     final AliasQuery checked = required(request);
     return executePost(
         ALIAS_HISTORY_PATH,
         checked.toJsonBytes(),
+        requiredAuth(canonicalAuth),
         payload -> {
           final Page<AliasHistoryEntry> page = MusubiJsonV1.parseAliasHistoryPage(payload);
           page.requireAliasHistoryMatches(checked);
@@ -213,11 +233,12 @@ public final class MusubiToriiClientV1 {
 
   /** Scans the deterministic public package directory by byte prefix. */
   public CompletableFuture<OrderedPrefixPage> findOrderedPrefix(
-      final OrderedPrefixQuery request) {
+      final OrderedPrefixQuery request, final ToriiCanonicalRequestAuth canonicalAuth) {
     final OrderedPrefixQuery checked = required(request);
     return executePost(
         ORDERED_PREFIX_PATH,
         checked.toJsonBytes(),
+        requiredAuth(canonicalAuth),
         payload -> {
           final OrderedPrefixPage page = MusubiJsonV1.parseOrderedPackagePage(payload);
           page.requireMatches(checked);
@@ -226,11 +247,13 @@ public final class MusubiToriiClientV1 {
   }
 
   /** Searches the rebuildable finalized-event package metadata projection. */
-  public CompletableFuture<SearchPage> search(final SearchQuery request) {
+  public CompletableFuture<SearchPage> search(
+      final SearchQuery request, final ToriiCanonicalRequestAuth canonicalAuth) {
     final SearchQuery checked = required(request);
     return executePost(
         SEARCH_PATH,
         checked.toJsonBytes(),
+        requiredAuth(canonicalAuth),
         payload -> {
           final SearchPage page = MusubiJsonV1.parseSearchPage(payload);
           page.requireMatches(checked);
@@ -241,14 +264,21 @@ public final class MusubiToriiClientV1 {
   public HttpTransportExecutor executor() { return executor; }
 
   private static <T> T required(final T value) { return Objects.requireNonNull(value, "request"); }
+  private static ToriiCanonicalRequestAuth requiredAuth(
+      final ToriiCanonicalRequestAuth value) {
+    return Objects.requireNonNull(value, "canonicalAuth");
+  }
 
   private <T> CompletableFuture<T> executePost(
-      final String path, final byte[] body, final Function<byte[], T> parser) {
+      final String path,
+      final byte[] body,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final Function<byte[], T> parser) {
     if (body.length > REQUEST_MAX_BYTES) {
       throw new IllegalArgumentException(
           "Musubi request exceeds the " + REQUEST_MAX_BYTES + "-byte route limit");
     }
-    final TransportRequest request = buildRequest(path, body);
+    final TransportRequest request = buildRequest(path, body, canonicalAuth);
     notifyRequest(request);
     return executor.execute(request).handle(
         (response, throwable) -> {
@@ -299,13 +329,18 @@ public final class MusubiToriiClientV1 {
     return parsed;
   }
 
-  private TransportRequest buildRequest(final String path, final byte[] body) {
+  private TransportRequest buildRequest(
+      final String path,
+      final byte[] body,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
     final String normalized = path.startsWith("/") ? path.substring(1) : path;
     final String base = baseUri.toString();
     final URI target = URI.create(base.endsWith("/") ? base + normalized : base + "/" + normalized);
     final Map<String, String> headers = new LinkedHashMap<>(defaultHeaders);
     ensureHeader(headers, "Accept", "application/json");
     ensureHeader(headers, "Content-Type", "application/json");
+    requireCanonicalHeadersUnset(headers);
+    headers.putAll(buildCanonicalHeaders(target, body, canonicalAuth));
     TransportSecurity.requireHttpRequestAllowed(
         "MusubiToriiClientV1", baseUri, target, headers, body);
     final TransportRequest.Builder builder = TransportRequest.builder()
@@ -318,6 +353,42 @@ public final class MusubiToriiClientV1 {
       builder.addHeader(header.getKey(), header.getValue());
     }
     return builder.build();
+  }
+
+  private Map<String, String> buildCanonicalHeaders(
+      final URI target,
+      final byte[] body,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    final Long timestampMs = canonicalAuth.timestampMs();
+    final String nonce = canonicalAuth.nonce();
+    if ((timestampMs == null) != (nonce == null)) {
+      throw new IllegalArgumentException("timestampMs and nonce must be provided together");
+    }
+    if (timestampMs == null) {
+      return CanonicalRequestSigner.buildHeaders(
+          localSigningContext.networkId(), "POST", target, body, canonicalAuth);
+    }
+    return CanonicalRequestSigner.buildHeaders(
+        localSigningContext.networkId(),
+        "POST",
+        target,
+        body,
+        canonicalAuth,
+        timestampMs.longValue(),
+        nonce);
+  }
+
+  private static void requireCanonicalHeadersUnset(final Map<String, String> headers) {
+    for (final String candidate : headers.keySet()) {
+      if (candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_ACCOUNT)
+          || candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_SIGNATURE)
+          || candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_TIMESTAMP_MS)
+          || candidate.equalsIgnoreCase(CanonicalRequestSigner.HEADER_NONCE)
+          || candidate.equalsIgnoreCase("X-Iroha-Witness")) {
+        throw new IllegalArgumentException(
+            "canonical request headers must be supplied only through canonicalAuth");
+      }
+    }
   }
 
   private void notifyRequest(final TransportRequest request) {
@@ -355,6 +426,7 @@ public final class MusubiToriiClientV1 {
   public static final class Builder {
     private HttpTransportExecutor executor;
     private URI baseUri = URI.create("http://localhost:8080");
+    private LocalSigningContext localSigningContext;
     private Duration timeout = Duration.ofSeconds(15);
     private final Map<String, String> defaultHeaders = new LinkedHashMap<>();
     private final List<ClientObserver> observers = new ArrayList<>();
@@ -363,6 +435,10 @@ public final class MusubiToriiClientV1 {
       this.executor = executor; return this;
     }
     public Builder baseUri(final URI baseUri) { this.baseUri = baseUri; return this; }
+    public Builder localSigningContext(final LocalSigningContext localSigningContext) {
+      this.localSigningContext = Objects.requireNonNull(localSigningContext, "localSigningContext");
+      return this;
+    }
     public Builder timeout(final Duration timeout) { this.timeout = timeout; return this; }
     public Builder addHeader(final String name, final String value) {
       defaultHeaders.put(name, value); return this;

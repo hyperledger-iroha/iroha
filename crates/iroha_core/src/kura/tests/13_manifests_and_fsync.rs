@@ -122,6 +122,35 @@ fn commit_manifest_recovery_accepts_partial_post_commit_sidecar_windows() {
 }
 
 #[test]
+fn replay_sidecar_reads_and_writes_enforce_the_same_hard_byte_limit() {
+    let kura = Kura::blank_kura_for_testing();
+    let path = kura.commit_manifest_path(1);
+    fs::create_dir_all(path.parent().expect("manifest parent")).expect("create manifest directory");
+    std::fs::File::create(&path)
+        .and_then(|file| {
+            file.set_len(
+                u64::try_from(MAX_COMMIT_MANIFEST_BYTES + 1).expect("sidecar byte limit fits u64"),
+            )
+        })
+        .expect("create sparse oversized manifest");
+
+    assert!(matches!(
+        Kura::decode_commit_manifest_at(&path),
+        Err(Error::IO(error, reported_path))
+            if reported_path == path && error.to_string().contains("hard byte limit")
+    ));
+
+    let write_error =
+        Kura::ensure_sidecar_encoding_within_limit(&path, "test replay sidecar", &[0_u8; 2], 1)
+            .expect_err("oversized encoded sidecar must reject before writing");
+    assert!(matches!(
+        write_error,
+        Error::IO(error, reported_path)
+            if reported_path == path && error.to_string().contains("1-byte hard limit")
+    ));
+}
+
+#[test]
 fn prune_to_height_removes_wsv_checkpoints_above_new_tip() {
     let kura = Kura::blank_kura_for_testing();
     let blocks = store_dummy_block_arcs(&kura, 3);

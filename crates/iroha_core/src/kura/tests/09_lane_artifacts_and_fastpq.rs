@@ -2329,14 +2329,38 @@ fn sidecar_reader_rejects_oversized_payloads() {
     let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
     let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
 
-    std::fs::write(&data_path, []).expect("create sidecar data file");
+    let pipeline_limit =
+        u64::try_from(MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES).unwrap_or(u64::MAX);
+    std::fs::File::create(&data_path)
+        .and_then(|file| file.set_len(pipeline_limit + 1))
+        .expect("create sparse oversized sidecar data file");
     let entry = SidecarIndexEntry {
         offset: 0,
-        len: STRICT_INIT_MAX_BLOCK_BYTES + 1,
+        len: pipeline_limit + 1,
     }
     .to_bytes();
     std::fs::write(&index_path, entry).expect("write oversized index entry");
 
+    let decoder_called = std::cell::Cell::new(false);
+    assert!(
+        Kura::read_indexed_sidecar_from_paths_with_recovery_and_limit::<(), _>(
+            1,
+            &data_path,
+            &index_path,
+            |_| {
+                decoder_called.set(true);
+                Ok(())
+            },
+            "pipeline sidecar",
+            false,
+            pipeline_limit,
+        )
+        .is_none()
+    );
+    assert!(
+        !decoder_called.get(),
+        "oversized payload must not be decoded"
+    );
     assert!(kura.read_pipeline_metadata(1).is_none());
 }
 

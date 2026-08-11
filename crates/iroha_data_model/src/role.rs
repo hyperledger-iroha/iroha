@@ -83,6 +83,13 @@ impl norito::json::FastJsonWrite for RoleId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.name, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.name, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -111,6 +118,22 @@ impl norito::json::FastJsonWrite for NewRole {
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.grant_to, out);
         out.push('}');
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"id\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.inner.id, out)?;
+        out.push_str(",\"permissions\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.inner.permissions, out)?;
+        out.push_str(",\"grant_to\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.grant_to, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -182,6 +205,20 @@ impl norito::json::JsonSerialize for Role {
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.permissions, out);
         out.push('}');
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"id\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.id, out)?;
+        out.push_str(",\"permissions\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.permissions, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 

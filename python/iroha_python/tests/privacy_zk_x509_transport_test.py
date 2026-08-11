@@ -24,6 +24,7 @@ SIGNED_X509_WIRE = b"canonical-signed-x509-wire"
 SIGNED_OTHER_WIRE = b"canonical-signed-other-protocol-wire"
 CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
 NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
+FOREIGN_NETWORK_ID = NetworkId.from_bytes(bytes([0xA7]) * 32)
 CANONICAL_AUTH = ToriiCanonicalRequestAuth(
     network_id=NETWORK_ID.literal,
     account_id=AccountAddress.from_account(
@@ -58,13 +59,13 @@ class _FakeCrypto:
     def inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
         self,
         wire: object,
-        genesis_hash: object,
+        network_id: object,
     ) -> dict[str, object]:
         self.events.append("inspect")
         if wire != SIGNED_X509_WIRE:
             raise ValueError("wrong privacy protocol")
-        if genesis_hash != CANONICAL_GENESIS_HASH:
-            raise ValueError("wrong genesis")
+        if network_id != NETWORK_ID:
+            raise ValueError("wrong NetworkId")
         return {"protocol_id": X509_PROTOCOL}
 
     def signed_transaction_envelope_from_versioned_v1(
@@ -177,13 +178,13 @@ def test_privacy_capabilities_rejects_json_and_never_invokes_native_decoder(
     assert events == []
 
 
-def test_crypto_x509_inspector_is_public_and_forwards_exact_genesis(
+def test_crypto_x509_inspector_is_public_and_forwards_exact_network_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[bytes, bytes]] = []
+    calls: list[tuple[bytes, object]] = []
 
-    def inspect(wire: bytes, genesis_hash: bytes) -> dict[str, object]:
-        calls.append((wire, genesis_hash))
+    def inspect(wire: bytes, network_id: object) -> dict[str, object]:
+        calls.append((wire, network_id))
         return {"protocol_id": X509_PROTOCOL}
 
     monkeypatch.setattr(
@@ -195,11 +196,11 @@ def test_crypto_x509_inspector_is_public_and_forwards_exact_genesis(
     )
     result = crypto_module.inspect_signed_privacy_zk_x509_identity_presentation_action_v1(
         bytearray(SIGNED_X509_WIRE),
-        memoryview(CANONICAL_GENESIS_HASH),
+        NETWORK_ID,
     )
 
     assert result == {"protocol_id": X509_PROTOCOL}
-    assert calls == [(SIGNED_X509_WIRE, CANONICAL_GENESIS_HASH)]
+    assert calls == [(SIGNED_X509_WIRE, NETWORK_ID)]
     assert (
         iroha_python.inspect_signed_privacy_zk_x509_identity_presentation_action_v1
         is crypto_module.inspect_signed_privacy_zk_x509_identity_presentation_action_v1
@@ -214,13 +215,15 @@ def test_crypto_x509_inspector_rejects_bad_inputs_and_native_contract_drift(
 ) -> None:
     inspect = crypto_module.inspect_signed_privacy_zk_x509_identity_presentation_action_v1
     with pytest.raises(TypeError, match="signed_transaction_versioned"):
-        inspect("not-bytes", CANONICAL_GENESIS_HASH)  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="canonical_genesis_hash"):
-        inspect(SIGNED_X509_WIRE, "not-bytes")  # type: ignore[arg-type]
+        inspect("not-bytes", NETWORK_ID)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="network_id must be a NetworkId"):
+        inspect(SIGNED_X509_WIRE, CANONICAL_GENESIS_HASH)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="network_id must be a NetworkId"):
+        inspect(SIGNED_X509_WIRE, "chain/dev")  # type: ignore[arg-type]
 
     monkeypatch.setattr(crypto_module, "_crypto", SimpleNamespace())
     with pytest.raises(RuntimeError, match="rebuild the extension"):
-        inspect(SIGNED_X509_WIRE, CANONICAL_GENESIS_HASH)
+        inspect(SIGNED_X509_WIRE, NETWORK_ID)
 
     monkeypatch.setattr(
         crypto_module,
@@ -230,7 +233,7 @@ def test_crypto_x509_inspector_rejects_bad_inputs_and_native_contract_drift(
         ),
     )
     with pytest.raises(RuntimeError, match="invalid result"):
-        inspect(SIGNED_X509_WIRE, CANONICAL_GENESIS_HASH)
+        inspect(SIGNED_X509_WIRE, NETWORK_ID)
 
     def reject(*_: object) -> None:
         raise RuntimeError("native detail must not escape")
@@ -243,7 +246,7 @@ def test_crypto_x509_inspector_rejects_bad_inputs_and_native_contract_drift(
         ),
     )
     with pytest.raises(ValueError, match="invalid canonical signed ZK-X509"):
-        inspect(SIGNED_X509_WIRE, CANONICAL_GENESIS_HASH)
+        inspect(SIGNED_X509_WIRE, NETWORK_ID)
 
 
 def test_transaction_draft_delegates_exact_x509_prepare_and_sign_inputs(
@@ -360,7 +363,7 @@ def test_x509_transport_authenticates_live_gates_and_submits_exactly_once(
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_X509_WIRE,
             canonical_auth=CANONICAL_AUTH,
-            canonical_genesis_hash=CANONICAL_GENESIS_HASH,
+            network_id=NETWORK_ID,
             wait=False,
         )
     )
@@ -405,7 +408,7 @@ def test_x509_transport_wait_path_submits_through_wait_helper_exactly_once(
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_X509_WIRE,
             canonical_auth=CANONICAL_AUTH,
-            canonical_genesis_hash=CANONICAL_GENESIS_HASH,
+            network_id=NETWORK_ID,
             interval=0.25,
             timeout=5.0,
             max_attempts=3,
@@ -422,6 +425,39 @@ def test_x509_transport_wait_path_submits_through_wait_helper_exactly_once(
     assert waits[0][1]["max_attempts"] == 3
     assert waits[0][1]["scope"] == "local"
     assert events == ["inspect", "capabilities", "reconstruct", "wait"]
+
+
+def test_x509_transport_rejects_raw_aliases_and_foreign_network_before_inspection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _, events = _client_with_crypto(monkeypatch)
+    monkeypatch.setattr(
+        client,
+        "privacy_capabilities_v1",
+        lambda **_kwargs: pytest.fail("invalid network reached capability fetch"),
+    )
+    monkeypatch.setattr(
+        client,
+        "submit_transaction_envelope",
+        lambda _: pytest.fail("invalid network was submitted"),
+    )
+
+    for retired in (CANONICAL_GENESIS_HASH, "chain/dev", "genesis"):
+        with pytest.raises(TypeError, match="network_id must be a NetworkId"):
+            client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
+                SIGNED_X509_WIRE,
+                canonical_auth=CANONICAL_AUTH,
+                network_id=retired,  # type: ignore[arg-type]
+                wait=False,
+            )
+    with pytest.raises(ValueError, match="does not match"):
+        client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
+            SIGNED_X509_WIRE,
+            canonical_auth=CANONICAL_AUTH,
+            network_id=FOREIGN_NETWORK_ID,
+            wait=False,
+        )
+    assert events == []
 
 
 def test_x509_transport_rejects_wrong_protocol_before_capability_fetch(
@@ -443,7 +479,7 @@ def test_x509_transport_rejects_wrong_protocol_before_capability_fetch(
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_OTHER_WIRE,
             canonical_auth=CANONICAL_AUTH,
-            canonical_genesis_hash=CANONICAL_GENESIS_HASH,
+            network_id=NETWORK_ID,
             wait=False,
         )
     assert events == ["inspect"]
@@ -478,7 +514,7 @@ def test_x509_transport_rejects_malformed_capability_bindings_before_submission(
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_X509_WIRE,
             canonical_auth=CANONICAL_AUTH,
-            canonical_genesis_hash=CANONICAL_GENESIS_HASH,
+            network_id=NETWORK_ID,
             wait=False,
         )
     assert events == ["inspect"]
@@ -515,7 +551,7 @@ def test_x509_transport_fails_closed_for_unavailable_or_inactive_capability(
         client.submit_signed_privacy_zk_x509_identity_presentation_action_v1(
             SIGNED_X509_WIRE,
             canonical_auth=CANONICAL_AUTH,
-            canonical_genesis_hash=CANONICAL_GENESIS_HASH,
+            network_id=NETWORK_ID,
             wait=False,
         )
     assert events == ["inspect"]

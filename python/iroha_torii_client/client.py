@@ -36,11 +36,7 @@ from blake3 import blake3
 
 from . import identifier_receipts as _identifier_receipts
 from .attachment_client import authenticated_attachment_request
-from .connect_session import (
-    ensure_connect_session_matches_request as _ensure_connect_session_matches_request,
-    normalize_connect_session_request as _normalize_connect_session_request,
-    parse_connect_session as _parse_connect_session,
-)
+from . import connect_session as _connect_session
 from .client_status_models import (
     SUMERAGI_EVIDENCE_EQUIVOCATION_CLASSES,
     SUMERAGI_EVIDENCE_KIND_FILTERS,
@@ -54,12 +50,21 @@ from .client_status_models import (
     ConnectSessionInfo,
     ConnectStatusPolicy,
     ConnectStatusSnapshot,
+    ConfigurationSnapshot,
+    ConfidentialGasSchedule,
     KaigiRelayDetail,
     KaigiRelayDomainMetrics,
     KaigiRelayHealthSnapshot,
     KaigiRelayReportedCall,
     KaigiRelaySummary,
     KaigiRelaySummaryList,
+    LoggerConfig,
+    NetworkConfig,
+    PeerInfo,
+    PeerTelemetryConfig,
+    PeerTelemetryInfo,
+    PeerTelemetryLocation,
+    QueueConfig,
     SumeragiCensorshipEvidenceRecord,
     SumeragiDoubleVoteEvidenceRecord,
     SumeragiEvidenceListPage,
@@ -76,10 +81,15 @@ from .client_status_models import (
     SumeragiQcEntry,
     SumeragiQcSnapshot,
     SumeragiV2EquivocationEvidenceRecord,
+    StreamingSoranetConfig,
+    StreamingTransportConfig,
+    TransportConfig,
+    TransportNoritoRpcConfig,
     _KAIGI_HEALTH_STATUSES,
     parse_sumeragi_json_object,
 )
 from .governance_ballot_client import create_governance_ballot_client_mixin
+from .kaigi_relay_client import create_kaigi_relay_client_mixin
 from .native_amx import (
     compute_native_amx_descriptor_hash,
     compute_native_amx_participant_settlement_hash,
@@ -128,7 +138,6 @@ from .offline_models import (
     OfflineVerifyingKeyRecordJson,
 )
 from .runtime_governance_auth import RuntimeGovernanceAuthMixin
-from .status_metrics import compute_status_metric_values as _compute_status_metric_values
 from .sccp import (
     SccpBridgeSubmitResponse,
     SccpCapabilities,
@@ -147,6 +156,10 @@ from .sccp import (
     parse_sccp_bridge_submit_response_json,
     parse_sccp_json_object,
 )
+from .space_directory_client import ToriiLocalSigningContext, create_space_directory_client_mixin
+from .status_metrics import compute_status_metric_values as _compute_status_metric_values
+from .subscription_auth import normalize_subscription_status, signed_subscription_post
+from .subscription_models import SubscriptionActionResult, SubscriptionCreateResult
 from .vpn_validation import (
     normalize_vpn_canonical_hex_input as _vpn_normalize_canonical_hex_input,
     parse_vpn_trust_fields as _vpn_parse_trust_fields,
@@ -950,10 +963,14 @@ __all__ = [
     "SumeragiLeaderSnapshot",
     "SumeragiParamsSnapshot",
     "ToriiCanonicalRequestAuth",
+    "ToriiOperatorSigningContext",
+    "ToriiLocalSigningContext",
     "canonical_query_string",
     "canonical_request_message",
     "canonical_network_request_signature_message",
+    "operator_network_request_signature_message",
     "build_canonical_request_headers",
+    "build_operator_request_headers",
     "encode_identifier_resolution_receipt_payload",
     "encode_identifier_resolution_receipt_attestation",
     "verify_identifier_resolution_receipt",
@@ -972,6 +989,25 @@ HEADER_ACCOUNT = "X-Iroha-Account"
 HEADER_SIGNATURE = "X-Iroha-Signature"
 HEADER_TIMESTAMP_MS = "X-Iroha-Timestamp-Ms"
 HEADER_NONCE = "X-Iroha-Nonce"
+HEADER_OPERATOR_PUBLIC_KEY = "X-Iroha-Operator-Public-Key"
+HEADER_OPERATOR_TIMESTAMP_MS = "X-Iroha-Operator-Timestamp-Ms"
+HEADER_OPERATOR_NONCE = "X-Iroha-Operator-Nonce"
+HEADER_OPERATOR_SIGNATURE = "X-Iroha-Operator-Signature"
+_OPERATOR_FORBIDDEN_AUTH_HEADERS = frozenset(
+    {
+        "authorization",
+        "x-api-token",
+        "x-iroha-account",
+        "x-iroha-signature",
+        "x-iroha-timestamp-ms",
+        "x-iroha-nonce",
+        "x-iroha-witness",
+        "x-iroha-operator-public-key",
+        "x-iroha-operator-timestamp-ms",
+        "x-iroha-operator-nonce",
+        "x-iroha-operator-signature",
+    }
+)
 
 def encode_identifier_resolution_receipt_payload(payload: Mapping[str, Any]) -> bytes:
     """Encode an identifier-resolution receipt payload with the shared canonical layout."""
@@ -1294,6 +1330,92 @@ class ToriiCanonicalRequestAuth:
             )
 
 
+@dataclass(frozen=True)
+class ToriiOperatorSigningContext:
+    """Immutable signer pinned to one exact genesis-derived NetworkId."""
+
+    network_id: str
+    public_key: str
+    signer: Callable[[bytes], Union[bytes, bytearray, memoryview]]
+
+    def __post_init__(self) -> None:
+        _offline_hash_literal(
+            self.network_id,
+            "ToriiOperatorSigningContext.network_id",
+        )
+        public_key = _require_exact_non_empty_string(
+            self.public_key,
+            "ToriiOperatorSigningContext.public_key",
+        )
+        if len(public_key) > 512 or re.fullmatch(r"[!-~]+", public_key) is None:
+            raise ValueError(
+                "ToriiOperatorSigningContext.public_key must be exact printable ASCII"
+            )
+        if not callable(self.signer):
+            raise TypeError("ToriiOperatorSigningContext.signer must be callable")
+
+
+def operator_network_request_signature_message(
+    network_id: str,
+    method: str,
+    path: str,
+    body: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+    *,
+    timestamp_ms: int,
+    nonce: str,
+) -> bytes:
+    """Build the exact NetworkId-bound operator request signature message."""
+
+    literal = _offline_hash_literal(network_id, "network_id")
+    checked_timestamp = _require_u64(timestamp_ms, "timestamp_ms")
+    checked_nonce = _require_canonical_nonce(nonce, "nonce")
+    return b"".join(
+        (
+            b"iroha.operator.http-request.network.v1\0",
+            bytes.fromhex(literal[5:69]),
+            canonical_request_message(method, path, body),
+            b"\n",
+            str(checked_timestamp).encode("ascii"),
+            b"\n",
+            checked_nonce.encode("utf-8"),
+        )
+    )
+
+
+def build_operator_request_headers(
+    context: ToriiOperatorSigningContext,
+    method: str,
+    path: str,
+    body: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+) -> Dict[str, str]:
+    """Build one fresh operator signature quartet for an exact request."""
+
+    if not isinstance(context, ToriiOperatorSigningContext):
+        raise TypeError("operator_signing_context must be ToriiOperatorSigningContext")
+    timestamp_ms = _require_u64(int(time.time() * 1000), "timestamp_ms")
+    nonce = secrets.token_hex(16)
+    message = operator_network_request_signature_message(
+        context.network_id,
+        method,
+        path,
+        body,
+        timestamp_ms=timestamp_ms,
+        nonce=nonce,
+    )
+    signature = context.signer(message)
+    if not isinstance(signature, (bytes, bytearray, memoryview)):
+        raise TypeError("operator signer must return bytes")
+    signature_bytes = bytes(signature)
+    if not signature_bytes:
+        raise ValueError("operator signer returned an empty signature")
+    return {
+        HEADER_OPERATOR_PUBLIC_KEY: context.public_key,
+        HEADER_OPERATOR_TIMESTAMP_MS: str(timestamp_ms),
+        HEADER_OPERATOR_NONCE: nonce,
+        HEADER_OPERATOR_SIGNATURE: base64.b64encode(signature_bytes).decode("ascii"),
+    }
+
+
 def build_canonical_request_headers(
     *,
     account_id: str,
@@ -1367,376 +1489,6 @@ def _require_canonical_nonce(value: Any, context: str) -> str:
     return nonce
 
 
-@dataclass(frozen=True)
-class PeerInfo:
-    """Online peer descriptor returned by ``GET /v1/peers``."""
-
-    address: str
-    public_key_hex: str
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "PeerInfo":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("peer payload must be an object")
-        address = payload.get("address")
-        if not isinstance(address, str) or not address:
-            raise RuntimeError("peer payload missing `address`")
-        identity = payload.get("id")
-        if not isinstance(identity, Mapping):
-            raise RuntimeError("peer payload missing `id` object")
-        public_key = identity.get("public_key")
-        if not isinstance(public_key, str) or not public_key:
-            raise RuntimeError("peer payload missing `id.public_key`")
-        return cls(address=address, public_key_hex=public_key)
-
-
-@dataclass(frozen=True)
-class PeerTelemetryConfig:
-    """Configuration snapshot attached to a telemetry peer entry."""
-
-    public_key_hex: str
-    queue_capacity: Optional[int]
-    network_block_gossip_size: Optional[int]
-    network_block_gossip_period_ms: Optional[int]
-    network_tx_gossip_size: Optional[int]
-    network_tx_gossip_period_ms: Optional[int]
-
-
-@dataclass(frozen=True)
-class PeerTelemetryLocation:
-    """Geolocation metadata for a telemetry peer."""
-
-    lat: float
-    lon: float
-    country: str
-    city: str
-
-
-@dataclass(frozen=True)
-class PeerTelemetryInfo:
-    """Entry returned by ``GET /v1/telemetry/peers-info``."""
-
-    url: str
-    connected: bool
-    telemetry_unsupported: bool
-    config: Optional[PeerTelemetryConfig]
-    location: Optional[PeerTelemetryLocation]
-    connected_peers: Optional[List[str]]
-
-
-@dataclass(frozen=True)
-class LoggerConfig:
-    """Logger configuration fragment exposed via ``/v1/configuration``."""
-
-    level: str
-    filter: Optional[str]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "LoggerConfig":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("logger section must be an object")
-        level = payload.get("level")
-        if not isinstance(level, str) or not level:
-            raise RuntimeError("logger section missing `level`")
-        filter_value = payload.get("filter")
-        if filter_value is None:
-            filter_str = None
-        elif isinstance(filter_value, str):
-            filter_str = filter_value
-        else:
-            raise RuntimeError("logger section `filter` must be a string when present")
-        return cls(level=level, filter=filter_str)
-
-    def to_payload(self) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {"level": self.level}
-        payload["filter"] = self.filter
-        return payload
-
-
-@dataclass(frozen=True)
-class NetworkConfig:
-    """Network gossip configuration exposed via ``/v1/configuration``."""
-
-    block_gossip_size: int
-    block_gossip_period_ms: int
-    transaction_gossip_size: int
-    transaction_gossip_period_ms: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "NetworkConfig":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("network section must be an object")
-        try:
-            block_gossip_size = int(payload["block_gossip_size"])
-            block_gossip_period_ms = int(payload["block_gossip_period_ms"])
-            transaction_gossip_size = int(payload["transaction_gossip_size"])
-            transaction_gossip_period_ms = int(payload["transaction_gossip_period_ms"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError("network section is missing numeric gossip fields") from exc
-        return cls(
-            block_gossip_size=block_gossip_size,
-            block_gossip_period_ms=block_gossip_period_ms,
-            transaction_gossip_size=transaction_gossip_size,
-            transaction_gossip_period_ms=transaction_gossip_period_ms,
-        )
-
-
-@dataclass(frozen=True)
-class QueueConfig:
-    """Transaction queue configuration exposed via ``/v1/configuration``."""
-
-    capacity: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "QueueConfig":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("queue section must be an object")
-        try:
-            capacity = int(payload["capacity"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError("queue section missing numeric `capacity`") from exc
-        return cls(capacity=capacity)
-
-
-@dataclass(frozen=True)
-class ConfidentialGasSchedule:
-    """Confidential verification gas schedule."""
-
-    proof_base: int
-    per_public_input: int
-    per_proof_byte: int
-    per_nullifier: int
-    per_commitment: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConfidentialGasSchedule":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("confidential gas section must be an object")
-        try:
-            proof_base = int(payload["proof_base"])
-            per_public_input = int(payload["per_public_input"])
-            per_proof_byte = int(payload["per_proof_byte"])
-            per_nullifier = int(payload["per_nullifier"])
-            per_commitment = int(payload["per_commitment"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError("confidential gas section missing numeric fields") from exc
-        return cls(
-            proof_base=proof_base,
-            per_public_input=per_public_input,
-            per_proof_byte=per_proof_byte,
-            per_nullifier=per_nullifier,
-            per_commitment=per_commitment,
-        )
-
-    def to_payload(self) -> Dict[str, Any]:
-        return {
-            "proof_base": self.proof_base,
-            "per_public_input": self.per_public_input,
-            "per_proof_byte": self.per_proof_byte,
-            "per_nullifier": self.per_nullifier,
-            "per_commitment": self.per_commitment,
-        }
-
-
-@dataclass(frozen=True)
-class TransportNoritoRpcConfig:
-    """Norito-RPC transport summary exposed via ``/v1/configuration``."""
-
-    enabled: bool
-    stage: str
-    require_mtls: bool
-    canary_allowlist_size: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "TransportNoritoRpcConfig":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("transport.norito_rpc section must be an object")
-        enabled = payload.get("enabled")
-        if not isinstance(enabled, bool):
-            raise RuntimeError("transport.norito_rpc section missing `enabled`")
-        stage = payload.get("stage")
-        if not isinstance(stage, str) or not stage:
-            raise RuntimeError("transport.norito_rpc section missing `stage`")
-        require_mtls = payload.get("require_mtls")
-        if not isinstance(require_mtls, bool):
-            raise RuntimeError("transport.norito_rpc section missing `require_mtls`")
-        try:
-            canary_allowlist_size = int(payload["canary_allowlist_size"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError(
-                "transport.norito_rpc section missing numeric `canary_allowlist_size`"
-            ) from exc
-        return cls(
-            enabled=enabled,
-            stage=stage,
-            require_mtls=require_mtls,
-            canary_allowlist_size=canary_allowlist_size,
-        )
-
-
-@dataclass(frozen=True)
-class StreamingSoranetConfig:
-    """SoraNet streaming defaults exposed via ``/v1/configuration``."""
-
-    enabled: bool
-    stream_tag: str
-    exit_multiaddr: str
-    padding_budget_ms: Optional[int]
-    access_kind: str
-    gar_category: str
-    channel_salt: str
-    provision_spool_dir: str
-    provision_window_segments: int
-    provision_queue_capacity: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "StreamingSoranetConfig":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("transport.streaming.soranet section must be an object")
-        enabled = payload.get("enabled")
-        if not isinstance(enabled, bool):
-            raise RuntimeError("transport.streaming.soranet section missing `enabled`")
-        stream_tag = payload.get("stream_tag")
-        if not isinstance(stream_tag, str) or not stream_tag:
-            raise RuntimeError("transport.streaming.soranet section missing `stream_tag`")
-        exit_multiaddr = payload.get("exit_multiaddr")
-        if not isinstance(exit_multiaddr, str) or not exit_multiaddr:
-            raise RuntimeError("transport.streaming.soranet section missing `exit_multiaddr`")
-        padding_value = payload.get("padding_budget_ms")
-        if padding_value is None:
-            padding_budget_ms = None
-        else:
-            try:
-                padding_budget_ms = int(padding_value)
-            except (TypeError, ValueError) as exc:
-                raise RuntimeError(
-                    "transport.streaming.soranet section `padding_budget_ms` must be numeric"
-                ) from exc
-        access_kind = payload.get("access_kind")
-        if not isinstance(access_kind, str) or not access_kind:
-            raise RuntimeError("transport.streaming.soranet section missing `access_kind`")
-        gar_category = payload.get("gar_category")
-        if not isinstance(gar_category, str) or not gar_category:
-            raise RuntimeError("transport.streaming.soranet section missing `gar_category`")
-        channel_salt = payload.get("channel_salt")
-        if not isinstance(channel_salt, str):
-            raise RuntimeError("transport.streaming.soranet section missing `channel_salt`")
-        provision_spool_dir = payload.get("provision_spool_dir")
-        if not isinstance(provision_spool_dir, str) or not provision_spool_dir:
-            raise RuntimeError("transport.streaming.soranet section missing `provision_spool_dir`")
-        try:
-            provision_window_segments = int(payload["provision_window_segments"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError(
-                "transport.streaming.soranet section missing numeric `provision_window_segments`"
-            ) from exc
-        try:
-            provision_queue_capacity = int(payload["provision_queue_capacity"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise RuntimeError(
-                "transport.streaming.soranet section missing numeric `provision_queue_capacity`"
-            ) from exc
-        return cls(
-            enabled=enabled,
-            stream_tag=stream_tag,
-            exit_multiaddr=exit_multiaddr,
-            padding_budget_ms=padding_budget_ms,
-            access_kind=access_kind,
-            gar_category=gar_category,
-            channel_salt=channel_salt,
-            provision_spool_dir=provision_spool_dir,
-            provision_window_segments=provision_window_segments,
-            provision_queue_capacity=provision_queue_capacity,
-        )
-
-
-@dataclass(frozen=True)
-class StreamingTransportConfig:
-    """Streaming transport configuration exposed via ``/v1/configuration``."""
-
-    soranet: Optional[StreamingSoranetConfig]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "StreamingTransportConfig":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("transport.streaming section must be an object")
-        soranet_section = payload.get("soranet")
-        soranet = (
-            StreamingSoranetConfig.from_payload(soranet_section)
-            if isinstance(soranet_section, Mapping)
-            else None
-        )
-        return cls(soranet=soranet)
-
-
-@dataclass(frozen=True)
-class TransportConfig:
-    """Transport configuration exposed via ``/v1/configuration``."""
-
-    norito_rpc: Optional[TransportNoritoRpcConfig]
-    streaming: Optional[StreamingTransportConfig]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "TransportConfig":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("transport section must be an object")
-        norito_section = payload.get("norito_rpc")
-        norito_rpc = (
-            TransportNoritoRpcConfig.from_payload(norito_section)
-            if isinstance(norito_section, Mapping)
-            else None
-        )
-        streaming_section = payload.get("streaming")
-        streaming = (
-            StreamingTransportConfig.from_payload(streaming_section)
-            if isinstance(streaming_section, Mapping)
-            else None
-        )
-        return cls(norito_rpc=norito_rpc, streaming=streaming)
-
-
-@dataclass(frozen=True)
-class ConfigurationSnapshot:
-    """Typed configuration payload returned by ``GET /v1/configuration``."""
-
-    public_key_hex: str
-    logger: LoggerConfig
-    network: NetworkConfig
-    queue: Optional[QueueConfig]
-    confidential_gas: Optional[ConfidentialGasSchedule]
-    transport: Optional[TransportConfig]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ConfigurationSnapshot":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("configuration response must be an object")
-        public_key = payload.get("public_key")
-        if not isinstance(public_key, str) or not public_key:
-            raise RuntimeError("configuration response missing `public_key`")
-        logger = LoggerConfig.from_payload(payload.get("logger", {}))
-        network = NetworkConfig.from_payload(payload.get("network", {}))
-        queue_section = payload.get("queue")
-        queue = QueueConfig.from_payload(queue_section) if isinstance(queue_section, Mapping) else None
-        gas_section = payload.get("confidential_gas")
-        confidential_gas = (
-            ConfidentialGasSchedule.from_payload(gas_section)
-            if isinstance(gas_section, Mapping)
-            else None
-        )
-        transport_section = payload.get("transport")
-        transport = (
-            TransportConfig.from_payload(transport_section)
-            if isinstance(transport_section, Mapping)
-            else None
-        )
-        return cls(
-            public_key_hex=public_key,
-            logger=logger,
-            network=network,
-            queue=queue,
-            confidential_gas=confidential_gas,
-            transport=transport,
-        )
 
 
 @dataclass(frozen=True)
@@ -5142,49 +4894,6 @@ class SubscriptionPlanListPage:
         return cls(items=items, total=total)
 
 
-@dataclass(frozen=True)
-class SubscriptionCreateResult:
-    """Response from ``POST /v1/subscriptions``."""
-
-    ok: bool
-    subscription_id: str
-    billing_trigger_id: str
-    usage_trigger_id: Optional[str]
-    first_charge_ms: int
-    tx_hash_hex: str
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionCreateResult":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("subscription create response must be an object")
-
-        def require_str(key: str) -> str:
-            value = payload.get(key)
-            if not isinstance(value, str) or not value:
-                raise RuntimeError(f"subscription create response missing `{key}`")
-            return value
-
-        ok_value = payload.get("ok")
-        if not isinstance(ok_value, bool):
-            raise RuntimeError("subscription create response missing `ok`")
-        first_charge = payload.get("first_charge_ms")
-        if isinstance(first_charge, bool) or not isinstance(first_charge, (int, float)):
-            raise RuntimeError("subscription create response missing `first_charge_ms`")
-        usage_trigger = payload.get("usage_trigger_id")
-        if usage_trigger is None:
-            usage_value = None
-        elif isinstance(usage_trigger, str) and usage_trigger:
-            usage_value = usage_trigger
-        else:
-            raise RuntimeError("subscription create response `usage_trigger_id` must be a string when present")
-        return cls(
-            ok=ok_value,
-            subscription_id=require_str("subscription_id"),
-            billing_trigger_id=require_str("billing_trigger_id"),
-            usage_trigger_id=usage_value,
-            first_charge_ms=int(first_charge),
-            tx_hash_hex=require_str("tx_hash_hex"),
-        )
 
 
 @dataclass(frozen=True)
@@ -5247,33 +4956,6 @@ class SubscriptionListPage:
         return cls(items=items, total=total)
 
 
-@dataclass(frozen=True)
-class SubscriptionActionResult:
-    """Response from subscription pause/resume/cancel/usage actions."""
-
-    ok: bool
-    subscription_id: str
-    tx_hash_hex: str
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SubscriptionActionResult":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("subscription action response must be an object")
-
-        def require_str(key: str) -> str:
-            value = payload.get(key)
-            if not isinstance(value, str) or not value:
-                raise RuntimeError(f"subscription action response missing `{key}`")
-            return value
-
-        ok_value = payload.get("ok")
-        if not isinstance(ok_value, bool):
-            raise RuntimeError("subscription action response missing `ok`")
-        return cls(
-            ok=ok_value,
-            subscription_id=require_str("subscription_id"),
-            tx_hash_hex=require_str("tx_hash_hex"),
-        )
 
 
 @dataclass(frozen=True)
@@ -10347,15 +10029,44 @@ _ToriiClientGovernanceBallotMixin = create_governance_ballot_client_mixin(
     canonical_quantity=_canonical_quantity,
     build_canonical_request_headers=build_canonical_request_headers,
 )
+_ToriiClientSpaceDirectoryMixin = create_space_directory_client_mixin(
+    canonical_auth_type=ToriiCanonicalRequestAuth, local_signing_context_type=ToriiLocalSigningContext,
+    normalize_network_id=_offline_hash_literal, transaction_draft_type=AppApiTransactionDraft,
+)
+_ToriiClientKaigiRelayMixin = create_kaigi_relay_client_mixin(
+    relay_summary_list_type=KaigiRelaySummaryList,
+    relay_detail_type=KaigiRelayDetail,
+    relay_health_type=KaigiRelayHealthSnapshot,
+)
 
 
-class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin):
+class ToriiClient(
+    _ToriiClientKaigiRelayMixin,
+    _ToriiClientSpaceDirectoryMixin,
+    _ToriiClientGovernanceBallotMixin,
+    RuntimeGovernanceAuthMixin,
+):
     """HTTP helper for Torii attachments, prover, and governance endpoints."""
-
-    def __init__(self, base_url: str, session: Optional[requests.Session] = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        session: Optional[requests.Session] = None,
+        *,
+        local_signing_context: Optional[ToriiLocalSigningContext] = None,
+        operator_signing_context: Optional[ToriiOperatorSigningContext] = None,
+    ) -> None:
+        if operator_signing_context is not None and not isinstance(
+            operator_signing_context,
+            ToriiOperatorSigningContext,
+        ):
+            raise TypeError(
+                "operator_signing_context must be ToriiOperatorSigningContext"
+            )
         self._base_url = base_url.rstrip("/")
         self._session = session or requests.Session()
         self._status_state = _StatusMetricsState()
+        self._local_signing_context = local_signing_context
+        self._operator_signing_context = operator_signing_context
 
     # ------------------------------------------------------------------
     # Attachments
@@ -10450,9 +10161,9 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
     # Admin & telemetry surfaces
     # ------------------------------------------------------------------
     def list_peers(self) -> List[PeerInfo]:
-        """Return online peers exposed by ``GET /v1/peers``."""
+        """Return the operator-authenticated node-local online peer snapshot."""
 
-        response = self._request("GET", "/v1/peers")
+        response = self._operator_get("/v1/peers")
         self._expect_status(response, {200})
         payload = response.json()
         if not isinstance(payload, list):
@@ -10843,13 +10554,9 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         return NetworkTimeSnapshot.from_payload(mapping)
 
     def get_time_status(self) -> NetworkTimeStatus:
-        """Fetch Network Time Service diagnostics (`GET /v1/time/status`)."""
+        """Fetch operator-authenticated node-local Network Time diagnostics."""
 
-        response = self._request(
-            "GET",
-            "/v1/time/status",
-            headers={"Accept": "application/json"},
-        )
+        response = self._operator_get("/v1/time/status")
         self._expect_status(response, {200})
         payload = response.json()
         mapping = self._ensure_mapping(payload, "network time status response")
@@ -11064,6 +10771,39 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         body = _read_bounded_sccp_response_body(response, maximum_body_bytes, context)
         return parser(body, context)
 
+    def _get_sumeragi_operator_json_object(
+        self,
+        path: str,
+        *,
+        context: str,
+        params: Optional[Mapping[str, Any]] = None,
+        maximum_body_bytes: int,
+        parser: Callable[[bytes, str], Mapping[str, Any]] = parse_sumeragi_json_object,
+    ) -> Mapping[str, Any]:
+        query = urlencode(sorted(params.items()), doseq=True) if params else ""
+        target = f"{path}?{query}" if query else path
+        response = self._operator_get(target, stream=True)
+        self._expect_status(
+            response,
+            {200},
+            maximum_body_bytes=maximum_body_bytes,
+            context=context,
+        )
+        content_type = response.headers.get("Content-Type", "")
+        if re.fullmatch(
+            r"application/json(?:\s*;.*)?",
+            content_type,
+            re.IGNORECASE,
+        ) is None:
+            response.close()
+            raise TypeError(f"{context} response must use application/json content type")
+        body = _read_bounded_sccp_response_body(
+            response,
+            maximum_body_bytes,
+            context,
+        )
+        return parser(body, context)
+
     def _get_sccp_typed_object(
         self,
         path: str,
@@ -11241,12 +10981,11 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         )
 
     def get_pipeline_preflight(self) -> PipelinePreflight:
-        """Fetch pipeline preflight diagnostics (`GET /v1/pipeline/preflight`)."""
+        """Fetch operator-authenticated node-local pipeline preflight diagnostics."""
 
-        payload = self._get_json_object(
-            "/v1/pipeline/preflight",
-            context="pipeline preflight",
-        )
+        response = self._operator_get("/v1/pipeline/preflight")
+        self._expect_status(response, {200})
+        payload = self._ensure_mapping(response.json(), "pipeline preflight")
         return self._parse_pipeline_preflight(payload, context="pipeline preflight")
 
     # ------------------------------------------------------------------
@@ -11406,18 +11145,19 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
     # Connect helpers
     # ------------------------------------------------------------------
     def get_connect_status(self) -> ConnectStatusSnapshot:
-        """Fetch Connect runtime status (`GET /v1/connect/status`)."""
+        """Fetch the operator-authenticated Connect aggregate snapshot."""
 
-        payload = self._get_json_object(
-            "/v1/connect/status",
-            context="connect status",
+        response = self._operator_get("/v1/connect/status/aggregate")
+        self._expect_status(response, {200})
+        return self._parse_connect_status(
+            response.json(),
+            context="connect aggregate status",
         )
-        return self._parse_connect_status(payload, context="connect status")
 
     def create_connect_session(self, payload: Mapping[str, Any]) -> ConnectSessionInfo:
         """Create a Connect session (`POST /v1/connect/session`)."""
 
-        request = _normalize_connect_session_request(
+        request = _connect_session.normalize_connect_session_request(
             payload,
             hash_literal=_offline_hash_literal,
         )
@@ -11427,14 +11167,18 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
             context="connect session",
         )
         session = self._parse_connect_session(body, context="connect session")
-        _ensure_connect_session_matches_request(session, request)
+        _connect_session.ensure_connect_session_matches_request(session, request)
         return session
 
     def delete_connect_session(self, sid: str, token_management: str) -> bool:
-        """Delete a Connect session (`DELETE /v1/connect/session/{sid}`)."""
+        """Delete a Connect session (`DELETE /v1/connect/session/{sid}`).
+        Both credentials must be canonical 32-byte unpadded base64url values.
+        """
 
-        if not isinstance(token_management, str) or not token_management:
-            raise TypeError("token_management must be a non-empty string")
+        sid = _connect_session.canonical_connect_sid(sid)
+        token_management = _connect_session.canonical_connect_token(
+            token_management, "Connect management token"
+        )
         response = self._request(
             "DELETE",
             f"/v1/connect/session/{sid}",
@@ -11611,9 +11355,9 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         authority: str,
         plan_id: str,
         plan: Mapping[str, Any],
+        canonical_auth: ToriiCanonicalRequestAuth,
     ) -> SubscriptionPlanCreateResult:
         """Prepare a locally signed subscription-plan transaction draft."""
-
         normalized_plan_id = self._require_non_empty_string(
             plan_id,
             "subscription plan plan_id",
@@ -11626,11 +11370,10 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
             "plan_id": normalized_plan_id,
             "plan": self._clone_json_payload(plan, context="subscription plan"),
         }
-        body = self._post_json(
-            "/v1/subscriptions/plans",
-            payload,
+        body = signed_subscription_post(
+            self, "/v1/subscriptions/plans", payload,
+            canonical_auth=canonical_auth,
             context="subscription plan create response",
-            expected_status=(200,),
         )
         result = SubscriptionPlanCreateResult.from_payload(body)
         if result.plan_id != normalized_plan_id:
@@ -11662,7 +11405,7 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
                 "subscriptions.provider",
             )
         if status is not None:
-            params["status"] = self._normalize_subscription_status(
+            params["status"] = normalize_subscription_status(
                 status,
                 "subscriptions.status",
             )
@@ -11688,24 +11431,19 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         self,
         *,
         authority: str,
-        private_key: str,
         subscription_id: str,
         plan_id: str,
         billing_trigger_id: Optional[str] = None,
         usage_trigger_id: Optional[str] = None,
         first_charge_ms: Optional[int] = None,
         grant_usage_to_provider: Optional[bool] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
     ) -> SubscriptionCreateResult:
-        """Create a subscription via ``POST /v1/subscriptions``."""
-
+        """Prepare an authority-bound subscription creation draft."""
         payload: Dict[str, Any] = {
             "authority": self._require_non_empty_string(
                 authority,
                 "subscription authority",
-            ),
-            "private_key": self._require_non_empty_string(
-                private_key,
-                "subscription private_key",
             ),
             "subscription_id": self._require_non_empty_string(
                 subscription_id,
@@ -11740,9 +11478,9 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
                 grant_usage_to_provider,
                 "subscription grant_usage_to_provider",
             )
-        body = self._post_json(
-            "/v1/subscriptions",
-            payload,
+        body = signed_subscription_post(
+            self, "/v1/subscriptions", payload,
+            canonical_auth=canonical_auth,
             context="subscription create response",
             expected_status=(200,),
         )
@@ -11768,10 +11506,9 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         subscription_id: str,
         *,
         authority: str,
-        private_key: str,
+        canonical_auth: ToriiCanonicalRequestAuth,
     ) -> SubscriptionActionResult:
         """Pause a subscription (`POST /v1/subscriptions/{subscription_id}/pause`)."""
-
         normalized_id = self._require_non_empty_string(
             subscription_id,
             "subscription_id",
@@ -11782,14 +11519,10 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
                 authority,
                 "subscription pause authority",
             ),
-            "private_key": self._require_non_empty_string(
-                private_key,
-                "subscription pause private_key",
-            ),
         }
-        body = self._post_json(
-            f"/v1/subscriptions/{encoded_id}/pause",
-            payload,
+        body = signed_subscription_post(
+            self, f"/v1/subscriptions/{encoded_id}/pause", payload,
+            canonical_auth=canonical_auth,
             context="subscription pause response",
             expected_status=(200,),
         )
@@ -11800,11 +11533,10 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         subscription_id: str,
         *,
         authority: str,
-        private_key: str,
         charge_at_ms: Optional[int] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
     ) -> SubscriptionActionResult:
         """Resume a subscription (`POST /v1/subscriptions/{subscription_id}/resume`)."""
-
         normalized_id = self._require_non_empty_string(
             subscription_id,
             "subscription_id",
@@ -11815,10 +11547,6 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
                 authority,
                 "subscription resume authority",
             ),
-            "private_key": self._require_non_empty_string(
-                private_key,
-                "subscription resume private_key",
-            ),
         }
         charge_value = self._normalize_optional_int(
             charge_at_ms,
@@ -11827,9 +11555,9 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         )
         if charge_value is not None:
             payload["charge_at_ms"] = charge_value
-        body = self._post_json(
-            f"/v1/subscriptions/{encoded_id}/resume",
-            payload,
+        body = signed_subscription_post(
+            self, f"/v1/subscriptions/{encoded_id}/resume", payload,
+            canonical_auth=canonical_auth,
             context="subscription resume response",
             expected_status=(200,),
         )
@@ -11840,28 +11568,33 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         subscription_id: str,
         *,
         authority: str,
-        private_key: str,
+        cancel_mode: str,
+        canonical_auth: ToriiCanonicalRequestAuth,
     ) -> SubscriptionActionResult:
         """Cancel a subscription (`POST /v1/subscriptions/{subscription_id}/cancel`)."""
-
         normalized_id = self._require_non_empty_string(
             subscription_id,
             "subscription_id",
         )
         encoded_id = quote(normalized_id, safe="")
+        normalized_mode = self._require_non_empty_string(
+            cancel_mode,
+            "subscription cancel_mode",
+        ).lower()
+        if normalized_mode not in {"immediate", "period_end"}:
+            raise ValueError(
+                "subscription cancel_mode must be immediate or period_end"
+            )
         payload = {
             "authority": self._require_non_empty_string(
                 authority,
                 "subscription cancel authority",
             ),
-            "private_key": self._require_non_empty_string(
-                private_key,
-                "subscription cancel private_key",
-            ),
+            "cancel_mode": {"mode": normalized_mode, "value": None},
         }
-        body = self._post_json(
-            f"/v1/subscriptions/{encoded_id}/cancel",
-            payload,
+        body = signed_subscription_post(
+            self, f"/v1/subscriptions/{encoded_id}/cancel", payload,
+            canonical_auth=canonical_auth,
             context="subscription cancel response",
             expected_status=(200,),
         )
@@ -11872,10 +11605,9 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         subscription_id: str,
         *,
         authority: str,
-        private_key: str,
+        canonical_auth: ToriiCanonicalRequestAuth,
     ) -> SubscriptionActionResult:
         """Keep a subscription (`POST /v1/subscriptions/{subscription_id}/keep`)."""
-
         normalized_id = self._require_non_empty_string(
             subscription_id,
             "subscription_id",
@@ -11886,14 +11618,10 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
                 authority,
                 "subscription keep authority",
             ),
-            "private_key": self._require_non_empty_string(
-                private_key,
-                "subscription keep private_key",
-            ),
         }
-        body = self._post_json(
-            f"/v1/subscriptions/{encoded_id}/keep",
-            payload,
+        body = signed_subscription_post(
+            self, f"/v1/subscriptions/{encoded_id}/keep", payload,
+            canonical_auth=canonical_auth,
             context="subscription keep response",
             expected_status=(200,),
         )
@@ -11904,11 +11632,10 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         subscription_id: str,
         *,
         authority: str,
-        private_key: str,
         charge_at_ms: Optional[int] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
     ) -> SubscriptionActionResult:
         """Charge a subscription now (`POST /v1/subscriptions/{subscription_id}/charge-now`)."""
-
         normalized_id = self._require_non_empty_string(
             subscription_id,
             "subscription_id",
@@ -11919,10 +11646,6 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
                 authority,
                 "subscription charge authority",
             ),
-            "private_key": self._require_non_empty_string(
-                private_key,
-                "subscription charge private_key",
-            ),
         }
         charge_value = self._normalize_optional_int(
             charge_at_ms,
@@ -11931,9 +11654,9 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         )
         if charge_value is not None:
             payload["charge_at_ms"] = charge_value
-        body = self._post_json(
-            f"/v1/subscriptions/{encoded_id}/charge-now",
-            payload,
+        body = signed_subscription_post(
+            self, f"/v1/subscriptions/{encoded_id}/charge-now", payload,
+            canonical_auth=canonical_auth,
             context="subscription charge-now response",
             expected_status=(200,),
         )
@@ -11947,9 +11670,9 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         unit_key: str,
         delta: str,
         usage_trigger_id: Optional[str] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
     ) -> SubscriptionUsageDraft:
         """Prepare a locally signed usage-recording transaction draft."""
-
         normalized_id = self._require_non_empty_string(
             subscription_id,
             "subscription_id",
@@ -11975,9 +11698,9 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         )
         if usage_value is not None:
             payload["usage_trigger_id"] = usage_value
-        body = self._post_json(
-            f"/v1/subscriptions/{encoded_id}/usage",
-            payload,
+        body = signed_subscription_post(
+            self, f"/v1/subscriptions/{encoded_id}/usage", payload,
+            canonical_auth=canonical_auth,
             context="subscription usage response",
             expected_status=(200,),
         )
@@ -12065,100 +11788,6 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
             raise RuntimeError("uaid manifests endpoint returned no payload")
         mapping = self._ensure_mapping(payload, "uaid manifests response")
         return self._parse_uaid_manifests_response(mapping, context="uaid manifests response")
-
-    def publish_space_directory_manifest(
-        self,
-        *,
-        authority: str,
-        manifest: Mapping[str, Any],
-        reason: Optional[str] = None,
-    ) -> AppApiTransactionDraft:
-        """Prepare a manifest-publication transaction for local signing."""
-
-        payload: Dict[str, Any] = {
-            "authority": self._require_non_empty_string(
-                authority,
-                "publish_space_directory_manifest.authority",
-            ),
-            "manifest": self._clone_json_payload(
-                manifest,
-                context="publish_space_directory_manifest.manifest",
-            ),
-        }
-        if reason is not None:
-            payload["reason"] = self._require_string(
-                reason,
-                "publish_space_directory_manifest.reason",
-            )
-        response = self._request(
-            "POST",
-            "/v1/space-directory/manifests",
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-            data=json.dumps(payload).encode("utf-8"),
-        )
-        self._expect_status(response, {200})
-        ack = self._maybe_json(response)
-        if ack is None:
-            raise RuntimeError("space directory manifest publish endpoint returned no payload")
-        return AppApiTransactionDraft.from_payload(
-            self._ensure_mapping(ack, "space directory manifest publish response"),
-            context="space directory manifest publish response",
-        )
-
-    def revoke_space_directory_manifest(
-        self,
-        *,
-        authority: str,
-        uaid: str,
-        dataspace: int,
-        revoked_epoch: int,
-        reason: Optional[str] = None,
-    ) -> AppApiTransactionDraft:
-        """Prepare a manifest-revocation transaction for local signing."""
-
-        payload: Dict[str, Any] = {
-            "authority": self._require_non_empty_string(
-                authority,
-                "revoke_space_directory_manifest.authority",
-            ),
-            "uaid": self._normalize_uaid_literal(
-                uaid,
-                context="revoke_space_directory_manifest.uaid",
-            ),
-            "dataspace": self._coerce_unsigned(
-                dataspace,
-                "revoke_space_directory_manifest.dataspace",
-            ),
-            "revoked_epoch": self._coerce_unsigned(
-                revoked_epoch,
-                "revoke_space_directory_manifest.revoked_epoch",
-            ),
-        }
-        if reason is not None:
-            payload["reason"] = self._require_string(
-                reason,
-                "revoke_space_directory_manifest.reason",
-            )
-        response = self._request(
-            "POST",
-            "/v1/space-directory/manifests/revoke",
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-            data=json.dumps(payload).encode("utf-8"),
-        )
-        self._expect_status(response, {200})
-        ack = self._maybe_json(response)
-        if ack is None:
-            raise RuntimeError("space directory manifest revoke endpoint returned no payload")
-        return AppApiTransactionDraft.from_payload(
-            self._ensure_mapping(ack, "space directory manifest revoke response"),
-            context="space directory manifest revoke response",
-        )
 
     # ------------------------------------------------------------------
     # First-release Kagemusha API
@@ -12285,7 +11914,7 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         the general status route is operational telemetry, while this route is
         the fail-closed reducer projection.
         """
-        payload = self._get_sccp_json_object(
+        payload = self._get_sumeragi_operator_json_object(
             "/v1/sumeragi/status",
             context="sumeragi status",
             maximum_body_bytes=1 * 1024 * 1024,
@@ -12294,60 +11923,18 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         return _SumeragiV2StatusParser.parse(payload)
     def get_sumeragi_diagnostics(self) -> SumeragiDiagnosticsStatus:
         """Fetch and validate bounded operator and lane diagnostics."""
-        payload = self._get_sccp_json_object(
+        payload = self._get_sumeragi_operator_json_object(
             "/v1/sumeragi/diagnostics",
             context="sumeragi diagnostics",
             maximum_body_bytes=16 * 1024 * 1024,
             parser=parse_sumeragi_json_object,
         )
         return _SumeragiDiagnosticsParser.parse(payload)
-    # ------------------------------------------------------------------
-    # Kaigi relay helpers
-    # ------------------------------------------------------------------
-    def list_kaigi_relays(self) -> KaigiRelaySummaryList:
-        """Return registered Kaigi relays via ``GET /v1/kaigi/relays``."""
-
-        response = self._request(
-            "GET",
-            "/v1/kaigi/relays",
-            headers={"Accept": "application/json"},
-        )
-        self._expect_status(response, {200})
-        payload = self._ensure_mapping(response.json(), "kaigi relay summary response")
-        return self._parse_kaigi_relay_summary_list(payload, context="kaigi relay summary response")
-
-    def get_kaigi_relay(self, relay_id: str) -> Optional[KaigiRelayDetail]:
-        """Return detailed metadata for a specific relay via ``GET /v1/kaigi/relays/{relay_id}``."""
-
-        canonical = self._normalize_canonical_account_id(relay_id, "relay_id")
-        response = self._request(
-            "GET",
-            f"/v1/kaigi/relays/{quote(canonical, safe='')}",
-            headers={"Accept": "application/json"},
-        )
-        self._expect_status(response, {200, 404})
-        if response.status_code == 404 or not response.content:
-            return None
-        payload = self._ensure_mapping(response.json(), "kaigi relay detail response")
-        return self._parse_kaigi_relay_detail(payload, context="kaigi relay detail response")
-
-    def get_kaigi_relays_health(self) -> KaigiRelayHealthSnapshot:
-        """Return aggregated Kaigi relay health metrics via ``GET /v1/kaigi/relays/health``."""
-
-        response = self._request(
-            "GET",
-            "/v1/kaigi/relays/health",
-            headers={"Accept": "application/json"},
-        )
-        self._expect_status(response, {200})
-        payload = self._ensure_mapping(response.json(), "kaigi relay health snapshot")
-        return self._parse_kaigi_relay_health_snapshot(payload, context="kaigi relay health snapshot")
-
     def get_sumeragi_qc(self) -> SumeragiQcSnapshot:
         """Fetch HighestQC/LockedQC snapshot (`GET /v1/sumeragi/qc`)."""
 
         payload = self._ensure_mapping(
-            self._request("GET", "/v1/sumeragi/qc").json(),
+            self._operator_get("/v1/sumeragi/qc").json(),
             "sumeragi qc",
         )
         highest = self._parse_sumeragi_qc_entry(payload.get("highest_qc"), context="sumeragi qc.highest_qc")
@@ -12376,7 +11963,7 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         """Fetch leader/PRF state (`GET /v1/sumeragi/leader`)."""
 
         payload = self._ensure_mapping(
-            self._request("GET", "/v1/sumeragi/leader").json(),
+            self._operator_get("/v1/sumeragi/leader").json(),
             "sumeragi leader",
         )
         leader_index = self._coerce_unsigned(payload.get("leader_index"), "sumeragi leader.leader_index")
@@ -12387,7 +11974,7 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         """Fetch on-chain Sumeragi parameters (`GET /v1/sumeragi/params`)."""
 
         payload = self._ensure_mapping(
-            self._request("GET", "/v1/sumeragi/params").json(),
+            self._operator_get("/v1/sumeragi/params").json(),
             "sumeragi params",
         )
         return self._parse_sumeragi_params(payload, context="sumeragi params")
@@ -12395,7 +11982,7 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
     def get_sumeragi_bls_keys(self) -> Dict[str, Optional[str]]:
         """Return mapping of network keys to optional BLS public keys (`GET /v1/sumeragi/bls-keys`)."""
 
-        payload = self._request("GET", "/v1/sumeragi/bls-keys").json()
+        payload = self._operator_get("/v1/sumeragi/bls-keys").json()
         if not isinstance(payload, Mapping):
             raise RuntimeError("sumeragi bls_keys response must be an object")
         result: Dict[str, Optional[str]] = {}
@@ -12442,10 +12029,14 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
                 allowed = ", ".join(sorted(SUMERAGI_EVIDENCE_KIND_FILTERS))
                 raise RuntimeError(f"sumeragi evidence kind must be one of: {allowed}")
             params["kind"] = literal
-        payload = self._get_json_object(
+        response = self._operator_get(
             "/v1/sumeragi/evidence",
-            context="sumeragi evidence listing",
             params=params or None,
+        )
+        self._expect_status(response, {200})
+        payload = self._ensure_mapping(
+            response.json(),
+            "sumeragi evidence listing",
         )
         return self._parse_sumeragi_evidence_page(payload, context="sumeragi evidence listing")
 
@@ -12453,7 +12044,7 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
         """Return number of evidence entries observed by the node (`GET /v1/sumeragi/evidence/count`)."""
 
         payload = self._ensure_mapping(
-            self._request("GET", "/v1/sumeragi/evidence/count").json(),
+            self._operator_get("/v1/sumeragi/evidence/count").json(),
             "sumeragi evidence count",
         )
         return self._coerce_unsigned(payload.get("count"), "sumeragi evidence count.count")
@@ -13787,6 +13378,54 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
                 for index, entry in enumerate(items_payload)
             ],
             total=total,
+        )
+
+    def _operator_get(
+        self,
+        path: str,
+        *,
+        params: Optional[Mapping[str, Any]] = None,
+        headers: Optional[Mapping[str, str]] = None,
+        stream: bool = False,
+    ) -> requests.Response:
+        context = self._operator_signing_context
+        if context is None:
+            raise ValueError("operator GET requires an immutable ToriiOperatorSigningContext before dispatch")
+        query = urlencode(sorted(params.items()), doseq=True) if params else ""
+        exact_target = f"{path}?{query}" if query else path
+        final_headers: Dict[str, str] = {"Accept": "application/json"}
+        if headers:
+            final_headers.update(dict(headers))
+        session_headers = getattr(self._session, "headers", {})
+        for source in (session_headers, final_headers):
+            for name in source:
+                if str(name).lower() in _OPERATOR_FORBIDDEN_AUTH_HEADERS:
+                    raise ValueError(
+                        "operator GETs reject token, canonical-account, "
+                        f"witness, and precomputed operator authentication header {name}"
+                    )
+        if getattr(self._session, "auth", None) is not None:
+            raise ValueError("operator GETs reject Session.auth token fallback")
+        try:
+            retry_total = self._session.get_adapter(
+                f"{self._base_url}{exact_target}"
+            ).max_retries.total
+        except (AttributeError, LookupError, ValueError) as exc:
+            raise ValueError(
+                "operator GET requires a verifiable one-shot HTTP transport"
+            ) from exc
+        if retry_total is not False and retry_total != 0:
+            raise ValueError("operator GET requires adapter retries to be disabled")
+        final_headers.update(
+            build_operator_request_headers(context, "GET", exact_target, b"")
+        )
+        return self._request(
+            "GET",
+            exact_target,
+            headers=final_headers,
+            stream=stream,
+            allow_retry=False,
+            allow_redirects=False,
         )
 
     def _request(
@@ -15432,17 +15071,6 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
             raise RuntimeError(f"{context}.signing_message_b64 must be the exact TransactionPayload hash")
         return payload, signing
 
-    @staticmethod
-    def _normalize_subscription_status(value: Any, context: str) -> str:
-        if not isinstance(value, str):
-            raise TypeError(f"{context} must be a string")
-        normalized = value.strip().lower()
-        if not normalized:
-            raise ValueError(f"{context} must be a non-empty string")
-        if normalized not in _SUBSCRIPTION_STATUSES:
-            raise ValueError(f"{context} must be one of {sorted(_SUBSCRIPTION_STATUSES)}")
-        return normalized
-
     def _post_json(
         self,
         path: str,
@@ -16637,7 +16265,7 @@ class ToriiClient(_ToriiClientGovernanceBallotMixin, RuntimeGovernanceAuthMixin)
 
     @staticmethod
     def _parse_connect_session(payload: Mapping[str, Any], *, context: str) -> ConnectSessionInfo:
-        return _parse_connect_session(
+        return _connect_session.parse_connect_session(
             payload,
             context=context,
             hash_literal=_offline_hash_literal,
@@ -18605,13 +18233,3 @@ _FILTER_MAPPING: Dict[str, str] = {
     "messages_only": "messages_only",
     "id": "id",
 }
-
-_SUBSCRIPTION_STATUSES = frozenset(
-    {
-        "active",
-        "paused",
-        "past_due",
-        "canceled",
-        "suspended",
-    }
-)

@@ -71,6 +71,8 @@ class TransportRequest(
                 when (name.lowercase(Locale.ROOT)) {
                     "x-iroha-signature",
                     "x-iroha-nonce",
+                    "x-iroha-operator-nonce",
+                    "x-iroha-operator-signature",
                     "x-iroha-onboarding-token" -> true
                     else -> false
                 }

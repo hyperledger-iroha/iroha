@@ -3017,65 +3017,98 @@ fn validate_object_namespace_v1(
         .values()
         .map(|entry| (entry.envelope_digest, entry))
         .collect::<BTreeMap<_, _>>();
+    // Validate the complete namespace before mutating it, but retain no orphan
+    // paths: interrupted publications can accumulate across failed cleanups,
+    // so a directory-sized path vector is not a safe recovery structure.
     let mut observed = BTreeSet::new();
-    let mut orphans = Vec::new();
+    let mut has_orphans = false;
     for entry in fs::read_dir(objects_root).map_err(|_| BootleLanternHolderStoreErrorV1::Backend)? {
         let entry = entry.map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| BootleLanternHolderStoreErrorV1::Corrupt)?;
-        let digest = parse_holder_object_file_name_v1(&name)?;
-        let metadata = entry
-            .metadata()
-            .map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
-        let file_type = entry
-            .file_type()
-            .map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt as _;
-            if metadata.nlink() != 1 {
-                return Err(BootleLanternHolderStoreErrorV1::Corrupt);
-            }
-        }
-        if file_type.is_symlink()
-            || !file_type.is_file()
-            || metadata.len() == 0
-            || metadata.len() > BOOTLE_LANTERN_HOLDER_MAX_ENVELOPE_BYTES_V1
-        {
-            return Err(BootleLanternHolderStoreErrorV1::Corrupt);
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt as _;
-            if metadata.uid() != rustix::process::geteuid().as_raw()
-                || metadata.mode() & 0o777 != 0o600
-            {
-                return Err(BootleLanternHolderStoreErrorV1::Corrupt);
-            }
-        }
-        let bytes =
-            read_regular_bounded_v1(&entry.path(), BOOTLE_LANTERN_HOLDER_MAX_ENVELOPE_BYTES_V1)?;
-        if envelope_digest_v1(&bytes) != digest {
-            return Err(BootleLanternHolderStoreErrorV1::Corrupt);
-        }
-        let envelope = decode_envelope_v1(&bytes)?;
+        let (_, digest, envelope) = load_holder_object_entry_v1(entry)?;
         if let Some(active_entry) = active.get(&digest) {
             validate_envelope_against_entry_v1(&envelope, manifest.vault_id, active_entry)?;
             observed.insert(digest);
         } else {
-            orphans.push(entry.path());
+            has_orphans = true;
         }
     }
     if observed.len() != active.len() || !observed.iter().all(|digest| active.contains_key(digest))
     {
         return Err(BootleLanternHolderStoreErrorV1::RollbackDetected);
     }
-    if !orphans.is_empty() {
-        for orphan in orphans {
-            fs::remove_file(orphan).map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
+    if has_orphans {
+        remove_orphan_holder_objects_v1(objects_root, manifest, &active)?;
+    }
+    Ok(())
+}
+
+fn load_holder_object_entry_v1(
+    entry: fs::DirEntry,
+) -> Result<(PathBuf, [u8; 32], HolderEnvelopeV1), BootleLanternHolderStoreErrorV1> {
+    let path = entry.path();
+    let name = entry
+        .file_name()
+        .into_string()
+        .map_err(|_| BootleLanternHolderStoreErrorV1::Corrupt)?;
+    let digest = parse_holder_object_file_name_v1(&name)?;
+    let metadata = entry
+        .metadata()
+        .map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
+    let file_type = entry
+        .file_type()
+        .map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if metadata.nlink() != 1 {
+            return Err(BootleLanternHolderStoreErrorV1::Corrupt);
         }
+    }
+    if file_type.is_symlink()
+        || !file_type.is_file()
+        || metadata.len() == 0
+        || metadata.len() > BOOTLE_LANTERN_HOLDER_MAX_ENVELOPE_BYTES_V1
+    {
+        return Err(BootleLanternHolderStoreErrorV1::Corrupt);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.mode() & 0o777 != 0o600
+        {
+            return Err(BootleLanternHolderStoreErrorV1::Corrupt);
+        }
+    }
+    let bytes = read_regular_bounded_v1(&path, BOOTLE_LANTERN_HOLDER_MAX_ENVELOPE_BYTES_V1)?;
+    if envelope_digest_v1(&bytes) != digest {
+        return Err(BootleLanternHolderStoreErrorV1::Corrupt);
+    }
+    Ok((path, digest, decode_envelope_v1(&bytes)?))
+}
+
+fn remove_orphan_holder_objects_v1(
+    objects_root: &Path,
+    manifest: &HolderManifestV1,
+    active: &BTreeMap<[u8; 32], &HolderManifestEntryV1>,
+) -> Result<(), BootleLanternHolderStoreErrorV1> {
+    let mut observed = BTreeSet::new();
+    let mut removed = false;
+    for entry in fs::read_dir(objects_root).map_err(|_| BootleLanternHolderStoreErrorV1::Backend)? {
+        let entry = entry.map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
+        let (path, digest, envelope) = load_holder_object_entry_v1(entry)?;
+        if let Some(active_entry) = active.get(&digest) {
+            validate_envelope_against_entry_v1(&envelope, manifest.vault_id, active_entry)?;
+            observed.insert(digest);
+        } else {
+            fs::remove_file(path).map_err(|_| BootleLanternHolderStoreErrorV1::Backend)?;
+            removed = true;
+        }
+    }
+    if observed.len() != active.len() || !observed.iter().all(|digest| active.contains_key(digest))
+    {
+        return Err(BootleLanternHolderStoreErrorV1::RollbackDetected);
+    }
+    if removed {
         sync_directory_v1(objects_root)
             .map_err(|_| BootleLanternHolderStoreErrorV1::DurabilityUncertain)?;
     }
@@ -4152,6 +4185,45 @@ mod tests {
         assert_eq!(
             reopened.phase_v1(handle),
             Err(BootleLanternHolderStoreErrorV1::NotFound)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restart_streams_multiple_orphans_without_collecting_paths() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("holder");
+        let wrapper = Arc::new(TestWrapper::exact());
+        let heads = Arc::new(TestHeads::new());
+        let store = open_test_store_v1(&root, Arc::clone(&wrapper), Arc::clone(&heads)).unwrap();
+        heads.inject_ambiguous_without_commit();
+        assert_eq!(
+            publish_rejected_test_record_v1(&store, 0x72),
+            Err(BootleLanternHolderStoreErrorV1::RollbackDetected)
+        );
+        let orphan_path = fs::read_dir(&store.objects_root)
+            .unwrap()
+            .next()
+            .expect("ambiguous publication leaves one orphan")
+            .unwrap()
+            .path();
+        let mut second_bytes = fs::read(orphan_path).unwrap();
+        *second_bytes.last_mut().expect("envelope is non-empty") ^= 1;
+        let second_digest = envelope_digest_v1(&second_bytes);
+        let second_path = store
+            .objects_root
+            .join(holder_object_file_name_v1(second_digest));
+        fs::write(&second_path, second_bytes).unwrap();
+        fs::set_permissions(&second_path, fs::Permissions::from_mode(0o600)).unwrap();
+        drop(store);
+
+        let reopened = open_test_store_v1(&root, wrapper, heads).unwrap();
+        assert_eq!(
+            fs::read_dir(&reopened.objects_root).unwrap().count(),
+            0,
+            "streaming recovery removes every validated orphan"
         );
     }
 

@@ -298,15 +298,18 @@ fn seed_asset_definition_for_test(
     let mut block = app.state.block(header);
     let mut tx = block.transaction();
 
-    let balance_scope_policy = if asset_definition_requires_restricted_balance_policy_for_test(
-        app,
-        owning_domain,
-    ) {
-        AssetBalancePolicy::DataspaceRestricted
-    } else {
-        AssetBalancePolicy::Global
-    };
-    let asset_definition = iroha_data_model::asset::AssetDefinition::numeric(asset_definition_id.clone(), "asset-definition".to_owned(), balance_scope_policy, owning_domain.cloned());
+    let balance_scope_policy =
+        if asset_definition_requires_restricted_balance_policy_for_test(app, owning_domain) {
+            AssetBalancePolicy::DataspaceRestricted
+        } else {
+            AssetBalancePolicy::Global
+        };
+    let asset_definition = iroha_data_model::asset::AssetDefinition::numeric(
+        asset_definition_id.clone(),
+        "asset-definition".to_owned(),
+        balance_scope_policy,
+        owning_domain.cloned(),
+    );
 
     Register::asset_definition(asset_definition)
         .execute(&ALICE_ID, &mut tx)
@@ -1591,54 +1594,6 @@ fn signed_app_headers_for_network(
     headers
 }
 
-pub(crate) fn signed_network_app_headers(
-    network_id: &NetworkId,
-    account: &AccountId,
-    key_pair: &KeyPair,
-    method: &axum::http::Method,
-    uri: &axum::http::Uri,
-    body: &[u8],
-) -> HeaderMap {
-    static TEST_NONCE_SEQ: LazyLock<std::sync::atomic::AtomicU64> =
-        LazyLock::new(|| std::sync::atomic::AtomicU64::new(0));
-    let timestamp_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock")
-        .as_millis() as u64;
-    let nonce_seq = TEST_NONCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let nonce = format!("lib-network-test-{timestamp_ms}-{nonce_seq}");
-    let message = crate::canonical_network_request_signature_message(
-        network_id,
-        method,
-        uri,
-        body,
-        timestamp_ms,
-        &nonce,
-    );
-    let signature = checked_torii_test_signature(
-        key_pair,
-        &message,
-        "sign exact-network Torii request fixture",
-    );
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        crate::HEADER_ACCOUNT,
-        account.to_string().parse().expect("account header"),
-    );
-    headers.insert(
-        crate::HEADER_SIGNATURE,
-        crate::signature_header_value(&signature)
-            .parse()
-            .expect("signature header"),
-    );
-    headers.insert(
-        crate::HEADER_TIMESTAMP_MS,
-        timestamp_ms.to_string().parse().expect("timestamp header"),
-    );
-    headers.insert(crate::HEADER_NONCE, nonce.parse().expect("nonce header"));
-    headers
-}
-
 fn checked_torii_test_signature(
     key_pair: &KeyPair,
     message: &[u8],
@@ -1906,8 +1861,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
 
     let content_config_snapshot = state.content_snapshot();
     let soranet_privacy_ingest = iroha_config::parameters::actual::SoranetPrivacyIngest::default();
-    let soranet_privacy_tokens: HashSet<String> =
-        soranet_privacy_ingest.tokens.iter().cloned().collect();
     let soranet_privacy_allow_nets = limits::parse_cidrs(&soranet_privacy_ingest.allow_cidrs);
     let soranet_privacy_rate_limiter = limits::RateLimiter::new(
         soranet_privacy_ingest
@@ -1970,6 +1923,22 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         Vec::new()
     });
 
+    let query_memory = query_memory_geometry(
+        usize::try_from(defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES.get())
+            .expect("default query memory pool fits usize"),
+        usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
+            .expect("default content limit fits usize"),
+        defaults::torii::QUERY_HEAVY_MAX_INFLIGHT.get(),
+    )
+    .expect("default query memory pool admits ingress and fanout reservations");
+    let proxy_frame_bytes = usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
+        .expect("default proxy content limit fits usize")
+        .checked_add(TORII_PROXY_REQUEST_FRAME_OVERHEAD_BYTES_V1)
+        .expect("default proxy frame limit fits usize");
+    let torii_proxy_http_ingress_envelope =
+        ToriiProxyHttpIngressEnvelope::from_max_content_bytes(proxy_frame_bytes)
+            .expect("default proxy HTTP memory envelope fits");
+
     Arc::new(AppState {
         events,
         kura,
@@ -1978,6 +1947,18 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         #[cfg(feature = "app_api")]
         transaction_max_content_len: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
             .unwrap_or(usize::MAX),
+        torii_proxy_max_response_bytes: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
+            .unwrap_or(usize::MAX),
+        query_fanout_working_set_bytes: query_memory.fanout_working_set_bytes,
+        query_ingress_envelope: query_memory.ingress,
+        torii_proxy_http_ingress_envelope,
+        torii_proxy_memory_inflight: Arc::new(tokio::sync::Semaphore::new(1)),
+        query_ingress_inflight: Arc::new(tokio::sync::Semaphore::new(
+            query_memory.ingress_slots.get(),
+        )),
+        query_fanout_inflight: Arc::new(tokio::sync::Semaphore::new(
+            query_memory.fanout_slots.get(),
+        )),
         transaction_ingress_compute_inflight: Arc::new(tokio::sync::Semaphore::new(
             defaults::torii::TRANSACTION_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS.get(),
         )),
@@ -2037,7 +2018,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         operator_auth,
         operator_signatures,
         soranet_privacy_ingest,
-        soranet_privacy_tokens: Arc::new(soranet_privacy_tokens),
         soranet_privacy_allow_nets: Arc::new(soranet_privacy_allow_nets),
         soranet_privacy_rate_limiter,
         api_rate_limit_bypass_nets: Arc::new(vec![]),

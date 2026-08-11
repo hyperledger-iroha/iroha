@@ -1635,17 +1635,15 @@ impl norito::NoritoSerialize for ProofAttachment {
         fn write_prefixed<W: Write, T: norito::NoritoSerialize>(
             writer: &mut W,
             value: &T,
+            scratch: &mut ncore::DeriveSmallBuf,
         ) -> Result<(), ncore::Error> {
-            let mut buf = Vec::new();
-            ncore::serialize_to_buffer(value, &mut buf)?;
-            ncore::write_len(writer, buf.len() as u64)?;
-            writer.write_all(&buf)?;
-            Ok(())
+            ncore::write_len_prefixed_exact(writer, value, scratch)
         }
 
-        write_prefixed(writer, &self.backend)?;
-        write_prefixed(writer, &self.proof)?;
-        write_prefixed(writer, &self.vk_ref)?;
+        let mut scratch = ncore::DeriveSmallBuf::new();
+        write_prefixed(writer, &self.backend, &mut scratch)?;
+        write_prefixed(writer, &self.proof, &mut scratch)?;
+        write_prefixed(writer, &self.vk_ref, &mut scratch)?;
 
         // Omit trailing default fields to keep payloads compact and deterministic.
         let tail = if self.lane_privacy.is_some() {
@@ -1656,13 +1654,13 @@ impl norito::NoritoSerialize for ProofAttachment {
             i32::from(self.vk_commitment.is_some())
         };
         if tail >= 1 {
-            write_prefixed(writer, &self.vk_commitment)?;
+            write_prefixed(writer, &self.vk_commitment, &mut scratch)?;
         }
         if tail >= 2 {
-            write_prefixed(writer, &self.envelope_hash)?;
+            write_prefixed(writer, &self.envelope_hash, &mut scratch)?;
         }
         if tail >= 3 {
-            write_prefixed(writer, &self.lane_privacy)?;
+            write_prefixed(writer, &self.lane_privacy, &mut scratch)?;
         }
         Ok(())
     }
@@ -2143,6 +2141,164 @@ fn proof_attachment_list_json_error(message: &'static str) -> norito::json::Erro
 }
 
 #[cfg(feature = "json")]
+struct ProofAttachmentListBase64Writer<'a> {
+    output: &'a mut dyn norito::json::JsonWriteSink,
+    carry: [u8; 3],
+    carry_len: usize,
+    sink_error: Option<norito::json::BoundedJsonError>,
+}
+
+#[cfg(feature = "json")]
+impl<'a> ProofAttachmentListBase64Writer<'a> {
+    fn new(output: &'a mut dyn norito::json::JsonWriteSink) -> Self {
+        Self {
+            output,
+            carry: [0; 3],
+            carry_len: 0,
+            sink_error: None,
+        }
+    }
+
+    fn sink_failure(&mut self, error: norito::json::BoundedJsonError) -> std::io::Error {
+        self.sink_error = Some(error);
+        std::io::Error::other("bounded JSON sink rejected streamed base64")
+    }
+
+    fn push(&mut self, byte: u8) -> std::io::Result<()> {
+        if self.sink_error.is_some() {
+            return Err(std::io::Error::other(
+                "bounded JSON sink already rejected streamed base64",
+            ));
+        }
+        match self.output.push(char::from(byte)) {
+            Ok(()) => Ok(()),
+            Err(error) => Err(self.sink_failure(error)),
+        }
+    }
+
+    fn emit_full_block(&mut self, block: [u8; 3]) -> std::io::Result<()> {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        self.push(ALPHABET[usize::from(block[0] >> 2)])?;
+        self.push(ALPHABET[usize::from(((block[0] & 0x03) << 4) | (block[1] >> 4))])?;
+        self.push(ALPHABET[usize::from(((block[1] & 0x0f) << 2) | (block[2] >> 6))])?;
+        self.push(ALPHABET[usize::from(block[2] & 0x3f)])
+    }
+
+    fn write_bytes(&mut self, mut bytes: &[u8]) -> std::io::Result<()> {
+        if self.carry_len != 0 {
+            let take = (3 - self.carry_len).min(bytes.len());
+            self.carry[self.carry_len..self.carry_len + take].copy_from_slice(&bytes[..take]);
+            self.carry_len += take;
+            bytes = &bytes[take..];
+            if self.carry_len != 3 {
+                return Ok(());
+            }
+            self.emit_full_block(self.carry)?;
+            self.carry_len = 0;
+        }
+
+        let mut chunks = bytes.chunks_exact(3);
+        for chunk in &mut chunks {
+            self.emit_full_block([chunk[0], chunk[1], chunk[2]])?;
+        }
+        let remainder = chunks.remainder();
+        self.carry[..remainder.len()].copy_from_slice(remainder);
+        self.carry_len = remainder.len();
+        Ok(())
+    }
+
+    fn finish(&mut self) -> Result<(), norito::json::BoundedJsonError> {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let result = match self.carry_len {
+            0 => Ok(()),
+            1 => {
+                let first = self.carry[0];
+                self.push(ALPHABET[usize::from(first >> 2)])
+                    .and_then(|()| self.push(ALPHABET[usize::from((first & 0x03) << 4)]))
+                    .and_then(|()| self.push(b'='))
+                    .and_then(|()| self.push(b'='))
+            }
+            2 => {
+                let first = self.carry[0];
+                let second = self.carry[1];
+                self.push(ALPHABET[usize::from(first >> 2)])
+                    .and_then(|()| {
+                        self.push(ALPHABET[usize::from(((first & 0x03) << 4) | (second >> 4))])
+                    })
+                    .and_then(|()| self.push(ALPHABET[usize::from((second & 0x0f) << 2)]))
+                    .and_then(|()| self.push(b'='))
+            }
+            _ => unreachable!("base64 carry is always shorter than one block"),
+        };
+        self.carry_len = 0;
+        result.map_err(|_| {
+            self.sink_error
+                .unwrap_or(norito::json::BoundedJsonError::LengthMismatch)
+        })
+    }
+
+    fn sink_error(&self) -> Option<norito::json::BoundedJsonError> {
+        self.sink_error
+    }
+}
+
+#[cfg(feature = "json")]
+impl Write for ProofAttachmentListBase64Writer<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.write_bytes(bytes)?;
+        Ok(bytes.len())
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.write_bytes(bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "json")]
+fn proof_attachment_list_write_json_to(
+    value: &ProofAttachmentList,
+    output: &mut dyn norito::json::JsonWriteSink,
+) -> Result<(), norito::json::BoundedJsonError> {
+    output.push('"')?;
+    let mut base64 = ProofAttachmentListBase64Writer::new(output);
+    if ncore::write_canonical_to_writer(value, &mut base64).is_err() {
+        return Err(base64
+            .sink_error()
+            .unwrap_or(norito::json::BoundedJsonError::LengthMismatch));
+    }
+    base64.finish()?;
+    drop(base64);
+    output.push('"')
+}
+
+#[cfg(feature = "json")]
+struct ProofAttachmentListStringSink<'a>(&'a mut String);
+
+#[cfg(feature = "json")]
+impl norito::json::JsonWriteSink for ProofAttachmentListStringSink<'_> {
+    fn push(&mut self, value: char) -> Result<(), norito::json::BoundedJsonError> {
+        self.0.push(value);
+        Ok(())
+    }
+
+    fn push_str(&mut self, value: &str) -> Result<(), norito::json::BoundedJsonError> {
+        self.0.push_str(value);
+        Ok(())
+    }
+
+    fn reserve(&mut self, additional: usize) -> Result<(), norito::json::BoundedJsonError> {
+        self.0.reserve(additional);
+        Ok(())
+    }
+}
+
+#[cfg(feature = "json")]
 fn proof_attachment_list_base64_decoded_len(
     encoded: &str,
     maximum_decoded_bytes: usize,
@@ -2305,10 +2461,16 @@ fn proof_attachment_list_frame_attachment_count(
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for ProofAttachmentList {
     fn json_serialize(&self, out: &mut String) {
-        let bytes = norito::encode_canonical(self)
+        let mut sink = ProofAttachmentListStringSink(out);
+        proof_attachment_list_write_json_to(self, &mut sink)
             .expect("validated ProofAttachmentList canonical serialization is infallible");
-        let encoded = STANDARD.encode(bytes);
-        norito::json::JsonSerialize::json_serialize(&encoded, out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        proof_attachment_list_write_json_to(self, out)
     }
 }
 
@@ -2398,6 +2560,47 @@ impl norito::json::JsonSerialize for ProofId {
     fn json_serialize(&self, out: &mut String) {
         let repr = self.to_string();
         norito::json::JsonSerialize::json_serialize(&repr, out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        fn write_escaped_fragment(
+            value: &str,
+            out: &mut dyn norito::json::JsonWriteSink,
+        ) -> Result<(), norito::json::BoundedJsonError> {
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            for ch in value.chars() {
+                match ch {
+                    '"' => out.push_str("\\\"")?,
+                    '\\' => out.push_str("\\\\")?,
+                    '\n' => out.push_str("\\n")?,
+                    '\r' => out.push_str("\\r")?,
+                    '\t' => out.push_str("\\t")?,
+                    '\u{08}' => out.push_str("\\b")?,
+                    '\u{0C}' => out.push_str("\\f")?,
+                    control if (control as u32) < 0x20 => {
+                        let byte = control as u8;
+                        out.push_str("\\u00")?;
+                        out.push(char::from(HEX[usize::from(byte >> 4)]))?;
+                        out.push(char::from(HEX[usize::from(byte & 0x0f)]))?;
+                    }
+                    ordinary => out.push(ordinary)?,
+                }
+            }
+            Ok(())
+        }
+
+        const UPPER_HEX: &[u8; 16] = b"0123456789ABCDEF";
+        out.push('"')?;
+        write_escaped_fragment(self.backend.as_str(), out)?;
+        out.push(':')?;
+        for byte in self.proof_hash {
+            out.push(char::from(UPPER_HEX[usize::from(byte >> 4)]))?;
+            out.push(char::from(UPPER_HEX[usize::from(byte & 0x0f)]))?;
+        }
+        out.push('"')
     }
 }
 
@@ -2508,6 +2711,18 @@ impl norito::json::JsonSerialize for ProofStatus {
             ProofStatus::Rejected => "Rejected",
         };
         norito::json::write_json_string(label, out);
+    }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        let label = match self {
+            ProofStatus::Submitted => "Submitted",
+            ProofStatus::Verified => "Verified",
+            ProofStatus::Rejected => "Rejected",
+        };
+        norito::json::write_json_string_to(label, out)
     }
 }
 
@@ -3650,6 +3865,22 @@ mod tests {
         )]);
         let canonical_json =
             norito::json::to_json(&list).expect("encode canonical proof-attachment list JSON");
+        let canonical_frame =
+            norito::encode_canonical(&list).expect("encode canonical proof-attachment list frame");
+        assert_eq!(
+            canonical_json,
+            format!("\"{}\"", STANDARD.encode(canonical_frame)),
+            "streamed base64 must preserve the legacy JSON bytes"
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&list, canonical_json.len())
+                .expect("serialize attachment list at its exact JSON limit"),
+            canonical_json
+        );
+        assert_eq!(
+            norito::json::to_json_bounded(&list, canonical_json.len() - 1),
+            Err(norito::json::BoundedJsonError::BodyTooLarge)
+        );
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         {
@@ -3683,6 +3914,36 @@ mod tests {
             <ProofAttachmentList as norito::json::JsonDeserialize>::json_from_value(&value)
                 .expect("canonical list Value must pass bounded preflight");
         assert_eq!(from_value, list);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn proof_manual_json_writers_preserve_bytes_and_closed_limits() {
+        fn assert_bounded<T: norito::json::JsonSerialize>(value: &T) {
+            let expected = norito::json::to_json(value).expect("serialize ordinary JSON");
+            assert_eq!(
+                norito::json::to_json_bounded(value, expected.len())
+                    .expect("serialize at exact JSON limit"),
+                expected
+            );
+            assert_eq!(
+                norito::json::to_json_bounded(value, expected.len() - 1),
+                Err(norito::json::BoundedJsonError::BodyTooLarge)
+            );
+        }
+
+        let id = ProofId {
+            backend: "halo2/ipa:profile".into(),
+            proof_hash: [0xAB; 32],
+        };
+        assert_bounded(&id);
+        for status in [
+            ProofStatus::Submitted,
+            ProofStatus::Verified,
+            ProofStatus::Rejected,
+        ] {
+            assert_bounded(&status);
+        }
     }
 
     #[cfg(feature = "json")]

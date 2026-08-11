@@ -57,7 +57,7 @@ use iroha_version::codec::EncodeVersioned;
 use norito::json;
 use rand::{TryRngCore as _, rngs::OsRng};
 use reqwest::{
-    Client, StatusCode,
+    Client, Response, StatusCode,
     header::{HeaderMap, HeaderName, HeaderValue, SEC_WEBSOCKET_PROTOCOL},
 };
 use tokio::{
@@ -80,7 +80,11 @@ use url::Url;
 
 use crate::compose::{InstructionPermission, SigningAuthority};
 
-const NORITO_MIME_TYPE: &str = "application/x-norito";
+mod operator_auth;
+pub use operator_auth::OperatorSigningContext;
+use operator_auth::build_operator_get_request;
+
+include!("torii/sumeragi_response_bounds.rs");
 
 /// Convenience result alias for Torii client operations.
 pub type ToriiResult<T> = std::result::Result<T, ToriiError>;
@@ -367,21 +371,7 @@ impl ToriiErrorEnvelope {
     }
 }
 
-fn reject_code_from_headers(headers: &HeaderMap) -> Option<String> {
-    headers
-        .get("x-iroha-reject-code")
-        .or_else(|| headers.get("x-iroha-axt-code"))
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned)
-}
-
-fn retry_after_from_headers(headers: &HeaderMap) -> Option<Duration> {
-    headers
-        .get(reqwest::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map(Duration::from_secs)
-}
+include!("torii/response_error_headers.rs");
 
 fn response_status_error(response: &reqwest::Response) -> ToriiError {
     if response.status() == StatusCode::TOO_MANY_REQUESTS {
@@ -1016,6 +1006,7 @@ pub struct ToriiClientBuilder {
     http_base: Url,
     ws_base: Url,
     network_id: Option<NetworkId>,
+    operator_signing_context: Option<OperatorSigningContext>,
     default_headers: HeaderMap,
     timeout: Option<Duration>,
 }
@@ -1028,6 +1019,7 @@ impl ToriiClientBuilder {
             http_base,
             ws_base,
             network_id: None,
+            operator_signing_context: None,
             default_headers: HeaderMap::new(),
             timeout: None,
         })
@@ -1082,11 +1074,31 @@ impl ToriiClientBuilder {
         self
     }
 
+    /// Install immutable operator signing material bound to one exact network.
+    #[must_use]
+    pub fn with_operator_signing_context(mut self, context: OperatorSigningContext) -> Self {
+        self.operator_signing_context = Some(context);
+        self
+    }
+
     /// Consume the builder and construct a [`ToriiClient`].
     pub fn build(self) -> ToriiResult<ToriiClient> {
+        let network_id = match (self.network_id, self.operator_signing_context.as_ref()) {
+            (Some(configured), Some(context)) if configured != context.network_id() => {
+                return Err(ToriiError::SignedQueryContext(format!(
+                    "operator signing context network id `{}` does not match client network id `{configured}`",
+                    context.network_id()
+                )));
+            }
+            (Some(configured), _) => Some(configured),
+            (None, Some(context)) => Some(context.network_id()),
+            (None, None) => None,
+        };
         // Signed query bodies are one-shot. A redirect could replay the same
         // nonce after the original endpoint already admitted the request.
-        let mut client_builder = Client::builder().redirect(reqwest::redirect::Policy::none());
+        let mut client_builder = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never());
         if let Some(timeout) = self.timeout {
             client_builder = client_builder.timeout(timeout);
         }
@@ -1098,7 +1110,8 @@ impl ToriiClientBuilder {
         Ok(ToriiClient {
             http_base: self.http_base,
             ws_base: self.ws_base,
-            network_id: self.network_id,
+            network_id,
+            operator_signing_context: self.operator_signing_context,
             http,
             status_state: Arc::new(Mutex::new(StatusState::default())),
             default_headers: self.default_headers,
@@ -2983,6 +2996,7 @@ pub struct ToriiClient {
     http_base: Url,
     ws_base: Url,
     network_id: Option<NetworkId>,
+    operator_signing_context: Option<OperatorSigningContext>,
     http: Client,
     status_state: Arc<Mutex<StatusState>>,
     default_headers: HeaderMap,
@@ -3701,12 +3715,14 @@ impl ToriiClient {
     /// Fetch the exact reducer-owned Sumeragi v2 status snapshot.
     pub async fn fetch_sumeragi_status(&self) -> ToriiResult<SumeragiV2Status> {
         let url = self.sumeragi_status_endpoint()?;
-        let response = self
-            .http
-            .get(url)
-            .header(reqwest::header::ACCEPT, NORITO_MIME_TYPE)
-            .send()
-            .await?;
+        let request = build_operator_get_request(
+            &self.http,
+            &self.default_headers,
+            self.network_id,
+            self.operator_signing_context.as_ref(),
+            url,
+        )?;
+        let response = self.http.execute(request).await?;
 
         if !response.status().is_success() {
             return Err(ToriiError::UnexpectedStatus {
@@ -3716,8 +3732,8 @@ impl ToriiClient {
             });
         }
 
-        let body = response.bytes().await?;
-        let status: SumeragiV2Status = decode_norito_with_alignment(body.as_ref())?;
+        let body = read_bounded_sumeragi_response(response).await?;
+        let status: SumeragiV2Status = decode_norito_with_alignment(&body)?;
         status
             .validate()
             .map_err(|error| ToriiError::Decode(error.to_string()))?;
@@ -3727,12 +3743,14 @@ impl ToriiClient {
     /// Fetch non-authoritative Sumeragi pipeline, queue, election, and lane diagnostics.
     pub async fn fetch_sumeragi_diagnostics(&self) -> ToriiResult<SumeragiDiagnosticsStatus> {
         let url = self.sumeragi_diagnostics_endpoint()?;
-        let response = self
-            .http
-            .get(url)
-            .header(reqwest::header::ACCEPT, NORITO_MIME_TYPE)
-            .send()
-            .await?;
+        let request = build_operator_get_request(
+            &self.http,
+            &self.default_headers,
+            self.network_id,
+            self.operator_signing_context.as_ref(),
+            url,
+        )?;
+        let response = self.http.execute(request).await?;
 
         if !response.status().is_success() {
             return Err(ToriiError::UnexpectedStatus {
@@ -3742,8 +3760,8 @@ impl ToriiClient {
             });
         }
 
-        let body = response.bytes().await?;
-        let diagnostics: SumeragiDiagnosticsStatus = decode_norito_with_alignment(body.as_ref())?;
+        let body = read_bounded_sumeragi_response(response).await?;
+        let diagnostics: SumeragiDiagnosticsStatus = decode_norito_with_alignment(&body)?;
         if let Some(npos) = diagnostics.npos {
             npos.validate()
                 .map_err(|reason| ToriiError::Decode(reason.to_owned()))?;
@@ -5392,111 +5410,7 @@ pub struct EventStream {
     decode_handle: JoinHandle<()>,
 }
 
-impl EventStream {
-    fn new(subscription: WsSubscription) -> Self {
-        let mut receiver = subscription.subscribe();
-        let (sender, _) = broadcast::channel(128);
-        let initial_receiver = sender.subscribe();
-        let forwarder = sender.clone();
-
-        let decode_handle = tokio::spawn(async move {
-            loop {
-                match receiver.recv().await {
-                    Ok(WsFrame::Binary(frame)) => {
-                        let raw_len = frame.len();
-                        match norito::decode_from_bytes::<EventMessage>(&frame) {
-                            Ok(message) => {
-                                let event_box: EventBox = message.into();
-                                let summary = EventSummary::from_event(&event_box);
-                                let event = Arc::new(event_box);
-                                let _ = forwarder.send(EventStreamEvent::Event {
-                                    summary,
-                                    event,
-                                    raw_len,
-                                });
-                            }
-                            Err(err) => {
-                                let _ = forwarder.send(EventStreamEvent::DecodeError {
-                                    error: EventStreamDecodeError::new(
-                                        EventDecodeStage::Frame,
-                                        raw_len,
-                                        err.to_string(),
-                                    ),
-                                });
-                            }
-                        }
-                    }
-                    Ok(WsFrame::Text(text)) => {
-                        let truncated = if text.len() > 256 {
-                            format!("{}…", &text[..255])
-                        } else {
-                            text
-                        };
-                        let _ = forwarder.send(EventStreamEvent::Text { text: truncated });
-                    }
-                    Ok(WsFrame::Error(message)) => {
-                        let _ = forwarder.send(EventStreamEvent::DecodeError {
-                            error: EventStreamDecodeError::new(
-                                EventDecodeStage::Stream,
-                                0,
-                                message,
-                            ),
-                        });
-                        break;
-                    }
-                    Ok(WsFrame::Closed) => {
-                        let _ = forwarder.send(EventStreamEvent::Closed);
-                        break;
-                    }
-                    Err(RecvError::Lagged(skipped)) => {
-                        let _ = forwarder.send(EventStreamEvent::Lagged {
-                            skipped: lag_to_usize(skipped),
-                        });
-                    }
-                    Err(RecvError::Closed) => {
-                        let _ = forwarder.send(EventStreamEvent::Closed);
-                        break;
-                    }
-                }
-            }
-        });
-
-        Self {
-            subscription,
-            sender,
-            initial_receiver: std::sync::Mutex::new(Some(initial_receiver)),
-            decode_handle,
-        }
-    }
-
-    /// Acquire a receiver for decoded events.
-    pub fn subscribe(&self) -> broadcast::Receiver<EventStreamEvent> {
-        self.initial_receiver
-            .lock()
-            .expect("event stream receiver lock poisoned")
-            .take()
-            .unwrap_or_else(|| self.sender.subscribe())
-    }
-
-    /// Abort both the raw WebSocket subscription and decoder task.
-    pub fn abort(&self) {
-        self.subscription.abort();
-        if !self.decode_handle.is_finished() {
-            self.decode_handle.abort();
-        }
-    }
-
-    /// Check whether the underlying tasks finished.
-    pub fn is_finished(&self) -> bool {
-        self.subscription.is_finished() && self.decode_handle.is_finished()
-    }
-}
-
-impl Drop for EventStream {
-    fn drop(&mut self) {
-        self.abort();
-    }
-}
+include!("torii/event_stream_runtime.rs");
 
 include!("torii/managed_streams.rs");
 

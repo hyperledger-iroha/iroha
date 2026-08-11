@@ -17,7 +17,7 @@ public sealed class ToriiIdentifierReceiptTests
             return new HttpResponseMessage(HttpStatusCode.OK);
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = ToriiIdentifierResolutionAuthenticationTests.AuthenticatedClient(handler);
         var error = await Assert.ThrowsAsync<ArgumentException>(() => client.ResolveIdentifierAsync(
             new ToriiIdentifierResolveRequest
             {
@@ -360,7 +360,7 @@ public sealed class ToriiIdentifierReceiptTests
         {
             Content = new StringContent(responseJson),
         });
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = ToriiIdentifierResolutionAuthenticationTests.AuthenticatedClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() => client.ResolveIdentifierAsync(
             new ToriiIdentifierResolveRequest

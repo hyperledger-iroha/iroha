@@ -16,6 +16,8 @@
 //! ceremony bound to the roster/epoch/transcript context, not by trusting a
 //! prover-supplied digest at this terminal boundary.
 
+use std::sync::Arc;
+
 use super::{
     Scalar, ZkAmsMkheErrorV1, keccak256,
     manifest::release_profile_v1,
@@ -490,7 +492,7 @@ pub fn zk_ams_phase3_terminal_implementation_v1() -> ZkAmsPhase3TerminalImplemen
 }
 
 struct TerminalProfile {
-    shape: Shape,
+    shape: Arc<Shape>,
     commitment_key: CommitmentKey,
     map_set_digest: [u8; 32],
     nifs_verifier_digest: [u8; 32],
@@ -1391,18 +1393,25 @@ fn build_terminal_profile(
     let commitment_columns = MASKED_RELAXED_COMMITMENT_COLUMNS_V1;
     let public_input_count = expected_shape.public_input_count();
     let variable_count = expected_shape.variable_count();
-    if require_release_relation {
+    let shape = if require_release_relation {
         require_release_relation_maps_v1(maps)?;
-    }
-    let shape = shape_from_paper_order_maps(maps, variable_count, public_input_count)?;
-    if &shape != expected_shape {
-        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-    }
-    if require_release_relation
-        && shape != super::super::canonical_shape().map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
-    {
-        return Err(ZkAmsMkheErrorV1::InvalidProfile);
-    }
+        let canonical =
+            super::super::canonical_shape().map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?;
+        if canonical.as_ref() != expected_shape {
+            return Err(ZkAmsMkheErrorV1::InvalidProfile);
+        }
+        canonical
+    } else {
+        let reconstructed = Arc::new(shape_from_paper_order_maps(
+            maps,
+            variable_count,
+            public_input_count,
+        )?);
+        if reconstructed.as_ref() != expected_shape {
+            return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
+        }
+        reconstructed
+    };
     let commitment_key =
         CommitmentKey::derive(super::super::COMMITMENT_KEY_LABEL_V1, commitment_columns)
             .map_err(|_| ZkAmsMkheErrorV1::InvalidKeyMaterial)?;
@@ -1836,7 +1845,7 @@ mod tests {
     #[derive(Clone)]
     struct Fixture {
         maps: [ZkAmsPhase23SparseMapV1; 3],
-        shape: Shape,
+        shape: Arc<Shape>,
         proof_context: super::super::super::ZkAmsProofContextV1<'static>,
         context: ZkAmsPhase3TerminalContextV1,
         governed: ZkAmsPhase3GovernedBatchV1,
@@ -1878,19 +1887,14 @@ mod tests {
         ]
     }
 
-    fn strict_assignment(shape: &Shape, public_input: u64) -> CircuitAssignment {
+    fn strict_assignment(shape: &Arc<Shape>, public_input: u64) -> CircuitAssignment {
         let assignment = CircuitAssignment {
-            shape: shape.clone(),
+            shape: Arc::clone(shape),
             witness: vec![s(public_input); TEST_ROWS],
             public_inputs: vec![s(public_input)],
         };
         shape
-            .validate_relaxed_assignment(
-                &assignment.witness,
-                Scalar::one(),
-                &assignment.public_inputs,
-                &vec![Scalar::zero(); TEST_ROWS],
-            )
+            .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
             .expect("synthetic strict assignment satisfies W*u=u*x");
         assignment
     }
@@ -1980,8 +1984,10 @@ mod tests {
 
     fn build_fixture() -> Fixture {
         let maps = test_maps();
-        let shape = shape_from_paper_order_maps(map_refs(&maps), TEST_ROWS, 1)
-            .expect("synthetic terminal shape");
+        let shape = Arc::new(
+            shape_from_paper_order_maps(map_refs(&maps), TEST_ROWS, 1)
+                .expect("synthetic terminal shape"),
+        );
         let profile = build_terminal_profile(map_refs(&maps), &shape, false)
             .expect("synthetic terminal profile");
         let assignments = vec![strict_assignment(&shape, 3), strict_assignment(&shape, 4)];

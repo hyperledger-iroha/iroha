@@ -219,11 +219,11 @@ impl TrustedBlockProofAnchor {
     /// This first verifies the artifact's complete frozen-roster, proof-of-possession, and
     /// `CommitQC` cryptography, then validates its exact association with `block.header()`. Only
     /// after both checks succeed does it use the `CommitQC`'s execution commitment to authenticate
-    /// the exact executed block wire. It then recomputes the full entrypoint and result trees,
+    /// the exact executed block wire. It validates the retained entrypoint/result caches in place,
     /// checks their exact count alignment, locates `entry_hash` in authenticated block order, and
     /// retains the exact FASTPQ transcript map bound by that wire. Every target binds the full
     /// executed-entrypoint tree so its index is identical to the corresponding result index. The
-    /// external-only header tree is recomputed and checked independently.
+    /// external-only header root is checked with a logarithmic-memory accumulator.
     ///
     /// # Errors
     /// Returns [`TrustedBlockProofAnchorError`] when finality verification or header association
@@ -262,15 +262,17 @@ impl TrustedBlockProofAnchor {
             return Err(TrustedBlockProofAnchorError::MissingResults);
         }
 
-        let entry_hashes = block.entrypoint_hashes().collect::<Vec<_>>();
-        let full_entry_tree: MerkleTree<TransactionEntrypoint> =
-            entry_hashes.iter().copied().collect();
-        let full_entry_commitment = full_entry_tree
-            .commitment()
+        block
+            .validate_entrypoint_merkle_cache()
+            .map_err(|_| TrustedBlockProofAnchorError::InconsistentMerkleMaterial)?;
+        block
+            .validate_result_merkle_cache()
+            .map_err(|_| TrustedBlockProofAnchorError::InconsistentMerkleMaterial)?;
+        let full_entry_commitment = block
+            .full_entry_merkle_commitment()
             .ok_or(TrustedBlockProofAnchorError::MissingEntrypoints)?;
-        let result_tree: MerkleTree<TransactionResult> = block.result_hashes().collect();
-        let result_commitment = result_tree
-            .commitment()
+        let result_commitment = block
+            .result_merkle_commitment()
             .ok_or(TrustedBlockProofAnchorError::MissingResults)?;
         if full_entry_commitment.leaf_count() != result_commitment.leaf_count() {
             return Err(TrustedBlockProofAnchorError::MisalignedLeafCounts);
@@ -278,17 +280,17 @@ impl TrustedBlockProofAnchor {
         if full_entry_commitment.leaf_count().get() > BLOCK_MERKLE_MAX_LEAF_COUNT {
             return Err(TrustedBlockProofAnchorError::TooManyEntrypoints);
         }
-        let external_count = block.external_entrypoint_count();
-        if external_count > entry_hashes.len() {
+        let external_count = u64::try_from(block.external_entrypoint_count())
+            .map_err(|_| TrustedBlockProofAnchorError::InconsistentMerkleMaterial)?;
+        if external_count > full_entry_commitment.leaf_count().get() {
             return Err(TrustedBlockProofAnchorError::InconsistentMerkleMaterial);
         }
-        let external_tree: MerkleTree<TransactionEntrypoint> = block
-            .external_entrypoints_cloned()
-            .map(|entrypoint| entrypoint.hash())
-            .collect();
-        if external_tree.leaf_count() != external_count
-            || block.header().merkle_root() != external_tree.root()
-        {
+        let external_root = MerkleTree::root_from_typed_leaves(
+            block
+                .external_entrypoints_cloned()
+                .map(|entrypoint| entrypoint.hash()),
+        );
+        if block.header().merkle_root() != external_root {
             return Err(TrustedBlockProofAnchorError::InconsistentMerkleMaterial);
         }
         if block.full_entry_merkle_commitment() != Some(full_entry_commitment)
@@ -298,9 +300,9 @@ impl TrustedBlockProofAnchor {
             return Err(TrustedBlockProofAnchorError::InconsistentMerkleMaterial);
         }
 
-        let entry_index_usize = entry_hashes
-            .iter()
-            .position(|candidate| candidate == entry_hash)
+        let entry_index_usize = block
+            .entrypoint_hashes()
+            .position(|candidate| &candidate == entry_hash)
             .ok_or(TrustedBlockProofAnchorError::EntrypointNotFound {
                 entry_hash: *entry_hash,
             })?;

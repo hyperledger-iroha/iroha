@@ -57,8 +57,8 @@ use crate::{
     genesis,
     logs::{LifecycleEvent, LogStreamKind, PeerLogStream},
     torii::{
-        ManagedBlockStream, ManagedEventStream, ReadinessSmokePlan, ToriiClient, ToriiError,
-        ToriiResult,
+        ManagedBlockStream, ManagedEventStream, OperatorSigningContext, ReadinessSmokePlan,
+        ToriiClient, ToriiError, ToriiResult,
     },
     vault::{SignerVault, SignerVaultError},
 };
@@ -84,6 +84,7 @@ const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = UNRESOLVED_GENESIS_EXPECTED_HASH
 #[cfg(any(test, feature = "test-support"))]
 const TEST_FINALIZE_KAGAMI_STUB_SIGNATURE: &str = "MOCHI_TEST_FINALIZE_KAGAMI_STUB_SIGNATURE";
 const SNAPSHOT_GENERATIONS_DIR_NAME: &str = "generations";
+const SNAPSHOT_METADATA_MAX_BYTES_V1: usize = 64 * 1024;
 const SMOKE_MAX_ATTEMPTS: usize = 3;
 const LOCAL_MCP_PROFILE: &str = "writer";
 const LOCAL_MCP_TOOL_PREFIX: &str = "iroha.";
@@ -1448,9 +1449,7 @@ fn try_build_irohad(workspace: &Path) -> Result<PathBuf> {
     if !status.success() {
         return Err(SupervisorError::BinaryUnavailable {
             binary: "iroha3d",
-            message: format!(
-                "`cargo build -p irohad --bin iroha3d` exited with status {status}"
-            ),
+            message: format!("`cargo build -p irohad --bin iroha3d` exited with status {status}"),
         });
     }
 
@@ -2852,8 +2851,7 @@ impl Supervisor {
     /// Construct a Torii client for the specified peer alias.
     pub fn torii_client(&self, alias: &str) -> Option<ToriiClient> {
         let peer = self.peers.iter().find(|peer| peer.alias() == alias)?;
-        let network_id = self.network_id().ok()?;
-        ToriiClient::new_for_network(peer.spec.torii_base_http(), network_id).ok()
+        peer.torii_client().ok()
     }
 
     /// Produce an instantaneous, generation-validated snapshot of local
@@ -3195,7 +3193,11 @@ impl Supervisor {
                 genesis_dir.join(GENESIS_SIGNED_FILE_NAME),
             )?;
 
-            let genesis_hash = Hash::new(fs::read(self.genesis_manifest())?);
+            let (genesis_hash, _) = hash_snapshot_file_bounded(
+                self.genesis_manifest(),
+                u64::try_from(iroha_genesis::GENESIS_MANIFEST_JSON_MAX_BYTES_V1)
+                    .expect("genesis manifest byte bound fits u64"),
+            )?;
 
             let mut kura_hashes = Map::new();
             for peer in &self.peers {
@@ -3228,10 +3230,14 @@ impl Supervisor {
             );
             metadata.insert("kura_hashes".to_owned(), Value::Object(kura_hashes));
 
-            fs::write(
-                destination.join("metadata.json"),
-                json::to_vec_pretty(&Value::Object(metadata))?,
-            )?;
+            let metadata =
+                json::to_json_bounded(&Value::Object(metadata), SNAPSHOT_METADATA_MAX_BYTES_V1)
+                    .map_err(|error| {
+                        SupervisorError::Config(format!(
+                            "snapshot metadata exceeds its first-release byte budget: {error}"
+                        ))
+                    })?;
+            fs::write(destination.join("metadata.json"), metadata.as_bytes())?;
 
             Ok(destination)
         })();
@@ -3368,7 +3374,10 @@ impl Supervisor {
                 .join(GENESIS_SIGNED_FILE_NAME),
             "signed genesis",
         )?;
-        let snapshot_genesis_hash = Hash::new(fs::read(&genesis_src)?);
+        let manifest_max_bytes = u64::try_from(iroha_genesis::GENESIS_MANIFEST_JSON_MAX_BYTES_V1)
+            .expect("genesis manifest byte bound fits u64");
+        let (snapshot_genesis_hash, _) =
+            hash_snapshot_file_bounded(&genesis_src, manifest_max_bytes)?;
         if snapshot_genesis_hash != metadata.genesis_hash {
             return Err(SupervisorError::Config(format!(
                 "snapshot `{}` genesis hash {} does not match recorded metadata {}; refusing restore",
@@ -3377,7 +3386,8 @@ impl Supervisor {
                 metadata.genesis_hash
             )));
         }
-        let current_genesis_hash = Hash::new(fs::read(self.genesis_manifest())?);
+        let (current_genesis_hash, _) =
+            hash_snapshot_file_bounded(self.genesis_manifest(), manifest_max_bytes)?;
         if snapshot_genesis_hash != current_genesis_hash {
             return Err(SupervisorError::Config(format!(
                 "snapshot `{}` genesis hash {} does not match current genesis hash {}; refusing restore",
@@ -3612,7 +3622,11 @@ impl PeerHandle {
             ))
         })?;
         let network_id = NetworkId::from_genesis_hash(config.genesis_expected_hash);
-        let client = ToriiClient::new_for_network(self.spec.torii_base_http(), network_id)?;
+        let operator_signing_context = self.spec.operator_signing_context(network_id)?;
+        let client = ToriiClient::builder(self.spec.torii_base_http())?
+            .with_network_id(network_id)
+            .with_operator_signing_context(operator_signing_context)
+            .build()?;
         if self.torii_client.set(client.clone()).is_ok() {
             Ok(client)
         } else {
@@ -4234,6 +4248,29 @@ impl PeerSpec {
             "data_dir".into(),
             toml::Value::String(torii_dir.display().to_string()),
         );
+        let operator_signatures = torii
+            .entry("operator_signatures")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| {
+                SupervisorError::Config("torii.operator_signatures must be a table".to_owned())
+            })?;
+        let allowed_public_keys = operator_signatures
+            .entry("allowed_public_keys")
+            .or_insert_with(|| toml::Value::Array(Vec::new()))
+            .as_array_mut()
+            .ok_or_else(|| {
+                SupervisorError::Config(
+                    "torii.operator_signatures.allowed_public_keys must be an array".to_owned(),
+                )
+            })?;
+        let operator_public_key = self.keys.identity_public_key.to_string();
+        if !allowed_public_keys
+            .iter()
+            .any(|value| value.as_str() == Some(operator_public_key.as_str()))
+        {
+            allowed_public_keys.push(toml::Value::String(operator_public_key));
+        }
         let entry = torii
             .entry("da_ingest")
             .or_insert_with(|| toml::Value::Table(toml::Table::new()));
@@ -4623,6 +4660,23 @@ impl PeerSpec {
 
     fn torii_base_http(&self) -> String {
         format!("http://{}", self.torii_public)
+    }
+
+    fn operator_signing_context(
+        &self,
+        network_id: NetworkId,
+    ) -> ToriiResult<OperatorSigningContext> {
+        let key_pair = KeyPair::new(
+            self.keys.identity_public_key.clone(),
+            self.keys.identity_private_key.0.clone(),
+        )
+        .map_err(|error| {
+            ToriiError::SignedQueryContext(format!(
+                "managed peer `{}` has an invalid operator key pair: {error}",
+                self.alias
+            ))
+        })?;
+        Ok(OperatorSigningContext::new(network_id, key_pair))
     }
 }
 
@@ -5064,18 +5118,13 @@ impl GenesisMaterial {
     }
 
     fn validate_generation(&self, chain_id: &str, peers: &[PeerSpec]) -> Result<()> {
-        const MAX_SIGNED_GENESIS_BYTES: u64 = 512 * 1024 * 1024;
-        let signed_metadata = fs::metadata(&self.block_path)?;
-        if !signed_metadata.is_file()
-            || signed_metadata.len() == 0
-            || signed_metadata.len() > MAX_SIGNED_GENESIS_BYTES
-        {
-            return Err(SupervisorError::GenerationValidation(format!(
-                "signed genesis `{}` must be a non-empty regular file no larger than {MAX_SIGNED_GENESIS_BYTES} bytes",
-                self.block_path.display()
-            )));
-        }
-        let signed = fs::read(&self.block_path)?;
+        let signed = iroha_genesis::read_signed_genesis_bytes(&self.block_path).map_err(|error| {
+            SupervisorError::GenerationValidation(format!(
+                "failed to read signed genesis `{}` under the {}-byte first-release limit: {error}",
+                self.block_path.display(),
+                iroha_genesis::SIGNED_GENESIS_MAX_BYTES_V1
+            ))
+        })?;
         let manifest = RawGenesisTransaction::from_path(&self.manifest_path)?;
         let expected_chain = chain_id.parse::<ChainId>().map_err(|error| {
             SupervisorError::GenerationValidation(format!(
@@ -5112,6 +5161,7 @@ impl GenesisMaterial {
                 "prepared signed-genesis startup validation failed: {error:#}"
             ))
         })?;
+        drop(signed);
 
         let expected_roster = peers
             .iter()
@@ -5630,14 +5680,15 @@ fn verify_snapshot_artifact_matches_selected(
             snapshot_path.display()
         )));
     }
-    let snapshot_bytes = fs::read(snapshot_path)?;
-    let selected_bytes = fs::read(selected_path).map_err(|error| {
+    let equal = regular_snapshot_files_equal(snapshot_path, selected_path).map_err(|error| {
         SupervisorError::GenerationValidation(format!(
-            "selected generation cannot read {label} `{}`: {error}",
-            selected_path.display()
+            "snapshot `{}` cannot compare {label} `{}` with selected generation artifact `{}`: {error}",
+            snapshot_root.display(),
+            snapshot_path.display(),
+            selected_path.display(),
         ))
     })?;
-    if snapshot_bytes != selected_bytes {
+    if !equal {
         return Err(SupervisorError::Config(format!(
             "snapshot `{}` {label} differs byte-for-byte from selected generation artifact `{}`; refusing restore",
             snapshot_root.display(),
@@ -5649,12 +5700,13 @@ fn verify_snapshot_artifact_matches_selected(
 
 fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
     let metadata_path = root.join("metadata.json");
-    let bytes = fs::read(&metadata_path).map_err(|err| {
-        SupervisorError::Config(format!(
-            "failed to read snapshot metadata `{}`: {err}",
-            metadata_path.display()
-        ))
-    })?;
+    let bytes = read_snapshot_file_bounded(&metadata_path, SNAPSHOT_METADATA_MAX_BYTES_V1)
+        .map_err(|err| {
+            SupervisorError::Config(format!(
+                "failed to read snapshot metadata `{}`: {err}",
+                metadata_path.display()
+            ))
+        })?;
     let value: Value = json::from_slice(&bytes).map_err(|err| {
         SupervisorError::Config(format!(
             "failed to parse snapshot metadata `{}`: {err}",
@@ -5791,50 +5843,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn collect_files_recursive(root: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
-    if !root.exists() {
-        return Ok(());
-    }
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            collect_files_recursive(&path, files)?;
-        } else if file_type.is_file() {
-            files.push(path);
-        }
-    }
-    Ok(())
-}
-
-fn normalized_relative_path(base: &Path, path: &Path) -> String {
-    let relative = path.strip_prefix(base).unwrap_or(path);
-    relative
-        .components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-fn hash_directory(root: &Path) -> io::Result<Hash> {
-    let mut files = Vec::new();
-    collect_files_recursive(root, &mut files)?;
-    files.sort_unstable();
-
-    let mut accumulator = Vec::new();
-    for file in files {
-        let rel = normalized_relative_path(root, &file);
-        let contents = fs::read(&file)?;
-        let file_hash = Hash::new(&contents);
-        accumulator.extend_from_slice(&(rel.len() as u64).to_le_bytes());
-        accumulator.extend_from_slice(rel.as_bytes());
-        accumulator.extend_from_slice(&(contents.len() as u64).to_le_bytes());
-        accumulator.extend_from_slice(file_hash.as_ref());
-    }
-
-    Ok(Hash::new(&accumulator))
-}
+include!("supervisor/snapshot_hash_helpers.rs");
 
 #[cfg(test)]
 mod tests;

@@ -1,8 +1,13 @@
 //! Streaming state-owner binding for native RNS-Link accumulator openings.
 //!
-//! This module stops at public, explicitly unverified aggregate metadata. It
-//! does not prove a carry, quotient, packing, or Hyrax-equality equation and
-//! cannot mint an operational receipt.
+//! This module stops at explicitly unverified topology metadata. It does not
+//! prove a carry, quotient, packing, or Hyrax-equality equation and cannot mint
+//! an operational receipt. Secret-derived packed-preflight roots remain only
+//! as transient validation state and are erased rather than returned. The
+//! underlying packed-plaintext values are still public `Clone + Debug` owners,
+//! while fresh collective ciphertext lineage now binds an opening-owned opaque
+//! nonce instead of their digest. This topology-only slice still supplies no
+//! hiding source/witness link and does not claim complete confidentiality.
 
 use core::ptr;
 
@@ -19,21 +24,23 @@ use super::super::{
 };
 use super::{
     RNS_LINK_FAMILY_COUNT_V1, RNS_LINK_RELEASE_COMMITMENTS_V1, RNS_LINK_VERSION_V1,
-    ZkAmsPhase23RnsLinkFamilyGeometryV1, ZkAmsPhase23RnsLinkFamilyV1,
-    ZkAmsPhase23RnsLinkReleaseGeometryV1, ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1,
+    ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1, ZkAmsPhase23RnsLinkFamilyGeometryV1,
+    ZkAmsPhase23RnsLinkFamilyV1, ZkAmsPhase23RnsLinkReleaseGeometryV1,
+    ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1,
     derive_zk_ams_phase23_rns_link_release_geometry_v1,
     preflight_zk_ams_phase23_rns_link_native_packed_geometry_v1,
+    q_relation_adapter::{
+        ZkAmsPhase23QNativeRelationAdapterSinkV1, ZkAmsPhase23QNativeRelationUnverifiedMetadataV1,
+    },
     verify_zk_ams_phase23_native_bgv_opening_v1,
 };
 use crate::vega::sponge::Keccak256;
 
 const STATE_OWNED_OPENINGS_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.phase23.rns-link.state-owned-native-bgv-openings";
-const STATE_OWNED_OPENING_CHUNK_DOMAIN_V1: &[u8] =
-    b"iroha.zk-ams.v1.phase23.rns-link.state-owned-native-bgv-chunk";
 
 /// Exact number of native openings in `X/U/E/rE/W/rW` chunk order.
-pub(super) const ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1: usize =
+pub(in super::super) const ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1: usize =
     RNS_LINK_RELEASE_COMMITMENTS_V1;
 
 const CANONICAL_FAMILY_CHUNK_COUNTS_V1: [(ZkAmsPhase23RnsLinkFamilyV1, u16);
@@ -72,14 +79,14 @@ struct CanonicalOpeningPositionV1 {
 /// producer handed over that array as a set.
 ///
 /// Each call to `absorb_next_opening_v1` takes one owned secret opening. It
-/// verifies and drops that opening before returning, immediately reduces the
-/// short-lived checked capability into a hash record, and retains neither an
-/// opening nor a checked capability. A failed or unwinding call poisons and
-/// destroys the live stream; it cannot be retried. Deliberately neither
-/// `Clone`, `Copy`, `Debug`, nor serializable.
+/// verifies and drops that opening before returning, advances only a concrete
+/// topology/count sink, and retains neither an opening nor a checked
+/// capability. A failed or unwinding call poisons and destroys the live
+/// stream; it cannot be retried. Deliberately neither `Clone`, `Copy`, `Debug`,
+/// nor serializable.
 #[must_use = "dropping this stream produces no RNS-Link equation"]
-pub(super) struct StateOwnedRnsLinkAccumulatorOpeningsV1<'a> {
-    live: Option<StateOwnedRnsLinkAccumulatorOpeningStreamV1<'a>>,
+pub(in super::super) struct StateOwnedRnsLinkAccumulatorOpeningsV1<'a> {
+    live: Option<Box<StateOwnedRnsLinkAccumulatorOpeningStreamV1<'a>>>,
 }
 
 struct StateOwnedRnsLinkAccumulatorOpeningStreamV1<'a> {
@@ -88,32 +95,39 @@ struct StateOwnedRnsLinkAccumulatorOpeningStreamV1<'a> {
     ciphertexts:
         [&'a ZkAmsMkheCollectiveCiphertextV1; ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1],
     geometry: ZkAmsPhase23RnsLinkReleaseGeometryV1,
-    packed_preflight: ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1,
+    packed_preflight: Box<ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1>,
+    q_native_relation_sink: Option<ZkAmsPhase23QNativeRelationAdapterSinkV1>,
     next_opening: usize,
-    ordered_opening_hash: Keccak256,
 }
 
-/// Aggregate public metadata emitted only after all 43 native openings were
+/// Aggregate topology metadata emitted only after all 43 native openings were
 /// consumed successfully in canonical state-owner order.
 ///
 /// This is intentionally copyable, explicitly `Unverified` metadata, not a
 /// proof or capability. No verifier, receipt minter, materializer, decrypter,
-/// readiness gate, or audit gate accepts it.
+/// readiness gate, or audit gate accepts it. It is statement-independent apart
+/// from public geometry/key identity and must not be used as an opening receipt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1 {
+pub(in super::super) struct ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1 {
     geometry_digest: [u8; 32],
-    packed_preflight_digest: [u8; 32],
-    packed_owner_chunk_root: [u8; 32],
     key_digest: [u8; 32],
-    ordered_opening_root: [u8; 32],
     opening_count: u16,
+    q_native_release_parameter_digest: [u8; 32],
+    q_native_ordered_topology_root: [u8; 32],
+    q_native_rlwe_equation_count: u16,
+    q_native_relation_coordinate_count: u32,
+    q_native_witness_polynomials_constructed: bool,
+    q_native_fiat_shamir_relation_bound: bool,
+    q_native_zero_knowledge_masked: bool,
+    q_native_deterministic_plaintext_lineage_hidden: bool,
+    q_native_secret_packed_plaintext_owner_hardened: bool,
     digest: [u8; 32],
 }
 
 impl<'a> StateOwnedRnsLinkAccumulatorOpeningsV1<'a> {
     /// Begin the exact 43-opening stream for one packed owner, one public-key
     /// owner, and one canonically ordered ciphertext-reference set.
-    pub(super) fn new(
+    pub(in super::super) fn new(
         packed_owner: &'a ZkAmsPhase23PackedAccumulatorSetV1,
         common_key: &'a ZkAmsMkheCollectivePublicKeyV1,
         ciphertexts: [&'a ZkAmsMkheCollectiveCiphertextV1;
@@ -139,25 +153,18 @@ impl<'a> StateOwnedRnsLinkAccumulatorOpeningsV1<'a> {
         if key_digest == [0; 32] {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
-        let mut ordered_opening_hash = Keccak256::new();
-        ordered_opening_hash.update(STATE_OWNED_OPENINGS_DOMAIN_V1);
-        ordered_opening_hash.update(&[RNS_LINK_VERSION_V1]);
-        ordered_opening_hash.update(&geometry.digest);
-        ordered_opening_hash.update(&packed_preflight.digest);
-        ordered_opening_hash.update(&packed_preflight.ordered_native_chunk_root);
-        ordered_opening_hash.update(&key_digest);
-        ordered_opening_hash.update(&packed_preflight.chunk_count.to_be_bytes());
+        let q_native_relation_sink = ZkAmsPhase23QNativeRelationAdapterSinkV1::new(geometry)?;
 
         Ok(Self {
-            live: Some(StateOwnedRnsLinkAccumulatorOpeningStreamV1 {
+            live: Some(Box::new(StateOwnedRnsLinkAccumulatorOpeningStreamV1 {
                 packed_owner,
                 common_key,
                 ciphertexts,
                 geometry,
                 packed_preflight,
+                q_native_relation_sink: Some(q_native_relation_sink),
                 next_opening: 0,
-                ordered_opening_hash,
-            }),
+            })),
         })
     }
 
@@ -166,19 +173,23 @@ impl<'a> StateOwnedRnsLinkAccumulatorOpeningsV1<'a> {
     /// The return type exposes no family/index label, callback, checked token,
     /// partial digest, or retry handle. On error or unwind the live state is
     /// removed before verification begins and is never restored.
-    pub(super) fn absorb_next_opening_v1(
+    pub(in super::super) fn absorb_next_opening_v1(
         &mut self,
         opening: ZkAmsMkheCollectiveEncryptionOpeningV1,
     ) -> Result<(), ZkAmsMkheErrorV1> {
-        advance_poisoning_v1(&mut self.live, move |live| {
-            live.absorb_next_opening_v1(opening)
-        })
+        let mut live = self
+            .live
+            .take()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        live.absorb_next_opening_v1(opening)?;
+        self.live = Some(live);
+        Ok(())
     }
 
     /// Finish by value only after exactly 43 successful ordered absorbs.
     ///
     /// Early finish consumes the stream and returns no partial metadata.
-    pub(super) fn finish_into_unverified_metadata_v1(
+    pub(in super::super) fn finish_into_unverified_metadata_v1(
         self,
     ) -> Result<ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1, ZkAmsMkheErrorV1> {
         self.live
@@ -210,65 +221,20 @@ impl StateOwnedRnsLinkAccumulatorOpeningStreamV1<'_> {
         )?;
 
         // The owned opening is dropped by this private verifier on success,
-        // error, or unwind. The resulting small checked value is consumed in
-        // this stack frame and is never retained by the stream.
-        let verified = verify_zk_ams_phase23_native_bgv_opening_v1(
+        // error, or unwind.  The concrete sink advances inside the collective
+        // verifier and retains only public topology/count metadata.
+        let q_native_relation_sink = self
+            .q_native_relation_sink
+            .as_mut()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        verify_zk_ams_phase23_native_bgv_opening_v1(
             self.common_key,
             expected_layout,
             expected_plaintext,
             expected_ciphertext,
             opening,
+            q_native_relation_sink,
         )?;
-        let sealed_rns_binding_digest = verified.rns_binding_digest;
-        let geometry_digest = self.geometry.digest;
-        let key_digest = self.common_key.digest();
-        let mut chunk_digest = None;
-        verified.consume(|key, layout, plaintext, ciphertext| {
-            validate_consumed_chunk_v1(
-                &self.geometry,
-                family_geometry,
-                position,
-                self.common_key,
-                expected_layout,
-                expected_plaintext,
-                expected_ciphertext,
-                key,
-                layout,
-                plaintext,
-                ciphertext,
-            )?;
-            let plaintext_digest = plaintext.digest;
-            let ciphertext_digest = ciphertext.digest();
-            if [
-                plaintext_digest,
-                sealed_rns_binding_digest,
-                ciphertext_digest,
-            ]
-            .contains(&[0; 32])
-            {
-                return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-            }
-
-            let mut hash = Keccak256::new();
-            hash.update(STATE_OWNED_OPENING_CHUNK_DOMAIN_V1);
-            hash.update(&[RNS_LINK_VERSION_V1]);
-            hash.update(&geometry_digest);
-            hash.update(&[position.family as u8]);
-            hash.update(&position.chunk_index.to_be_bytes());
-            hash.update(&key_digest);
-            hash.update(&layout.digest);
-            hash.update(&plaintext_digest);
-            hash.update(&sealed_rns_binding_digest);
-            hash.update(&ciphertext_digest);
-            let digest = hash.finalize();
-            if digest == [0; 32] {
-                return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-            }
-            chunk_digest = Some(digest);
-            Ok(())
-        })?;
-        self.ordered_opening_hash
-            .update(&chunk_digest.ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?);
         self.next_opening = self
             .next_opening
             .checked_add(1)
@@ -277,31 +243,55 @@ impl StateOwnedRnsLinkAccumulatorOpeningStreamV1<'_> {
     }
 
     fn finish_into_unverified_metadata_v1(
-        self,
+        mut self: Box<Self>,
     ) -> Result<ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1, ZkAmsMkheErrorV1> {
         require_complete_opening_count_v1(self.next_opening)?;
-        let Self {
-            common_key,
-            geometry,
-            packed_preflight,
-            ordered_opening_hash,
-            ..
-        } = self;
-        let key_digest = common_key.digest();
-        let ordered_opening_root = ordered_opening_hash.finalize();
-        if key_digest == [0; 32] || ordered_opening_root == [0; 32] {
+        // The relation sink contains topology only and may be consumed. The
+        // secret-derived preflight remains behind its original `Box`, is only
+        // borrowed below, and is erased in place with the enclosing stream on
+        // every return or unwind path. Hash/helper and compiler temporaries
+        // remain residual, so the owner-hardening axis below stays false.
+        let q_native_relation_sink = self
+            .q_native_relation_sink
+            .take()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        let q_native_relation_metadata =
+            q_native_relation_sink.finish_into_unverified_metadata_v1()?;
+        let packed_preflight = &self.packed_preflight;
+        validate_q_native_relation_metadata_v1(
+            packed_preflight.chunk_count,
+            q_native_relation_metadata,
+        )?;
+        let key_digest = self.common_key.digest();
+        if key_digest == [0; 32] {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
         }
 
+        // No packed-preflight, plaintext, RNS-binding, ciphertext-lineage, or
+        // opening digest leaves the stream.  Those deterministic values are
+        // not hiding commitments for the low-entropy secret families.
         let mut hash = Keccak256::new();
         hash.update(STATE_OWNED_OPENINGS_DOMAIN_V1);
         hash.update(&[RNS_LINK_VERSION_V1]);
-        hash.update(&geometry.digest);
-        hash.update(&packed_preflight.digest);
-        hash.update(&packed_preflight.ordered_native_chunk_root);
+        hash.update(&self.geometry.digest);
         hash.update(&key_digest);
-        hash.update(&ordered_opening_root);
         hash.update(&packed_preflight.chunk_count.to_be_bytes());
+        hash.update(&q_native_relation_metadata.release_parameter_digest);
+        hash.update(&q_native_relation_metadata.ordered_topology_root);
+        hash.update(&q_native_relation_metadata.rlwe_equation_count.to_be_bytes());
+        hash.update(
+            &q_native_relation_metadata
+                .q_native_relation_coordinate_count
+                .to_be_bytes(),
+        );
+        hash.update(&q_native_relation_metadata.digest);
+        hash.update(&[
+            q_native_relation_metadata.witness_polynomials_constructed as u8,
+            q_native_relation_metadata.fiat_shamir_relation_bound as u8,
+            q_native_relation_metadata.zero_knowledge_masked as u8,
+            q_native_relation_metadata.deterministic_plaintext_lineage_hidden as u8,
+            q_native_relation_metadata.secret_packed_plaintext_owner_hardened as u8,
+        ]);
         let digest = hash.finalize();
         if digest == [0; 32] {
             return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
@@ -309,12 +299,20 @@ impl StateOwnedRnsLinkAccumulatorOpeningStreamV1<'_> {
 
         Ok(
             ZkAmsPhase23RnsLinkUnverifiedStateOwnedNativeBgvPreflightV1 {
-                geometry_digest: geometry.digest,
-                packed_preflight_digest: packed_preflight.digest,
-                packed_owner_chunk_root: packed_preflight.ordered_native_chunk_root,
+                geometry_digest: self.geometry.digest,
                 key_digest,
-                ordered_opening_root,
                 opening_count: packed_preflight.chunk_count,
+                q_native_release_parameter_digest: q_native_relation_metadata
+                    .release_parameter_digest,
+                q_native_ordered_topology_root: q_native_relation_metadata.ordered_topology_root,
+                q_native_rlwe_equation_count: q_native_relation_metadata.rlwe_equation_count,
+                q_native_relation_coordinate_count: q_native_relation_metadata
+                    .q_native_relation_coordinate_count,
+                q_native_witness_polynomials_constructed: false,
+                q_native_fiat_shamir_relation_bound: false,
+                q_native_zero_knowledge_masked: false,
+                q_native_deterministic_plaintext_lineage_hidden: false,
+                q_native_secret_packed_plaintext_owner_hardened: false,
                 digest,
             },
         )
@@ -448,66 +446,35 @@ fn validate_expected_chunk_v1(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn validate_consumed_chunk_v1(
-    geometry: &ZkAmsPhase23RnsLinkReleaseGeometryV1,
-    expected_family: ZkAmsPhase23RnsLinkFamilyGeometryV1,
-    position: CanonicalOpeningPositionV1,
-    expected_key: &ZkAmsMkheCollectivePublicKeyV1,
-    expected_layout: ZkAmsT256PackingLayoutV1,
-    expected_plaintext: &ZkAmsT256PackedPlaintextV1,
-    expected_ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
-    actual_key: &ZkAmsMkheCollectivePublicKeyV1,
-    actual_layout: ZkAmsT256PackingLayoutV1,
-    actual_plaintext: &ZkAmsT256PackedPlaintextV1,
-    actual_ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
+fn validate_q_native_relation_metadata_v1(
+    expected_opening_count: u16,
+    metadata: ZkAmsPhase23QNativeRelationUnverifiedMetadataV1,
 ) -> Result<(), ZkAmsMkheErrorV1> {
-    validate_exact_pointer_binding_v1(
-        expected_key,
-        actual_key,
-        expected_plaintext,
-        actual_plaintext,
-        expected_ciphertext,
-        actual_ciphertext,
-    )?;
-    if actual_layout != expected_layout {
-        return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
-    }
-    validate_expected_chunk_v1(
-        geometry,
-        expected_family,
-        position,
-        actual_layout,
-        actual_plaintext,
-        actual_key,
-        actual_ciphertext,
-    )
-}
-
-fn validate_exact_pointer_binding_v1<K, P, C>(
-    expected_key: &K,
-    actual_key: &K,
-    expected_plaintext: &P,
-    actual_plaintext: &P,
-    expected_ciphertext: &C,
-    actual_ciphertext: &C,
-) -> Result<(), ZkAmsMkheErrorV1> {
-    if !ptr::eq(expected_key, actual_key)
-        || !ptr::eq(expected_plaintext, actual_plaintext)
-        || !ptr::eq(expected_ciphertext, actual_ciphertext)
+    if metadata.release_parameter_digest == [0; 32]
+        || metadata.ordered_topology_root == [0; 32]
+        || metadata.digest == [0; 32]
+        || metadata.opening_count != expected_opening_count
+        || metadata.rlwe_equation_count
+            != expected_opening_count
+                .checked_mul(2)
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+        || metadata.q_native_relation_coordinate_count
+            != u32::from(expected_opening_count)
+                .checked_mul(2)
+                .and_then(|count| {
+                    count.checked_mul(
+                        u32::try_from(ZK_AMS_PHASE23_RNS_LINK_RELEASE_RNS_LIMB_COUNT_V1).ok()?,
+                    )
+                })
+                .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?
+        || metadata.witness_polynomials_constructed
+        || metadata.fiat_shamir_relation_bound
+        || metadata.zero_knowledge_masked
+        || metadata.deterministic_plaintext_lineage_hidden
+        || metadata.secret_packed_plaintext_owner_hardened
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-    Ok(())
-}
-
-fn advance_poisoning_v1<T>(
-    live: &mut Option<T>,
-    advance: impl FnOnce(&mut T) -> Result<(), ZkAmsMkheErrorV1>,
-) -> Result<(), ZkAmsMkheErrorV1> {
-    let mut state = live.take().ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
-    advance(&mut state)?;
-    *live = Some(state);
     Ok(())
 }
 
@@ -574,14 +541,10 @@ mod tests {
         let _: AbsorbStateOwnedOpeningV1 = absorb_state_owned_opening_v1;
         let _: FinishStateOwnedOpeningsV1 = finish_state_owned_openings_v1;
         assert_eq!(ZK_AMS_PHASE23_RNS_LINK_STATE_OWNED_OPENING_COUNT_V1, 43);
-        // The checked single-opening value contains only borrowed public
-        // artifacts, one copied layout, and one digest. Streaming is an API
-        // and residency hardening, not a claim that this value owns the
-        // opening's ciphertext-sized secret buffers.
-        assert!(
-            core::mem::size_of::<super::super::VerifiedZkAmsPhase23NativeBgvOpeningV1<'static>>()
-                < 512
-        );
+        // The concrete sink retains only fixed topology/count state and a
+        // public-parameter hash state. Streaming is an API and residency
+        // hardening, not a claim that it owns relation polynomials.
+        assert!(core::mem::size_of::<ZkAmsPhase23QNativeRelationAdapterSinkV1>() < 1024);
         assert!(core::mem::size_of::<StateOwnedRnsLinkAccumulatorOpeningsV1<'static>>() < 4096);
     }
 
@@ -654,48 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn reorder_and_foreign_owner_key_or_ciphertext_pointers_are_rejected() {
-        let owner = [7_u16, 7];
-        let key = [11_u16, 11];
-        let ciphertext = [13_u16, 17];
-        validate_exact_pointer_binding_v1(
-            &key[0],
-            &key[0],
-            &owner[0],
-            &owner[0],
-            &ciphertext[0],
-            &ciphertext[0],
-        )
-        .unwrap();
-        for result in [
-            validate_exact_pointer_binding_v1(
-                &key[0],
-                &key[0],
-                &owner[0],
-                &owner[1],
-                &ciphertext[0],
-                &ciphertext[0],
-            ),
-            validate_exact_pointer_binding_v1(
-                &key[0],
-                &key[1],
-                &owner[0],
-                &owner[0],
-                &ciphertext[0],
-                &ciphertext[0],
-            ),
-            validate_exact_pointer_binding_v1(
-                &key[0],
-                &key[0],
-                &owner[0],
-                &owner[0],
-                &ciphertext[0],
-                &ciphertext[1],
-            ),
-        ] {
-            assert_eq!(result, Err(ZkAmsMkheErrorV1::InvalidPhase23Fold));
-        }
-
+    fn canonical_ciphertext_borrow_order_is_fixed_and_bounded() {
         let ciphertext_values: [u16; 43] =
             core::array::from_fn(|index| u16::try_from(index).unwrap());
         let ciphertexts = core::array::from_fn(|index| &ciphertext_values[index]);
@@ -719,12 +641,33 @@ mod tests {
         }
     }
 
+    fn advance_poisoning_probe_v1<T>(
+        live: &mut Option<Box<T>>,
+        advance: impl FnOnce(&mut T) -> Result<(), ZkAmsMkheErrorV1>,
+    ) -> Result<(), ZkAmsMkheErrorV1> {
+        let mut state = live.take().ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
+        advance(state.as_mut())?;
+        *live = Some(state);
+        Ok(())
+    }
+
     #[test]
     fn error_and_unwind_destroy_live_state_and_forbid_retry() {
-        let error_drop = Rc::new(Cell::new(false));
-        let mut live = Some(DropProbe(Rc::clone(&error_drop)));
+        let success_drop = Rc::new(Cell::new(false));
+        let mut successful_live = Some(Box::new(DropProbe(Rc::clone(&success_drop))));
+        let stable_address = successful_live.as_deref().unwrap() as *const DropProbe;
+        advance_poisoning_probe_v1(&mut successful_live, |_| Ok(())).unwrap();
         assert_eq!(
-            advance_poisoning_v1(&mut live, |_| { Err(ZkAmsMkheErrorV1::InvalidCiphertext) }),
+            successful_live.as_deref().unwrap() as *const DropProbe,
+            stable_address
+        );
+        drop(successful_live);
+        assert!(success_drop.get());
+
+        let error_drop = Rc::new(Cell::new(false));
+        let mut live = Some(Box::new(DropProbe(Rc::clone(&error_drop))));
+        assert_eq!(
+            advance_poisoning_probe_v1(&mut live, |_| { Err(ZkAmsMkheErrorV1::InvalidCiphertext) }),
             Err(ZkAmsMkheErrorV1::InvalidCiphertext)
         );
         assert!(live.is_none());
@@ -732,7 +675,7 @@ mod tests {
 
         let retry_called = Cell::new(false);
         assert_eq!(
-            advance_poisoning_v1(&mut live, |_| {
+            advance_poisoning_probe_v1(&mut live, |_| {
                 retry_called.set(true);
                 Ok(())
             }),
@@ -741,16 +684,74 @@ mod tests {
         assert!(!retry_called.get());
 
         let unwind_drop = Rc::new(Cell::new(false));
-        let mut unwinding_live = Some(DropProbe(Rc::clone(&unwind_drop)));
+        let mut unwinding_live = Some(Box::new(DropProbe(Rc::clone(&unwind_drop))));
         let caught = catch_unwind(AssertUnwindSafe(|| {
-            let _ =
-                advance_poisoning_v1(&mut unwinding_live, |_| -> Result<(), ZkAmsMkheErrorV1> {
-                    panic!("hostile verifier unwind")
-                });
+            let _ = advance_poisoning_probe_v1(
+                &mut unwinding_live,
+                |_| -> Result<(), ZkAmsMkheErrorV1> { panic!("hostile verifier unwind") },
+            );
         }));
         assert!(caught.is_err());
         assert!(unwinding_live.is_none());
         assert!(unwind_drop.get());
+    }
+
+    #[test]
+    fn q_native_topology_metadata_rejects_count_or_false_axis_overclaim() {
+        let baseline = ZkAmsPhase23QNativeRelationUnverifiedMetadataV1 {
+            release_parameter_digest: [1; 32],
+            ordered_topology_root: [2; 32],
+            opening_count: 43,
+            rlwe_equation_count: 86,
+            q_native_relation_coordinate_count: 3_268,
+            witness_polynomials_constructed: false,
+            fiat_shamir_relation_bound: false,
+            zero_knowledge_masked: false,
+            deterministic_plaintext_lineage_hidden: false,
+            secret_packed_plaintext_owner_hardened: false,
+            digest: [3; 32],
+        };
+        validate_q_native_relation_metadata_v1(43, baseline).unwrap();
+
+        for hostile in [
+            ZkAmsPhase23QNativeRelationUnverifiedMetadataV1 {
+                opening_count: 42,
+                ..baseline
+            },
+            ZkAmsPhase23QNativeRelationUnverifiedMetadataV1 {
+                rlwe_equation_count: 84,
+                ..baseline
+            },
+            ZkAmsPhase23QNativeRelationUnverifiedMetadataV1 {
+                q_native_relation_coordinate_count: 3_267,
+                ..baseline
+            },
+            ZkAmsPhase23QNativeRelationUnverifiedMetadataV1 {
+                witness_polynomials_constructed: true,
+                ..baseline
+            },
+            ZkAmsPhase23QNativeRelationUnverifiedMetadataV1 {
+                fiat_shamir_relation_bound: true,
+                ..baseline
+            },
+            ZkAmsPhase23QNativeRelationUnverifiedMetadataV1 {
+                zero_knowledge_masked: true,
+                ..baseline
+            },
+            ZkAmsPhase23QNativeRelationUnverifiedMetadataV1 {
+                deterministic_plaintext_lineage_hidden: true,
+                ..baseline
+            },
+            ZkAmsPhase23QNativeRelationUnverifiedMetadataV1 {
+                secret_packed_plaintext_owner_hardened: true,
+                ..baseline
+            },
+        ] {
+            assert_eq!(
+                validate_q_native_relation_metadata_v1(43, hostile),
+                Err(ZkAmsMkheErrorV1::InvalidPhase23Fold)
+            );
+        }
     }
 
     #[test]
@@ -763,16 +764,24 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .expect("production source prefix");
+        assert!(source.lines().count() <= 1_050);
+        assert!(source.len() <= 45_000);
         for forbidden in [
             "NoritoSerialize",
             "NoritoDeserialize",
             "serde",
             "release_kat_digest",
             "zk_ams_mkhe_readiness",
-            "Vec<VerifiedZkAmsPhase23NativeBgvOpeningV1",
-            "[VerifiedZkAmsPhase23NativeBgvOpeningV1",
+            "VerifiedZkAmsPhase23NativeBgvOpeningV1",
             "Vec<ZkAmsMkheCollectiveEncryptionOpeningV1",
             "[ZkAmsMkheCollectiveEncryptionOpeningV1",
+            "impl Fn",
+            "packed_preflight.digest",
+            "packed_preflight.ordered_native_chunk_root",
+            "ordered_opening_root",
+            "plaintext_digest",
+            "sealed_rns_binding_digest",
+            "ciphertext_digest",
         ] {
             assert!(
                 !production.contains(forbidden),
@@ -780,14 +789,40 @@ mod tests {
             );
         }
         assert!(!production.contains("Vec<"));
-        assert!(production.contains("ordered_opening_hash: Keccak256"));
-        assert!(production.contains("live: Option<StateOwnedRnsLinkAccumulatorOpeningStreamV1"));
+        assert!(
+            production.contains(
+                "q_native_relation_sink: Option<ZkAmsPhase23QNativeRelationAdapterSinkV1>"
+            )
+        );
+        assert!(
+            production
+                .contains("live: Option<Box<StateOwnedRnsLinkAccumulatorOpeningStreamV1<'a>>>")
+        );
+        assert!(production.contains(
+            "packed_preflight: Box<ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1>"
+        ));
+        assert!(production.contains("mut self: Box<Self>"));
+        assert!(production.contains("let packed_preflight = &self.packed_preflight"));
+        assert!(production.contains(".q_native_relation_sink\n            .take()"));
+        assert!(!production.contains("let Self {"));
         assert!(
             production.contains(
                 "Residual provenance: the caller still assembles the ciphertext-reference"
             )
         );
         assert!(!production.contains("pub(in super::super)"));
+        for required in [
+            "q_native_witness_polynomials_constructed: false",
+            "q_native_fiat_shamir_relation_bound: false",
+            "q_native_zero_knowledge_masked: false",
+            "q_native_deterministic_plaintext_lineage_hidden: false",
+            "q_native_secret_packed_plaintext_owner_hardened: false",
+        ] {
+            assert!(
+                production.contains(required),
+                "missing false axis: {required}"
+            );
+        }
 
         let constructor = production
             .split("pub(super) fn new(")
@@ -874,6 +909,7 @@ mod tests {
         for required in [
             "self,",
             "ZkAmsPhase23NativeBgvOpeningVerifierPermitV1",
+            "&mut ZkAmsPhase23QNativeRelationAdapterSinkV1",
             "Result<(), ZkAmsMkheErrorV1>",
         ] {
             assert!(
@@ -901,30 +937,73 @@ mod tests {
         );
         assert!(!production.contains("verify_and_consume_phase23_native_bgv_opening_v1"));
 
-        assert!(parent_source.contains("\nstruct VerifiedZkAmsPhase23NativeBgvOpeningV1"));
-        assert!(
-            !parent_source.contains("pub(super) struct VerifiedZkAmsPhase23NativeBgvOpeningV1")
-        );
+        assert!(!parent_source.contains("VerifiedZkAmsPhase23NativeBgvOpeningV1"));
         assert!(parent_source.contains("\nfn verify_zk_ams_phase23_native_bgv_opening_v1"));
         assert!(
             !parent_source.contains("pub(super) fn verify_zk_ams_phase23_native_bgv_opening_v1")
         );
-        let verified_impl = parent_source
-            .split("impl<'a> VerifiedZkAmsPhase23NativeBgvOpeningV1<'a>")
+        let direct_verifier = parent_source
+            .split("fn verify_zk_ams_phase23_native_bgv_opening_v1(")
             .nth(1)
-            .expect("private checked-value implementation")
-            .split("#[path = \"phase23_rns_link_state_owned.rs\"]")
+            .expect("private direct verifier")
+            .split("/// Unit-test bridge")
             .next()
-            .expect("private checked-value implementation boundary");
-        assert!(verified_impl.contains("\n    fn consume("));
-        assert!(!verified_impl.contains("pub(super) fn consume("));
+            .expect("private direct verifier boundary");
+        assert!(
+            direct_verifier
+                .contains("relation_sink: &mut ZkAmsPhase23QNativeRelationAdapterSinkV1")
+        );
+        assert!(direct_verifier.contains(") -> Result<(), ZkAmsMkheErrorV1>"));
+        for forbidden in ["impl Fn", "Verified", ".consume(", "Result<Verified"] {
+            assert!(
+                !direct_verifier.contains(forbidden),
+                "direct verifier reopened authority: {forbidden}"
+            );
+        }
         assert!(parent_source.contains(
             "#[cfg(test)]\npub(super) fn test_verify_and_consume_zk_ams_phase23_native_bgv_opening_v1"
+        ));
+        assert!(parent_source.contains(
+            "#[path = \"phase23_rns_link_q_relation_adapter.rs\"]\nmod q_relation_adapter;"
+        ));
+        assert!(parent_source.contains(
+            "pub(super) use q_relation_adapter::ZkAmsPhase23QNativeRelationAdapterSinkV1;"
         ));
         assert!(parent_source.contains(
             "#[path = \"phase23_rns_link_state_owned.rs\"]\nmod state_owned;\n#[cfg(test)]\npub(super) use state_owned::"
         ));
         assert!(!parent_source.contains("pub(super) mod state_owned"));
+        assert!(
+            parent_source.contains("\nstruct ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1")
+        );
+        assert!(
+            !parent_source
+                .contains("pub(super) struct ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1")
+        );
+        assert!(
+            parent_source
+                .contains("impl Drop for ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1")
+        );
+        assert!(
+            !parent_source.contains(
+                "pub(super) fn preflight_zk_ams_phase23_rns_link_native_packed_geometry_v1"
+            )
+        );
+        let parent_preflight = parent_source
+            .split("fn preflight_zk_ams_phase23_rns_link_native_packed_geometry_v1")
+            .nth(1)
+            .expect("parent-private packed preflight")
+            .split("#[derive(Clone)]")
+            .next()
+            .expect("packed preflight source slice");
+        assert!(
+            parent_preflight
+                .contains("Result<Box<ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1>")
+        );
+        assert!(parent_preflight.contains(
+            "let mut preflight = Box::new(ZkAmsPhase23RnsLinkUnverifiedNativePackedPreflightV1"
+        ));
+        assert!(parent_preflight.contains("Ok(preflight)"));
 
         for forbidden in [
             "VerifiedZkAmsPhase23NativeBgvOpeningV1",

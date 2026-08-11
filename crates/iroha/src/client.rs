@@ -1,5 +1,7 @@
 //! End-point querying logic, including custom public and authenticated routes.
 
+#[cfg(test)]
+mod operator_auth_tests;
 mod public_musubi;
 mod runtime_governance_client_auth;
 pub use public_musubi::{
@@ -142,6 +144,7 @@ use crate::{
         SubscriptionCreateResponse, SubscriptionGetResponse, SubscriptionListParams,
         SubscriptionListResponse, SubscriptionPlanCreateRequest, SubscriptionPlanCreateResponse,
         SubscriptionPlanListParams, SubscriptionPlanListResponse, SubscriptionUsageRequest,
+        SubscriptionUsageResponse,
     },
 };
 // (No query imports needed here)
@@ -5278,20 +5281,20 @@ pub struct SorafsAliasListFilter<'a> {
 }
 
 impl SorafsAliasListFilter<'_> {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply_to_url(&self, url: &mut Url) {
+        let mut query = url.query_pairs_mut();
         if let Some(limit) = self.limit {
-            req = req.param("limit", &limit);
+            query.append_pair("limit", &limit.to_string());
         }
         if let Some(offset) = self.offset {
-            req = req.param("offset", &offset);
+            query.append_pair("offset", &offset.to_string());
         }
         if let Some(namespace) = self.namespace {
-            req = req.param("namespace", &namespace);
+            query.append_pair("namespace", namespace);
         }
         if let Some(digest) = self.manifest_digest {
-            req = req.param("manifest_digest", &digest);
+            query.append_pair("manifest_digest", digest);
         }
-        req
     }
 }
 
@@ -5309,20 +5312,20 @@ pub struct SorafsReplicationListFilter<'a> {
 }
 
 impl SorafsReplicationListFilter<'_> {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply_to_url(&self, url: &mut Url) {
+        let mut query = url.query_pairs_mut();
         if let Some(limit) = self.limit {
-            req = req.param("limit", &limit);
+            query.append_pair("limit", &limit.to_string());
         }
         if let Some(offset) = self.offset {
-            req = req.param("offset", &offset);
+            query.append_pair("offset", &offset.to_string());
         }
         if let Some(status) = self.status {
-            req = req.param("status", &status);
+            query.append_pair("status", status);
         }
         if let Some(digest) = self.manifest_digest {
-            req = req.param("manifest_digest", &digest);
+            query.append_pair("manifest_digest", digest);
         }
-        req
     }
 }
 
@@ -7127,11 +7130,11 @@ pub struct SumeragiEvidenceListFilter<'a> {
 }
 
 impl SumeragiEvidenceListFilter<'_> {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
+    fn apply_to_url(&self, url: &mut Url) {
+        let mut query = url.query_pairs_mut();
         for (key, value) in self.param_entries() {
-            req = req.param(key, &value);
+            query.append_pair(key, &value);
         }
-        req
     }
 
     fn param_entries(&self) -> Vec<(&'static str, String)> {
@@ -7884,7 +7887,7 @@ impl Client {
     pub fn get_sumeragi_status(&self) -> Result<SumeragiV2Status> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/status");
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", ACCEPT_NORITO_PREFERRED),
         )?;
         if resp.status() != StatusCode::OK {
@@ -7924,7 +7927,7 @@ impl Client {
     pub fn get_sumeragi_status_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/status");
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )?;
         if resp.status() != StatusCode::OK {
@@ -7966,7 +7969,7 @@ impl Client {
     pub fn get_sumeragi_diagnostics(&self) -> Result<SumeragiDiagnosticsStatus> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/diagnostics");
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", ACCEPT_NORITO_PREFERRED),
         )?;
         if resp.status() != StatusCode::OK {
@@ -8125,11 +8128,10 @@ impl Client {
             &self.torii_url,
             &format!("v1/sumeragi/commit-qcs/{hash_hex}"),
         );
-        let resp = self
-            .default_request(HttpMethod::GET, url)
-            .header("Accept", APPLICATION_NORITO)
-            .build()?
-            .send()?;
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_NORITO),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get sumeragi commit_qc: {} {}",
@@ -8160,7 +8162,7 @@ impl Client {
             &format!("v1/sumeragi/vrf/penalties/{epoch}"),
         );
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )?;
         Self::parse_json_ok_response(&resp, "Failed to get sumeragi vrf penalties")
@@ -8173,7 +8175,7 @@ impl Client {
     pub fn get_sumeragi_vrf_epoch_json(&self, epoch: u64) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, &format!("v1/sumeragi/vrf/epoch/{epoch}"));
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )?;
         Self::parse_json_ok_response(&resp, "Failed to get sumeragi vrf epoch")
@@ -8186,7 +8188,7 @@ impl Client {
     pub fn get_sumeragi_leader_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/leader");
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )?;
         Self::parse_json_ok_response(&resp, "Failed to get sumeragi leader")
@@ -8199,7 +8201,7 @@ impl Client {
     pub fn get_sumeragi_params_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/params");
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )?;
         Self::parse_json_ok_response(&resp, "Failed to get sumeragi params")
@@ -8222,7 +8224,7 @@ impl Client {
     pub fn get_sumeragi_qc_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/qc");
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_NORITO),
         )?;
         if resp.status() != StatusCode::OK {
@@ -8278,7 +8280,7 @@ impl Client {
     pub fn get_sumeragi_telemetry_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/telemetry");
         let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )?;
         Self::parse_json_ok_response(&resp, "Failed to get sumeragi telemetry")
@@ -8291,7 +8293,7 @@ impl Client {
     pub fn get_sumeragi_evidence_count_json(&self) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/evidence/count");
         let response = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
+            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )?;
         let value =
@@ -8307,9 +8309,10 @@ impl Client {
         &self,
         filter: &SumeragiEvidenceListFilter<'_>,
     ) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/evidence");
-        let req = filter
-            .apply(self.default_request(HttpMethod::GET, url))
+        let mut url = join_torii_url(&self.torii_url, "v1/sumeragi/evidence");
+        filter.apply_to_url(&mut url);
+        let req = self
+            .operator_signed_request(HttpMethod::GET, url, Vec::new())?
             .header("Accept", APPLICATION_JSON);
         let response = self.send_builder(req)?;
         let value =
@@ -8327,9 +8330,10 @@ impl Client {
         &self,
         filter: &SumeragiEvidenceListFilter<'_>,
     ) -> Result<(u64, Vec<EvidenceRecord>)> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/evidence");
-        let req = filter
-            .apply(self.default_request(HttpMethod::GET, url))
+        let mut url = join_torii_url(&self.torii_url, "v1/sumeragi/evidence");
+        filter.apply_to_url(&mut url);
+        let req = self
+            .operator_signed_request(HttpMethod::GET, url, Vec::new())?
             .header("Accept", APPLICATION_NORITO);
         let response = self.send_builder(req)?;
         if response.status() != StatusCode::OK {
@@ -9274,7 +9278,7 @@ mod evidence_http_tests {
             name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
         });
         assert!(has_content_type, "Content-Type header missing");
-        assert_canonical_account_signed_json_request(&client, snapshot);
+        super::tests::assert_canonical_account_signed_json_request(&client, snapshot);
     }
 
     #[test]
@@ -10217,7 +10221,7 @@ mod evidence_http_tests {
             snapshot.url.as_str(),
             "http://mock.local/v1/zk/ivm/prove/abc"
         );
-        assert_canonical_account_signed_request(&client, snapshot);
+        super::tests::assert_canonical_account_signed_request(&client, snapshot);
     }
 
     #[test]
@@ -10241,7 +10245,7 @@ mod evidence_http_tests {
             snapshot.url.as_str(),
             "http://mock.local/v1/zk/ivm/prove/abc"
         );
-        assert_canonical_account_signed_request(&client, snapshot);
+        super::tests::assert_canonical_account_signed_request(&client, snapshot);
     }
 
     type SorafsFetchHook = Arc<
@@ -10358,7 +10362,8 @@ mod evidence_http_tests {
         };
 
         with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
+            let mut client = client_with_base_url(base_url());
+            client.set_operator_key_pair(checked_random_keypair());
             client
                 .post_sorafs_storage_token(
                     &manifest_hex,
@@ -10389,14 +10394,14 @@ mod evidence_http_tests {
                 .any(|(name, value)| name == HEADER_SORA_NONCE && value == "nonce-abc"),
             "nonce header missing"
         );
-        assert!(
-            snapshot
-                .headers
-                .iter()
-                .any(|(name, value)| name.eq_ignore_ascii_case("content-type")
-                    && value == APPLICATION_JSON),
-            "content-type header missing"
-        );
+        for name in [
+            HEADER_OPERATOR_PUBLIC_KEY,
+            HEADER_OPERATOR_TIMESTAMP_MS,
+            HEADER_OPERATOR_NONCE,
+            HEADER_OPERATOR_SIGNATURE,
+        ] {
+            assert!(snapshot.headers.iter().any(|(actual, _)| actual == name));
+        }
 
         let body: Value =
             norito::json::from_slice(&snapshot.body).expect("token request body JSON");
@@ -12853,6 +12858,8 @@ impl Client {
         builder
     }
 
+    include!("client/operator_request_auth.rs");
+
     fn send_builder(&self, builder: DefaultRequestBuilder) -> Result<Response<Vec<u8>>> {
         let request = builder.build()?;
         self.send_prepared_request(request)
@@ -12897,7 +12904,7 @@ impl Client {
         .into_bytes()
     }
 
-    fn operator_network_request_message(
+    pub(crate) fn operator_network_request_message(
         network_id: &NetworkId,
         method: &HttpMethod,
         url: &Url,
@@ -13021,56 +13028,6 @@ impl Client {
         }
 
         Ok(builder)
-    }
-
-    fn operator_signed_request(
-        &self,
-        method: HttpMethod,
-        url: Url,
-        body: Vec<u8>,
-    ) -> Result<DefaultRequestBuilder> {
-        let operator_headers = if let Some(operator_key_pair) = self.operator_key_pair.as_ref() {
-            let timestamp_ms: u64 = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-                .try_into()
-                .unwrap_or(u64::MAX);
-            let nonce = Self::signed_request_nonce()?;
-            let message = Self::operator_network_request_message(
-                &self.network_id,
-                &method,
-                &url,
-                &body,
-                timestamp_ms,
-                nonce.as_str(),
-            );
-            let signature = Signature::try_new(operator_key_pair.private_key(), &message)
-                .wrap_err("failed to sign operator request headers")?;
-            let public_key = operator_key_pair.public_key().to_string();
-            let timestamp = timestamp_ms.to_string();
-            let signature_b64 =
-                base64::engine::general_purpose::STANDARD.encode(signature.payload());
-
-            Some((public_key, timestamp, nonce, signature_b64))
-        } else {
-            None
-        };
-        let mut builder = self.default_request(method, url);
-
-        if let Some((public_key, timestamp, nonce, signature_b64)) = operator_headers {
-            builder = builder
-                .header(HEADER_OPERATOR_PUBLIC_KEY, &public_key)
-                .header(HEADER_OPERATOR_TIMESTAMP_MS, &timestamp)
-                .header(HEADER_OPERATOR_NONCE, &nonce)
-                .header(HEADER_OPERATOR_SIGNATURE, &signature_b64);
-        }
-
-        if body.is_empty() {
-            Ok(builder)
-        } else {
-            Ok(builder.body(body))
-        }
     }
 
     fn build_sorafs_gateway_fetch_config(
@@ -17124,33 +17081,33 @@ impl Client {
     /// Convenience: GET `/v1/sorafs/aliases` to list manifest alias bindings.
     ///
     /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
+    /// Returns an error if canonical request signing, request construction, or the HTTP call fails.
     pub fn get_sorafs_aliases(
         &self,
         filter: &SorafsAliasListFilter<'_>,
     ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/aliases");
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
+        let mut url = join_torii_url(&self.torii_url, "v1/sorafs/aliases");
+        filter.apply_to_url(&mut url);
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
     }
 
     /// Convenience: GET `/v1/sorafs/replication` to list replication orders.
     ///
     /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
+    /// Returns an error if canonical request signing, request construction, or the HTTP call fails.
     pub fn get_sorafs_replication_orders(
         &self,
         filter: &SorafsReplicationListFilter<'_>,
     ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/replication");
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
+        let mut url = join_torii_url(&self.torii_url, "v1/sorafs/replication");
+        filter.apply_to_url(&mut url);
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
     }
 
     /// Fetch chain-authoritative `SoraFS` repair counters at an optional finalized anchor.
@@ -18747,11 +18704,10 @@ impl Client {
                 .map_or(norito::json::Value::Null, norito::json::Value::from),
         );
         let body = norito::json::to_vec(&norito::json::Value::Object(map))?;
-        self.default_request(HttpMethod::POST, url)
+        self.operator_signed_request(HttpMethod::POST, url, body)?
             .header("Content-Type", APPLICATION_JSON)
             .header(HEADER_SORA_CLIENT, client_id)
             .header(HEADER_SORA_NONCE, nonce)
-            .body(body)
             .build()?
             .send()
     }
@@ -20086,21 +20042,20 @@ impl Client {
     }
 
     /// POST `/v1/subscriptions/plans` with a JSON subscription plan payload.
-    ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
     pub fn create_subscription_plan(
         &self,
         request: &SubscriptionPlanCreateRequest,
     ) -> Result<SubscriptionPlanCreateResponse> {
+        self.require_subscription_authority(&request.authority)?;
         let url = join_torii_url(&self.torii_url, "v1/subscriptions/plans");
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode subscription plan create request")?;
         let resp = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
+            self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON)
-                .body(body),
+                .header("Accept", APPLICATION_JSON),
         )?;
         let payload = Self::parse_json_ok_response(&resp, "subscription plan create request")?;
         norito::json::from_value(payload)
@@ -20108,7 +20063,6 @@ impl Client {
     }
 
     /// GET `/v1/subscriptions/plans` with optional query parameters.
-    ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
     pub fn list_subscription_plans(
@@ -20135,21 +20089,20 @@ impl Client {
     }
 
     /// POST `/v1/subscriptions` with a subscription creation payload.
-    ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
     pub fn create_subscription(
         &self,
         request: &SubscriptionCreateRequest,
     ) -> Result<SubscriptionCreateResponse> {
+        self.require_subscription_authority(&request.authority)?;
         let url = join_torii_url(&self.torii_url, "v1/subscriptions");
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode subscription create request")?;
         let resp = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
+            self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON)
-                .body(body),
+                .header("Accept", APPLICATION_JSON),
         )?;
         let payload = Self::parse_json_ok_response(&resp, "subscription create request")?;
         norito::json::from_value(payload).wrap_err("failed to decode subscription create response")
@@ -20203,7 +20156,6 @@ impl Client {
     }
 
     /// POST `/v1/subscriptions/{subscription_id}/pause`.
-    ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
     pub fn pause_subscription(
@@ -20268,23 +20220,22 @@ impl Client {
     }
 
     /// POST `/v1/subscriptions/{subscription_id}/usage`.
-    ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
     pub fn record_subscription_usage(
         &self,
         subscription_id: &NftId,
         request: &SubscriptionUsageRequest,
-    ) -> Result<SubscriptionActionResponse> {
+    ) -> Result<SubscriptionUsageResponse> {
+        self.require_subscription_authority(&request.authority)?;
         let path = format!("v1/subscriptions/{subscription_id}/usage");
         let url = join_torii_url(&self.torii_url, &path);
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode subscription usage request")?;
         let resp = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
+            self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON)
-                .body(body),
+                .header("Accept", APPLICATION_JSON),
         )?;
         let payload = Self::parse_json_ok_response(&resp, "subscription usage request")?;
         norito::json::from_value(payload).wrap_err("failed to decode subscription usage response")
@@ -20296,18 +20247,27 @@ impl Client {
         action: &str,
         request: &SubscriptionActionRequest,
     ) -> Result<SubscriptionActionResponse> {
+        self.require_subscription_authority(&request.authority)?;
         let path = format!("v1/subscriptions/{subscription_id}/{action}");
         let url = join_torii_url(&self.torii_url, &path);
         let body = norito::json::to_vec(request)
             .wrap_err("failed to encode subscription action request")?;
         let resp = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
+            self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON)
-                .body(body),
+                .header("Accept", APPLICATION_JSON),
         )?;
         let payload = Self::parse_json_ok_response(&resp, "subscription action request")?;
         norito::json::from_value(payload).wrap_err("failed to decode subscription action response")
+    }
+
+    fn require_subscription_authority(&self, authority: &AccountId) -> Result<()> {
+        if authority == &self.account {
+            return Ok(());
+        }
+        Err(eyre!(
+            "subscription request authority must equal the canonically authenticated client account"
+        ))
     }
 
     /// GET `/v1/runtime/abi/active`
@@ -21406,7 +21366,8 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// Inspect proof retention configuration and live counters via `/v1/proofs/retention`.
+    /// Inspect node-local proof retention configuration and live counters as an authenticated
+    /// operator via `/v1/proofs/retention`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_proof_retention_status(&self) -> Result<iroha_torii_shared::ProofRetentionStatus> {
@@ -21414,7 +21375,8 @@ impl Client {
             &self.torii_url,
             iroha_torii_shared::uri::PROOF_RETENTION_STATUS.trim_start_matches('/'),
         );
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp =
+            self.send_builder(self.operator_signed_request(HttpMethod::GET, url, Vec::new())?)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to fetch proof retention status with HTTP status: {}. {}",
@@ -22159,348 +22121,7 @@ fn hashes_match(target: &HashOf<SignedTransaction>, entry_hash: impl AsRef<[u8]>
 
 #[cfg(test)]
 mod subscription_http_tests {
-    use std::{
-        collections::BTreeMap,
-        sync::{Arc, Mutex},
-    };
-
-    use http::StatusCode;
-    use iroha_primitives::numeric::Quantity;
-    use iroha_test_samples::gen_account_in;
-    use norito::json::{JsonSerialize, Value as JsonValue};
-
-    use super::evidence_http_tests::{
-        SnapshotStore, base_url, client_with_base_url, json_response, with_mock_http,
-    };
-    use super::{
-        SubscriptionActionRequest, SubscriptionCreateRequest, SubscriptionPlanCreateRequest,
-    };
-    use super::{
-        SubscriptionActionResponse, SubscriptionCreateResponse, SubscriptionGetResponse,
-        SubscriptionListParams, SubscriptionListResponse, SubscriptionPlanListParams,
-        SubscriptionPlanListResponse, SubscriptionUsageRequest,
-    };
-    use crate::{
-        data_model::{
-            asset::AssetDefinitionId,
-            domain::DomainId,
-            name::Name,
-            nft::NftId,
-            subscription::{
-                SubscriptionBilling, SubscriptionCadence, SubscriptionFixedPeriodCadence,
-                SubscriptionFixedPricing, SubscriptionPlan, SubscriptionState, SubscriptionStatus,
-            },
-            trigger::TriggerId,
-        },
-        http::{Method as HttpMethod, Response as HttpResponse},
-        http_default::RequestSnapshot,
-        subscriptions::{
-            SubscriptionListItem, SubscriptionPlanCreateResponse, SubscriptionPlanListItem,
-        },
-    };
-
-    fn encode_json<T: JsonSerialize>(value: &T) -> String {
-        norito::json::to_json(value).expect("encode json")
-    }
-
-    fn match_body<T: JsonSerialize>(snapshot: &RequestSnapshot, expected: &T) {
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        let expected = norito::json::to_value(expected).expect("encode expected body");
-        assert_eq!(
-            body, expected,
-            "unexpected request body for {}",
-            snapshot.url
-        );
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn subscription_endpoints_build_requests() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let (provider, provider_key) = gen_account_in("commerce");
-        let (subscriber, subscriber_key) = gen_account_in("users");
-        let plan_id: AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("commerce", "universal").unwrap(),
-                "fixed_plan".parse().unwrap(),
-            );
-        let subscription_id: NftId = "sub-1$subscriptions.universal".parse().unwrap();
-        let billing_trigger_id: TriggerId = "sub-1-bill".parse().unwrap();
-        let charge_asset_id: AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-                DomainId::try_new("pay", "universal").unwrap(),
-                "usd".parse().unwrap(),
-            );
-        let unit_key: Name = "compute_ms".parse().unwrap();
-        let provider_private = provider_key.private_key().clone();
-        let subscriber_private = subscriber_key.private_key().clone();
-
-        let plan = SubscriptionPlan {
-            provider: provider.clone(),
-            billing: SubscriptionBilling {
-                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
-                    period_ms: 1_000,
-                }),
-                bill_for: crate::data_model::subscription::SubscriptionBillFor::PreviousPeriod,
-                retry_backoff_ms: 100,
-                max_failures: 3,
-                grace_ms: 500,
-            },
-            pricing: crate::data_model::subscription::SubscriptionPricing::Fixed(
-                SubscriptionFixedPricing {
-                    amount: Quantity::from(5_u32),
-                    asset_definition: charge_asset_id.clone(),
-                },
-            ),
-        };
-
-        let subscription_state = SubscriptionState {
-            plan_id: plan_id.clone(),
-            provider: provider.clone(),
-            subscriber: subscriber.clone(),
-            status: SubscriptionStatus::Active,
-            current_period_start_ms: 0,
-            current_period_end_ms: 1,
-            next_charge_ms: 1,
-            cancel_at_period_end: false,
-            cancel_at_ms: None,
-            failure_count: 0,
-            usage_accumulated: BTreeMap::new(),
-            billing_trigger_id: billing_trigger_id.clone(),
-        };
-
-        let plan_request = SubscriptionPlanCreateRequest {
-            authority: provider.clone(),
-            private_key: crate::data_model::prelude::ExposedPrivateKey(provider_private),
-            plan_id: plan_id.clone(),
-            plan: plan.clone(),
-        };
-        let plan_list_params = SubscriptionPlanListParams {
-            provider: Some(provider.to_string()),
-            limit: Some(10),
-            offset: 5,
-            count_mode: Some("exact".to_string()),
-        };
-        let subscription_request = SubscriptionCreateRequest {
-            authority: subscriber.clone(),
-            private_key: crate::data_model::prelude::ExposedPrivateKey(subscriber_private.clone()),
-            subscription_id: subscription_id.clone(),
-            plan_id: plan_id.clone(),
-            billing_trigger_id: Some(billing_trigger_id.clone()),
-            usage_trigger_id: None,
-            first_charge_ms: Some(42),
-            grant_usage_to_provider: Some(true),
-        };
-        let subscription_list_params = SubscriptionListParams {
-            owned_by: Some(subscriber.to_string()),
-            provider: Some(provider.to_string()),
-            status: Some("active".to_string()),
-            limit: Some(25),
-            offset: 2,
-            count_mode: Some("exact".to_string()),
-        };
-        let action_request = SubscriptionActionRequest {
-            authority: subscriber.clone(),
-            private_key: crate::data_model::prelude::ExposedPrivateKey(subscriber_private.clone()),
-            charge_at_ms: Some(170),
-            cancel_mode: None,
-        };
-        let usage_request = SubscriptionUsageRequest {
-            authority: subscriber.clone(),
-            private_key: crate::data_model::prelude::ExposedPrivateKey(subscriber_private),
-            unit_key: unit_key.clone(),
-            delta: Quantity::from(3_u32),
-            usage_trigger_id: None,
-        };
-
-        let plan_create_response = SubscriptionPlanCreateResponse {
-            ok: true,
-            plan_id: plan_id.clone(),
-            tx_hash_hex: "aa".to_string(),
-        };
-        let plan_list_response = SubscriptionPlanListResponse {
-            items: vec![SubscriptionPlanListItem {
-                plan_id: plan_id.clone(),
-                plan: plan.clone(),
-            }],
-            total: Some(1),
-            has_more: false,
-            count_mode: "exact".to_string(),
-        };
-        let subscription_create_response = SubscriptionCreateResponse {
-            ok: true,
-            subscription_id: subscription_id.clone(),
-            billing_trigger_id: billing_trigger_id.clone(),
-            usage_trigger_id: None,
-            first_charge_ms: 42,
-            tx_hash_hex: "bb".to_string(),
-        };
-        let subscription_list_response = SubscriptionListResponse {
-            items: vec![SubscriptionListItem {
-                subscription_id: subscription_id.clone(),
-                subscription: subscription_state.clone(),
-                invoice: None,
-                plan: Some(plan.clone()),
-            }],
-            total: Some(1),
-            has_more: false,
-            count_mode: "exact".to_string(),
-        };
-        let subscription_get_response = SubscriptionGetResponse {
-            subscription_id: subscription_id.clone(),
-            subscription: subscription_state,
-            invoice: None,
-            plan: Some(plan),
-        };
-        let action_response = SubscriptionActionResponse {
-            ok: true,
-            subscription_id: subscription_id.clone(),
-            tx_hash_hex: "cc".to_string(),
-        };
-
-        let responder = {
-            let store = Arc::clone(&store);
-            let plan_create_json = encode_json(&plan_create_response);
-            let plan_list_json = encode_json(&plan_list_response);
-            let subscription_create_json = encode_json(&subscription_create_response);
-            let subscription_list_json = encode_json(&subscription_list_response);
-            let subscription_get_json = encode_json(&subscription_get_response);
-            let action_json = encode_json(&action_response);
-            move |snapshot: RequestSnapshot| {
-                store
-                    .lock()
-                    .expect("lock snapshot store")
-                    .push(snapshot.clone());
-                let path = snapshot.url.path();
-                let response = match (snapshot.method.clone(), path) {
-                    (HttpMethod::POST, "/v1/subscriptions/plans") => {
-                        json_response(StatusCode::OK, &plan_create_json)
-                    }
-                    (HttpMethod::GET, "/v1/subscriptions/plans") => {
-                        json_response(StatusCode::OK, &plan_list_json)
-                    }
-                    (HttpMethod::POST, "/v1/subscriptions") => {
-                        json_response(StatusCode::OK, &subscription_create_json)
-                    }
-                    (HttpMethod::GET, "/v1/subscriptions") => {
-                        json_response(StatusCode::OK, &subscription_list_json)
-                    }
-                    (HttpMethod::GET, "/v1/subscriptions/sub-1$subscriptions.universal") => {
-                        json_response(StatusCode::OK, &subscription_get_json)
-                    }
-                    (
-                        HttpMethod::POST,
-                        "/v1/subscriptions/sub-1$subscriptions.universal/pause"
-                        | "/v1/subscriptions/sub-1$subscriptions.universal/resume"
-                        | "/v1/subscriptions/sub-1$subscriptions.universal/cancel"
-                        | "/v1/subscriptions/sub-1$subscriptions.universal/charge-now"
-                        | "/v1/subscriptions/sub-1$subscriptions.universal/usage",
-                    ) => json_response(StatusCode::OK, &action_json),
-                    _ => HttpResponse::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .body(Vec::new())
-                        .expect("response build"),
-                };
-                Ok(response)
-            }
-        };
-
-        with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            client
-                .create_subscription_plan(&plan_request)
-                .expect("create subscription plan");
-            client
-                .list_subscription_plans(&plan_list_params)
-                .expect("list subscription plans");
-            client
-                .create_subscription(&subscription_request)
-                .expect("create subscription");
-            client
-                .list_subscriptions(&subscription_list_params)
-                .expect("list subscriptions");
-            client
-                .get_subscription(&subscription_id)
-                .expect("get subscription");
-            client
-                .pause_subscription(&subscription_id, &action_request)
-                .expect("pause subscription");
-            client
-                .resume_subscription(&subscription_id, &action_request)
-                .expect("resume subscription");
-            client
-                .cancel_subscription(&subscription_id, &action_request)
-                .expect("cancel subscription");
-            client
-                .charge_subscription_now(&subscription_id, &action_request)
-                .expect("charge subscription now");
-            client
-                .record_subscription_usage(&subscription_id, &usage_request)
-                .expect("record usage");
-        });
-
-        let snapshots = store.lock().expect("lock snapshots").clone();
-        assert_eq!(snapshots.len(), 10);
-        for snapshot in &snapshots {
-            match (snapshot.method.clone(), snapshot.url.path()) {
-                (HttpMethod::POST, "/v1/subscriptions/plans") => {
-                    match_body(snapshot, &plan_request);
-                }
-                (HttpMethod::GET, "/v1/subscriptions/plans") => {
-                    let params: Vec<(String, String)> = snapshot
-                        .url
-                        .query_pairs()
-                        .map(|(k, v)| (k.to_string(), v.to_string()))
-                        .collect();
-                    assert_eq!(
-                        params,
-                        vec![
-                            ("provider".to_string(), provider.to_string()),
-                            ("limit".to_string(), "10".to_string()),
-                            ("offset".to_string(), "5".to_string()),
-                        ]
-                    );
-                }
-                (HttpMethod::POST, "/v1/subscriptions") => {
-                    match_body(snapshot, &subscription_request);
-                }
-                (HttpMethod::GET, "/v1/subscriptions") => {
-                    let params: Vec<(String, String)> = snapshot
-                        .url
-                        .query_pairs()
-                        .map(|(k, v)| (k.to_string(), v.to_string()))
-                        .collect();
-                    assert_eq!(
-                        params,
-                        vec![
-                            ("owned_by".to_string(), subscriber.to_string()),
-                            ("provider".to_string(), provider.to_string()),
-                            ("status".to_string(), "active".to_string()),
-                            ("limit".to_string(), "25".to_string()),
-                            ("offset".to_string(), "2".to_string()),
-                        ]
-                    );
-                }
-                (HttpMethod::GET, "/v1/subscriptions/sub-1$subscriptions.universal") => {
-                    assert!(snapshot.body.is_empty());
-                }
-                (
-                    HttpMethod::POST,
-                    "/v1/subscriptions/sub-1$subscriptions.universal/pause"
-                    | "/v1/subscriptions/sub-1$subscriptions.universal/resume"
-                    | "/v1/subscriptions/sub-1$subscriptions.universal/cancel"
-                    | "/v1/subscriptions/sub-1$subscriptions.universal/charge-now",
-                ) => {
-                    match_body(snapshot, &action_request);
-                }
-                (HttpMethod::POST, "/v1/subscriptions/sub-1$subscriptions.universal/usage") => {
-                    match_body(snapshot, &usage_request);
-                }
-                _ => {}
-            }
-        }
-    }
+    include!("client/subscription_http_tests.rs");
 }
 
 #[cfg(test)]
@@ -22899,7 +22520,7 @@ mod tx_hash_tests {
             },
         };
 
-        let network_id = test_network_id();
+        let network_id = super::test_network_id();
         let public_key: crate::crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -24168,11 +23789,10 @@ mod tests {
         block::{
             BlockHeader,
             consensus::{
-                CertPhase, LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt,
-                LaneSwapMetadata, LaneVolatilityClass, NativeAmxReceipt, PERMISSIONED_TAG,
-                SumeragiAutonomousLaneExecution, SumeragiAutonomousLaneExecutionStage,
-                SumeragiAutonomousLaneExecutionStuckReason, SumeragiPipelineExecutionStatus,
-                SumeragiQcEntry, SumeragiQcSnapshot,
+                LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
+                LaneVolatilityClass, NativeAmxReceipt, SumeragiAutonomousLaneExecution,
+                SumeragiAutonomousLaneExecutionStage, SumeragiAutonomousLaneExecutionStuckReason,
+                SumeragiPipelineExecutionStatus, SumeragiQcEntry, SumeragiQcSnapshot,
             },
             consensus_v2::{
                 ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
@@ -24180,7 +23800,6 @@ mod tests {
                 SumeragiV2StatusPhase,
             },
         },
-        consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash},
         da::{
             commitment::{
                 DaCommitmentBundle, DaCommitmentLocation, DaCommitmentProof, DaCommitmentRecord,
@@ -24197,12 +23816,10 @@ mod tests {
             },
         },
         domain::DomainId,
-        id::MAX_CHAIN_ID_BYTES,
         isi::alias_setup::{ConfigureAliasAutoRenew, EnsureAlias, RenewAliasLease},
         name::{MAX_NAME_BYTES, Name},
         nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleStatusV1, LaneRelayEnvelope},
         parameter::system::Parameters,
-        peer::PeerId,
         privacy::{
             PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyCapabilityRowV1,
             PrivacyCapabilitySnapshotV1, PrivacyCompiledProfileResultV1,
@@ -24485,10 +24102,10 @@ mod tests {
         let foreign_network = foreign_alias_plan_network_id();
         let foreign_error = assert_no_http(|| {
             client.post_gov_ballot_plain_json(&norito::json!({
-                "authority": authority.as_str(),
-                "network_id": foreign_network,
+                "authority": (authority.as_str()),
+                "network_id": (foreign_network),
                 "referendum_id": "referendum-1",
-                "owner": authority.as_str(),
+                "owner": (authority.as_str()),
                 "amount": "1",
                 "duration_blocks": "0",
                 "direction": "Aye"
@@ -24498,8 +24115,8 @@ mod tests {
 
         for retired in ["chain_id", "genesis_hash"] {
             let mut payload = norito::json!({
-                "authority": authority.as_str(),
-                "network_id": client.network_id,
+                "authority": (authority.as_str()),
+                "network_id": (client.network_id),
                 "election_id": "election-1",
                 "backend": "halo2/ipa",
                 "envelope_b64": "cHJvb2Y="
@@ -24515,7 +24132,7 @@ mod tests {
         let error = assert_no_http(|| {
             client.post_gov_ballot_plain_json(&norito::json!({
                 "authority": TEST_AUDITOR_I105,
-                "network_id": client.network_id,
+                "network_id": (client.network_id),
                 "referendum_id": "referendum-1",
                 "owner": TEST_AUDITOR_I105,
                 "amount": "1",
@@ -24544,8 +24161,8 @@ mod tests {
                 if is_zk {
                     client
                         .post_gov_ballot_zk_v1_json(&norito::json!({
-                            "authority": authority.as_str(),
-                            "network_id": client.network_id,
+                            "authority": (authority.as_str()),
+                            "network_id": (client.network_id),
                             "election_id": "election-1",
                             "backend": "halo2/ipa",
                             "envelope_b64": "cHJvb2Y="
@@ -24554,10 +24171,10 @@ mod tests {
                 } else {
                     client
                         .post_gov_ballot_plain_json(&norito::json!({
-                            "authority": authority.as_str(),
-                            "network_id": client.network_id,
+                            "authority": (authority.as_str()),
+                            "network_id": (client.network_id),
                             "referendum_id": "referendum-1",
-                            "owner": authority.as_str(),
+                            "owner": (authority.as_str()),
                             "amount": "1",
                             "duration_blocks": "0",
                             "direction": "Aye"
@@ -25088,8 +24705,8 @@ mod tests {
 
     impl rand::rand_core::TryCryptoRng for FailingClientRng {}
 
-    fn assert_canonical_account_signed_request(client: &Client, snapshot: &RequestSnapshot) {
-        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+    pub(super) fn assert_canonical_account_signed_request(client: &Client, req: &RequestSnapshot) {
+        let headers: HashMap<_, _> = req.headers.iter().cloned().collect();
         for header in [
             HEADER_ACCOUNT,
             HEADER_SIGNATURE,
@@ -25097,8 +24714,7 @@ mod tests {
             HEADER_NONCE,
         ] {
             assert_eq!(
-                snapshot
-                    .headers
+                req.headers
                     .iter()
                     .filter(|(name, _)| name == header)
                     .count(),
@@ -25130,9 +24746,9 @@ mod tests {
             .expect("account signature header must pass checked admission");
         let signed_message = Client::exact_network_request_message(
             &client.network_id,
-            &snapshot.method,
-            &snapshot.url,
-            &snapshot.body,
+            &req.method,
+            &req.url,
+            &req.body,
             timestamp_ms,
             nonce,
         );
@@ -25141,7 +24757,10 @@ mod tests {
             .expect("signature must cover the exact method, path, query, and body");
     }
 
-    fn assert_canonical_account_signed_json_request(client: &Client, snapshot: &RequestSnapshot) {
+    pub(super) fn assert_canonical_account_signed_json_request(
+        client: &Client,
+        snapshot: &RequestSnapshot,
+    ) {
         assert_canonical_account_signed_request(client, snapshot);
         let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
         assert_eq!(
@@ -26780,30 +26399,6 @@ mod tests {
             .expect("transaction builder should not read RNG when nonce is disabled");
 
         assert_eq!(transaction.nonce(), None);
-    }
-
-    fn sample_commit_qc(block_header: &BlockHeader) -> Qc {
-        let validator_set: Vec<PeerId> = Vec::new();
-        Qc {
-            phase: CertPhase::Commit,
-            subject_block_hash: block_header.hash(),
-            parent_state_root: Hash::prehashed([0xEA; Hash::LENGTH]),
-            post_state_root: Hash::prehashed([0xEE; Hash::LENGTH]),
-            height: block_header.height().get(),
-            view: block_header.view_change_index(),
-            epoch: 1,
-            chain_order_hash: default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: vec![0b1010_0001],
-                bls_aggregate_signature: vec![0xAB; 48],
-            },
-        }
     }
 
     fn sample_sumeragi_v2_status(height: u64, view: u64, leader: u32) -> SumeragiV2Status {
@@ -28993,7 +28588,6 @@ mod tests {
 
     #[test]
     fn prepared_transaction_payload_allows_foreign_network_for_server_rejection_tests() {
-        let client = client_with_base_url(base_url());
         let (authority, keypair) = gen_account_in("foreign-chain-authority");
         let foreign_network = NetworkId::from_genesis_hash(
             iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
@@ -29008,7 +28602,7 @@ mod tests {
         .with_instructions(Vec::<InstructionBox>::new())
         .try_sign(keypair.private_key())
         .expect("foreign-network fixture transaction should sign");
-        let prepared = client.prepare_transaction_payload(&tx);
+        let prepared = Client::prepare_transaction_payload(&tx);
 
         assert_eq!(prepared.hash(), tx.hash());
         let decoded = SignedTransaction::decode_all_versioned(prepared.as_bytes())
@@ -31319,19 +30913,16 @@ mod tests {
     #[test]
     fn sorafs_alias_filter_sets_query_params() {
         let client = Client::new(config_factory());
-        let url = join_torii_url(&client.torii_url, "v1/sorafs/aliases");
+        let mut url = join_torii_url(&client.torii_url, "v1/sorafs/aliases");
         let filter = SorafsAliasListFilter {
             limit: Some(10),
             offset: Some(3),
             namespace: Some("docs"),
             manifest_digest: Some("deadbeef"),
         };
-        let request = filter
-            .apply(client.default_request(HttpMethod::GET, url))
-            .build()
-            .expect("build request");
+        filter.apply_to_url(&mut url);
         assert_eq!(
-            request.uri().query(),
+            url.query(),
             Some("limit=10&offset=3&namespace=docs&manifest_digest=deadbeef")
         );
     }
@@ -31339,22 +30930,21 @@ mod tests {
     #[test]
     fn sorafs_replication_filter_sets_query_params() {
         let client = Client::new(config_factory());
-        let url = join_torii_url(&client.torii_url, "v1/sorafs/replication");
+        let mut url = join_torii_url(&client.torii_url, "v1/sorafs/replication");
         let filter = SorafsReplicationListFilter {
             limit: Some(50),
             offset: Some(2),
             status: Some("completed"),
             manifest_digest: Some("abc123"),
         };
-        let request = filter
-            .apply(client.default_request(HttpMethod::GET, url))
-            .build()
-            .expect("build request");
+        filter.apply_to_url(&mut url);
         assert_eq!(
-            request.uri().query(),
+            url.query(),
             Some("limit=50&offset=2&status=completed&manifest_digest=abc123")
         );
     }
+
+    include!("client/sorafs_inventory_auth_tests.rs");
 
     #[test]
     fn sorafs_repair_filters_set_finalized_cursor_params() {

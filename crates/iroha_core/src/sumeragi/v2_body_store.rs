@@ -34,6 +34,8 @@ const VALIDATED_MAGIC: &[u8; 8] = b"SUM2VALD";
 const STORE_VERSION: u16 = 4;
 const FRAME_HEADER_LEN: usize = STORE_MAGIC.len() + size_of::<u16>() + size_of::<u64>();
 const CHECKSUM_LEN: usize = 32;
+const FRAME_PAYLOAD_MAX_BYTES: u64 =
+    wire::MAX_EXECUTED_BLOCK_WIRE_BYTES + wire::MAX_DA_ENCODED_PAYLOAD_BYTES;
 
 /// Metadata and exact canonical bytes persisted in one final body file.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
@@ -1145,11 +1147,17 @@ fn frame_payload(payload: &[u8]) -> Result<Vec<u8>, V2BodyStoreError> {
 
 fn frame_payload_with_magic(magic: &[u8; 8], payload: &[u8]) -> Result<Vec<u8>, V2BodyStoreError> {
     let payload_len = u64::try_from(payload.len()).map_err(|_| V2BodyStoreError::BodyTooLarge)?;
+    if payload_len > FRAME_PAYLOAD_MAX_BYTES {
+        return Err(V2BodyStoreError::BodyTooLarge);
+    }
     let capacity = FRAME_HEADER_LEN
         .checked_add(payload.len())
         .and_then(|length| length.checked_add(CHECKSUM_LEN))
         .ok_or(V2BodyStoreError::BodyTooLarge)?;
-    let mut frame = Vec::with_capacity(capacity);
+    let mut frame = Vec::new();
+    frame
+        .try_reserve_exact(capacity)
+        .map_err(|_| V2BodyStoreError::BodyTooLarge)?;
     frame.extend_from_slice(magic);
     frame.extend_from_slice(&STORE_VERSION.to_le_bytes());
     frame.extend_from_slice(&payload_len.to_le_bytes());
@@ -1178,18 +1186,31 @@ fn read_frame_payload_with_hash(
         path: path.to_path_buf(),
         source,
     })?;
-    let mut frame = Vec::new();
-    file.read_to_end(&mut frame)
+    let opened_len = file
+        .metadata()
         .map_err(|source| V2BodyStoreError::Io {
             path: path.to_path_buf(),
             source,
-        })?;
-    if frame.len() < FRAME_HEADER_LEN + CHECKSUM_LEN || &frame[..magic.len()] != magic {
+        })?
+        .len();
+    let maximum_frame_bytes = FRAME_PAYLOAD_MAX_BYTES
+        .checked_add(
+            u64::try_from(FRAME_HEADER_LEN + CHECKSUM_LEN).expect("frame overhead fits u64"),
+        )
+        .ok_or(V2BodyStoreError::BodyTooLarge)?;
+    if opened_len > maximum_frame_bytes {
+        return Err(V2BodyStoreError::BodyTooLarge);
+    }
+
+    let mut header = [0_u8; FRAME_HEADER_LEN];
+    file.read_exact(&mut header)
+        .map_err(|_| V2BodyStoreError::CorruptFrame)?;
+    if &header[..magic.len()] != magic {
         return Err(V2BodyStoreError::CorruptFrame);
     }
     let version_offset = magic.len();
     let version = u16::from_le_bytes(
-        frame[version_offset..version_offset + size_of::<u16>()]
+        header[version_offset..version_offset + size_of::<u16>()]
             .try_into()
             .map_err(|_| V2BodyStoreError::CorruptFrame)?,
     );
@@ -1198,24 +1219,48 @@ fn read_frame_payload_with_hash(
     }
     let length_offset = version_offset + size_of::<u16>();
     let payload_len = u64::from_le_bytes(
-        frame[length_offset..length_offset + size_of::<u64>()]
+        header[length_offset..length_offset + size_of::<u64>()]
             .try_into()
             .map_err(|_| V2BodyStoreError::CorruptFrame)?,
     );
+    if payload_len > FRAME_PAYLOAD_MAX_BYTES {
+        return Err(V2BodyStoreError::BodyTooLarge);
+    }
     let payload_len = usize::try_from(payload_len).map_err(|_| V2BodyStoreError::BodyTooLarge)?;
     let expected_len = FRAME_HEADER_LEN
         .checked_add(payload_len)
         .and_then(|length| length.checked_add(CHECKSUM_LEN))
         .ok_or(V2BodyStoreError::BodyTooLarge)?;
-    if frame.len() != expected_len {
+    if opened_len != u64::try_from(expected_len).map_err(|_| V2BodyStoreError::BodyTooLarge)? {
         return Err(V2BodyStoreError::CorruptFrame);
     }
-    let payload = frame[FRAME_HEADER_LEN..FRAME_HEADER_LEN + payload_len].to_vec();
-    let checksum = &frame[FRAME_HEADER_LEN + payload_len..];
-    if Hash::new(&payload).as_ref().as_slice() != checksum {
+
+    let mut payload = Vec::new();
+    payload
+        .try_reserve_exact(payload_len)
+        .map_err(|_| V2BodyStoreError::BodyTooLarge)?;
+    payload.resize(payload_len, 0);
+    file.read_exact(&mut payload)
+        .map_err(|_| V2BodyStoreError::CorruptFrame)?;
+    let mut checksum = [0_u8; CHECKSUM_LEN];
+    file.read_exact(&mut checksum)
+        .map_err(|_| V2BodyStoreError::CorruptFrame)?;
+    let mut trailing = [0_u8; 1];
+    if file
+        .read(&mut trailing)
+        .map_err(|source| V2BodyStoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?
+        != 0
+    {
+        return Err(V2BodyStoreError::CorruptFrame);
+    }
+    if Hash::new(&payload).as_ref() != checksum.as_slice() {
         return Err(V2BodyStoreError::ChecksumMismatch);
     }
-    Ok((payload, Hash::new(&frame)))
+    let frame_hash = Hash::new_from_chunks(&[&header, &payload, &checksum]);
+    Ok((payload, frame_hash))
 }
 
 fn write_validated_marker(
@@ -1416,9 +1461,10 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{
-        BlockSignaturePolicy, BodyValidationCompletion, BodyValidationError, STORE_MAGIC,
-        STORE_VERSION, V2BodyStore, V2BodyStoreError, VALIDATED_MAGIC, ValidatedBodyMarker,
-        ValidatedBodyReceipt, write_validated_marker,
+        BlockSignaturePolicy, BodyValidationCompletion, BodyValidationError, CHECKSUM_LEN,
+        FRAME_PAYLOAD_MAX_BYTES, STORE_MAGIC, STORE_VERSION, V2BodyStore, V2BodyStoreError,
+        VALIDATED_MAGIC, ValidatedBodyMarker, ValidatedBodyReceipt, read_frame_payload_with_hash,
+        write_validated_marker,
     };
 
     use crate::sumeragi::{
@@ -2408,6 +2454,23 @@ mod tests {
         assert!(matches!(
             V2BodyStore::open(directory.path(), context),
             Err(V2BodyStoreError::OrphanedValidationMarker)
+        ));
+    }
+
+    #[test]
+    fn declared_oversized_frame_is_rejected_before_payload_allocation() {
+        let directory = TempDir::new().expect("temporary directory");
+        let path = directory.path().join("oversized.norito");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(STORE_MAGIC);
+        bytes.extend_from_slice(&STORE_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&FRAME_PAYLOAD_MAX_BYTES.saturating_add(1).to_le_bytes());
+        bytes.extend_from_slice(&[0_u8; CHECKSUM_LEN]);
+        fs::write(&path, bytes).expect("write oversized frame header");
+
+        assert!(matches!(
+            read_frame_payload_with_hash(&path, STORE_MAGIC),
+            Err(V2BodyStoreError::BodyTooLarge)
         ));
     }
 

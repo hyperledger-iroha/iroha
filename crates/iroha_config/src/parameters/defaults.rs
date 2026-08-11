@@ -2300,8 +2300,10 @@ pub mod torii {
     use iroha_primitives::numeric::XorQuantity;
     use nonzero_ext::nonzero;
 
+    /// Maximum inner body carried by the first-release Torii proxy protocol.
+    pub const TORII_PROXY_MAX_INNER_BODY_BYTES_V1: u64 = 64_000_000;
     /// Maximum request payload size accepted by Torii (bytes).
-    pub const MAX_CONTENT_LEN: Bytes<u64> = Bytes(64_000_000);
+    pub const MAX_CONTENT_LEN: Bytes<u64> = Bytes(TORII_PROXY_MAX_INNER_BODY_BYTES_V1);
     /// Maximum concurrent physical transaction-ingress compute jobs.
     pub const TRANSACTION_INGRESS_MAX_CONCURRENT_COMPUTE_JOBS: NonZeroUsize = nonzero!(4usize);
     /// Maximum signed transactions accepted by one HTTP batch submission.
@@ -2316,6 +2318,14 @@ pub mod torii {
     pub const QUERY_MAX_INFLIGHT: NonZeroUsize = nonzero!(128usize);
     /// Maximum concurrent heavy query executions admitted by Torii.
     pub const QUERY_HEAVY_MAX_INFLIGHT: NonZeroUsize = nonzero!(32usize);
+    /// Aggregate bytes reserved for concurrently materialized cross-dataspace query fanouts.
+    pub const QUERY_FANOUT_MAX_RETAINED_BYTES: Bytes<u64> = Bytes(64_000_000);
+    /// Minimum aggregate V1 query-memory pool for four ingress slots plus one fanout.
+    pub const QUERY_FANOUT_MIN_POOL_BYTES_V1: u64 = 20_000_000;
+    /// Reserved address-space headroom for fixed internal proxy decode state.
+    pub const TORII_PROXY_HTTP_FIXED_MEMORY_HEADROOM_V1: u64 = 64 * 1024 * 1024;
+    /// Variable-size representations in the internal proxy HTTP memory envelope.
+    pub const TORII_PROXY_HTTP_MEMORY_PHASE_UNITS_V1: u64 = 4;
     /// Maximum time a query waits for execution capacity before Torii rejects it.
     pub const QUERY_QUEUE_TIMEOUT_MS: u64 = 25;
     // Default per-authority query rate (tokens/sec). Set low but permissive.
@@ -2389,19 +2399,12 @@ pub mod torii {
     pub mod soranet_privacy_ingest {
         use super::*;
 
-        /// Require an explicit allow-list and token before accepting privacy telemetry.
+        /// Require an explicit allow-list before accepting signed privacy telemetry.
         pub const ENABLED: bool = false;
-        /// Require a token header for privacy ingestion calls.
-        pub const REQUIRE_TOKEN: bool = true;
         /// Requests per second budget for privacy ingest (None disables).
         pub const RATE_PER_SEC: Option<u32> = Some(8);
         /// Burst budget for privacy ingest (tokens).
         pub const BURST: Option<u32> = Some(16);
-
-        /// Default token list (empty by default; must be configured).
-        pub fn tokens() -> Vec<String> {
-            Vec::new()
-        }
 
         /// CIDR allow-list for privacy ingest (empty => deny).
         pub fn allow_cidrs() -> Vec<String> {
@@ -2645,8 +2648,12 @@ pub mod torii {
         use super::*;
         use std::num::NonZeroU64;
 
-        /// Leading-zero-bit difficulty for faucet proof-of-work (0 disables PoW).
-        pub const POW_DIFFICULTY_BITS: u8 = 0;
+        /// Leading-zero-bit difficulty for faucet proof-of-work.
+        ///
+        /// Eighteen bits is the fail-safe default for an explicitly enabled
+        /// faucet. Operators may select a lower non-zero value for bounded
+        /// testnet and local-development deployments.
+        pub const POW_DIFFICULTY_BITS: u8 = 18;
         /// Scrypt `log2(N)` cost parameter for faucet proof-of-work.
         pub const POW_SCRYPT_LOG_N: u8 = 13;
         /// Scrypt block size parameter for faucet proof-of-work.
@@ -2727,6 +2734,14 @@ pub mod torii {
     pub const ZK_PROVER_SCAN_PERIOD_SECS: u64 = 30;
     /// Background ZK prover reports retention TTL (seconds)
     pub const ZK_PROVER_REPORTS_TTL_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
+    /// Maximum number of prover reports retained on disk.
+    pub const ZK_PROVER_REPORTS_MAX_COUNT: u64 = 4_096;
+    /// Maximum aggregate bytes retained by prover report bodies and summary shards.
+    pub const ZK_PROVER_REPORTS_MAX_BYTES: u64 = 256 * 1024 * 1024; // 256 MiB
+    /// Maximum bytes in one persisted first-release prover report.
+    pub const ZK_PROVER_REPORT_MAX_BYTES_V1: u64 = 8 * 1024 * 1024; // 8 MiB
+    /// Maximum bytes in one persisted first-release prover summary shard.
+    pub const ZK_PROVER_REPORT_SUMMARY_MAX_BYTES_V1: u64 = 64 * 1024; // 64 KiB
     /// Maximum number of attachments the background prover processes concurrently.
     pub const ZK_PROVER_MAX_INFLIGHT: usize = 2;
     /// Maximum raw body bytes admitted by the first-release prover worker.
@@ -3031,12 +3046,19 @@ pub mod torii {
     pub const ISO_BRIDGE_REFERENCE_REFRESH_SECS: u64 = 24 * 60 * 60; // 24 hours
     /// ISO 20022 durable store age retention (seconds); zero keeps records by age.
     pub const ISO_BRIDGE_STORE_RETENTION_SECS: u64 = 0;
-    /// ISO 20022 durable store maximum record count; zero keeps all records by count.
-    pub const ISO_BRIDGE_STORE_MAX_RECORDS: u64 = 0;
+    /// ISO 20022 durable store default maximum record count.
+    pub const ISO_BRIDGE_STORE_MAX_RECORDS: u64 = 256;
+    /// Absolute first-release maximum for ISO 20022 durable records retained in memory.
+    pub const ISO_BRIDGE_STORE_MAX_RECORDS_HARD_LIMIT_V1: u64 = 1_024;
     /// Return the default ISO 20022 submission body limit.
     #[must_use]
     pub const fn iso_bridge_max_body_bytes() -> Bytes<u64> {
         ISO_BRIDGE_MAX_BODY_BYTES
+    }
+    /// Return the default ISO 20022 durable-store record limit.
+    #[must_use]
+    pub const fn iso_bridge_store_max_records() -> u64 {
+        ISO_BRIDGE_STORE_MAX_RECORDS
     }
     /// Return the default ISO 20022 bridge rail profile identifier.
     #[must_use]

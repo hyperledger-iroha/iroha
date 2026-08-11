@@ -15,6 +15,7 @@ use iroha_crypto::{
     Algorithm, ExposedPrivateKey, KeyPair, PublicKey, bls_normal_pop_prove, bls_normal_pop_verify,
 };
 use iroha_data_model::peer::PeerId;
+use iroha_genesis::{read_genesis_manifest_bytes, validate_genesis_manifest_json};
 use norito::json::{self, Value as JsonValue};
 use toml::{Value as TomlValue, value::Table as TomlTable};
 
@@ -240,6 +241,8 @@ impl<T: Write> RunArgs<T> for Args {
 
         let genesis_payload = json::to_string_pretty(&genesis)
             .wrap_err("failed to serialise genesis after wizard updates")?;
+        validate_genesis_manifest_json(genesis_payload.as_bytes())
+            .wrap_err("generated wizard genesis exceeds fixed resource bounds")?;
         fs::write(&genesis_path, genesis_payload)
             .wrap_err_with(|| format!("failed to write genesis to {}", genesis_path.display()))?;
         let guide_path = answers.output_dir.join("README.md");
@@ -819,10 +822,11 @@ fn apply_overrides(
 }
 
 fn load_and_patch_genesis(template_path: &str, chain: &str) -> Result<JsonValue> {
-    let raw = fs::read_to_string(template_path)
-        .wrap_err_with(|| format!("failed to read genesis template at {template_path}"))?;
-    let mut genesis: JsonValue = json::from_str(&raw)
+    let raw = read_genesis_manifest_bytes(Path::new(template_path))
+        .wrap_err_with(|| format!("failed to read bounded genesis template at {template_path}"))?;
+    let mut genesis: JsonValue = json::from_slice(&raw)
         .wrap_err_with(|| format!("failed to parse genesis template at {template_path}"))?;
+    drop(raw);
     if let Some(chain_slot) = genesis.get_mut("chain") {
         *chain_slot = JsonValue::String(chain.to_string());
     } else if let Some(root) = genesis.as_object_mut() {

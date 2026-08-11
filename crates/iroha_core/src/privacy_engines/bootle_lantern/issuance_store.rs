@@ -4,6 +4,8 @@
 //! persists one strict, versioned record per authorization with atomic
 //! replace-and-sync transitions. A held Unix advisory lock enforces exactly
 //! one live issuer process per directory without stale lock-file recovery.
+//! Reopen, crash recovery, and pruning stay within the configured count and
+//! byte budget without materializing secondary full-store batches.
 //! The directory and its ancestors are an authenticated local trust boundary
 //! and must not be writable by an attacker while the issuer is running.
 
@@ -11,6 +13,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
+    ops::Bound::{Excluded, Unbounded},
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
@@ -259,6 +262,9 @@ struct StoredAuthorizationV1 {
     issued_at_height: u64,
     expires_at_height: u64,
     state: StoredIssuanceStateV1,
+    // This is process-local state, never part of the canonical record. Keeping
+    // it beside the record avoids a second full-store index during reopen.
+    processing_at_file_open: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -382,6 +388,7 @@ impl BootleLanternIssuanceStoreV1 for BootleLanternInMemoryIssuanceStoreV1 {
             issued_at_height,
             expires_at_height,
             state: StoredIssuanceStateV1::Fresh,
+            processing_at_file_open: false,
         };
         let mut state = self
             .state
@@ -532,15 +539,21 @@ impl BootleLanternIssuanceStoreV1 for BootleLanternInMemoryIssuanceStoreV1 {
             .state
             .lock()
             .map_err(|_| BootleLanternIssuanceStoreErrorV1::Backend)?;
-        let (candidates, recovered_bytes) = plan_processing_recovery_v1(
+        let (recovered, recovered_bytes) = validate_processing_recovery_v1(
             &state.records,
-            None,
+            ProcessingRecoveryScopeV1::All,
             state.canonical_bytes,
             self.config.max_total_bytes,
             authoritative_height,
         )?;
-        let recovered = candidates.len();
-        for candidate in candidates {
+        let mut cursor = None;
+        while let Some(candidate) = next_processing_recovery_candidate_v1(
+            &state.records,
+            ProcessingRecoveryScopeV1::All,
+            cursor,
+            authoritative_height,
+        ) {
+            cursor = Some(candidate.authorization_id);
             state.records.insert(candidate.authorization_id, candidate);
         }
         state.canonical_bytes = recovered_bytes;
@@ -555,36 +568,37 @@ impl BootleLanternIssuanceStoreV1 for BootleLanternInMemoryIssuanceStoreV1 {
             .state
             .lock()
             .map_err(|_| BootleLanternIssuanceStoreErrorV1::Backend)?;
-        let removable = state
-            .records
-            .iter()
-            .filter_map(|(id, record)| {
-                record
-                    .retention_horizon_reached_v1(
-                        authoritative_height,
-                        self.config.terminal_retention_blocks,
-                    )
-                    .then_some(*id)
-            })
-            .collect::<Vec<_>>();
-        for id in &removable {
+        let mut removed = 0_usize;
+        let mut cursor = None;
+        while let Some((id, encoded_len)) = next_prunable_record_v1(
+            &state.records,
+            cursor,
+            authoritative_height,
+            self.config.terminal_retention_blocks,
+        ) {
+            cursor = Some(id);
             let record = state
                 .records
-                .remove(id)
+                .remove(&id)
                 .ok_or(BootleLanternIssuanceStoreErrorV1::Backend)?;
+            if record.encoded_len_v1() != encoded_len {
+                return Err(BootleLanternIssuanceStoreErrorV1::Backend);
+            }
             state.canonical_bytes = state
                 .canonical_bytes
-                .checked_sub(record.encoded_len_v1() as u64)
+                .checked_sub(encoded_len as u64)
+                .ok_or(BootleLanternIssuanceStoreErrorV1::Backend)?;
+            removed = removed
+                .checked_add(1)
                 .ok_or(BootleLanternIssuanceStoreErrorV1::Backend)?;
         }
-        Ok(removable.len())
+        Ok(removed)
     }
 }
 
 #[derive(Debug)]
 struct FileStoreStateV1 {
     records: BTreeMap<[u8; 32], StoredAuthorizationV1>,
-    recovered_processing: BTreeSet<[u8; 32]>,
     canonical_bytes: u64,
     poisoned: bool,
 }
@@ -608,7 +622,9 @@ impl Drop for FileStoreDirectoryLeaseV1 {
 /// identifier. Open rejects every unknown, non-regular, symlinked, oversized,
 /// truncated, non-canonical, or duplicate entry. State transitions write and
 /// sync a temporary file, atomically rename it, then sync both affected
-/// directories before reporting durable success.
+/// directories before reporting durable success. Open admits the configured
+/// count and aggregate byte footprint before allocating each record buffer;
+/// recovery and pruning stream one record at a time in identifier order.
 ///
 /// `Processing` records loaded by [`Self::open`] form the explicit recovery
 /// set. Claims started after open remain live and are not failed by a delayed
@@ -788,11 +804,14 @@ impl BootleLanternFileIssuanceStoreV1 {
     fn commit_candidate_locked_v1(
         &self,
         state: &mut FileStoreStateV1,
-        candidate: StoredAuthorizationV1,
+        mut candidate: StoredAuthorizationV1,
     ) -> Result<(), BootleLanternIssuanceStoreErrorV1> {
         let authorization_id = candidate.authorization_id;
         let remains_processing =
             matches!(&candidate.state, StoredIssuanceStateV1::Processing { .. });
+        if !remains_processing {
+            candidate.processing_at_file_open = false;
+        }
         let old_len = state
             .records
             .get(&authorization_id)
@@ -807,17 +826,11 @@ impl BootleLanternFileIssuanceStoreV1 {
         match self.persist_candidate_v1(&candidate) {
             Ok(()) => {
                 state.records.insert(authorization_id, candidate);
-                if !remains_processing {
-                    state.recovered_processing.remove(&authorization_id);
-                }
                 state.canonical_bytes = new_total;
                 Ok(())
             }
             Err(failure) if failure.committed => {
                 state.records.insert(authorization_id, candidate);
-                if !remains_processing {
-                    state.recovered_processing.remove(&authorization_id);
-                }
                 state.canonical_bytes = new_total;
                 state.poisoned = true;
                 Err(BootleLanternIssuanceStoreErrorV1::Backend)
@@ -847,6 +860,7 @@ impl BootleLanternIssuanceStoreV1 for BootleLanternFileIssuanceStoreV1 {
             issued_at_height,
             expires_at_height,
             state: StoredIssuanceStateV1::Fresh,
+            processing_at_file_open: false,
         };
         let mut state = self
             .state
@@ -994,15 +1008,21 @@ impl BootleLanternIssuanceStoreV1 for BootleLanternFileIssuanceStoreV1 {
             .lock()
             .map_err(|_| BootleLanternIssuanceStoreErrorV1::Backend)?;
         ensure_file_store_healthy_v1(&state)?;
-        let (candidates, _) = plan_processing_recovery_v1(
+        let (recovered, _) = validate_processing_recovery_v1(
             &state.records,
-            Some(&state.recovered_processing),
+            ProcessingRecoveryScopeV1::FileOpenSnapshot,
             state.canonical_bytes,
             self.config.max_total_bytes,
             authoritative_height,
         )?;
-        let recovered = candidates.len();
-        for candidate in candidates {
+        let mut cursor = None;
+        while let Some(candidate) = next_processing_recovery_candidate_v1(
+            &state.records,
+            ProcessingRecoveryScopeV1::FileOpenSnapshot,
+            cursor,
+            authoritative_height,
+        ) {
+            cursor = Some(candidate.authorization_id);
             if let Err(error) = self.commit_candidate_locked_v1(&mut state, candidate) {
                 // A batch can have earlier durable records even when this
                 // particular replacement failed before rename. Force reopen
@@ -1024,42 +1044,46 @@ impl BootleLanternIssuanceStoreV1 for BootleLanternFileIssuanceStoreV1 {
             .lock()
             .map_err(|_| BootleLanternIssuanceStoreErrorV1::Backend)?;
         ensure_file_store_healthy_v1(&state)?;
-        let removable = state
-            .records
-            .iter()
-            .filter_map(|(id, record)| {
-                record
-                    .retention_horizon_reached_v1(
-                        authoritative_height,
-                        self.config.terminal_retention_blocks,
-                    )
-                    .then_some(*id)
-            })
-            .collect::<Vec<_>>();
         let mut removed = 0_usize;
-        for id in removable {
-            let record = state
-                .records
-                .get(&id)
-                .cloned()
-                .ok_or(BootleLanternIssuanceStoreErrorV1::Backend)?;
+        let mut cursor = None;
+        while let Some((id, encoded_len)) = next_prunable_record_v1(
+            &state.records,
+            cursor,
+            authoritative_height,
+            self.config.terminal_retention_blocks,
+        ) {
+            cursor = Some(id);
             match self.remove_record_file_v1(id) {
                 Ok(()) => {}
                 Err(failure) if failure.committed => {
-                    state.records.remove(&id);
+                    let record = state
+                        .records
+                        .remove(&id)
+                        .ok_or(BootleLanternIssuanceStoreErrorV1::Backend)?;
+                    if record.encoded_len_v1() != encoded_len {
+                        state.poisoned = true;
+                        return Err(BootleLanternIssuanceStoreErrorV1::Backend);
+                    }
                     state.canonical_bytes = state
                         .canonical_bytes
-                        .checked_sub(record.encoded_len_v1() as u64)
+                        .checked_sub(encoded_len as u64)
                         .ok_or(BootleLanternIssuanceStoreErrorV1::Backend)?;
                     state.poisoned = true;
                     return Err(BootleLanternIssuanceStoreErrorV1::Backend);
                 }
                 Err(_) => return Err(BootleLanternIssuanceStoreErrorV1::Backend),
             }
-            state.records.remove(&id);
+            let record = state
+                .records
+                .remove(&id)
+                .ok_or(BootleLanternIssuanceStoreErrorV1::Backend)?;
+            if record.encoded_len_v1() != encoded_len {
+                state.poisoned = true;
+                return Err(BootleLanternIssuanceStoreErrorV1::Backend);
+            }
             state.canonical_bytes = state
                 .canonical_bytes
-                .checked_sub(record.encoded_len_v1() as u64)
+                .checked_sub(encoded_len as u64)
                 .ok_or(BootleLanternIssuanceStoreErrorV1::Backend)?;
             removed = removed
                 .checked_add(1)
@@ -1258,13 +1282,19 @@ fn classify_preflight_v1(
     }
 }
 
-fn plan_processing_recovery_v1(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProcessingRecoveryScopeV1 {
+    All,
+    FileOpenSnapshot,
+}
+
+fn validate_processing_recovery_v1(
     records: &BTreeMap<[u8; 32], StoredAuthorizationV1>,
-    eligible_processing: Option<&BTreeSet<[u8; 32]>>,
+    scope: ProcessingRecoveryScopeV1,
     canonical_bytes: u64,
     max_total_bytes: u64,
     authoritative_height: u64,
-) -> Result<(Vec<StoredAuthorizationV1>, u64), BootleLanternIssuanceStoreErrorV1> {
+) -> Result<(usize, u64), BootleLanternIssuanceStoreErrorV1> {
     // Validate every height first. In particular, a lower-id processing
     // record must not be failed before a later record proves that the caller
     // supplied a regressed chain height.
@@ -1288,23 +1318,11 @@ fn plan_processing_recovery_v1(
     }
 
     let mut recovered_bytes = canonical_bytes;
-    let mut candidates = Vec::new();
-    for (authorization_id, record) in records {
-        if eligible_processing.is_some_and(|eligible| !eligible.contains(authorization_id)) {
-            continue;
-        }
-        let StoredIssuanceStateV1::Processing {
-            request_digest,
-            claimed_at_height,
-        } = &record.state
+    let mut recovered = 0_usize;
+    for record in records.values() {
+        let Some(candidate) = processing_recovery_candidate_v1(record, scope, authoritative_height)
         else {
             continue;
-        };
-        let mut candidate = record.clone();
-        candidate.state = StoredIssuanceStateV1::Failed {
-            request_digest: *request_digest,
-            claimed_at_height: *claimed_at_height,
-            failed_at_height: authoritative_height,
         };
         recovered_bytes = replace_size_v1(
             recovered_bytes,
@@ -1312,9 +1330,65 @@ fn plan_processing_recovery_v1(
             candidate.encoded_len_v1(),
             max_total_bytes,
         )?;
-        candidates.push(candidate);
+        recovered = recovered
+            .checked_add(1)
+            .ok_or(BootleLanternIssuanceStoreErrorV1::CapacityExceeded)?;
     }
-    Ok((candidates, recovered_bytes))
+    Ok((recovered, recovered_bytes))
+}
+
+fn next_processing_recovery_candidate_v1(
+    records: &BTreeMap<[u8; 32], StoredAuthorizationV1>,
+    scope: ProcessingRecoveryScopeV1,
+    after: Option<[u8; 32]>,
+    authoritative_height: u64,
+) -> Option<StoredAuthorizationV1> {
+    let lower_bound = after.map_or(Unbounded, Excluded);
+    records
+        .range((lower_bound, Unbounded))
+        .find_map(|(_, record)| {
+            processing_recovery_candidate_v1(record, scope, authoritative_height)
+        })
+}
+
+fn processing_recovery_candidate_v1(
+    record: &StoredAuthorizationV1,
+    scope: ProcessingRecoveryScopeV1,
+    authoritative_height: u64,
+) -> Option<StoredAuthorizationV1> {
+    if scope == ProcessingRecoveryScopeV1::FileOpenSnapshot && !record.processing_at_file_open {
+        return None;
+    }
+    let StoredIssuanceStateV1::Processing {
+        request_digest,
+        claimed_at_height,
+    } = &record.state
+    else {
+        return None;
+    };
+    let mut candidate = record.clone();
+    candidate.state = StoredIssuanceStateV1::Failed {
+        request_digest: *request_digest,
+        claimed_at_height: *claimed_at_height,
+        failed_at_height: authoritative_height,
+    };
+    Some(candidate)
+}
+
+fn next_prunable_record_v1(
+    records: &BTreeMap<[u8; 32], StoredAuthorizationV1>,
+    after: Option<[u8; 32]>,
+    authoritative_height: u64,
+    retention_blocks: u64,
+) -> Option<([u8; 32], usize)> {
+    let lower_bound = after.map_or(Unbounded, Excluded);
+    records
+        .range((lower_bound, Unbounded))
+        .find_map(|(authorization_id, record)| {
+            record
+                .retention_horizon_reached_v1(authoritative_height, retention_blocks)
+                .then_some((*authorization_id, record.encoded_len_v1()))
+        })
 }
 
 trait StoreCapacityStateV1 {
@@ -1518,6 +1592,7 @@ fn decode_record_v1(
         issued_at_height,
         expires_at_height,
         state,
+        processing_at_file_open: false,
     };
     validate_decoded_record_v1(&record).map_err(|_| BootleLanternIssuanceStoreErrorV1::Corrupt)?;
     if encode_record_v1(&record).map_err(|_| BootleLanternIssuanceStoreErrorV1::Corrupt)? != bytes {
@@ -1726,6 +1801,27 @@ fn clean_stale_temp_files_v1(temp_root: &Path) -> Result<(), BootleLanternIssuan
     Ok(())
 }
 
+fn admit_file_record_allocation_v1(
+    loaded_records: usize,
+    loaded_bytes: u64,
+    record_bytes: u64,
+    config: BootleLanternIssuanceStoreConfigV1,
+) -> Result<u64, BootleLanternIssuanceStoreErrorV1> {
+    let next_count = loaded_records
+        .checked_add(1)
+        .filter(|count| *count <= config.max_records)
+        .ok_or(BootleLanternIssuanceStoreErrorV1::CapacityExceeded)?;
+    u64::try_from(next_count)
+        .ok()
+        .and_then(|count| count.checked_mul(BOOTLE_LANTERN_ISSUANCE_STORE_MAX_RECORD_BYTES_V1))
+        .filter(|reserved| *reserved <= config.max_total_bytes)
+        .ok_or(BootleLanternIssuanceStoreErrorV1::CapacityExceeded)?;
+    loaded_bytes
+        .checked_add(record_bytes)
+        .filter(|total| *total <= config.max_total_bytes)
+        .ok_or(BootleLanternIssuanceStoreErrorV1::CapacityExceeded)
+}
+
 #[cfg(unix)]
 fn acquire_file_store_writer_lock_v1(
     root: &Path,
@@ -1832,6 +1928,12 @@ fn load_file_store_v1(
         {
             return Err(BootleLanternIssuanceStoreErrorV1::Corrupt);
         }
+        let next_canonical_bytes = admit_file_record_allocation_v1(
+            records.len(),
+            canonical_bytes,
+            metadata.len(),
+            config,
+        )?;
         let file = open_record_file_v1(&entry.path(), &metadata)?;
         let mut bytes = Vec::with_capacity(metadata.len() as usize);
         file.take(BOOTLE_LANTERN_ISSUANCE_STORE_MAX_RECORD_BYTES_V1 + 1)
@@ -1842,18 +1944,16 @@ fn load_file_store_v1(
         {
             return Err(BootleLanternIssuanceStoreErrorV1::Corrupt);
         }
-        let record = decode_record_v1(&bytes)?;
-        if record.authorization_id != file_id
-            || records.insert(record.authorization_id, record).is_some()
-        {
+        let mut record = decode_record_v1(&bytes)?;
+        if record.authorization_id != file_id {
             return Err(BootleLanternIssuanceStoreErrorV1::Corrupt);
         }
-        canonical_bytes = canonical_bytes
-            .checked_add(metadata.len())
-            .ok_or(BootleLanternIssuanceStoreErrorV1::CapacityExceeded)?;
-        if records.len() > config.max_records || canonical_bytes > config.max_total_bytes {
-            return Err(BootleLanternIssuanceStoreErrorV1::CapacityExceeded);
+        record.processing_at_file_open =
+            matches!(&record.state, StoredIssuanceStateV1::Processing { .. });
+        if records.insert(record.authorization_id, record).is_some() {
+            return Err(BootleLanternIssuanceStoreErrorV1::Corrupt);
         }
+        canonical_bytes = next_canonical_bytes;
     }
     let reserved = u64::try_from(records.len())
         .ok()
@@ -1862,16 +1962,8 @@ fn load_file_store_v1(
     if reserved > config.max_total_bytes {
         return Err(BootleLanternIssuanceStoreErrorV1::CapacityExceeded);
     }
-    let recovered_processing = records
-        .iter()
-        .filter_map(|(authorization_id, record)| {
-            matches!(&record.state, StoredIssuanceStateV1::Processing { .. })
-                .then_some(*authorization_id)
-        })
-        .collect();
     Ok(FileStoreStateV1 {
         records,
-        recovered_processing,
         canonical_bytes,
         poisoned: false,
     })
@@ -2067,6 +2159,23 @@ mod tests {
                 1,
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn file_record_allocation_is_admitted_before_payload_read() {
+        let config = one_record_config(1);
+        assert_eq!(
+            admit_file_record_allocation_v1(0, 0, STORE_RECORD_HEADER_BYTES_V1 as u64, config),
+            Ok(STORE_RECORD_HEADER_BYTES_V1 as u64)
+        );
+        assert_eq!(
+            admit_file_record_allocation_v1(1, 0, STORE_RECORD_HEADER_BYTES_V1 as u64, config),
+            Err(BootleLanternIssuanceStoreErrorV1::CapacityExceeded)
+        );
+        assert_eq!(
+            admit_file_record_allocation_v1(0, config.max_total_bytes, 1, config),
+            Err(BootleLanternIssuanceStoreErrorV1::CapacityExceeded)
         );
     }
 
@@ -2533,6 +2642,7 @@ mod tests {
                 completed_at_height: EXPIRES_AT + 1,
                 response_bytes: response_bytes(),
             },
+            processing_at_file_open: false,
         };
         let bytes = encode_record_v1(&record).unwrap();
         assert_eq!(bytes.len(), STORE_COMPLETED_BYTES_V1);
@@ -2822,6 +2932,11 @@ mod tests {
             recovered
                 .claim_v1(post_open.0, post_open.1, post_open.2, post_open.3)
                 .unwrap();
+            {
+                let state = recovered.state.lock().unwrap();
+                assert!(state.records[&AUTHORIZATION_ID].processing_at_file_open);
+                assert!(!state.records[&post_open.0].processing_at_file_open);
+            }
             assert_eq!(recovered.recover_processing_v1(EXPIRES_AT), Ok(1));
             assert_eq!(
                 recovered.preflight_v1(

@@ -182,11 +182,15 @@ _GOVERNANCE_BALLOT_METHODS = frozenset(
         "governance_submit_zk_ballot_proof_v1",
     }
 )
+_GOVERNANCE_CANONICAL_AUTH_METHODS = _GOVERNANCE_BALLOT_METHODS | {
+    "governance_deploy_contract_proposal",
+    "governance_enact_proposal",
+}
 
 
 def _invoke_governance(client: ToriiClient, method_name: str, payload: Mapping[str, Any]) -> Any:
     method = getattr(client, method_name)
-    if method_name in _GOVERNANCE_BALLOT_METHODS:
+    if method_name in _GOVERNANCE_CANONICAL_AUTH_METHODS:
         return method(payload, canonical_auth=GOVERNANCE_AUTH)
     return method(payload)
 
@@ -588,6 +592,7 @@ def test_governance_mutations_preserve_supported_canonical_payloads(
     if method_name in _GOVERNANCE_BALLOT_METHODS:
         expected["network_id"] = GOVERNANCE_NETWORK_ID.literal
         assert "chain_id" not in expected
+    if method_name in _GOVERNANCE_CANONICAL_AUTH_METHODS:
         assert session.calls[0]["headers"]["X-Iroha-Account"] == CANONICAL_AUTHORITY
         assert "X-Iroha-Signature" in session.calls[0]["headers"]
     if method_name == "governance_submit_plain_ballot":

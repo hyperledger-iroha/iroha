@@ -25,6 +25,7 @@ export const SORACLOUD_APP_INFRA_DEPLOY_WIRE_ID =
 export const SORACLOUD_APP_INFRA_UPGRADE_WIRE_ID =
   "iroha_data_model::isi::soracloud::UpgradeSoracloudAppInfra";
 const PRIVATE_UPLOADED_MODEL_COUNT_MODES = new Set(["bounded", "exact"]);
+const JSON_ACCEPT_HEADERS = Object.freeze({ Accept: "application/json" });
 
 function rejectSoracloudSigningSecrets(input) {
   if (input == null || (typeof input !== "object" && typeof input !== "function")) {
@@ -91,6 +92,49 @@ function normalizeSafePositiveIntegerValue(value, field) {
 
 function normalizeSafePositiveInteger(input, field) {
   return normalizeSafePositiveIntegerValue(input?.[field], field);
+}
+
+/**
+ * Fetch one exact-network account-authenticated Soracloud app status response.
+ *
+ * @param {object} client Torii client transport.
+ * @param {Record<string, unknown>} options Request options including `canonicalAuth`.
+ * @param {string | undefined} namedAppName Optional path-bound app name.
+ * @returns {Promise<unknown>}
+ */
+export async function requestSoracloudAppInfraStatus(
+  client,
+  options,
+  namedAppName = undefined,
+) {
+  const context = namedAppName === undefined
+    ? "getSoracloudAppInfraStatus"
+    : "getSoracloudNamedAppInfraStatus";
+  if (options == null || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError(`${context} options must be an object`);
+  }
+  if (options.canonicalAuth == null) {
+    throw new TypeError(`${context} options.canonicalAuth is required`);
+  }
+
+  const params = {};
+  const path = namedAppName === undefined
+    ? "/v1/soracloud/apps/status"
+    : `/v1/soracloud/apps/${encodeURIComponent(requireString({ appName: namedAppName }, "appName"))}/status`;
+  if (namedAppName === undefined && options.appName != null) {
+    params.app_name = requireString(options, "appName");
+  }
+  if (options.auditLimit != null) {
+    params.audit_limit = normalizeSafePositiveInteger(options, "auditLimit");
+  }
+  const response = await client._request("GET", path, {
+    params,
+    headers: JSON_ACCEPT_HEADERS,
+    signal: options.signal,
+    canonicalAuth: options.canonicalAuth,
+  });
+  await client._expectStatus(response, [200]);
+  return client._maybeJson(response);
 }
 
 function normalizeSignedI32(value, field) {

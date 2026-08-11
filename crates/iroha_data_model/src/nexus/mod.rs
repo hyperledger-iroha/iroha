@@ -561,6 +561,13 @@ impl norito::json::FastJsonWrite for LaneId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -579,6 +586,13 @@ impl norito::json::JsonDeserialize for LaneId {
 impl norito::json::FastJsonWrite for ShardId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
     }
 }
 
@@ -901,6 +915,13 @@ impl norito::json::FastJsonWrite for LaneVisibility {
         out.push_str(self.as_str());
         out.push('"');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_str(), out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -921,6 +942,13 @@ impl norito::json::FastJsonWrite for LaneStorageProfile {
         out.push('"');
         out.push_str(self.as_str());
         out.push('"');
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_str(), out)
     }
 }
 
@@ -984,6 +1012,38 @@ impl norito::json::FastJsonWrite for LaneConfig {
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.metadata, out);
         out.push('}');
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"id\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.id, out)?;
+        out.push_str(",\"dataspace_id\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.dataspace_id, out)?;
+        out.push_str(",\"alias\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.alias, out)?;
+        out.push_str(",\"description\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.description, out)?;
+        out.push_str(",\"visibility\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.visibility, out)?;
+        out.push_str(",\"lane_type\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.lane_type, out)?;
+        out.push_str(",\"governance\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.governance, out)?;
+        out.push_str(",\"settlement\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.settlement, out)?;
+        out.push_str(",\"storage\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.storage, out)?;
+        out.push_str(",\"proof_scheme\":")?;
+        norito::json::write_json_string_to(&self.proof_scheme.to_string(), out)?;
+        out.push_str(",\"metadata\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.metadata, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -1077,6 +1137,20 @@ impl norito::json::FastJsonWrite for LaneLifecyclePlan {
         norito::json::JsonSerialize::json_serialize(&self.retire, out);
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"additions\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.additions, out)?;
+        out.push_str(",\"retire\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.retire, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -1144,6 +1218,24 @@ impl norito::json::FastJsonWrite for LaneLifecycleParameterV1 {
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.plan, out);
         out.push('}');
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"version\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.version, out)?;
+        out.push_str(",\"expected_catalog_hash\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.expected_catalog_hash, out)?;
+        out.push_str(",\"expected_incarnation_root\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.expected_incarnation_root, out)?;
+        out.push_str(",\"plan\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.plan, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -1244,6 +1336,20 @@ impl norito::json::FastJsonWrite for LaneLifecycleIncarnationEntry {
         norito::json::JsonSerialize::json_serialize(&self.incarnation, out);
         out.push('}');
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"lane_id\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.lane_id, out)?;
+        out.push_str(",\"incarnation\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.incarnation, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]
@@ -1329,6 +1435,30 @@ impl norito::json::FastJsonWrite for LaneLifecycleStatusV1 {
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.incarnation_root, out);
         out.push('}');
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push_str("{\"version\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.version, out)?;
+        out.push_str(",\"nexus_enabled\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.nexus_enabled, out)?;
+        out.push_str(",\"lane_count\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.lane_count, out)?;
+        out.push_str(",\"lanes\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.lanes, out)?;
+        out.push_str(",\"catalog_hash\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.catalog_hash, out)?;
+        out.push_str(",\"incarnations\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.incarnations, out)?;
+        out.push_str(",\"incarnation_root\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.incarnation_root, out)?;
+        out.push('}')?;
+        out.end_container();
+        Ok(())
     }
 }
 
@@ -1716,6 +1846,13 @@ pub enum DataSpaceCatalogError {
 impl norito::json::FastJsonWrite for DataSpaceId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::JsonSerialize::json_serialize_to(&self.0, out)
     }
 }
 

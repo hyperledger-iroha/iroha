@@ -404,17 +404,102 @@ pub mod wire {
         pub Vec<u8>,
     );
 
-    impl ncore::NoritoSerialize for BlockSignatureWire {
+    /// Borrowed view of [`BlockSignatureWire`] used to stream the tuple wire
+    /// layout without cloning or staging the signature payload.
+    #[derive(Clone, Copy)]
+    pub(super) struct BlockSignatureWireRef<'a> {
+        index: u64,
+        payload: &'a [u8],
+    }
+
+    impl<'a> BlockSignatureWireRef<'a> {
+        pub(super) const fn new(index: u64, payload: &'a [u8]) -> Self {
+            Self { index, payload }
+        }
+
+        fn tuple_flags() -> u8 {
+            let defaults = ncore::default_encode_flags();
+            let dynamic_mask = ncore::header_flags::PACKED_SEQ;
+            let static_defaults = defaults & !dynamic_mask;
+            match ncore::effective_decode_flags() {
+                None => defaults,
+                Some(0) => 0,
+                Some(current) => {
+                    let current_dynamic = current & dynamic_mask;
+                    let current_static = current & !dynamic_mask;
+                    let effective_static = if current_static == 0 {
+                        static_defaults
+                    } else {
+                        current_static | static_defaults
+                    };
+                    current_dynamic | effective_static
+                }
+            }
+        }
+
+        fn payload_wire_len(&self) -> Option<usize> {
+            ncore::seq_len_prefix_len(self.payload.len()).checked_add(self.payload.len())
+        }
+    }
+
+    impl ncore::NoritoSerialize for BlockSignatureWireRef<'_> {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-            <(u64, Vec<u8>) as ncore::NoritoSerialize>::serialize(&(self.0, self.1.clone()), writer)
+            let flags = Self::tuple_flags();
+            let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+
+            let index_len = <u64 as ncore::NoritoSerialize>::encoded_len_exact(&self.index)
+                .ok_or(ncore::Error::LengthMismatch)?;
+            ncore::write_len_with_flags(
+                writer,
+                u64::try_from(index_len).map_err(|_| ncore::Error::LengthMismatch)?,
+                flags,
+            )?;
+            <u64 as ncore::NoritoSerialize>::serialize(&self.index, writer)?;
+
+            let payload_wire_len = self
+                .payload_wire_len()
+                .ok_or(ncore::Error::LengthMismatch)?;
+            ncore::write_len_with_flags(
+                writer,
+                u64::try_from(payload_wire_len).map_err(|_| ncore::Error::LengthMismatch)?,
+                flags,
+            )?;
+            ncore::write_seq_len(
+                writer,
+                u64::try_from(self.payload.len()).map_err(|_| ncore::Error::LengthMismatch)?,
+            )?;
+            writer.write_all(self.payload)?;
+            Ok(())
         }
 
         fn encoded_len_hint(&self) -> Option<usize> {
-            <(u64, Vec<u8>) as ncore::NoritoSerialize>::encoded_len_hint(&(self.0, self.1.clone()))
+            ncore::NoritoSerialize::encoded_len_exact(self)
         }
 
         fn encoded_len_exact(&self) -> Option<usize> {
-            <(u64, Vec<u8>) as ncore::NoritoSerialize>::encoded_len_exact(&(self.0, self.1.clone()))
+            let flags = Self::tuple_flags();
+            let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let index_len = <u64 as ncore::NoritoSerialize>::encoded_len_exact(&self.index)?;
+            let payload_wire_len = self.payload_wire_len()?;
+
+            ncore::len_prefix_len_with_flags(index_len, flags)
+                .checked_add(index_len)?
+                .checked_add(ncore::len_prefix_len_with_flags(payload_wire_len, flags))?
+                .checked_add(payload_wire_len)
+        }
+    }
+
+    impl ncore::NoritoSerialize for BlockSignatureWire {
+        fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
+            ncore::NoritoSerialize::serialize(&BlockSignatureWireRef::new(self.0, &self.1), writer)
+        }
+
+        fn encoded_len_hint(&self) -> Option<usize> {
+            ncore::NoritoSerialize::encoded_len_hint(&BlockSignatureWireRef::new(self.0, &self.1))
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            ncore::NoritoSerialize::encoded_len_exact(&BlockSignatureWireRef::new(self.0, &self.1))
         }
     }
 
@@ -716,18 +801,24 @@ impl BlockSignature {
 
 impl ncore::NoritoSerialize for BlockSignature {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        let wire_repr = wire::BlockSignatureWire::from(self);
-        ncore::NoritoSerialize::serialize(&wire_repr, writer)
+        ncore::NoritoSerialize::serialize(
+            &wire::BlockSignatureWireRef::new(self.index, self.signature.payload()),
+            writer,
+        )
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        let wire_repr = wire::BlockSignatureWire::from(self);
-        ncore::NoritoSerialize::encoded_len_hint(&wire_repr)
+        ncore::NoritoSerialize::encoded_len_hint(&wire::BlockSignatureWireRef::new(
+            self.index,
+            self.signature.payload(),
+        ))
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        let wire_repr = wire::BlockSignatureWire::from(self);
-        ncore::NoritoSerialize::encoded_len_exact(&wire_repr)
+        ncore::NoritoSerialize::encoded_len_exact(&wire::BlockSignatureWireRef::new(
+            self.index,
+            self.signature.payload(),
+        ))
     }
 }
 

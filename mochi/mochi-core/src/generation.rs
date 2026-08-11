@@ -24,6 +24,20 @@ const GENERATION_INVENTORY_FILE: &str = "generation.json";
 const GENERATION_SCHEMA: u64 = 1;
 const GENERATION_POINTER_TEMP_PREFIX: &str = ".current-generation.";
 const GENERATION_POINTER_TEMP_SUFFIX: &str = ".tmp";
+const GENERATION_FILE_HASH_BUFFER_BYTES: usize = 64 * 1024;
+// A generation is a seven-peer-at-most Mochi configuration bundle whose runtime
+// storage is pristine at publication. These V1 ceilings are deliberately far
+// above that source-derived shape while making corrupt directory and inventory
+// growth a fail-closed protocol error instead of a process-memory decision.
+const GENERATION_TREE_MAX_ENTRIES_V1: usize = 16_384;
+const GENERATION_TREE_MAX_DEPTH_V1: usize = 32;
+const GENERATION_INVENTORY_MAX_FILES_V1: usize = 8_192;
+const GENERATION_INVENTORY_MAX_PATH_BYTES_V1: usize = 4 * 1024 * 1024;
+const GENERATION_INVENTORY_MAX_PATH_BYTES_PER_FILE_V1: usize = 4 * 1024;
+const GENERATION_INVENTORY_MAX_BYTES_V1: usize = 8 * 1024 * 1024;
+const GENERATION_SMALL_RECORD_MAX_BYTES_V1: usize = 4 * 1024;
+const GENERATION_MAX_PEER_DIRECTORIES_V1: usize = 7;
+const GENERATION_ID_RECORD_BYTES: usize = 32 + 1;
 
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -432,12 +446,13 @@ impl GenerationTransaction {
     fn write_inventory(&self, context: &GenerationInventoryContext<'_>) -> Result<()> {
         let inventory_path = self.generation_root.join(GENERATION_INVENTORY_FILE);
         let files = generation_file_hashes(&self.generation_root, Some(&inventory_path))?;
-        let encoded_before = files
-            .iter()
-            .map(|(path, hash)| (path.as_str(), hash.as_str()))
-            .collect::<Vec<_>>();
 
-        let mut file_values = Vec::with_capacity(files.len());
+        let mut file_values = Vec::new();
+        file_values.try_reserve_exact(files.len()).map_err(|_| {
+            SupervisorError::GenerationValidation(
+                "generation inventory JSON allocation failed".to_owned(),
+            )
+        })?;
         for (path, hash) in &files {
             let mut entry = Map::new();
             entry.insert("path".to_owned(), Value::String(path.clone()));
@@ -466,7 +481,16 @@ impl GenerationTransaction {
         );
         inventory.insert("files".to_owned(), Value::Array(file_values));
 
-        let mut bytes = json::to_vec_pretty(&Value::Object(inventory))?;
+        let mut bytes = json::to_json_bounded(
+            &Value::Object(inventory),
+            GENERATION_INVENTORY_MAX_BYTES_V1 - 1,
+        )
+        .map_err(|error| {
+            SupervisorError::GenerationValidation(format!(
+                "generation inventory exceeds its V1 memory envelope: {error}"
+            ))
+        })?
+        .into_bytes();
         bytes.push(b'\n');
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
@@ -479,11 +503,7 @@ impl GenerationTransaction {
         // Re-hash after the inventory write. A concurrent mutation of any
         // candidate artifact therefore invalidates publication.
         let after = generation_file_hashes(&self.generation_root, Some(&inventory_path))?;
-        let encoded_after = after
-            .iter()
-            .map(|(path, hash)| (path.as_str(), hash.as_str()))
-            .collect::<Vec<_>>();
-        if encoded_after != encoded_before {
+        if after != files {
             return Err(SupervisorError::GenerationValidation(
                 "candidate generation changed while its inventory was being sealed".to_owned(),
             ));
@@ -559,9 +579,10 @@ fn generation_pointer_temporary_id(name: &OsStr) -> Result<Option<String>> {
 /// retained publication history, even when that history has since been
 /// damaged and no longer passes strict verification.
 fn recover_abandoned_generation_transactions(root: &Path, generations: &Path) -> Result<()> {
-    let mut markers = fs::read_dir(root)?.collect::<std::io::Result<Vec<_>>>()?;
-    markers.sort_by_key(fs::DirEntry::file_name);
-    for marker in markers {
+    let mut entries = 0_usize;
+    for marker in fs::read_dir(root)? {
+        let marker = marker?;
+        admit_generation_tree_entry(&mut entries)?;
         let Some(id) = generation_pointer_temporary_id(&marker.file_name())? else {
             continue;
         };
@@ -631,11 +652,26 @@ fn validate_generation_pointer_temporary(path: &Path, id: &str) -> Result<()> {
             path.display()
         )));
     }
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
-    if !expected.as_bytes().starts_with(&bytes) {
+    let observed_len = usize::try_from(file.metadata()?.len()).map_err(|_| {
+        SupervisorError::GenerationValidation(
+            "generation pointer temporary length does not fit usize".to_owned(),
+        )
+    })?;
+    let mut bytes = [0_u8; GENERATION_ID_RECORD_BYTES];
+    file.read_exact(&mut bytes[..observed_len])?;
+    let mut growth_probe = [0_u8; 1];
+    if file.read(&mut growth_probe)? != 0
+        || !expected.as_bytes().starts_with(&bytes[..observed_len])
+    {
         return Err(SupervisorError::GenerationValidation(format!(
             "generation pointer temporary `{}` has malformed contents",
+            path.display()
+        )));
+    }
+    validate_generation_pointer_temporary_file(path, &file)?;
+    if usize::try_from(file.metadata()?.len()).ok() != Some(observed_len) {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "generation pointer temporary `{}` changed while it was read",
             path.display()
         )));
     }
@@ -701,10 +737,28 @@ fn abandoned_runtime_storage_paths(root: &Path, id: &str) -> Result<Vec<PathBuf>
         Err(error) => return Err(error.into()),
     }
 
-    let mut aliases = fs::read_dir(&peers)?.collect::<std::io::Result<Vec<_>>>()?;
-    aliases.sort_by_key(fs::DirEntry::file_name);
     let mut storage_roots = Vec::new();
-    for alias in aliases {
+    storage_roots
+        .try_reserve_exact(GENERATION_MAX_PEER_DIRECTORIES_V1)
+        .map_err(|_| {
+            SupervisorError::GenerationValidation(
+                "runtime storage recovery allocation failed".to_owned(),
+            )
+        })?;
+    let mut aliases = 0_usize;
+    for alias in fs::read_dir(&peers)? {
+        let alias = alias?;
+        aliases = aliases.checked_add(1).ok_or_else(|| {
+            SupervisorError::GenerationValidation(
+                "runtime peer directory count overflowed usize".to_owned(),
+            )
+        })?;
+        if aliases > GENERATION_MAX_PEER_DIRECTORIES_V1 {
+            return Err(SupervisorError::GenerationValidation(format!(
+                "runtime peers exceed the Mochi V1 {}-peer limit",
+                GENERATION_MAX_PEER_DIRECTORIES_V1
+            )));
+        }
         let peer = alias.path();
         let metadata = fs::symlink_metadata(&peer)?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -801,7 +855,16 @@ pub(crate) fn current_generation_id(root: &Path) -> Result<Option<String>> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     }
-    let record = fs::read_to_string(&path)?;
+    let record = read_generation_file_bounded(
+        &path,
+        "current generation pointer",
+        GENERATION_ID_RECORD_BYTES,
+    )?;
+    let record = std::str::from_utf8(&record).map_err(|_| {
+        SupervisorError::GenerationValidation(
+            "current-generation must contain canonical UTF-8".to_owned(),
+        )
+    })?;
     let id = record.strip_suffix('\n').ok_or_else(|| {
         SupervisorError::GenerationValidation(
             "current-generation must end in exactly one newline".to_owned(),
@@ -836,9 +899,40 @@ pub(crate) fn verify_selected_generation(root: &Path, id: &str) -> Result<Verifi
             "selected generation `{id}` is incomplete"
         )));
     }
-    let bytes = fs::read(&inventory_path)?;
+    let bytes = read_generation_file_bounded(
+        &inventory_path,
+        "generation inventory",
+        GENERATION_INVENTORY_MAX_BYTES_V1,
+    )?;
+    const INVENTORY_JSON_ELEMENTS_V1: usize = GENERATION_INVENTORY_MAX_FILES_V1 * 4 + 64;
+    json::preflight_slice(
+        &bytes,
+        json::JsonPreflightLimits::new(
+            GENERATION_INVENTORY_MAX_BYTES_V1,
+            INVENTORY_JSON_ELEMENTS_V1 + 1,
+            GENERATION_INVENTORY_MAX_PATH_BYTES_PER_FILE_V1 * 6 + 2,
+            GENERATION_INVENTORY_MAX_PATH_BYTES_PER_FILE_V1,
+            GENERATION_INVENTORY_MAX_BYTES_V1,
+            GENERATION_INVENTORY_MAX_FILES_V1,
+            GENERATION_INVENTORY_MAX_FILES_V1,
+            INVENTORY_JSON_ELEMENTS_V1,
+            INVENTORY_JSON_ELEMENTS_V1,
+            8,
+        ),
+    )
+    .map_err(|error| {
+        SupervisorError::GenerationValidation(format!(
+            "selected generation `{id}` inventory exceeds its V1 JSON envelope: {error}"
+        ))
+    })?;
     let value: Value = json::from_slice(&bytes)?;
-    let mut canonical = json::to_vec_pretty(&value)?;
+    let mut canonical = json::to_json_bounded(&value, GENERATION_INVENTORY_MAX_BYTES_V1 - 1)
+        .map_err(|error| {
+            SupervisorError::GenerationValidation(format!(
+                "selected generation `{id}` inventory cannot be canonically bounded: {error}"
+            ))
+        })?
+        .into_bytes();
     canonical.push(b'\n');
     if canonical != bytes {
         return Err(SupervisorError::GenerationValidation(format!(
@@ -927,67 +1021,94 @@ pub(crate) fn verify_selected_generation(root: &Path, id: &str) -> Result<Verifi
             "generation inventory expected_hash is not canonical".to_owned(),
         ));
     }
-    let recorded = object
+    let recorded_entries = object
         .get("files")
         .and_then(Value::as_array)
         .ok_or_else(|| {
             SupervisorError::GenerationValidation(
                 "generation inventory omitted its files array".to_owned(),
             )
-        })?
-        .iter()
-        .map(|entry| {
-            let entry = entry.as_object().ok_or_else(|| {
-                SupervisorError::GenerationValidation(
-                    "generation inventory contains a non-object file entry".to_owned(),
-                )
-            })?;
-            if entry.len() != 2 || !entry.contains_key("path") || !entry.contains_key("blake3") {
-                return Err(SupervisorError::GenerationValidation(
-                    "generation inventory file entries must contain exactly `path` and `blake3`"
-                        .to_owned(),
-                ));
-            }
-            let path = entry.get("path").and_then(Value::as_str).ok_or_else(|| {
-                SupervisorError::GenerationValidation(
-                    "generation inventory file entry omitted path".to_owned(),
-                )
-            })?;
-            let hash = entry.get("blake3").and_then(Value::as_str).ok_or_else(|| {
-                SupervisorError::GenerationValidation(
-                    "generation inventory file entry omitted blake3".to_owned(),
-                )
-            })?;
-            if hash.len() != 64
-                || !hash
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            {
-                return Err(SupervisorError::GenerationValidation(format!(
-                    "generation inventory file `{path}` has a non-canonical BLAKE3 digest"
-                )));
-            }
-            let candidate = Path::new(path);
-            if candidate.is_absolute()
-                || candidate
-                    .components()
-                    .any(|component| !matches!(component, std::path::Component::Normal(_)))
-            {
-                return Err(SupervisorError::GenerationValidation(format!(
-                    "generation inventory contains unsafe path `{path}`"
-                )));
-            }
-            Ok((path.to_owned(), hash.to_owned()))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut sorted_recorded = recorded.clone();
-    sorted_recorded.sort();
-    sorted_recorded.dedup();
-    if recorded != sorted_recorded {
-        return Err(SupervisorError::GenerationValidation(
-            "generation inventory file entries must be unique and sorted".to_owned(),
+        })?;
+    if recorded_entries.len() > GENERATION_INVENTORY_MAX_FILES_V1 {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "generation inventory exceeds the V1 {}-file limit",
+            GENERATION_INVENTORY_MAX_FILES_V1
+        )));
+    }
+    let mut recorded = Vec::new();
+    recorded
+        .try_reserve_exact(recorded_entries.len())
+        .map_err(|_| {
+            SupervisorError::GenerationValidation(
+                "generation inventory record allocation failed".to_owned(),
+            )
+        })?;
+    let mut recorded_files = 0_usize;
+    let mut recorded_path_bytes = 0_usize;
+    for entry in recorded_entries {
+        let entry = entry.as_object().ok_or_else(|| {
+            SupervisorError::GenerationValidation(
+                "generation inventory contains a non-object file entry".to_owned(),
+            )
+        })?;
+        if entry.len() != 2 || !entry.contains_key("path") || !entry.contains_key("blake3") {
+            return Err(SupervisorError::GenerationValidation(
+                "generation inventory file entries must contain exactly `path` and `blake3`"
+                    .to_owned(),
+            ));
+        }
+        let path = entry.get("path").and_then(Value::as_str).ok_or_else(|| {
+            SupervisorError::GenerationValidation(
+                "generation inventory file entry omitted path".to_owned(),
+            )
+        })?;
+        let hash = entry.get("blake3").and_then(Value::as_str).ok_or_else(|| {
+            SupervisorError::GenerationValidation(
+                "generation inventory file entry omitted blake3".to_owned(),
+            )
+        })?;
+        admit_generation_inventory_file(&mut recorded_files, &mut recorded_path_bytes, path.len())?;
+        if hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(SupervisorError::GenerationValidation(format!(
+                "generation inventory file `{path}` has a non-canonical BLAKE3 digest"
+            )));
+        }
+        let candidate = Path::new(path);
+        if candidate.is_absolute()
+            || candidate
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(SupervisorError::GenerationValidation(format!(
+                "generation inventory contains unsafe path `{path}`"
+            )));
+        }
+        if recorded
+            .last()
+            .is_some_and(|(previous_path, previous_hash)| {
+                (previous_path.as_str(), previous_hash.as_str()) >= (path, hash)
+                    || previous_path == path
+            })
+        {
+            return Err(SupervisorError::GenerationValidation(
+                "generation inventory file entries must be unique and sorted".to_owned(),
+            ));
+        }
+        recorded.push((
+            copy_generation_text(path, "record path")?,
+            copy_generation_text(hash, "record digest")?,
         ));
     }
+    if recorded.len() != recorded_entries.len() {
+        return Err(SupervisorError::GenerationValidation(
+            "generation inventory record count changed while parsing".to_owned(),
+        ));
+    }
+    drop(value);
     let actual = generation_file_hashes(&generation_root, Some(&inventory_path))?;
     if recorded != actual {
         return Err(SupervisorError::GenerationValidation(format!(
@@ -1007,10 +1128,16 @@ pub(crate) fn verify_selected_generation(root: &Path, id: &str) -> Result<Verifi
         }
     }
     if !recorded.iter().any(|(path, _)| {
-        let components = Path::new(path).components().collect::<Vec<_>>();
-        components.len() == 3
-            && components[0].as_os_str() == "peers"
-            && components[2].as_os_str() == "config.toml"
+        let mut components = Path::new(path).components();
+        matches!(
+            components.next(),
+            Some(std::path::Component::Normal(value)) if value == "peers"
+        ) && matches!(components.next(), Some(std::path::Component::Normal(_)))
+            && matches!(
+                components.next(),
+                Some(std::path::Component::Normal(value)) if value == "config.toml"
+            )
+            && components.next().is_none()
     }) {
         return Err(SupervisorError::GenerationValidation(format!(
             "selected generation `{id}` inventory contains no peer config"
@@ -1018,13 +1145,23 @@ pub(crate) fn verify_selected_generation(root: &Path, id: &str) -> Result<Verifi
     }
 
     let public_key_path = generation_root.join("genesis/genesis.public_key");
-    if fs::read_to_string(&public_key_path)? != format!("{genesis_public_key}\n") {
+    let public_key_bytes = read_generation_file_bounded(
+        &public_key_path,
+        "generation public-key record",
+        GENERATION_SMALL_RECORD_MAX_BYTES_V1,
+    )?;
+    if public_key_bytes != format!("{genesis_public_key}\n").as_bytes() {
         return Err(SupervisorError::GenerationValidation(format!(
             "selected generation `{id}` public-key record is not exact"
         )));
     }
     let expected_hash_path = generation_root.join("genesis/genesis.expected_hash");
-    if fs::read_to_string(&expected_hash_path)? != format!("{expected_hash}\n") {
+    let expected_hash_bytes = read_generation_file_bounded(
+        &expected_hash_path,
+        "generation expected-hash record",
+        GENERATION_SMALL_RECORD_MAX_BYTES_V1,
+    )?;
+    if expected_hash_bytes != format!("{expected_hash}\n").as_bytes() {
         return Err(SupervisorError::GenerationValidation(format!(
             "selected generation `{id}` expected-hash record is not exact"
         )));
@@ -1152,16 +1289,234 @@ fn candidate_runtime_storage_is_safe(root: &Path, id: &str, path: &Path) -> bool
             .is_some_and(|(parent, candidate)| candidate.parent() == Some(parent.as_path()))
 }
 
+fn generation_file_metadata_unchanged(expected: &fs::Metadata, observed: &fs::Metadata) -> bool {
+    if !expected.is_file() || !observed.is_file() || expected.len() != observed.len() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        expected.dev() == observed.dev()
+            && expected.ino() == observed.ino()
+            && expected.mtime() == observed.mtime()
+            && expected.mtime_nsec() == observed.mtime_nsec()
+            && expected.ctime() == observed.ctime()
+            && expected.ctime_nsec() == observed.ctime_nsec()
+    }
+    #[cfg(not(unix))]
+    {
+        expected.modified().ok() == observed.modified().ok()
+    }
+}
+
+fn admit_generation_tree_entry(entries: &mut usize) -> Result<()> {
+    *entries = (*entries).checked_add(1).ok_or_else(|| {
+        SupervisorError::GenerationValidation(
+            "candidate generation entry count overflowed usize".to_owned(),
+        )
+    })?;
+    if *entries > GENERATION_TREE_MAX_ENTRIES_V1 {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "candidate generation exceeds the V1 {}-entry tree limit",
+            GENERATION_TREE_MAX_ENTRIES_V1
+        )));
+    }
+    Ok(())
+}
+
+fn admit_generation_inventory_file(
+    files: &mut usize,
+    aggregate_path_bytes: &mut usize,
+    path_bytes: usize,
+) -> Result<()> {
+    if path_bytes > GENERATION_INVENTORY_MAX_PATH_BYTES_PER_FILE_V1 {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "candidate generation path exceeds the V1 {}-byte limit",
+            GENERATION_INVENTORY_MAX_PATH_BYTES_PER_FILE_V1
+        )));
+    }
+    *files = (*files).checked_add(1).ok_or_else(|| {
+        SupervisorError::GenerationValidation(
+            "candidate generation file count overflowed usize".to_owned(),
+        )
+    })?;
+    if *files > GENERATION_INVENTORY_MAX_FILES_V1 {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "candidate generation exceeds the V1 {}-file inventory limit",
+            GENERATION_INVENTORY_MAX_FILES_V1
+        )));
+    }
+    *aggregate_path_bytes = (*aggregate_path_bytes)
+        .checked_add(path_bytes)
+        .ok_or_else(|| {
+            SupervisorError::GenerationValidation(
+                "candidate generation path-byte total overflowed usize".to_owned(),
+            )
+        })?;
+    if *aggregate_path_bytes > GENERATION_INVENTORY_MAX_PATH_BYTES_V1 {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "candidate generation exceeds the V1 {}-byte aggregate path limit",
+            GENERATION_INVENTORY_MAX_PATH_BYTES_V1
+        )));
+    }
+    Ok(())
+}
+
+fn copy_generation_text(value: &str, label: &'static str) -> Result<String> {
+    let mut output = String::new();
+    output.try_reserve_exact(value.len()).map_err(|_| {
+        SupervisorError::GenerationValidation(format!(
+            "candidate generation {label} allocation failed"
+        ))
+    })?;
+    output.push_str(value);
+    Ok(output)
+}
+
+fn read_generation_file_bounded(
+    path: &Path,
+    label: &'static str,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
+    let named = fs::symlink_metadata(path)?;
+    if named.file_type().is_symlink() || !named.is_file() {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "{label} `{}` is not a regular file",
+            path.display()
+        )));
+    }
+    if named.len() > u64::try_from(max_bytes).unwrap_or(u64::MAX) {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "{label} `{}` exceeds its {max_bytes}-byte limit",
+            path.display()
+        )));
+    }
+    let expected_len = usize::try_from(named.len()).map_err(|_| {
+        SupervisorError::GenerationValidation(format!(
+            "{label} `{}` length does not fit usize",
+            path.display()
+        ))
+    })?;
+    let mut file = File::open(path)?;
+    let opened = file.metadata()?;
+    if !generation_file_metadata_unchanged(&named, &opened) {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "{label} `{}` changed while it was opened",
+            path.display()
+        )));
+    }
+
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(expected_len).map_err(|_| {
+        SupervisorError::GenerationValidation(format!(
+            "{label} `{}` allocation failed",
+            path.display()
+        ))
+    })?;
+    bytes.resize(expected_len, 0);
+    file.read_exact(&mut bytes)?;
+    let mut growth_probe = [0_u8; 1];
+    if file.read(&mut growth_probe)? != 0 {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "{label} `{}` grew while it was read",
+            path.display()
+        )));
+    }
+    let opened_after = file.metadata()?;
+    let named_after = fs::symlink_metadata(path)?;
+    if named_after.file_type().is_symlink()
+        || !generation_file_metadata_unchanged(&named, &opened_after)
+        || !generation_file_metadata_unchanged(&named, &named_after)
+    {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "{label} `{}` changed while it was read",
+            path.display()
+        )));
+    }
+    Ok(bytes)
+}
+
+fn hash_generation_file(path: &Path, expected: &fs::Metadata) -> Result<String> {
+    let mut file = File::open(path)?;
+    let opened = file.metadata()?;
+    if !generation_file_metadata_unchanged(expected, &opened) {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "candidate generation file `{}` changed while it was opened",
+            path.display()
+        )));
+    }
+
+    let mut hasher = blake3::Hasher::new();
+    let mut buffer = [0_u8; GENERATION_FILE_HASH_BUFFER_BYTES];
+    let mut observed_bytes = 0_u64;
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        observed_bytes = observed_bytes
+            .checked_add(u64::try_from(read).map_err(|_| {
+                SupervisorError::GenerationValidation(
+                    "candidate generation read length does not fit u64".to_owned(),
+                )
+            })?)
+            .ok_or_else(|| {
+                SupervisorError::GenerationValidation(
+                    "candidate generation file length overflowed u64".to_owned(),
+                )
+            })?;
+        if observed_bytes > expected.len() {
+            return Err(SupervisorError::GenerationValidation(format!(
+                "candidate generation file `{}` grew while it was hashed",
+                path.display()
+            )));
+        }
+        hasher.update(&buffer[..read]);
+    }
+
+    let opened_after = file.metadata()?;
+    let named_after = fs::symlink_metadata(path)?;
+    if named_after.file_type().is_symlink()
+        || observed_bytes != expected.len()
+        || !generation_file_metadata_unchanged(expected, &opened_after)
+        || !generation_file_metadata_unchanged(expected, &named_after)
+    {
+        return Err(SupervisorError::GenerationValidation(format!(
+            "candidate generation file `{}` changed while it was hashed",
+            path.display()
+        )));
+    }
+    let digest = hasher.finalize();
+    let mut encoded = String::new();
+    encoded.try_reserve_exact(64).map_err(|_| {
+        SupervisorError::GenerationValidation(
+            "candidate generation digest allocation failed".to_owned(),
+        )
+    })?;
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for &byte in digest.as_bytes() {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    Ok(encoded)
+}
+
 fn generation_file_hashes(root: &Path, excluded: Option<&Path>) -> Result<Vec<(String, String)>> {
-    fn visit(
-        root: &Path,
-        directory: &Path,
-        excluded: Option<&Path>,
-        output: &mut Vec<(String, String)>,
-    ) -> Result<()> {
-        let mut entries = fs::read_dir(directory)?.collect::<std::io::Result<Vec<_>>>()?;
-        entries.sort_by_key(fs::DirEntry::file_name);
-        for entry in entries {
+    let mut output = Vec::new();
+    let mut pending = Vec::new();
+    pending.try_reserve_exact(1).map_err(|_| {
+        SupervisorError::GenerationValidation(
+            "candidate generation traversal allocation failed".to_owned(),
+        )
+    })?;
+    pending.push((root.to_path_buf(), 0_usize));
+    let mut tree_entries = 0_usize;
+    let mut file_count = 0_usize;
+    let mut aggregate_path_bytes = 0_usize;
+
+    while let Some((directory, depth)) = pending.pop() {
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            admit_generation_tree_entry(&mut tree_entries)?;
             let path = entry.path();
             let metadata = fs::symlink_metadata(&path)?;
             if metadata.file_type().is_symlink() {
@@ -1171,7 +1526,23 @@ fn generation_file_hashes(root: &Path, excluded: Option<&Path>) -> Result<Vec<(S
                 )));
             }
             if metadata.is_dir() {
-                visit(root, &path, excluded, output)?;
+                let child_depth = depth.checked_add(1).ok_or_else(|| {
+                    SupervisorError::GenerationValidation(
+                        "candidate generation directory depth overflowed usize".to_owned(),
+                    )
+                })?;
+                if child_depth > GENERATION_TREE_MAX_DEPTH_V1 {
+                    return Err(SupervisorError::GenerationValidation(format!(
+                        "candidate generation exceeds the V1 {}-level directory-depth limit",
+                        GENERATION_TREE_MAX_DEPTH_V1
+                    )));
+                }
+                pending.try_reserve(1).map_err(|_| {
+                    SupervisorError::GenerationValidation(
+                        "candidate generation traversal allocation failed".to_owned(),
+                    )
+                })?;
+                pending.push((path, child_depth));
             } else if metadata.is_file() && excluded != Some(path.as_path()) {
                 let relative = path.strip_prefix(root).map_err(|error| {
                     SupervisorError::GenerationValidation(format!(
@@ -1183,8 +1554,19 @@ fn generation_file_hashes(root: &Path, excluded: Option<&Path>) -> Result<Vec<(S
                         "candidate generation contains a non-UTF-8 path".to_owned(),
                     )
                 })?;
-                let hash = blake3::hash(&fs::read(&path)?).to_hex().to_string();
-                output.push((relative.to_owned(), hash));
+                admit_generation_inventory_file(
+                    &mut file_count,
+                    &mut aggregate_path_bytes,
+                    relative.len(),
+                )?;
+                let hash = hash_generation_file(&path, &metadata)?;
+                let relative = copy_generation_text(relative, "path")?;
+                output.try_reserve(1).map_err(|_| {
+                    SupervisorError::GenerationValidation(
+                        "candidate generation inventory allocation failed".to_owned(),
+                    )
+                })?;
+                output.push((relative, hash));
             } else if !metadata.is_file() {
                 return Err(SupervisorError::GenerationValidation(format!(
                     "candidate generation contains non-regular entry `{}`",
@@ -1192,39 +1574,77 @@ fn generation_file_hashes(root: &Path, excluded: Option<&Path>) -> Result<Vec<(S
                 )));
             }
         }
-        Ok(())
     }
-
-    let mut output = Vec::new();
-    visit(root, root, excluded, &mut output)?;
-    output.sort();
+    output.sort_unstable();
     Ok(output)
 }
 
 fn sync_tree(path: &Path) -> Result<()> {
-    let mut entries = fs::read_dir(path)?.collect::<std::io::Result<Vec<_>>>()?;
-    entries.sort_by_key(fs::DirEntry::file_name);
-    for entry in entries {
-        let path = entry.path();
-        let metadata = fs::symlink_metadata(&path)?;
-        if metadata.file_type().is_symlink() {
-            return Err(SupervisorError::GenerationValidation(format!(
-                "candidate publication tree contains symbolic link `{}`",
-                path.display()
-            )));
-        }
-        if metadata.is_dir() {
-            sync_tree(&path)?;
-        } else if metadata.is_file() {
-            File::open(&path)?.sync_all()?;
-        } else {
-            return Err(SupervisorError::GenerationValidation(format!(
-                "candidate publication tree contains non-regular entry `{}`",
-                path.display()
-            )));
+    let mut pending = Vec::new();
+    let mut directories = Vec::new();
+    pending.try_reserve_exact(1).map_err(|_| {
+        SupervisorError::GenerationValidation(
+            "candidate publication traversal allocation failed".to_owned(),
+        )
+    })?;
+    directories.try_reserve_exact(1).map_err(|_| {
+        SupervisorError::GenerationValidation(
+            "candidate publication directory allocation failed".to_owned(),
+        )
+    })?;
+    pending.push((path.to_path_buf(), 0_usize));
+    directories.push(path.to_path_buf());
+    let mut tree_entries = 0_usize;
+
+    while let Some((directory, depth)) = pending.pop() {
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            admit_generation_tree_entry(&mut tree_entries)?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                return Err(SupervisorError::GenerationValidation(format!(
+                    "candidate publication tree contains symbolic link `{}`",
+                    path.display()
+                )));
+            }
+            if metadata.is_dir() {
+                let child_depth = depth.checked_add(1).ok_or_else(|| {
+                    SupervisorError::GenerationValidation(
+                        "candidate publication directory depth overflowed usize".to_owned(),
+                    )
+                })?;
+                if child_depth > GENERATION_TREE_MAX_DEPTH_V1 {
+                    return Err(SupervisorError::GenerationValidation(format!(
+                        "candidate publication exceeds the V1 {}-level directory-depth limit",
+                        GENERATION_TREE_MAX_DEPTH_V1
+                    )));
+                }
+                pending.try_reserve(1).map_err(|_| {
+                    SupervisorError::GenerationValidation(
+                        "candidate publication traversal allocation failed".to_owned(),
+                    )
+                })?;
+                directories.try_reserve(1).map_err(|_| {
+                    SupervisorError::GenerationValidation(
+                        "candidate publication directory allocation failed".to_owned(),
+                    )
+                })?;
+                pending.push((path.clone(), child_depth));
+                directories.push(path);
+            } else if metadata.is_file() {
+                File::open(&path)?.sync_all()?;
+            } else {
+                return Err(SupervisorError::GenerationValidation(format!(
+                    "candidate publication tree contains non-regular entry `{}`",
+                    path.display()
+                )));
+            }
         }
     }
-    sync_directory(path)?;
+    for directory in directories.into_iter().rev() {
+        sync_directory(&directory)?;
+    }
     Ok(())
 }
 
@@ -1294,6 +1714,85 @@ fn encode_lower_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use iroha_crypto::KeyPair;
+
+    #[test]
+    fn generation_file_hash_streams_across_multiple_chunks() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let path = temp.path().join("large-generation-artifact.bin");
+        let bytes = (0..GENERATION_FILE_HASH_BUFFER_BYTES * 2 + 17)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        fs::write(&path, &bytes).expect("write multi-chunk artifact");
+        let metadata = fs::symlink_metadata(&path).expect("inspect multi-chunk artifact");
+
+        let observed = hash_generation_file(&path, &metadata).expect("stream artifact hash");
+
+        assert_eq!(observed, blake3::hash(&bytes).to_hex().to_string());
+    }
+
+    #[test]
+    fn generation_tree_and_inventory_budgets_accept_exact_and_reject_next() {
+        let mut entries = GENERATION_TREE_MAX_ENTRIES_V1 - 1;
+        admit_generation_tree_entry(&mut entries).expect("exact tree-entry limit");
+        assert!(admit_generation_tree_entry(&mut entries).is_err());
+
+        let mut files = GENERATION_INVENTORY_MAX_FILES_V1 - 1;
+        let mut path_bytes = GENERATION_INVENTORY_MAX_PATH_BYTES_V1
+            - GENERATION_INVENTORY_MAX_PATH_BYTES_PER_FILE_V1;
+        admit_generation_inventory_file(
+            &mut files,
+            &mut path_bytes,
+            GENERATION_INVENTORY_MAX_PATH_BYTES_PER_FILE_V1,
+        )
+        .expect("exact generation inventory limits");
+        assert!(
+            admit_generation_inventory_file(&mut files, &mut path_bytes, 0).is_err(),
+            "the first file beyond the V1 limit must fail closed"
+        );
+
+        let mut path_only_files = 0;
+        let mut path_only_bytes = GENERATION_INVENTORY_MAX_PATH_BYTES_V1;
+        assert!(
+            admit_generation_inventory_file(&mut path_only_files, &mut path_only_bytes, 1).is_err(),
+            "the first aggregate path byte beyond the V1 limit must fail closed"
+        );
+    }
+
+    #[test]
+    fn bounded_generation_reader_accepts_exact_and_rejects_max_plus_one() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let path = temp.path().join("generation.json");
+        fs::write(&path, [0x5A_u8; 32]).expect("write exact generation record");
+        assert_eq!(
+            read_generation_file_bounded(&path, "test generation record", 32)
+                .expect("read exact generation record"),
+            [0x5A_u8; 32]
+        );
+
+        fs::write(&path, [0x5A_u8; 33]).expect("write oversized generation record");
+        let error = read_generation_file_bounded(&path, "test generation record", 32)
+            .expect_err("max plus one must reject before allocation");
+        assert!(error.to_string().contains("exceeds its 32-byte limit"));
+    }
+
+    #[test]
+    fn generation_file_inventory_is_sorted_after_streaming_walk() {
+        let temp = tempfile::tempdir().expect("temporary root");
+        let nested = temp.path().join("nested");
+        fs::create_dir(&nested).expect("create nested generation directory");
+        fs::write(temp.path().join("z.bin"), b"zeta").expect("write root artifact");
+        fs::write(nested.join("a.bin"), b"alpha").expect("write nested artifact");
+
+        let observed =
+            generation_file_hashes(temp.path(), None).expect("stream generation inventory files");
+        assert_eq!(
+            observed
+                .iter()
+                .map(|(path, _)| path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["nested/a.bin", "z.bin"]
+        );
+    }
 
     fn write_complete_candidate(
         root: &Path,
@@ -1986,7 +2485,9 @@ mod tests {
             "chain_id".to_owned(),
             Value::String("substituted-chain".to_owned()),
         );
-        let mut bytes = json::to_vec_pretty(&value).expect("encode substituted inventory");
+        let mut bytes = json::to_json_bounded(&value, GENERATION_INVENTORY_MAX_BYTES_V1 - 1)
+            .expect("encode substituted inventory")
+            .into_bytes();
         bytes.push(b'\n');
         fs::write(&inventory, bytes).expect("write substituted inventory");
         let error = verify_selected_generation(temp.path(), &id)
@@ -2024,7 +2525,9 @@ mod tests {
                 entry.insert("blake3".to_owned(), Value::String("A".repeat(64)));
                 "non-canonical BLAKE3 digest"
             };
-            let mut bytes = json::to_vec_pretty(&value).expect("encode mutated inventory");
+            let mut bytes = json::to_json_bounded(&value, GENERATION_INVENTORY_MAX_BYTES_V1 - 1)
+                .expect("encode mutated inventory")
+                .into_bytes();
             bytes.push(b'\n');
             fs::write(&inventory, bytes).expect("write mutated inventory");
             let error = verify_selected_generation(temp.path(), &id)

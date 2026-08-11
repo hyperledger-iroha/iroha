@@ -31,7 +31,14 @@ Both paths emit `ProofEvent::Pruned` with the backend, removed ids (bounded by
 ## Surfacing and tooling
 
 - Status endpoint: `GET /v1/proofs/retention` returns caps, grace, prune_batch,
-  total records, total prunable, and per-backend counts.
+  total records, total prunable, and per-backend counts. Because these are
+  node-local retention details, the request requires a fresh, exact-network
+  `OperatorSignature` over `GET`, the exact path and query, and an empty body;
+  redirects, retries, and token fallback are rejected. Status aggregation keeps
+  only one scalar summary per backend; it does not clone, sort, or retain the
+  full proof-id population in response memory. The first-release protocol caps
+  one status response at 256 distinct backends and fails closed with HTTP 422
+  before inserting a 257th backend summary.
 - CLI: `iroha app zk proofs retention` (status) and `iroha app zk proofs prune` (manual
   enforcement).
 - Events: subscribe to `DataEvent::Proof(ProofEvent::Pruned)` via SSE/WS filters

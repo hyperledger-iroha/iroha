@@ -28,9 +28,8 @@ use iroha_core::soracloud_runtime::{
     SoracloudLocalReadKind, SoracloudPrivateUploadedModelExecutionRequestV1,
     SoracloudQuantizedCpuModelV1, SoracloudQuantizedRoundingV1, SoracloudRuntimeExecutionErrorKind,
     SoracloudRuntimeHfSourcePlan, SoracloudRuntimeHfSourceStatus,
-    SoracloudUploadedModelEncryptionRecipient, build_soracloud_hf_generated_agent_manifest,
-    build_soracloud_hf_generated_service_bundle, execute_private_uploaded_model_quantized_cpu_v1,
-    soracloud_hf_generated_source_binding,
+    build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
+    execute_private_uploaded_model_quantized_cpu_v1, soracloud_hf_generated_source_binding,
 };
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
@@ -112,6 +111,9 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 use tokio::sync::RwLock;
 
 use crate::{JsonBody, NoritoJson, NoritoQuery, SharedAppState};
+
+mod bounded_public_response;
+mod hf_model_info_response;
 
 const CONTROL_PLANE_SCHEMA_VERSION: u16 = 1;
 const PUBLIC_SERVICE_DISCOVERY_CONFIG_NAME: &str = "soracloud/public_service_discovery";
@@ -3292,62 +3294,26 @@ async fn derive_hf_resource_profile(
             response.status()
         )));
     }
-    let body = response.bytes().await.map_err(|err| {
-        SoracloudError::internal(format!(
-            "failed to read Hugging Face model info response from {info_url}: {err}"
-        ))
-    })?;
-    let model_info: norito::json::Value = norito::json::from_slice(&body).map_err(|err| {
-        SoracloudError::internal(format!(
-            "failed to decode Hugging Face model info JSON for `{repo_id}@{resolved_revision}`: {err}"
-        ))
-    })?;
-    let sibling_paths = model_info
-        .get("siblings")
-        .and_then(norito::json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry.get("rfilename").and_then(norito::json::Value::as_str))
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-
-    let select_paths = |extensions: &[&str]| {
-        sibling_paths
-            .iter()
-            .filter(|path| {
-                let normalized = path.to_ascii_lowercase();
-                extensions
-                    .iter()
-                    .any(|extension| normalized.ends_with(extension))
-            })
-            .cloned()
-            .collect::<Vec<_>>()
-    };
-    let (backend_family, model_format, weight_files) = if let files @ [_first, ..] =
-        select_paths(&[".gguf"]).as_slice()
-    {
-        (
-            SoraHfBackendFamilyV1::Gguf,
-            SoraHfModelFormatV1::Gguf,
-            files.to_vec(),
-        )
-    } else if let files @ [_first, ..] = select_paths(&[".safetensors"]).as_slice() {
-        (
-            SoraHfBackendFamilyV1::Transformers,
-            SoraHfModelFormatV1::Safetensors,
-            files.to_vec(),
-        )
-    } else if let files @ [_first, ..] = select_paths(&[".bin", ".pt", ".pth"]).as_slice() {
-        (
-            SoraHfBackendFamilyV1::Transformers,
-            SoraHfModelFormatV1::PyTorch,
-            files.to_vec(),
-        )
-    } else {
+    let body = hf_model_info_response::read(response, config, repo_id, resolved_revision).await?;
+    let model_info = hf_model_info_response::decode(&body, config, repo_id, resolved_revision)?;
+    // The decoded tree owns its strings, so the bounded wire buffer need not
+    // remain resident while the provider-controlled sibling list is handled.
+    drop(body);
+    let Some((backend_family, model_format, weight_files)) =
+        hf_model_info_response::select_weight_files(
+            &model_info,
+            config,
+            repo_id,
+            resolved_revision,
+        )?
+    else {
         return Err(SoracloudError::conflict(format!(
             "no supported Hugging Face model weights were found for `{repo_id}@{resolved_revision}`"
         )));
     };
+    // Release the decoded metadata before issuing one HEAD request per selected
+    // weight file; only the paths needed for deterministic profile derivation remain.
+    drop(model_info);
 
     let mut required_model_bytes = 0_u64;
     for file_path in &weight_files {
@@ -8596,20 +8562,6 @@ fn authoritative_agent_execution_audit_record(
     }
 }
 
-fn authoritative_uploaded_model_encryption_recipient(
-    recipient: SoracloudUploadedModelEncryptionRecipient,
-) -> SoraUploadedModelEncryptionRecipientV1 {
-    SoraUploadedModelEncryptionRecipientV1 {
-        schema_version: recipient.schema_version,
-        key_id: recipient.key_id,
-        key_version: recipient.key_version,
-        kem: recipient.kem,
-        aead: recipient.aead,
-        public_key_bytes: recipient.public_key_bytes,
-        public_key_fingerprint: recipient.public_key_fingerprint,
-    }
-}
-
 fn authoritative_agent_runtime_receipt_for_run(
     world: &impl WorldReadOnly,
     run: &SoraAgentAutonomyRunRecordV1,
@@ -10525,7 +10477,7 @@ pub(crate) async fn handle_service_public_discovery(
         Err(err) => return err.into_response(),
     };
     match authoritative_service_public_discovery_response(&app, service_name.as_ref(), None) {
-        Ok(response) => JsonBody(response).into_response(),
+        Ok(response) => bounded_public_response::json(&response),
         Err(err) => err.into_response(),
     }
 }
@@ -10561,7 +10513,7 @@ pub(crate) async fn handle_service_revision_public_discovery(
         service_name.as_ref(),
         Some(service_version),
     ) {
-        Ok(response) => JsonBody(response).into_response(),
+        Ok(response) => bounded_public_response::json(&response),
         Err(err) => err.into_response(),
     }
 }
@@ -11571,10 +11523,7 @@ pub(crate) async fn handle_uploaded_model_encryption_recipient(
         )
         .into_response();
     };
-    JsonBody(UploadedModelEncryptionRecipientResponse {
-        recipient: authoritative_uploaded_model_encryption_recipient(recipient),
-    })
-    .into_response()
+    bounded_public_response::encryption_recipient(recipient)
 }
 
 pub(crate) async fn handle_uploaded_model_status(

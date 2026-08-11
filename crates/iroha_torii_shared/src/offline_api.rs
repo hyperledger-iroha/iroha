@@ -173,9 +173,9 @@ impl OfflineRecipientRegistrationLineage {
         {
             return Err("receiver-lineage finality chain is empty or exceeds 64 proofs".to_owned());
         }
-        let finality_bytes = norito::to_bytes(&self.finality_chain)
+        let finality_bytes = norito::core::encoded_frame_len(&self.finality_chain)
             .map_err(|error| format!("finality chain encoding failed: {error}"))?;
-        if finality_bytes.len() > OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_CHAIN_BYTES {
+        if finality_bytes > OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_CHAIN_BYTES {
             return Err("receiver-lineage finality chain exceeds its byte bound".to_owned());
         }
         if self.finality_chain.windows(2).any(|pair| {

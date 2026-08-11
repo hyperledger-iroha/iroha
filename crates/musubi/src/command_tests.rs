@@ -8,7 +8,7 @@ use std::{
 };
 
 use clap::CommandFactory as _;
-use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
+use iroha::crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     NetworkId,
     account::{AccountId, address::ChainDiscriminantGuard},
@@ -46,6 +46,27 @@ fn test_network_id(byte: u8) -> NetworkId {
     NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         [byte; Hash::LENGTH],
     )))
+}
+
+fn authenticated_registry_config(torii_url: &str, chain_discriminant: u16) -> String {
+    let signer =
+        KeyPair::try_from_seed(vec![0x5B; 32], Algorithm::Ed25519).expect("registry signer");
+    format!(
+        r#"
+chain = "musubi-command-test"
+network_id = "{}"
+torii_url = "{torii_url}"
+torii_request_timeout_ms = 2000
+
+[account]
+chain_discriminant = {chain_discriminant}
+public_key = "{}"
+private_key = "{}"
+"#,
+        test_network_id(0x31),
+        signer.public_key(),
+        ExposedPrivateKey(signer.private_key().clone()),
+    )
 }
 
 #[test]
@@ -286,13 +307,15 @@ public_key = "deliberately-not-a-key"
 private_key = "deliberately-not-a-key"
 
 [musubi.fetch]
+network_id = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
 client_id = "recovery-test"
 request_timeout_ms = 1
 
 [[musubi.fetch.provider_gateways]]
 provider_id = "1111111111111111111111111111111111111111111111111111111111111111"
 url = "https://provider.invalid/"
-api_token_file = "missing-provider.token"
+operator_public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+operator_private_key_file = "missing-provider.key"
 "#,
     )
     .expect("write poisoned recovery config");
@@ -306,7 +329,7 @@ fn assert_archive_transport_is_poisoned(config: &Path) {
         .expect("parse secret-free fetch configuration");
     assert!(
         build_production_archive_transport_v1(&prepared).is_err(),
-        "the absent token must make runtime transport construction fail"
+        "the absent operator key must make runtime transport construction fail"
     );
 }
 
@@ -635,12 +658,12 @@ fn cache_prune_dry_run_reports_without_mutating() {
     let (torii_url, server) = serve_json_sequence(vec![
         norito::json::to_vec(&page).expect("retention response JSON"),
     ]);
-    let registry = RegistryReadClientV1::new(
+    let registry = RegistryReadClientV1::new_for_test(
         torii_url.parse().expect("loopback URL"),
         Duration::from_secs(2),
         753,
     )
-    .expect("signer-free registry client");
+    .expect("authenticated registry client");
 
     let result = prune_cache_targets(&cache, &[archive_id], &registry, true)
         .expect("dry-run retention proof");
@@ -686,12 +709,12 @@ fn cache_prune_live_fails_closed_without_touching_any_candidate() {
     let (torii_url, server) = serve_json_sequence(vec![
         norito::json::to_vec(&page).expect("retention response JSON"),
     ]);
-    let registry = RegistryReadClientV1::new(
+    let registry = RegistryReadClientV1::new_for_test(
         torii_url.parse().expect("loopback URL"),
         Duration::from_secs(2),
         753,
     )
-    .expect("signer-free registry client");
+    .expect("authenticated registry client");
 
     let error = match prune_cache_targets(&cache, &archive_ids, &registry, false) {
         Err(error) => error,
@@ -760,12 +783,12 @@ fn cache_prune_rejects_cross_batch_deployment_drift_before_mutation() {
         norito::json::to_vec(&second).expect("second retention batch JSON"),
     ];
     let (torii_url, server) = serve_json_sequence(responses);
-    let registry = RegistryReadClientV1::new(
+    let registry = RegistryReadClientV1::new_for_test(
         torii_url.parse().expect("loopback URL"),
         Duration::from_secs(2),
         753,
     )
-    .expect("signer-free registry client");
+    .expect("authenticated registry client");
 
     let error = match prune_cache_targets(&cache, &archive_ids, &registry, false) {
         Err(error) => error,
@@ -941,7 +964,7 @@ fn frozen_combines_locked_and_offline_at_typed_boundary() {
 }
 
 #[test]
-fn graph_commands_accept_an_explicit_signer_free_registry_config() {
+fn graph_commands_accept_an_explicit_authenticated_registry_config() {
     let cli = Cli::try_parse_from(["musubi", "build", "--config", "/platform/client.toml"])
         .expect("parse registry config");
     let Command::Build(args) = cli.command else {
@@ -954,7 +977,7 @@ fn graph_commands_accept_an_explicit_signer_free_registry_config() {
 }
 
 #[test]
-fn search_uses_the_signer_free_finalized_projection_route() {
+fn search_uses_the_authenticated_finalized_projection_route() {
     let selector: MusubiPackageSelectorV1 = "apps.sora/proofs".parse().expect("selector");
     let page = MusubiSearchPageV1 {
         query: MusubiSearchQueryV1 {
@@ -992,13 +1015,8 @@ fn search_uses_the_signer_free_finalized_projection_route() {
     let (torii_url, server) = serve_json_sequence(vec![response]);
     let temporary = TempDir::new().expect("temporary config directory");
     let config = temporary.path().join("client.toml");
-    fs::write(
-        &config,
-        format!(
-            "torii_url = \"{torii_url}\"\ntorii_request_timeout_ms = 2000\n[account]\nchain_discriminant = 753\n"
-        ),
-    )
-    .expect("write public config");
+    fs::write(&config, authenticated_registry_config(&torii_url, 753))
+        .expect("write authenticated config");
 
     let invocation = invoke([
         OsString::from("musubi"),
@@ -1262,9 +1280,9 @@ fn owner_remove_selects_exactly_one_member_or_pending_invitation() {
 #[test]
 #[allow(
     clippy::too_many_lines,
-    reason = "the fixture verifies the complete signer-free owner-list response"
+    reason = "the fixture verifies the complete authenticated owner-list response"
 )]
-fn owner_list_is_signer_free_and_includes_pending_invitations() {
+fn owner_list_is_authenticated_and_includes_pending_invitations() {
     let selector: MusubiPackageSelectorV1 = "apps.sora/demo".parse().expect("selector");
     let binding = MusubiNamespaceBindingV1 {
         namespace: selector.namespace.clone(),
@@ -1351,13 +1369,8 @@ fn owner_list_is_signer_free_and_includes_pending_invitations() {
     let (torii_url, server) = serve_json_sequence(responses);
     let temporary = TempDir::new().expect("temporary config directory");
     let config = temporary.path().join("client.toml");
-    fs::write(
-        &config,
-        format!(
-            "torii_url = \"{torii_url}\"\ntorii_request_timeout_ms = 2000\n[account]\nchain_discriminant = 753\n"
-        ),
-    )
-    .expect("write public config");
+    fs::write(&config, authenticated_registry_config(&torii_url, 753))
+        .expect("write authenticated config");
 
     let invocation = invoke([
         OsString::from("musubi"),

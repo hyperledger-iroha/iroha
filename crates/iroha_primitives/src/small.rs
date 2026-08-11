@@ -79,6 +79,13 @@ mod small_string {
         fn write_json(&self, out: &mut String) {
             json::write_json_string(self.as_str(), out);
         }
+
+        fn write_json_to(
+            &self,
+            out: &mut dyn json::JsonWriteSink,
+        ) -> Result<(), json::BoundedJsonError> {
+            json::write_json_string_to(self.as_str(), out)
+        }
     }
 
     impl JsonDeserialize for SmallStr {
@@ -482,6 +489,23 @@ mod small_vector {
             }
             out.push(']');
         }
+
+        fn write_json_to(
+            &self,
+            out: &mut dyn json::JsonWriteSink,
+        ) -> Result<(), json::BoundedJsonError> {
+            out.begin_container()?;
+            out.push('[')?;
+            for (index, item) in self.0.iter().enumerate() {
+                if index != 0 {
+                    out.push(',')?;
+                }
+                item.json_serialize_to(out)?;
+            }
+            out.push(']')?;
+            out.end_container();
+            Ok(())
+        }
     }
 
     impl<A: smallvec::Array> JsonDeserialize for SmallVec<A>
@@ -502,12 +526,15 @@ mod small_vector {
     {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             use ncore::WriteBytesExt;
-            writer.write_u64::<ncore::LittleEndian>(self.0.len() as u64)?;
+            writer.write_u64::<ncore::LittleEndian>(
+                u64::try_from(self.0.len()).map_err(|_| ncore::Error::LengthMismatch)?,
+            )?;
             for item in &self.0 {
-                let mut buf = Vec::new();
-                ncore::serialize_to_buffer(item, &mut buf)?;
-                writer.write_u64::<ncore::LittleEndian>(buf.len() as u64)?;
-                writer.write_all(&buf)?;
+                let encoded_len = ncore::encoded_payload_len(item)?;
+                writer.write_u64::<ncore::LittleEndian>(
+                    u64::try_from(encoded_len).map_err(|_| ncore::Error::LengthMismatch)?,
+                )?;
+                ncore::serialize_to_writer_exact(item, writer, encoded_len)?;
             }
             Ok(())
         }

@@ -255,6 +255,18 @@ fn torii_proxy_response_body_limit_caps_hosted_http_and_strict_receipts() {
         expected_route: ToriiRouteHintV1::from(route),
         response_format: ToriiProxyResponseFormatV1::Norito,
     };
+    let single_route_query_request = ToriiProxyRequestKindV4::SignedQuery {
+        query_bytes: Vec::new(),
+        expected_route: ToriiRouteHintV1::from(route),
+        response_format: ToriiProxyResponseFormatV1::Norito,
+    };
+    let fanout_request = ToriiProxyRequestKindV4::SignedQueryFanout {
+        query_bytes: Vec::new(),
+        response_format: ToriiProxyResponseFormatV1::Norito,
+    };
+    let query_envelope =
+        QueryFanoutMemoryEnvelope::for_body_admission(app.query_fanout_working_set_bytes)
+            .expect("test query memory geometry should fit");
     let (_strict_app, strict_request) =
         incoming_proxy_submit_fixture(0xaa, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
 
@@ -265,8 +277,18 @@ fn torii_proxy_response_body_limit_caps_hosted_http_and_strict_receipts() {
     );
     assert_eq!(
         super::torii_proxy_response_body_limit(app.as_ref(), &query_request),
-        usize::MAX,
-        "non-hosted proxy responses are not capped by the public HTTP response limit"
+        query_envelope.route_body_bytes,
+        "one route-scan snapshot must fit the admitted raw-route phase"
+    );
+    assert_eq!(
+        super::torii_proxy_response_body_limit(app.as_ref(), &single_route_query_request),
+        query_envelope.route_body_bytes,
+        "one remote single-route query must stay inside its held raw-route phase"
+    );
+    assert_eq!(
+        super::torii_proxy_response_body_limit(app.as_ref(), &fanout_request),
+        query_envelope.final_body_bytes,
+        "a final fanout snapshot must fit the admitted final-body phase"
     );
     assert_eq!(
         super::torii_proxy_response_body_limit(app.as_ref(), &strict_request.request),
@@ -451,6 +473,27 @@ fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
     );
     let process_session = Hash::new(b"torii-proxy-request-id-test-session");
     let ingress_peer = PeerId::from(keypair.public_key().clone());
+    for request in [&query_request, &submit_request] {
+        let legacy = norito::to_bytes(&(
+            "torii:proxy:v5",
+            process_session.clone(),
+            ingress_peer.clone(),
+            7_u64,
+            request.clone(),
+        ))
+        .expect("legacy owned request-id preimage");
+        let borrowed = norito::to_bytes(&super::BorrowedToriiProxyRequestIdPreimage {
+            process_session_id: &process_session,
+            local_peer_id: &ingress_peer,
+            sequence: 7,
+            request,
+        })
+        .expect("borrowed request-id preimage");
+        assert_eq!(
+            borrowed, legacy,
+            "borrowed request-id preimage must preserve the established bytes"
+        );
+    }
     assert_ne!(
         super::torii_proxy_request_id_for_session_sequence(
             &process_session,
@@ -1554,8 +1597,12 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
             async move {
                 match candidate {
                     ToriiProxyCandidate::Local(peer_id) => {
-                        super::execute_torii_proxy_request_locally(&app, peer_id, candidate_request)
-                            .await
+                        super::execute_torii_proxy_request_locally(
+                            &app,
+                            peer_id,
+                            candidate_request.into_owned(),
+                        )
+                        .await
                     }
                     ToriiProxyCandidate::P2p(peer_id) if peer_id == remote_peer_id => {
                         Ok(remote_snapshot)

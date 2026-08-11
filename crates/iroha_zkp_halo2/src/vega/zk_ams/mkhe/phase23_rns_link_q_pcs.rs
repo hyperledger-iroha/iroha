@@ -20,17 +20,32 @@
 //! 637,534,208 bytes and must live in a seekable external column store.  The
 //! enumerated heap bound excludes OS page-cache residency and has not been
 //! measured.  The exact FRI theorem has not been instantiated, no release KAT
-//! exists, and no production wire consumes this prototype.  All qualification
-//! booleans below consequently remain false.
+//! exists, and no production wire consumes this prototype.  Moreover, the
+//! Merkle + FRI rows are binding but not hiding: opening raw relation or
+//! quotient evaluations would disclose witness information.  No masking
+//! theorem or zero-knowledge transform has been implemented. Fresh collective
+//! encryption lineage is nonce-hiding, but this PCS still has no deterministic
+//! source/witness linkage from those openings to its relation rows.
+//! The packed-plaintext owner also remains a public `Clone + Debug` type rather
+//! than a move-only zeroizing secret owner.
+//! A private child now exercises the masking identity `H~=H+S`,
+//! `P~=P+(X^N+1)S` for five caller-sampled, domain-separated masks and freezes
+//! the resulting ten-row accounting. It remains unwired: the topology sink
+//! constructs no aggregate pairs, this PCS still accepts only two batch rows,
+//! and no production uniform sampler, source link, or ten-row proof exists.
+//! All qualification booleans below consequently remain false.
 
 use core::fmt;
 
 use crate::vega::sponge::{keccak256, shake256};
 
-use super::super::is_prime_u64;
 use super::super::manifest::{
     RELEASE_MODULI_V1, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, release_profile_v1,
 };
+use super::super::{ZkAmsMkheErrorV1, is_prime_u64};
+
+#[path = "phase23_rns_link_q_pcs_masking.rs"]
+mod masking;
 
 const PCS_VERSION_V1: u8 = 1;
 const OPENING_REPETITIONS_V1: usize = 5;
@@ -162,6 +177,9 @@ struct ZkAmsPhase23RnsLinkQPcsReleasePlanV1 {
     seekable_external_store_implemented: bool,
     exact_fri_theorem_instantiated: bool,
     fiat_shamir_relation_adapter_implemented: bool,
+    zero_knowledge_masking_implemented: bool,
+    deterministic_plaintext_lineage_hiding_implemented: bool,
+    secret_packed_plaintext_owner_hardened: bool,
     release_kat_matches: bool,
     measured_resident_set_within_cap: bool,
     production_wire_integrated: bool,
@@ -249,6 +267,9 @@ fn zk_ams_phase23_rns_link_q_pcs_release_plan_v1()
         seekable_external_store_implemented: false,
         exact_fri_theorem_instantiated: false,
         fiat_shamir_relation_adapter_implemented: false,
+        zero_knowledge_masking_implemented: false,
+        deterministic_plaintext_lineage_hiding_implemented: false,
+        secret_packed_plaintext_owner_hardened: false,
         release_kat_matches: false,
         measured_resident_set_within_cap: false,
         production_wire_integrated: false,
@@ -269,6 +290,18 @@ fn zk_ams_phase23_rns_link_q_pcs_release_plan_v1()
     Ok(plan)
 }
 
+/// Public parameter identity for private prerequisite stages.
+///
+/// This exposes neither a commitment nor release authority.  In particular,
+/// obtaining this digest does not close the Fiat-Shamir relation-adapter,
+/// hiding, external-store, theorem, KAT, wire, or qualification blockers.
+pub(super) fn zk_ams_phase23_rns_link_q_pcs_release_parameter_digest_v1()
+-> Result<[u8; 32], ZkAmsMkheErrorV1> {
+    zk_ams_phase23_rns_link_q_pcs_release_plan_v1()
+        .map(|plan| plan.release_parameter_digest)
+        .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)
+}
+
 /// Release proving cannot begin until the global external-store implementation
 /// and the independent qualification evidence exist.
 fn require_zk_ams_phase23_rns_link_q_pcs_release_prover_v1() -> Result<(), QPcsErrorV1> {
@@ -278,6 +311,9 @@ fn require_zk_ams_phase23_rns_link_q_pcs_release_prover_v1() -> Result<(), QPcsE
     }
     if !plan.exact_fri_theorem_instantiated
         || !plan.fiat_shamir_relation_adapter_implemented
+        || !plan.zero_knowledge_masking_implemented
+        || !plan.deterministic_plaintext_lineage_hiding_implemented
+        || !plan.secret_packed_plaintext_owner_hardened
         || !plan.release_kat_matches
         || !plan.measured_resident_set_within_cap
         || !plan.production_wire_integrated
@@ -2584,6 +2620,9 @@ mod tests {
         assert!(!plan.seekable_external_store_implemented);
         assert!(!plan.exact_fri_theorem_instantiated);
         assert!(!plan.fiat_shamir_relation_adapter_implemented);
+        assert!(!plan.zero_knowledge_masking_implemented);
+        assert!(!plan.deterministic_plaintext_lineage_hiding_implemented);
+        assert!(!plan.secret_packed_plaintext_owner_hardened);
         assert!(!plan.release_kat_matches);
         assert!(!plan.measured_resident_set_within_cap);
         assert!(!plan.production_wire_integrated);
@@ -3126,15 +3165,22 @@ mod tests {
         let parent = include_str!("phase23_rns_link.rs");
         let audit = include_str!("receipt_capability_audit.rs");
         let manifest = include_str!("manifest.rs");
+        assert!(source.lines().count() <= 3_250);
+        assert!(source.len() <= 125_000);
         assert!(source.contains("const RELEASE_FRI_QUERY_COUNT_V1: usize = 160;"));
         assert!(source.contains("const RELEASE_MAX_ENCODED_PROOF_BYTES_V1: usize = 6_530_912;"));
         assert!(source.contains("const RELEASE_EXTERNAL_SCRATCH_BYTES_V1: usize = 956_301_312;"));
         assert!(source.contains("release_qualified: false"));
         assert!(source.contains("seekable_external_store_implemented: false"));
         assert!(source.contains("fiat_shamir_relation_adapter_implemented: false"));
+        assert!(source.contains("zero_knowledge_masking_implemented: false"));
+        assert!(source.contains("deterministic_plaintext_lineage_hiding_implemented: false"));
+        assert!(source.contains("secret_packed_plaintext_owner_hardened: false"));
         assert!(source.contains("validate_proof_evaluations_v1"));
         assert!(source.contains("preflight_in_memory_reference_v1("));
         assert!(parent.contains("#[path = \"phase23_rns_link_q_pcs.rs\"]\nmod q_pcs;"));
+        assert!(source.contains("#[path = \"phase23_rns_link_q_pcs_masking.rs\"]\nmod masking;"));
+        assert!(!source.contains(concat!("pub use ", "masking")));
         assert!(!parent.contains("pub use q_pcs"));
         assert!(!audit.contains("phase23_rns_link_q_pcs"));
         assert!(!manifest.contains("phase23_rns_link_q_pcs"));

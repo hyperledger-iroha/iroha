@@ -384,7 +384,7 @@ where
         envelope.pagination.offset,
         limit_cap,
         count_mode,
-    );
+    )?;
     let items = page
         .items
         .into_iter()
@@ -408,11 +408,11 @@ where
     I: IntoIterator<Item = Map>,
 {
     validate_aggregate(resource, aggregate, sort)?;
-    let mut rows = aggregate_rows(resource, rows, aggregate)?;
+    let mut rows = aggregate_rows(resource, rows, aggregate, limit_cap)?;
     if let Some(having) = aggregate.having.as_ref() {
         rows.retain(|row| evaluate_filter(having, row));
     }
-    let page = collect_sorted_page(rows, resource, sort, limit, offset, limit_cap, count_mode);
+    let page = collect_sorted_page(rows, resource, sort, limit, offset, limit_cap, count_mode)?;
     build_common_response(page.items, page.total, page.has_more, count_mode, snapshot)
 }
 
@@ -1044,15 +1044,28 @@ fn collect_sorted_page<I>(
     offset: u64,
     cap: u64,
     count_mode: CountMode,
-) -> PageResult
+) -> Result<PageResult>
 where
     I: IntoIterator<Item = Map>,
 {
     let fields = sort_fields(resource, sort);
     let effective_limit = limit.unwrap_or(cap).min(cap);
-    let skip = usize::try_from(offset).unwrap_or(usize::MAX);
-    let take = usize::try_from(effective_limit).unwrap_or(usize::MAX);
-    let page_cap = skip.saturating_add(take).saturating_add(1);
+    let window = offset.checked_add(effective_limit).ok_or_else(|| {
+        validation_error("pagination offset plus limit exceeds the query fetch budget")
+    })?;
+    if window > cap {
+        return Err(validation_error(format!(
+            "pagination offset plus limit must not exceed the configured fetch budget of {cap} rows"
+        )));
+    }
+    let skip = usize::try_from(offset)
+        .map_err(|_| validation_error("pagination offset is not representable on this host"))?;
+    let take = usize::try_from(effective_limit)
+        .map_err(|_| validation_error("pagination limit is not representable on this host"))?;
+    let page_cap = skip
+        .checked_add(take)
+        .and_then(|rows| rows.checked_add(1))
+        .ok_or_else(|| validation_error("pagination working-set size overflowed"))?;
 
     if take == 0 {
         let total = match count_mode {
@@ -1060,17 +1073,15 @@ where
             CountMode::Bounded => usize::from(rows.into_iter().next().is_some()),
         };
         let has_more = total > skip;
-        return PageResult {
+        return Ok(PageResult {
             items: Vec::new(),
             total: (count_mode == CountMode::Exact).then_some(total),
             has_more,
-        };
+        });
     }
 
     let mut seq = 0usize;
     let mut heap = BinaryHeap::new();
-    let mut collected = Vec::new();
-    let bounded = page_cap != usize::MAX;
 
     for row in rows {
         let entry = SortedPageEntry {
@@ -1079,17 +1090,13 @@ where
             row,
         };
         seq = seq.wrapping_add(1);
-        if bounded {
-            heap.push(entry);
-            if heap.len() > page_cap {
-                heap.pop();
-            }
-        } else {
-            collected.push(entry);
+        heap.push(entry);
+        if heap.len() > page_cap {
+            heap.pop();
         }
     }
 
-    let mut entries = if bounded { heap.into_vec() } else { collected };
+    let mut entries = heap.into_vec();
     entries.sort_by(|left, right| {
         let ordering = left.key.cmp(&right.key);
         if ordering == Ordering::Equal {
@@ -1106,11 +1113,11 @@ where
         .take(take)
         .map(|entry| entry.row)
         .collect();
-    PageResult {
+    Ok(PageResult {
         items: page,
         total: (count_mode == CountMode::Exact).then_some(total),
         has_more,
-    }
+    })
 }
 
 fn project_row(row: &Map, select: &crate::filter::Selector) -> Map {
@@ -1149,7 +1156,12 @@ impl MetricState {
         }
     }
 
-    fn update(&mut self, row: &Map, metric: &AggregateMetric) -> Result<()> {
+    fn update(
+        &mut self,
+        row: &Map,
+        metric: &AggregateMetric,
+        distinct_value_cap: usize,
+    ) -> Result<()> {
         match self {
             Self::Count(total) => {
                 *total = total.saturating_add(1);
@@ -1161,7 +1173,13 @@ impl MetricState {
                     .as_ref()
                     .ok_or_else(|| validation_error("distinct_count requires a field"))?;
                 if let Some(value) = row_field_value(row, &field.0) {
-                    values.insert(json_key_string(value));
+                    let value = json_key_string(value);
+                    if !values.contains(&value) && values.len() >= distinct_value_cap {
+                        return Err(validation_error(format!(
+                            "distinct_count exceeds the configured fetch budget of {distinct_value_cap} values"
+                        )));
+                    }
+                    values.insert(value);
                 }
                 Ok(())
             }
@@ -1253,10 +1271,16 @@ fn aggregate_rows<I>(
     resource: &QueryResourceSpec,
     rows: I,
     aggregate: &AggregateSpec,
+    limit_cap: u64,
 ) -> Result<Vec<Map>>
 where
     I: IntoIterator<Item = Map>,
 {
+    let working_set_cap = usize::try_from(limit_cap)
+        .map_err(|_| validation_error("query fetch budget is not representable on this host"))?;
+    if working_set_cap == 0 {
+        return Err(validation_error("query fetch budget must be positive"));
+    }
     let mut groups: BTreeMap<Vec<String>, GroupState> = BTreeMap::new();
     for row in rows {
         let group_key = aggregate
@@ -1268,6 +1292,11 @@ where
                     .unwrap_or_else(|| "null".to_owned())
             })
             .collect::<Vec<_>>();
+        if !groups.contains_key(&group_key) && groups.len() >= working_set_cap {
+            return Err(validation_error(format!(
+                "aggregate group count exceeds the configured fetch budget of {working_set_cap} groups"
+            )));
+        }
         let entry = groups.entry(group_key).or_insert_with(|| GroupState {
             group_values: aggregate
                 .group_by
@@ -1282,7 +1311,7 @@ where
             metrics: aggregate.metrics.iter().map(MetricState::new).collect(),
         });
         for (state, metric) in entry.metrics.iter_mut().zip(&aggregate.metrics) {
-            state.update(&row, metric)?;
+            state.update(&row, metric, working_set_cap)?;
         }
     }
     let mut out = Vec::with_capacity(groups.len());
@@ -1578,6 +1607,92 @@ mod tests {
             payload["items"][0]["primary_alias_domain"].as_str(),
             Some("hbl.paynet")
         );
+    }
+
+    #[test]
+    fn sorted_query_rejects_a_window_beyond_the_fetch_budget() {
+        let envelope = QueryEnvelope {
+            select: Some(Selector(vec![FieldPath("id".into())])),
+            pagination: Pagination {
+                limit: Some(2),
+                offset: 2,
+            },
+            ..Default::default()
+        };
+        let error = execute_query_envelope(
+            &ACCOUNTS_SPEC,
+            envelope,
+            vec![row(&[("id", Value::from("a"))])],
+            3,
+            QuerySnapshot::new(0, None, "live"),
+        )
+        .expect_err("offset plus limit must stay within the fetch budget");
+        assert!(error.to_string().contains("offset plus limit"));
+    }
+
+    #[test]
+    fn aggregate_group_working_set_is_bounded_by_the_fetch_budget() {
+        let envelope = QueryEnvelope {
+            aggregate: Some(AggregateSpec {
+                group_by: vec![FieldPath("id".into())],
+                metrics: vec![AggregateMetric {
+                    alias: "total".into(),
+                    r#fn: AggregateFn::Count,
+                    field: None,
+                }],
+                having: None,
+            }),
+            pagination: Pagination {
+                limit: Some(2),
+                offset: 0,
+            },
+            ..Default::default()
+        };
+        let error = execute_query_envelope(
+            &ACCOUNTS_SPEC,
+            envelope,
+            vec![
+                row(&[("id", Value::from("a"))]),
+                row(&[("id", Value::from("b"))]),
+                row(&[("id", Value::from("c"))]),
+            ],
+            2,
+            QuerySnapshot::new(0, None, "live"),
+        )
+        .expect_err("group cardinality must stay within the fetch budget");
+        assert!(error.to_string().contains("aggregate group count"));
+    }
+
+    #[test]
+    fn distinct_count_working_set_is_bounded_by_the_fetch_budget() {
+        let envelope = QueryEnvelope {
+            aggregate: Some(AggregateSpec {
+                metrics: vec![AggregateMetric {
+                    alias: "ids".into(),
+                    r#fn: AggregateFn::DistinctCount,
+                    field: Some(FieldPath("id".into())),
+                }],
+                ..Default::default()
+            }),
+            pagination: Pagination {
+                limit: Some(1),
+                offset: 0,
+            },
+            ..Default::default()
+        };
+        let error = execute_query_envelope(
+            &ACCOUNTS_SPEC,
+            envelope,
+            vec![
+                row(&[("id", Value::from("a"))]),
+                row(&[("id", Value::from("b"))]),
+                row(&[("id", Value::from("c"))]),
+            ],
+            2,
+            QuerySnapshot::new(0, None, "live"),
+        )
+        .expect_err("distinct cardinality must stay within the fetch budget");
+        assert!(error.to_string().contains("distinct_count"));
     }
 
     #[test]

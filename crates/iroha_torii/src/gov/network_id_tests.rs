@@ -234,7 +234,7 @@ async fn governance_ballot_dtos_reject_retired_identity_keys() {
 async fn governance_capabilities_expose_one_exact_network_identity() {
     let harness = mk_governance_harness(true);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let mut block = harness.state.block(header);
+    let block = harness.state.block(header);
     block
         .commit()
         .expect("commit genesis-like capabilities fixture");

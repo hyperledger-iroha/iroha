@@ -434,6 +434,13 @@ impl norito::json::FastJsonWrite for ContractAlias {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_ref(), out)
+    }
 }
 
 #[cfg(feature = "json")]
@@ -632,6 +639,13 @@ impl FromStr for ContractAddress {
 impl norito::json::FastJsonWrite for ContractAddress {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        norito::json::write_json_string_to(self.as_ref(), out)
     }
 }
 
@@ -1142,6 +1156,24 @@ pub mod manifest {
             out.push(':');
             JsonSerialize::json_serialize(&self.dynamic_writes, out);
             out.push('}');
+        }
+
+        fn write_json_to(
+            &self,
+            out: &mut dyn json::JsonWriteSink,
+        ) -> Result<(), json::BoundedJsonError> {
+            out.begin_container()?;
+            out.push_str("{\"read_keys\":")?;
+            self.read_keys.json_serialize_to(out)?;
+            out.push_str(",\"write_keys\":")?;
+            self.write_keys.json_serialize_to(out)?;
+            out.push_str(",\"dynamic_reads\":")?;
+            self.dynamic_reads.json_serialize_to(out)?;
+            out.push_str(",\"dynamic_writes\":")?;
+            self.dynamic_writes.json_serialize_to(out)?;
+            out.push('}')?;
+            out.end_container();
+            Ok(())
         }
     }
 

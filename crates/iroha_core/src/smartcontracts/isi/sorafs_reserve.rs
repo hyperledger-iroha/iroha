@@ -306,8 +306,20 @@ where
             "{label} state exceeds {STATE_MAX_BYTES} bytes"
         )));
     }
-    let value = decode_from_bytes_with_limits::<T>(bytes, STATE_LIMITS)
-        .map_err(|error| corrupt_state(format!("failed to decode {label}: {error}")))?;
+    let limits = crate::smartcontracts::isi::query::singular_query_decode_limits(
+        bytes.len(),
+        STATE_LIMITS,
+    )
+    .map_err(InstructionExecutionError::Query)?;
+    let value = decode_from_bytes_with_limits::<T>(bytes, limits).map_err(|error| {
+        if crate::smartcontracts::isi::query::singular_query_limits_active()
+            && error.is_decode_resource_limit()
+        {
+            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+        } else {
+            corrupt_state(format!("failed to decode {label}: {error}"))
+        }
+    })?;
     if encode_state(&value, label)? != bytes {
         return Err(corrupt_state(format!(
             "{label} state is not exact canonical Norito"
@@ -1157,6 +1169,13 @@ fn decode_provider_record(
     provider_id: ProviderId,
 ) -> Result<ReserveProviderAccountV1, InstructionExecutionError> {
     let account: ReserveProviderAccountV1 = decode_state(bytes, "reserve provider account")?;
+    validate_provider_record(account, provider_id)
+}
+
+fn validate_provider_record(
+    account: ReserveProviderAccountV1,
+    provider_id: ProviderId,
+) -> Result<ReserveProviderAccountV1, InstructionExecutionError> {
     if account.terms.provider_id != provider_id
         || account.terms.capacity_gib == 0
         || account.policy_digest == [0; 32]
@@ -1326,6 +1345,13 @@ fn decode_movement_record(
     movement_id: [u8; 32],
 ) -> Result<ReserveMovementRecordV1, InstructionExecutionError> {
     let record: ReserveMovementRecordV1 = decode_state(bytes, "reserve movement")?;
+    validate_movement_record(record, movement_id)
+}
+
+fn validate_movement_record(
+    record: ReserveMovementRecordV1,
+    movement_id: [u8; 32],
+) -> Result<ReserveMovementRecordV1, InstructionExecutionError> {
     let terminal_fields = record.decided_by.is_some()
         && record.decided_at_unix.is_some()
         && record.rationale.is_some();
@@ -1366,6 +1392,13 @@ fn decode_appeal_record(
     appeal_id: [u8; 32],
 ) -> Result<ReserveAppealRecordV1, InstructionExecutionError> {
     let record: ReserveAppealRecordV1 = decode_state(bytes, "reserve appeal")?;
+    validate_appeal_record(record, appeal_id)
+}
+
+fn validate_appeal_record(
+    record: ReserveAppealRecordV1,
+    appeal_id: [u8; 32],
+) -> Result<ReserveAppealRecordV1, InstructionExecutionError> {
     let terminal_fields = record.decided_by.is_some()
         && record.decided_at_unix.is_some()
         && record.rationale.is_some();
@@ -2263,8 +2296,11 @@ impl Execute for DecideSorafsReserveAppeal {
     }
 }
 
-fn query_failure(error: impl core::fmt::Display) -> QueryExecutionFail {
-    QueryExecutionFail::Conversion(error.to_string())
+fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
+    match error {
+        InstructionExecutionError::Query(error) => error,
+        error => QueryExecutionFail::Conversion(error.to_string()),
+    }
 }
 
 const RESERVE_QUERY_MAX_EVENT_READ_BYTES_V1: usize = RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1 * 4;
@@ -2568,13 +2604,22 @@ fn resolve_committed_event(
             record.sequence
         )));
     }
-    Ok(ReserveFinalizedEventV1 {
-        sequence: record.sequence,
-        block_height: record.target_block_height,
-        block_hash,
-        event_index: record.event_index,
-        event: record.event.clone(),
-    })
+    crate::smartcontracts::isi::query::own_singular_query_struct::<ReserveFinalizedEventV1, 5>(
+        [
+            &record.sequence,
+            &record.target_block_height,
+            &block_hash,
+            &record.event_index,
+            &record.event,
+        ],
+        || ReserveFinalizedEventV1 {
+            sequence: record.sequence,
+            block_height: record.target_block_height,
+            block_hash,
+            event_index: record.event_index,
+            event: record.event.clone(),
+        },
+    )
 }
 
 fn query_reserve_event_page(
@@ -2584,6 +2629,9 @@ fn query_reserve_event_page(
     budget: &mut ReserveEventQueryBudgetV1,
 ) -> Result<ReserveFinalizedEventPageV1, QueryExecutionFail> {
     let limit = checked_query_limit(query.limit)?;
+    let page_bytes_limit = crate::smartcontracts::isi::query::singular_query_frame_limit(
+        RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+    );
     let world = state_ro.world();
     if read_policy_for_query(world, budget)?.is_none() {
         return Err(QueryExecutionFail::Find(FindError::SorafsReservePolicy));
@@ -2649,7 +2697,7 @@ fn query_reserve_event_page(
     let mut sequence = query
         .after
         .map_or(Some(1), |after| after.sequence.checked_add(1));
-    let mut events = Vec::with_capacity(limit);
+    let mut events = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
     let mut encoded_event_bytes = 0usize;
     while let Some(current_sequence) = sequence {
         if current_sequence > head.last_sequence || events.len() >= limit {
@@ -2665,26 +2713,25 @@ fn query_reserve_event_page(
         let resolved = resolve_committed_event(state_ro, &record, budget)?;
         encoded_event_bytes = encoded_event_bytes
             .checked_add(
-                norito::to_bytes(&resolved)
+                norito::core::encoded_frame_len(&resolved)
                     .map_err(|error| {
                         QueryExecutionFail::Conversion(format!(
-                            "failed to encode committed reserve event: {error}"
+                            "failed to size committed reserve event: {error}"
                         ))
-                    })?
-                    .len(),
+                    })?,
             )
             .ok_or_else(|| {
                 QueryExecutionFail::Conversion(
                     "committed reserve event page byte counter overflow".to_owned(),
                 )
             })?;
-        if encoded_event_bytes > RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+        if encoded_event_bytes > page_bytes_limit {
             return Err(QueryExecutionFail::Conversion(format!(
-                "committed reserve event page exceeds {RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1} bytes"
+                "committed reserve event page exceeds {page_bytes_limit} bytes"
             )));
         }
         previous = Some(record);
-        events.push(resolved);
+        events.try_push(resolved)?;
         sequence = current_sequence.checked_add(1);
     }
     let has_more = events
@@ -2698,20 +2745,18 @@ fn query_reserve_event_page(
     });
     let page = ReserveFinalizedEventPageV1 {
         finalized_cursor,
-        events,
+        events: events.into_vec(),
         has_more,
         next_after,
     };
-    let encoded_len = norito::to_bytes(&page)
-        .map_err(|error| {
-            QueryExecutionFail::Conversion(format!(
-                "failed to encode committed reserve event page: {error}"
-            ))
-        })?
-        .len();
-    if encoded_len > RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+    let encoded_len = norito::core::encoded_frame_len(&page).map_err(|error| {
+        QueryExecutionFail::Conversion(format!(
+            "failed to size committed reserve event page: {error}"
+        ))
+    })?;
+    if encoded_len > page_bytes_limit {
         return Err(QueryExecutionFail::Conversion(format!(
-            "committed reserve event page encodes to {encoded_len} bytes, above {RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1}"
+            "committed reserve event page encodes to {encoded_len} bytes, above {page_bytes_limit}"
         )));
     }
     Ok(page)
@@ -2724,8 +2769,13 @@ fn scan_reserve_records<T>(
     limit: usize,
     budget: &mut ReserveEventQueryBudgetV1,
     mut decode: impl FnMut(&StatePath, &[u8]) -> Result<Option<T>, QueryExecutionFail>,
-) -> Result<Vec<T>, QueryExecutionFail> {
-    let mut records = Vec::with_capacity(limit.saturating_add(1));
+) -> Result<(Vec<T>, bool), QueryExecutionFail>
+where
+    T: norito::core::NoritoSerialize,
+    for<'de> T: norito::core::NoritoDeserialize<'de>,
+{
+    let mut records = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
+    let mut has_more = false;
     let mut probe_key = start.clone();
     let mut iter = world.smart_contract_state().range(start..);
     loop {
@@ -2744,24 +2794,21 @@ fn scan_reserve_records<T>(
             )));
         }
         if let Some(record) = decode(key, payload)? {
-            records.push(record);
-            if records.len() > limit {
+            if records.len() == limit {
+                has_more = true;
                 break;
             }
+            records.try_push(record)?;
         }
     }
-    Ok(records)
+    Ok((records.into_vec(), has_more))
 }
 
 fn checked_page_records<T, I: Copy>(
-    mut records: Vec<T>,
-    limit: usize,
+    records: Vec<T>,
+    has_more: bool,
     id: impl Fn(&T) -> I,
 ) -> Result<(Vec<T>, bool, Option<I>), QueryExecutionFail> {
-    let has_more = records.len() > limit;
-    if has_more {
-        records.pop();
-    }
     let next_after = if has_more {
         Some(id(records.last().ok_or_else(|| {
             QueryExecutionFail::Conversion(
@@ -2777,16 +2824,17 @@ fn checked_page_records<T, I: Copy>(
 fn validate_encoded_record_page<T: norito::core::NoritoSerialize>(
     page: &T,
 ) -> Result<(), QueryExecutionFail> {
-    let encoded_len = norito::to_bytes(page)
-        .map_err(|error| {
-            QueryExecutionFail::Conversion(format!(
-                "failed to encode authoritative reserve record page: {error}"
-            ))
-        })?
-        .len();
-    if encoded_len > RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+    let maximum = crate::smartcontracts::isi::query::singular_query_frame_limit(
+        RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+    );
+    let encoded_len = norito::core::encoded_frame_len(page).map_err(|error| {
+        QueryExecutionFail::Conversion(format!(
+            "failed to size authoritative reserve record page: {error}"
+        ))
+    })?;
+    if encoded_len > maximum {
         return Err(QueryExecutionFail::Conversion(format!(
-            "authoritative reserve record page encodes to {encoded_len} bytes, above {RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1}"
+            "authoritative reserve record page encodes to {encoded_len} bytes, above {maximum}"
         )));
     }
     Ok(())
@@ -2861,7 +2909,7 @@ impl ValidSingularQuery for FindSorafsReserveProviders {
             },
             provider_key,
         );
-        let accounts = scan_reserve_records(
+        let (accounts, has_more) = scan_reserve_records(
             world,
             PROVIDER_STATE_KEY_PREFIX,
             start,
@@ -2877,12 +2925,12 @@ impl ValidSingularQuery for FindSorafsReserveProviders {
                     ));
                 }
                 let account =
-                    decode_provider_record(payload, provider_id).map_err(query_failure)?;
+                    validate_provider_record(candidate, provider_id).map_err(query_failure)?;
                 Ok((!after.is_some_and(|cursor| provider_id <= cursor)).then_some(account))
             },
         )?;
         let (accounts, has_more, next_after) =
-            checked_page_records(accounts, limit, |account| account.terms.provider_id)?;
+            checked_page_records(accounts, has_more, |account| account.terms.provider_id)?;
         let page = ReserveProviderAccountPageV1 {
             finalized_cursor,
             accounts,
@@ -2915,7 +2963,7 @@ impl ValidSingularQuery for FindSorafsReserveMovements {
             },
             movement_key,
         );
-        let movements = scan_reserve_records(
+        let (movements, has_more) = scan_reserve_records(
             world,
             MOVEMENT_STATE_KEY_PREFIX,
             start,
@@ -2931,12 +2979,12 @@ impl ValidSingularQuery for FindSorafsReserveMovements {
                     ));
                 }
                 let movement =
-                    decode_movement_record(payload, movement_id).map_err(query_failure)?;
+                    validate_movement_record(candidate, movement_id).map_err(query_failure)?;
                 Ok((!after.is_some_and(|cursor| movement_id <= cursor)).then_some(movement))
             },
         )?;
         let (movements, has_more, next_after) =
-            checked_page_records(movements, limit, |movement| movement.movement_id)?;
+            checked_page_records(movements, has_more, |movement| movement.movement_id)?;
         let page = ReserveMovementPageV1 {
             finalized_cursor,
             movements,
@@ -2966,7 +3014,7 @@ impl ValidSingularQuery for FindSorafsReserveAppeals {
             || StatePath::from_str(APPEAL_STATE_KEY_PREFIX).expect("static appeal prefix is valid"),
             appeal_key,
         );
-        let appeals = scan_reserve_records(
+        let (appeals, has_more) = scan_reserve_records(
             world,
             APPEAL_STATE_KEY_PREFIX,
             start,
@@ -2981,12 +3029,12 @@ impl ValidSingularQuery for FindSorafsReserveAppeals {
                         "authoritative reserve appeal key does not match its record".to_owned(),
                     ));
                 }
-                let appeal = decode_appeal_record(payload, appeal_id).map_err(query_failure)?;
+                let appeal = validate_appeal_record(candidate, appeal_id).map_err(query_failure)?;
                 Ok((!after.is_some_and(|cursor| appeal_id <= cursor)).then_some(appeal))
             },
         )?;
         let (appeals, has_more, next_after) =
-            checked_page_records(appeals, limit, |appeal| appeal.appeal_id)?;
+            checked_page_records(appeals, has_more, |appeal| appeal.appeal_id)?;
         let page = ReserveAppealPageV1 {
             finalized_cursor,
             appeals,

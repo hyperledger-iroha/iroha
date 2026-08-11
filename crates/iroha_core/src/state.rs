@@ -25,9 +25,7 @@ use iroha_crypto::KeyPair;
 use iroha_crypto::sm::OpenSslProvider;
 #[cfg(feature = "sm")]
 use iroha_crypto::sm::{Sm2PublicKey, SmIntrinsicPolicy};
-use iroha_crypto::{
-    Algorithm, Hash, HashOf, MerkleTree as CanonMerkleTree, PublicKey, blake2::Blake2b512,
-};
+use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, blake2::Blake2b512};
 use iroha_data_model::{
     IntoKeyValue,
     account::{
@@ -346,6 +344,8 @@ use crate::{
     sumeragi::stake_snapshot::CommitStakeSnapshot,
 };
 
+mod bounded_authority;
+mod committed_hash_journal;
 mod tiered;
 use hex;
 use ivm::IVM;
@@ -12197,6 +12197,8 @@ pub struct StateBlock<'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     pub query_handle: &'state LiveQueryStoreHandle,
+    /// Deterministic ledger time used by queries in this block scope.
+    query_ledger_time_ms: u64,
     /// Optional shared Soracloud runtime handle used for ordered mailbox execution.
     pub soracloud_runtime: Option<crate::soracloud_runtime::SharedSoracloudRuntime>,
     /// Cached snapshot of account identifiers for this block.
@@ -12977,6 +12979,8 @@ pub struct StateTransaction<'block, 'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     pub query_handle: &'state LiveQueryStoreHandle,
+    /// Deterministic ledger time used by queries in this transaction scope.
+    query_ledger_time_ms: u64,
     /// State telemetry
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
@@ -13346,6 +13350,8 @@ pub struct StateView<'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     pub query_handle: &'state LiveQueryStoreHandle,
+    /// Latest committed ledger time captured with this view.
+    query_ledger_time_ms: u64,
     /// Cached snapshot of account identifiers for this view.
     accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
     /// State telemetry
@@ -13419,6 +13425,8 @@ pub struct StateQueryView<'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     pub query_handle: &'state LiveQueryStoreHandle,
+    /// Latest committed ledger time captured with this query view.
+    query_ledger_time_ms: u64,
     /// Cached snapshot of account identifiers for this view.
     accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
     /// State telemetry.
@@ -26434,7 +26442,7 @@ impl State {
         payload: crate::snapshot::AuthenticatedSnapshotBootstrapPayload,
     ) -> core::result::Result<(), String> {
         if self.authenticated_snapshot_v2_bootstrap.as_ref() != Some(payload.record())
-            || self.committed_block_hashes_snapshot() != payload.block_hashes()
+            || !self.committed_block_hashes_match(payload.block_hashes())
         {
             return Err(
                 "outer snapshot authentication payload differs from validated restored State"
@@ -26499,12 +26507,8 @@ impl State {
                     .to_owned(),
             );
         }
-        let anchor_index = usize::try_from(anchor.snapshot_height.saturating_sub(1))
-            .map_err(|_| "bootstrap anchor height exceeds usize".to_owned())?;
         let anchor_block_hash = self
-            .committed_block_hashes_snapshot()
-            .get(anchor_index)
-            .copied()
+            .committed_block_hash_at_height(anchor.snapshot_height)
             .ok_or_else(|| {
                 "bootstrap anchor block hash is absent from snapshot history".to_owned()
             })?;
@@ -30266,6 +30270,8 @@ impl State {
             pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.read().clone(),
             kura: &self.kura,
             query_handle: &self.query_handle,
+            query_ledger_time_ms: u64::try_from(curr_block.creation_time().as_millis())
+                .unwrap_or(u64::MAX),
             soracloud_runtime: self.soracloud_runtime(),
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
@@ -31172,6 +31178,8 @@ impl State {
             pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.read().clone(),
             kura: &self.kura,
             query_handle: &self.query_handle,
+            query_ledger_time_ms: u64::try_from(curr_block.creation_time().as_millis())
+                .unwrap_or(u64::MAX),
             soracloud_runtime: self.soracloud_runtime(),
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
@@ -31287,6 +31295,8 @@ impl State {
             pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.read().clone(),
             kura: &self.kura,
             query_handle: &self.query_handle,
+            query_ledger_time_ms: u64::try_from(curr_block.creation_time().as_millis())
+                .unwrap_or(u64::MAX),
             soracloud_runtime: self.soracloud_runtime(),
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
@@ -31475,7 +31485,14 @@ impl State {
         let caller = core::panic::Location::caller();
         let total_start = Instant::now();
 
-        let (world, block_hashes, block_hashes_wait, world_wait, sccp_registry) = loop {
+        let (
+            world,
+            block_hashes,
+            block_hashes_wait,
+            world_wait,
+            sccp_registry,
+            query_ledger_time_ms,
+        ) = loop {
             let generation_before = self.state_view_generation();
             if generation_before % 2 != 0 {
                 self.note_view_generation_contention(caller);
@@ -31486,6 +31503,7 @@ impl State {
             let block_hashes: Vec<HashOf<BlockHeader>> =
                 self.block_hashes.view().iter().copied().collect();
             let block_hashes_wait = block_hashes_start.elapsed();
+            let query_ledger_time_ms = self.latest_block_creation_time_ms_fast().unwrap_or(0);
             let world_start = Instant::now();
             let world = self.world.view();
             let world_wait = world_start.elapsed();
@@ -31498,6 +31516,7 @@ impl State {
                     block_hashes_wait,
                     world_wait,
                     sccp_registry,
+                    query_ledger_time_ms,
                 );
             }
             drop(world);
@@ -31551,6 +31570,7 @@ impl State {
             pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.read().clone(),
             kura: &self.kura,
             query_handle: &self.query_handle,
+            query_ledger_time_ms,
             accounts_snapshot_cache: SyncOnceCell::new(),
             #[cfg(feature = "telemetry")]
             telemetry: &self.telemetry,
@@ -31609,26 +31629,6 @@ impl State {
     #[track_caller]
     pub fn durable_block_count_lossy(&self) -> usize {
         self.kura.durable_blocks_count_lossy()
-    }
-
-    /// Snapshot committed block hashes from the block-hash journal.
-    ///
-    /// This is cheaper than acquiring a full [`StateView`] when only the committed
-    /// hash sequence is required.
-    #[track_caller]
-    pub fn committed_block_hashes_snapshot(&self) -> Vec<HashOf<BlockHeader>> {
-        self.block_hashes.view().iter().copied().collect()
-    }
-
-    /// Return the committed block hash at one-based `height` without cloning
-    /// the complete block-hash journal.
-    #[track_caller]
-    pub(crate) fn committed_block_hash_at_height(
-        &self,
-        height: u64,
-    ) -> Option<HashOf<BlockHeader>> {
-        let index = usize::try_from(height).ok()?.checked_sub(1)?;
-        self.block_hashes.view().get(index).copied()
     }
 
     /// Load a committed block by height from Kura.
@@ -31716,6 +31716,18 @@ impl State {
     #[track_caller]
     pub fn latest_block_header_fast(&self) -> Option<BlockHeader> {
         self.latest_block_header.read().clone()
+    }
+
+    /// Latest committed block creation time from the in-memory header cache.
+    ///
+    /// Unlike [`StateReadOnly::latest_block`], this never loads or decodes a
+    /// block body from Kura when a query needs only deterministic ledger time.
+    #[must_use]
+    pub fn latest_block_creation_time_ms_fast(&self) -> Option<u64> {
+        self.latest_block_header
+            .read()
+            .as_ref()
+            .map(|header| u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX))
     }
 
     fn update_latest_block_header_cache(&self, header: BlockHeader) {
@@ -32166,6 +32178,7 @@ impl State {
             let block_hashes: Vec<HashOf<BlockHeader>> =
                 self.block_hashes.view().iter().copied().collect();
             let block_hashes_wait = block_hashes_start.elapsed();
+            let query_ledger_time_ms = self.latest_block_creation_time_ms_fast().unwrap_or(0);
             let nexus_start = Instant::now();
             let nexus = self.nexus_snapshot();
             let lane_incarnations = self.lane_incarnations_snapshot();
@@ -32253,6 +32266,7 @@ impl State {
                 da_shard_cursors: &self.da_shard_cursors,
                 kura: &self.kura,
                 query_handle: &self.query_handle,
+                query_ledger_time_ms,
                 accounts_snapshot_cache: SyncOnceCell::new(),
                 #[cfg(feature = "telemetry")]
                 telemetry: &self.telemetry,
@@ -33419,18 +33433,59 @@ impl State {
         self.lane_compliance.read().clone()
     }
 
+    fn lane_authority_inputs_from_nexus(
+        lane_id: LaneId,
+        validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        block_height: u64,
+    ) -> Option<bounded_authority::LaneAuthorityInputs> {
+        let dataspace_id = Self::nexus_authoritative_lane_dataspace(lane_id, nexus)?;
+        nexus_lane_active_for_authority(lane_id, dataspace_id, nexus, block_height).then_some(())?;
+        let lane = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == lane_id)?;
+        // Snapshot only the protocol-bounded authority material. Cloning the
+        // full lane would duplicate arbitrary dashboard metadata on every
+        // routed query even though authority resolution never reads it.
+        let autoscale_validator_set = lane_claims_autoscale_managed(lane).then(|| {
+            decode_autoscale_lane_committee(lane)
+                .ok()
+                .flatten()
+                .map_or_else(Vec::new, |committee| committee.validator_set)
+        });
+        Some(bounded_authority::LaneAuthorityInputs {
+            dataspace_id,
+            autoscale_validator_set,
+            validator_mode,
+            minimum_stake: nexus.staking.min_validator_stake.clone(),
+            max_validators: nexus.staking.max_validators.get(),
+        })
+    }
+
+    fn lane_authority_inputs(
+        &self,
+        lane_id: LaneId,
+        block_height: u64,
+    ) -> Option<bounded_authority::LaneAuthorityInputs> {
+        let nexus = self.nexus.read();
+        let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
+        Self::lane_authority_inputs_from_nexus(lane_id, validator_mode, &nexus, block_height)
+    }
+
     /// Resolve the authoritative validator accounts for a lane from manifests or staking state.
     pub fn authoritative_lane_validator_accounts(&self, lane_id: LaneId) -> Vec<AccountId> {
-        let manifest_registry = self.lane_manifests.read().clone();
-        let nexus = self.nexus_snapshot();
-        let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
         let block_height = self.lane_authority_height();
-        Self::authoritative_lane_validator_accounts_from_sources(
+        let Some(inputs) = self.lane_authority_inputs(lane_id, block_height) else {
+            return Vec::new();
+        };
+        let manifest_registry = self.lane_manifests.read().clone();
+        Self::authoritative_lane_validator_accounts_with_inputs(
             &self.world.view(),
             lane_id,
-            validator_mode,
             manifest_registry.as_ref(),
-            &nexus,
+            &inputs,
             block_height,
         )
     }
@@ -33446,28 +33501,23 @@ impl State {
         lane_id: LaneId,
         block_height: u64,
     ) -> Vec<PeerId> {
+        let Some(inputs) = self.lane_authority_inputs(lane_id, block_height) else {
+            return Vec::new();
+        };
         let manifest_registry = self.lane_manifests.read().clone();
-        let nexus = self.nexus_snapshot();
-        let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
-        let commit_topology = self.commit_topology_snapshot();
-        Self::authoritative_lane_peer_ids_from_sources(
+        Self::authoritative_lane_peer_ids_with_inputs(
             &self.world.view(),
             lane_id,
-            validator_mode,
             manifest_registry.as_ref(),
-            &nexus,
-            &commit_topology,
+            &inputs,
             block_height,
         )
     }
 
     /// Return whether a lane is active at the committed lane-authority height.
     pub fn is_lane_active_for_authority(&self, lane_id: LaneId) -> bool {
-        let nexus = self.nexus_snapshot();
-        let Some(dataspace_id) = Self::nexus_authoritative_lane_dataspace(lane_id, &nexus) else {
-            return false;
-        };
-        nexus_lane_active_for_authority(lane_id, dataspace_id, &nexus, self.lane_authority_height())
+        self.lane_authority_inputs(lane_id, self.lane_authority_height())
+            .is_some()
     }
 
     fn lane_authority_height(&self) -> u64 {
@@ -33502,95 +33552,27 @@ impl State {
         lane_id: LaneId,
         block_height: u64,
     ) -> Vec<ManifestValidatorBinding> {
-        let nexus = self.nexus_snapshot();
-        let Some(dataspace_id) = Self::nexus_authoritative_lane_dataspace(lane_id, &nexus) else {
+        let Some(inputs) = self.lane_authority_inputs(lane_id, block_height) else {
             return Vec::new();
         };
-        if !nexus_lane_active_for_authority(lane_id, dataspace_id, &nexus, block_height) {
+        let lane_manifests = self.lane_manifests.read().clone();
+        if !Self::manifest_registry_matches_lane_dataspace(
+            lane_id,
+            inputs.dataspace_id,
+            lane_manifests.as_ref(),
+        ) {
             return Vec::new();
         }
-        let (validators, bindings) = {
-            let lane_manifests = self.lane_manifests.read();
-            if !Self::manifest_registry_matches_lane_dataspace(
-                lane_id,
-                dataspace_id,
-                lane_manifests.as_ref(),
-            ) {
-                return Vec::new();
-            }
-            let Some(rules) = lane_manifests.lane_rules(lane_id) else {
-                return Vec::new();
-            };
-            (rules.validators.clone(), rules.validator_bindings.clone())
+        let Some(rules) = lane_manifests.lane_rules(lane_id) else {
+            return Vec::new();
         };
         let world = self.world.view();
-        Self::live_manifest_validator_bindings_from_sources(
+        bounded_authority::live_manifest_validator_bindings(
             &world,
-            bindings,
-            &validators,
+            &rules.validator_bindings,
+            &rules.validators,
             block_height,
         )
-    }
-
-    fn live_manifest_validator_bindings_from_sources(
-        world: &impl WorldReadOnly,
-        mut bindings: Vec<ManifestValidatorBinding>,
-        declared_validators: &[AccountId],
-        block_height: u64,
-    ) -> Vec<ManifestValidatorBinding> {
-        let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
-        let mut declared_validator_set = BTreeSet::new();
-        if declared_validators
-            .iter()
-            .any(|validator| !declared_validator_set.insert(validator.clone()))
-        {
-            return Vec::new();
-        }
-        let mut seen_validators = BTreeSet::new();
-        let mut seen_peers = BTreeSet::new();
-        for binding in &bindings {
-            if !declared_validator_set.contains(&binding.validator)
-                || !seen_validators.insert(binding.validator.clone())
-                || !seen_peers.insert(binding.peer_id.clone())
-            {
-                return Vec::new();
-            }
-        }
-        bindings.retain(|binding| {
-            present_peers.contains(&binding.peer_id)
-                && peer_has_live_consensus_key(world, &binding.peer_id, block_height)
-        });
-        bindings.sort_by(|lhs, rhs| {
-            lhs.validator
-                .cmp(&rhs.validator)
-                .then_with(|| lhs.peer_id.cmp(&rhs.peer_id))
-        });
-        bindings
-    }
-
-    fn live_manifest_validator_account_peers_from_sources(
-        world: &impl WorldReadOnly,
-        mut validators: Vec<AccountId>,
-        block_height: u64,
-    ) -> Vec<(AccountId, PeerId)> {
-        let mut seen_validators = BTreeSet::new();
-        if validators
-            .iter()
-            .any(|validator| !seen_validators.insert(validator.clone()))
-        {
-            return Vec::new();
-        }
-        validators.sort();
-        let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
-        validators
-            .into_iter()
-            .filter_map(|validator| {
-                let peer = PeerId::new(validator.try_signatory()?.clone());
-                (present_peers.contains(&peer)
-                    && peer_has_live_consensus_key(world, &peer, block_height))
-                .then_some((validator, peer))
-            })
-            .collect()
     }
 
     #[cfg(test)]
@@ -33679,20 +33661,37 @@ impl State {
         nexus: &iroha_config::parameters::actual::Nexus,
         block_height: u64,
     ) -> Vec<AccountId> {
-        let Some(dataspace_id) = Self::nexus_authoritative_lane_dataspace(lane_id, nexus) else {
+        let Some(inputs) =
+            Self::lane_authority_inputs_from_nexus(lane_id, validator_mode, nexus, block_height)
+        else {
             return Vec::new();
         };
-        if !nexus_lane_active_for_authority(lane_id, dataspace_id, nexus, block_height) {
-            return Vec::new();
-        }
-        let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
-        if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
-            && let Some(rules) = manifest_registry.lane_rules(lane_id)
+        Self::authoritative_lane_validator_accounts_with_inputs(
+            world,
+            lane_id,
+            manifest_registry,
+            &inputs,
+            block_height,
+        )
+    }
+
+    fn authoritative_lane_validator_accounts_with_inputs(
+        world: &impl WorldReadOnly,
+        lane_id: LaneId,
+        manifest_registry: &LaneManifestRegistry,
+        inputs: &bounded_authority::LaneAuthorityInputs,
+        block_height: u64,
+    ) -> Vec<AccountId> {
+        if Self::manifest_registry_matches_lane_dataspace(
+            lane_id,
+            inputs.dataspace_id,
+            manifest_registry,
+        ) && let Some(rules) = manifest_registry.lane_rules(lane_id)
             && !rules.validator_bindings.is_empty()
         {
-            let bindings = Self::live_manifest_validator_bindings_from_sources(
+            let bindings = bounded_authority::live_manifest_validator_bindings(
                 world,
-                rules.validator_bindings.clone(),
+                &rules.validator_bindings,
                 &rules.validators,
                 block_height,
             );
@@ -33702,12 +33701,15 @@ impl State {
                 .collect();
         }
 
-        if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
-            && let Some(validators) = manifest_registry.lane_validators(lane_id)
+        if Self::manifest_registry_matches_lane_dataspace(
+            lane_id,
+            inputs.dataspace_id,
+            manifest_registry,
+        ) && let Some(rules) = manifest_registry.lane_rules(lane_id)
         {
-            return Self::live_manifest_validator_account_peers_from_sources(
+            return bounded_authority::live_manifest_validator_account_peers(
                 world,
-                validators,
+                &rules.validators,
                 block_height,
             )
             .into_iter()
@@ -33716,49 +33718,18 @@ impl State {
         }
 
         if !matches!(
-            validator_mode,
+            inputs.validator_mode,
             iroha_config::parameters::actual::LaneValidatorMode::StakeElected
         ) {
             return Vec::new();
         }
-
-        let mut candidates: Vec<(AccountId, Quantity)> = world
-            .public_lane_validators()
-            .iter()
-            .filter(|(key, record)| {
-                public_lane_validator_record_matches_key(key, record)
-                    && key.0 == lane_id
-                    && matches!(record.status, PublicLaneValidatorStatus::Active)
-            })
-            .filter_map(|(_, record)| {
-                let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
-                    &record.self_stake,
-                    &nexus.staking.min_validator_stake,
-                ) else {
-                    return None;
-                };
-                if !meets_min {
-                    return None;
-                }
-                if !present_peers.contains(&record.peer_id)
-                    || !peer_has_live_consensus_key(world, &record.peer_id, block_height)
-                {
-                    return None;
-                }
-                Some((record.validator.clone(), record.total_stake.clone()))
-            })
-            .collect();
-        candidates.sort_by(|lhs, rhs| rhs.1.cmp(&lhs.1).then_with(|| lhs.0.cmp(&rhs.0)));
-        candidates.dedup_by(|lhs, rhs| lhs.0 == rhs.0);
-
-        let max = usize::try_from(nexus.staking.max_validators.get())
-            .unwrap_or(usize::MAX)
-            .min(candidates.len());
-        candidates
-            .into_iter()
-            .take(max)
-            .map(|(account, _)| account)
-            .collect()
+        bounded_authority::stake_elected_validator_accounts(
+            world,
+            lane_id,
+            &inputs.minimum_stake,
+            inputs.max_validators,
+            block_height,
+        )
     }
 
     fn authoritative_lane_peer_ids_from_sources(
@@ -33770,39 +33741,45 @@ impl State {
         _commit_topology: &[PeerId],
         block_height: u64,
     ) -> Vec<PeerId> {
-        let Some(dataspace_id) = Self::nexus_authoritative_lane_dataspace(lane_id, nexus) else {
-            return Vec::new();
-        };
-        if !nexus_lane_active_for_authority(lane_id, dataspace_id, nexus, block_height) {
-            return Vec::new();
-        }
-        let Some(lane) = nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .find(|lane| lane.id == lane_id)
+        let Some(inputs) =
+            Self::lane_authority_inputs_from_nexus(lane_id, validator_mode, nexus, block_height)
         else {
             return Vec::new();
         };
-        if lane_claims_autoscale_managed(lane) {
+        Self::authoritative_lane_peer_ids_with_inputs(
+            world,
+            lane_id,
+            manifest_registry,
+            &inputs,
+            block_height,
+        )
+    }
+
+    fn authoritative_lane_peer_ids_with_inputs(
+        world: &impl WorldReadOnly,
+        lane_id: LaneId,
+        manifest_registry: &LaneManifestRegistry,
+        inputs: &bounded_authority::LaneAuthorityInputs,
+        block_height: u64,
+    ) -> Vec<PeerId> {
+        if let Some(validator_set) = &inputs.autoscale_validator_set {
             // An autoscale lane has one immutable committee for its full
             // incarnation. Never apply current-world peer/key/manifest or
             // topology filters here: delayed QCs from this pinned authority
             // must remain verifiable after roster churn.
-            return decode_autoscale_lane_committee(lane)
-                .ok()
-                .flatten()
-                .map_or_else(Vec::new, |committee| committee.validator_set);
+            return validator_set.clone();
         }
 
-        let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
-        if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
-            && let Some(rules) = manifest_registry.lane_rules(lane_id)
+        if Self::manifest_registry_matches_lane_dataspace(
+            lane_id,
+            inputs.dataspace_id,
+            manifest_registry,
+        ) && let Some(rules) = manifest_registry.lane_rules(lane_id)
         {
             if !rules.validator_bindings.is_empty() {
-                let bindings = Self::live_manifest_validator_bindings_from_sources(
+                let bindings = bounded_authority::live_manifest_validator_bindings(
                     world,
-                    rules.validator_bindings.clone(),
+                    &rules.validator_bindings,
                     &rules.validators,
                     block_height,
                 );
@@ -33814,12 +33791,15 @@ impl State {
             }
         }
 
-        if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
-            && let Some(validators) = manifest_registry.lane_validators(lane_id)
+        if Self::manifest_registry_matches_lane_dataspace(
+            lane_id,
+            inputs.dataspace_id,
+            manifest_registry,
+        ) && let Some(rules) = manifest_registry.lane_rules(lane_id)
         {
-            let pool: Vec<_> = Self::live_manifest_validator_account_peers_from_sources(
+            let pool: Vec<_> = bounded_authority::live_manifest_validator_account_peers(
                 world,
-                validators,
+                &rules.validators,
                 block_height,
             )
             .into_iter()
@@ -33829,58 +33809,18 @@ impl State {
         }
 
         if !matches!(
-            validator_mode,
+            inputs.validator_mode,
             iroha_config::parameters::actual::LaneValidatorMode::StakeElected
         ) {
             return Vec::new();
         }
-
-        let mut candidates: Vec<(AccountId, PeerId, Quantity)> = world
-            .public_lane_validators()
-            .iter()
-            .filter(|(key, record)| {
-                public_lane_validator_record_matches_key(key, record)
-                    && key.0 == lane_id
-                    && matches!(record.status, PublicLaneValidatorStatus::Active)
-            })
-            .filter_map(|(_, record)| {
-                let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
-                    &record.self_stake,
-                    &nexus.staking.min_validator_stake,
-                ) else {
-                    return None;
-                };
-                if !meets_min {
-                    return None;
-                }
-                if !present_peers.contains(&record.peer_id)
-                    || !peer_has_live_consensus_key(world, &record.peer_id, block_height)
-                {
-                    return None;
-                }
-                Some((
-                    record.validator.clone(),
-                    record.peer_id.clone(),
-                    record.total_stake.clone(),
-                ))
-            })
-            .collect();
-        candidates.sort_by(|lhs, rhs| {
-            rhs.2
-                .cmp(&lhs.2)
-                .then_with(|| lhs.0.cmp(&rhs.0))
-                .then_with(|| lhs.1.cmp(&rhs.1))
-        });
-        candidates.dedup_by(|lhs, rhs| lhs.1 == rhs.1);
-
-        let max = usize::try_from(nexus.staking.max_validators.get())
-            .unwrap_or(usize::MAX)
-            .min(candidates.len());
-        candidates
-            .into_iter()
-            .take(max)
-            .map(|(_, peer_id, _)| peer_id)
-            .collect()
+        bounded_authority::stake_elected_peer_ids(
+            world,
+            lane_id,
+            &inputs.minimum_stake,
+            inputs.max_validators,
+            block_height,
+        )
     }
 
     /// Derive the initial committee for a brand-new autoscale lane incarnation.
@@ -33930,9 +33870,9 @@ impl State {
             && let Some(rules) = manifest_registry.lane_rules(lane_id)
         {
             if !rules.validator_bindings.is_empty() {
-                let pool = Self::live_manifest_validator_bindings_from_sources(
+                let pool = bounded_authority::live_manifest_validator_bindings(
                     world,
-                    rules.validator_bindings.clone(),
+                    &rules.validator_bindings,
                     &rules.validators,
                     proposal_height,
                 )
@@ -33951,11 +33891,11 @@ impl State {
             }
         }
         if Self::manifest_registry_matches_lane_dataspace(lane_id, dataspace_id, manifest_registry)
-            && let Some(validators) = manifest_registry.lane_validators(lane_id)
+            && let Some(rules) = manifest_registry.lane_rules(lane_id)
         {
-            let pool = Self::live_manifest_validator_account_peers_from_sources(
+            let pool = bounded_authority::live_manifest_validator_account_peers(
                 world,
-                validators,
+                &rules.validators,
                 proposal_height,
             )
             .into_iter()
@@ -43805,7 +43745,7 @@ impl State {
         ensure_autoscale_runtime_lane_bounds(&nexus.autoscale)?;
         ensure_autoscale_default_lane_is_base(&nexus)?;
         if nexus.enabled && nexus.autoscale.enabled {
-            ensure_autoscale_base_profile_supported(&nexus, None, None)?;
+            ensure_autoscale_base_profile_supported(&nexus, None)?;
         }
         let current_block_height = self.block_hashes.view().len() as u64;
         let protected_autoscale_lanes: BTreeMap<LaneId, iroha_data_model::nexus::LaneConfig> = self
@@ -47868,7 +47808,6 @@ fn ensure_autoscale_default_lane_is_base(
 fn ensure_autoscale_base_profile_supported(
     nexus: &iroha_config::parameters::actual::Nexus,
     manifest_registry: Option<&LaneManifestRegistry>,
-    prospective_alias: Option<&str>,
 ) -> Result<(), LaneLifecycleError> {
     let lane_id = nexus.routing_policy.default_lane;
     let Some(base_lane) = nexus
@@ -47906,14 +47845,9 @@ fn ensure_autoscale_base_profile_supported(
             reason: "loaded base manifest semantics are alias-specific",
         });
     }
-    if prospective_alias.is_some_and(|alias| {
-        manifest_registry.is_some_and(|registry| registry.has_manifest_source_alias(alias))
-    }) {
-        return Err(LaneLifecycleError::AutoscaleBaseProfileUnsupported {
-            lane: lane_id,
-            reason: "the prospective elastic alias has pre-provisioned manifest semantics that cannot be installed atomically",
-        });
-    }
+    // Prospective aliases are absent from a frozen active-only source set by
+    // construction. `rebind_lane_manifests_for_lifecycle` is the authoritative
+    // updated-catalog coverage check before any lifecycle mutation is staged.
     Ok(())
 }
 
@@ -48467,11 +48401,9 @@ fn block_proofs_for_entry_from_kura(
     if !block.has_results() {
         return Err(BlockProofError::MissingResults(block_height));
     }
-    let entry_hashes: Vec<_> = block.entrypoint_hashes().collect();
-    let (entry_index, _) = entry_hashes
-        .iter()
-        .enumerate()
-        .find(|(_, hash)| **hash == entry_hash)
+    let entry_index = block
+        .entrypoint_hashes()
+        .position(|hash| hash == entry_hash)
         .ok_or(BlockProofError::EntrypointNotFound {
             entry_hash,
             block_height,
@@ -48485,33 +48417,22 @@ fn block_proofs_for_entry_from_kura(
                 block_height,
             })?;
 
-    let expected_root =
-        block
-            .full_entry_merkle_root()
-            .ok_or(BlockProofError::MerkleProofUnavailable {
-                entry_hash,
-                block_height,
-            })?;
-    let stored_entry_commitment =
+    block.validate_entrypoint_merkle_cache().map_err(|_| {
+        BlockProofError::MerkleProofUnavailable {
+            entry_hash,
+            block_height,
+        }
+    })?;
+    let entry_commitment =
         block
             .full_entry_merkle_commitment()
             .ok_or(BlockProofError::MerkleProofUnavailable {
                 entry_hash,
                 block_height,
             })?;
-    let entry_merkle: CanonMerkleTree<_> = entry_hashes.iter().copied().collect();
-    let entry_commitment = entry_merkle
-        .commitment()
-        .filter(|commitment| {
-            commitment.root() == &expected_root && commitment == &stored_entry_commitment
-        })
-        .ok_or(BlockProofError::MerkleProofUnavailable {
-            entry_hash,
-            block_height,
-        })?;
     let entry_receipt_proof =
-        entry_merkle
-            .get_proof(entry_index_u32)
+        block
+            .entrypoint_proof(entry_index_u32)
             .ok_or(BlockProofError::MerkleProofUnavailable {
                 entry_hash,
                 block_height,
@@ -48526,39 +48447,42 @@ fn block_proofs_for_entry_from_kura(
                 entry_hash,
                 block_height,
             })?;
-    let result_hashes: Vec<_> = block.result_hashes().collect();
+    block
+        .validate_result_merkle_cache()
+        .map_err(|_| BlockProofError::ExecutionResultMissing {
+            entry_hash,
+            block_height,
+        })?;
     let result_hash =
-        *result_hashes
-            .get(entry_index)
+        block
+            .result_hashes()
+            .nth(entry_index)
             .ok_or(BlockProofError::ExecutionResultMissing {
                 entry_hash,
                 block_height,
             })?;
-    let result_merkle: CanonMerkleTree<_> = result_hashes.iter().copied().collect();
-    let stored_result_commitment =
+    let result_commitment =
         block
             .result_merkle_commitment()
             .ok_or(BlockProofError::ExecutionResultMissing {
                 entry_hash,
                 block_height,
             })?;
-    let result_commitment = result_merkle
-        .commitment()
-        .filter(|commitment| {
-            commitment.root() == &expected_result_root
-                && commitment == &stored_result_commitment
-                && commitment.leaf_count() == entry_commitment.leaf_count()
-        })
-        .ok_or(BlockProofError::ExecutionResultMissing {
+    if result_commitment.root() != &expected_result_root
+        || result_commitment.leaf_count() != entry_commitment.leaf_count()
+    {
+        return Err(BlockProofError::ExecutionResultMissing {
             entry_hash,
             block_height,
-        })?;
-    let result_proof = result_merkle.get_proof(entry_index_u32).ok_or(
-        BlockProofError::ExecutionResultMissing {
-            entry_hash,
-            block_height,
-        },
-    )?;
+        });
+    }
+    let result_proof =
+        block
+            .result_proof(entry_index_u32)
+            .ok_or(BlockProofError::ExecutionResultMissing {
+                entry_hash,
+                block_height,
+            })?;
     let result_receipt = ExecutionReceiptProof::new(result_hash, result_proof);
 
     Ok(BlockProofs {
@@ -48611,6 +48535,12 @@ pub trait StateReadOnly: WorldStateSnapshot {
     fn height(&self) -> usize {
         self.block_hashes().len()
     }
+
+    /// Deterministic ledger time for queries in this state scope.
+    ///
+    /// Committed views capture the latest cached block-header time. Block and
+    /// transaction scopes use the header of the block they are executing.
+    fn query_ledger_time_ms(&self) -> u64;
 
     /// Build the exact privacy capability snapshot from this committed view.
     ///
@@ -48872,6 +48802,9 @@ macro_rules! impl_state_ro {
             }
             fn query_handle(&self) -> &LiveQueryStoreHandle {
                 &self.query_handle
+            }
+            fn query_ledger_time_ms(&self) -> u64 {
+                self.query_ledger_time_ms
             }
             #[cfg(feature = "telemetry")]
             fn metrics(&self) -> &StateTelemetry {
@@ -52126,6 +52059,7 @@ impl<'state> StateBlock<'state> {
             pipeline_ivm_prepared_cache: self.pipeline_ivm_prepared_cache.clone(),
             kura: self.kura,
             query_handle: self.query_handle,
+            query_ledger_time_ms: self.query_ledger_time_ms,
             #[cfg(feature = "telemetry")]
             telemetry: self.telemetry,
             _curr_block: self._curr_block,
@@ -55239,7 +55173,6 @@ impl<'state> StateBlock<'state> {
             ensure_autoscale_base_profile_supported(
                 &self.nexus,
                 Some(self.lane_manifests.as_ref()),
-                plan.additions.first().map(|lane| lane.alias.as_str()),
             )?;
         }
         ensure_lane_lifecycle_compliance_ready(&self.nexus, self.lane_compliance.as_deref(), plan)?;

@@ -9335,19 +9335,12 @@ impl MergeSigningGuard {
         path: &Path,
         max_record_bytes: usize,
     ) -> Result<MergeSigningHighWaterV2, MergeSidecarError> {
-        let metadata = fs::symlink_metadata(path)
-            .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
-        if metadata.file_type().is_symlink()
-            || !metadata.file_type().is_file()
-            || metadata.len() > max_record_bytes as u64
-        {
-            return Err(MergeSidecarError::SigningGuard(format!(
-                "unsafe signing-guard high-water file {}",
-                path.display()
-            )));
-        }
-        let bytes =
-            fs::read(path).map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
+        let bytes = MergeSidecarLifecycleJournal::read_bounded_regular(
+            path,
+            max_record_bytes,
+            "signing-guard high-water",
+        )
+        .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
         let high_water = norito::decode_from_bytes::<MergeSigningHighWaterV2>(&bytes)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
         let canonical = norito::to_bytes(&high_water)
@@ -9488,24 +9481,12 @@ impl MergeSigningGuard {
         path: &Path,
         max_record_bytes: usize,
     ) -> Result<MergeSigningGuardRecordV2, MergeSidecarError> {
-        let metadata = fs::symlink_metadata(path)
-            .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
-        if metadata.file_type().is_symlink()
-            || !metadata.file_type().is_file()
-            || metadata.len() > max_record_bytes as u64
-        {
-            return Err(MergeSidecarError::SigningGuard(format!(
-                "unsafe signing-guard record {}",
-                path.display()
-            )));
-        }
-        let mut file = OpenOptions::new()
-            .read(true)
-            .open(path)
-            .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
-        let mut bytes = Vec::with_capacity(metadata.len() as usize);
-        file.read_to_end(&mut bytes)
-            .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
+        let bytes = MergeSidecarLifecycleJournal::read_bounded_regular(
+            path,
+            max_record_bytes,
+            "signing-guard record",
+        )
+        .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
         let record = norito::decode_from_bytes::<MergeSigningGuardRecordV2>(&bytes)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
         let canonical = norito::to_bytes(&record)

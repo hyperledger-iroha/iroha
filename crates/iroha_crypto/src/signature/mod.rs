@@ -492,6 +492,13 @@ impl FastJsonWrite for Signature {
         let encoded = hex::encode_upper(self.payload());
         json::write_json_string(&encoded, out);
     }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_upper_hex_json_string_to(self.payload(), out)
+    }
 }
 
 #[cfg(all(feature = "json", not(feature = "ffi_import")))]
@@ -665,6 +672,13 @@ impl<'de, T> norito::core::NoritoDeserialize<'de> for SignatureOf<T> {
 impl<T> FastJsonWrite for SignatureOf<T> {
     fn write_json(&self, out: &mut String) {
         self.0.write_json(out);
+    }
+
+    fn write_json_to(
+        &self,
+        out: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        self.0.write_json_to(out)
     }
 }
 

@@ -126,6 +126,23 @@ impl norito::json::JsonSerialize for ManifestRootCid {
     fn json_serialize(&self, out: &mut String) {
         crate::json_helpers::fixed_bytes::serialize(&self.0, out);
     }
+
+    fn json_serialize_to(
+        &self,
+        out: &mut dyn norito::json::JsonWriteSink,
+    ) -> Result<(), norito::json::BoundedJsonError> {
+        out.begin_container()?;
+        out.push('[')?;
+        for (index, byte) in self.0.iter().enumerate() {
+            if index != 0 {
+                out.push(',')?;
+            }
+            norito::json::JsonSerialize::json_serialize_to(byte, out)?;
+        }
+        out.push(']')?;
+        out.end_container();
+        Ok(())
+    }
 }
 
 #[cfg(feature = "json")]

@@ -10,8 +10,8 @@ public sealed class SignedQueryBuilderTests
 {
     private const string FixtureSeedHex = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
     private const string FixtureAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
-    private const string FixtureNetworkId = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
-    private const string AlternateNetworkId = "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94";
+    private const string FixtureNetworkIdLiteral = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+    private const string AlternateNetworkIdLiteral = "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94";
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     private const string FixtureContractCodeHash = "0x00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEE00";
     private const string FixtureProofHash = "0x111122223333444455556666777788889999AAAABBBBCCCCDDDDEEEEFFFF0000";
@@ -19,6 +19,8 @@ public sealed class SignedQueryBuilderTests
     private const string FixtureStorageTicket = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     private const string FixtureManifestDigest = "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
     private const string FixtureProviderId = "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
+    private static readonly NetworkId FixtureNetworkId = NetworkId.Parse(FixtureNetworkIdLiteral);
+    private static readonly NetworkId AlternateNetworkId = NetworkId.Parse(AlternateNetworkIdLiteral);
 
     [Fact]
     public void BuildSignedEncodesFindParametersQuery()
@@ -209,16 +211,31 @@ public sealed class SignedQueryBuilderTests
             () => new SignedQueryBuilder(FixtureAccountId.Insert(8, " "), FixtureNetworkId));
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149")]
-    [InlineData("hash:32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149#A2F0")]
-    [InlineData("hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#0000")]
-    public void ConstructorRejectsNonCanonicalNetworkId(string networkId)
+    [Fact]
+    public void ConstructorRequiresNominalNetworkId()
     {
-        AssertArgumentException(
-            "networkId",
-            () => new SignedQueryBuilder(FixtureAccountId, networkId));
+        Assert.Throws<ArgumentNullException>(
+            () => new SignedQueryBuilder(FixtureAccountId, null!));
+        Assert.Throws<FormatException>(() => NetworkId.Parse("chain/dev"));
+        Assert.Throws<FormatException>(() => NetworkId.Parse("genesis"));
+        Assert.Throws<FormatException>(() => NetworkId.Parse(""));
+    }
+
+    [Fact]
+    public void SignedQueryBuildersExposeNoRawStringNetworkIdentityOverload()
+    {
+        foreach (var builderType in new[]
+                 {
+                     typeof(SignedQueryBuilder),
+                     typeof(SignedIterableQueryBuilder),
+                 })
+        {
+            var constructor = Assert.Single(builderType.GetConstructors());
+            var parameters = constructor.GetParameters();
+            Assert.Equal(2, parameters.Length);
+            Assert.Equal(typeof(NetworkId), parameters[1].ParameterType);
+            Assert.Equal(typeof(NetworkId), builderType.GetProperty("NetworkId")!.PropertyType);
+        }
     }
 
     [Fact]
@@ -734,7 +751,7 @@ public sealed class SignedQueryBuilderTests
         offset += consumed;
 
         Assert.Equal(payload.Length, offset);
-        Assert.Equal(Convert.FromHexString(FixtureNetworkId.Substring(5, 64)), networkId);
+        Assert.Equal(Convert.FromHexString(FixtureNetworkIdLiteral.Substring(5, 64)), networkId);
         Assert.NotEmpty(authority);
         Assert.True(BinaryPrimitives.ReadUInt64LittleEndian(creationTime) > 0);
         Assert.Equal(100_000ul, BinaryPrimitives.ReadUInt64LittleEndian(timeToLive));

@@ -34,6 +34,12 @@ pub const QUERY_PROJECTION_DA_CODEC: &str = "application/x-iroha-query-shard+nor
 pub const QUERY_PROJECTION_DA_COMPRESSION: Compression = Compression::Zstd;
 /// Default partition count for account-scoped query projection shards.
 pub const QUERY_PROJECTION_DEFAULT_PARTITION_COUNT: u32 = 4096;
+/// First-release ceiling for shard references retained by one checkpoint descriptor.
+pub const QUERY_PROJECTION_CHECKPOINT_MAX_SHARDS: usize = 65_536;
+/// First-release ceiling for one optional asset-definition discriminator.
+pub const QUERY_PROJECTION_CHECKPOINT_MAX_ASSET_DEFINITION_ID_BYTES: usize = 4 * 1024;
+/// First-release aggregate ceiling for asset-definition discriminators in one checkpoint.
+pub const QUERY_PROJECTION_CHECKPOINT_MAX_TOTAL_ASSET_DEFINITION_ID_BYTES: usize = 4 * 1024 * 1024;
 
 /// Resource family described by a query projection checkpoint shard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
@@ -104,6 +110,36 @@ pub struct QueryProjectionUploadedShardArchive {
 /// Errors returned when building a checkpoint publish plan from uploaded archives.
 #[derive(Debug, Error)]
 pub enum QueryProjectionCheckpointPlanError {
+    /// A checkpoint would retain more shard references than the first-release protocol ceiling.
+    #[error("query projection checkpoint exceeds the first-release {maximum}-shard limit")]
+    TooManyShards {
+        /// Maximum shard references retained by one checkpoint.
+        maximum: usize,
+    },
+    /// One asset-definition discriminator exceeds the first-release byte ceiling.
+    #[error(
+        "query projection shard {resource:?}/partition={partition_id} asset-definition discriminator is {found} bytes (maximum {maximum})"
+    )]
+    AssetDefinitionIdTooLong {
+        /// Resource family covered by the shard.
+        resource: QueryProjectionResourceKind,
+        /// Stable partition identifier inside the resource family.
+        partition_id: u32,
+        /// Encoded discriminator bytes observed.
+        found: usize,
+        /// Maximum bytes accepted for one discriminator.
+        maximum: usize,
+    },
+    /// The aggregate asset-definition discriminator budget would be exceeded.
+    #[error(
+        "query projection checkpoint asset-definition discriminators require {found} bytes (maximum {maximum})"
+    )]
+    AssetDefinitionIdBudgetExceeded {
+        /// Aggregate discriminator bytes observed.
+        found: usize,
+        /// Maximum aggregate discriminator bytes accepted.
+        maximum: usize,
+    },
     /// A shard archive uses an unsupported archive-version marker.
     #[error(
         "query projection shard {resource:?}/partition={partition_id}/asset={asset_definition_id:?} uses unsupported archive version {found} (expected {expected})"
@@ -292,9 +328,17 @@ impl QueryProjectionCheckpointPublishPlan {
             .map(|hash| hex::encode(hash.as_ref()));
         let mut seen = HashSet::new();
         let mut shards = Vec::new();
+        let mut asset_definition_id_bytes = 0_usize;
 
         for upload in uploads {
             let archive = upload.archive;
+            asset_definition_id_bytes = admit_checkpoint_shard_reference(
+                shards.len(),
+                asset_definition_id_bytes,
+                archive.resource,
+                archive.partition_id,
+                archive.asset_definition_id.as_deref(),
+            )?;
             let key = (
                 archive.resource,
                 archive.partition_id,
@@ -402,6 +446,48 @@ impl QueryProjectionCheckpointPublishPlan {
     pub fn into_checkpoint(self) -> QueryProjectionCheckpoint {
         self.checkpoint
     }
+}
+
+fn admit_checkpoint_shard_reference(
+    retained_shards: usize,
+    retained_asset_definition_id_bytes: usize,
+    resource: QueryProjectionResourceKind,
+    partition_id: u32,
+    asset_definition_id: Option<&str>,
+) -> Result<usize, QueryProjectionCheckpointPlanError> {
+    if retained_shards >= QUERY_PROJECTION_CHECKPOINT_MAX_SHARDS {
+        return Err(QueryProjectionCheckpointPlanError::TooManyShards {
+            maximum: QUERY_PROJECTION_CHECKPOINT_MAX_SHARDS,
+        });
+    }
+    let asset_definition_id_bytes = asset_definition_id.map_or(0, str::len);
+    if asset_definition_id_bytes > QUERY_PROJECTION_CHECKPOINT_MAX_ASSET_DEFINITION_ID_BYTES {
+        return Err(
+            QueryProjectionCheckpointPlanError::AssetDefinitionIdTooLong {
+                resource,
+                partition_id,
+                found: asset_definition_id_bytes,
+                maximum: QUERY_PROJECTION_CHECKPOINT_MAX_ASSET_DEFINITION_ID_BYTES,
+            },
+        );
+    }
+    let total = retained_asset_definition_id_bytes
+        .checked_add(asset_definition_id_bytes)
+        .ok_or(
+            QueryProjectionCheckpointPlanError::AssetDefinitionIdBudgetExceeded {
+                found: usize::MAX,
+                maximum: QUERY_PROJECTION_CHECKPOINT_MAX_TOTAL_ASSET_DEFINITION_ID_BYTES,
+            },
+        )?;
+    if total > QUERY_PROJECTION_CHECKPOINT_MAX_TOTAL_ASSET_DEFINITION_ID_BYTES {
+        return Err(
+            QueryProjectionCheckpointPlanError::AssetDefinitionIdBudgetExceeded {
+                found: total,
+                maximum: QUERY_PROJECTION_CHECKPOINT_MAX_TOTAL_ASSET_DEFINITION_ID_BYTES,
+            },
+        );
+    }
+    Ok(total)
 }
 
 impl Default for QueryProjectionCheckpoint {
@@ -622,6 +708,48 @@ mod tests {
                 partition_id: 7,
                 asset_definition_id: None,
             }
+        ));
+    }
+
+    #[test]
+    fn checkpoint_shard_budget_rejects_first_overflow_without_allocating_it() {
+        assert!(matches!(
+            admit_checkpoint_shard_reference(
+                QUERY_PROJECTION_CHECKPOINT_MAX_SHARDS,
+                0,
+                QueryProjectionResourceKind::AssetHolders,
+                1,
+                None,
+            ),
+            Err(QueryProjectionCheckpointPlanError::TooManyShards { maximum })
+                if maximum == QUERY_PROJECTION_CHECKPOINT_MAX_SHARDS
+        ));
+
+        let oversized = "x".repeat(QUERY_PROJECTION_CHECKPOINT_MAX_ASSET_DEFINITION_ID_BYTES + 1);
+        assert!(matches!(
+            admit_checkpoint_shard_reference(
+                0,
+                0,
+                QueryProjectionResourceKind::AssetHolders,
+                1,
+                Some(&oversized),
+            ),
+            Err(QueryProjectionCheckpointPlanError::AssetDefinitionIdTooLong { found, maximum, .. })
+                if found == maximum + 1
+        ));
+
+        assert!(matches!(
+            admit_checkpoint_shard_reference(
+                0,
+                QUERY_PROJECTION_CHECKPOINT_MAX_TOTAL_ASSET_DEFINITION_ID_BYTES,
+                QueryProjectionResourceKind::AssetHolders,
+                1,
+                Some("x"),
+            ),
+            Err(QueryProjectionCheckpointPlanError::AssetDefinitionIdBudgetExceeded {
+                found,
+                maximum,
+            }) if found == maximum + 1
         ));
     }
 

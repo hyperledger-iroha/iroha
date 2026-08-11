@@ -554,12 +554,7 @@ mod tests {
         let assignment = builder.finalize().expect("shape");
         assignment
             .shape
-            .validate_relaxed_assignment(
-                &assignment.witness,
-                Scalar::one(),
-                &assignment.public_inputs,
-                &vec![Scalar::zero(); assignment.shape.constraint_count()],
-            )
+            .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
             .expect("satisfying trace");
     }
 
@@ -584,12 +579,7 @@ mod tests {
             let assignment = builder.finalize().expect("shape");
             let satisfied = assignment
                 .shape
-                .validate_relaxed_assignment(
-                    &assignment.witness,
-                    Scalar::one(),
-                    &assignment.public_inputs,
-                    &vec![Scalar::zero(); assignment.shape.constraint_count()],
-                )
+                .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
                 .is_ok();
             assert_eq!(result.is_ok() && satisfied, accepted);
         }
@@ -640,12 +630,7 @@ mod tests {
             let assignment = builder.finalize().expect("shape");
             let satisfied = assignment
                 .shape
-                .validate_relaxed_assignment(
-                    &assignment.witness,
-                    Scalar::one(),
-                    &assignment.public_inputs,
-                    &vec![Scalar::zero(); assignment.shape.constraint_count()],
-                )
+                .validate_strict_assignment(&assignment.witness, &assignment.public_inputs)
                 .is_ok();
             assert_eq!(satisfied, accepted);
         }

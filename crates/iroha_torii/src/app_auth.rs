@@ -1688,14 +1688,14 @@ mod tests {
     }
 
     #[test]
-    fn exact_network_auth_rejects_wrong_network_and_replay() {
+    fn exact_network_auth_rejects_wrong_network_path_body_and_replay() {
         let _guard = test_guard(CanonicalRequestAuthConfig::default());
         let account = ALICE_ID.clone();
         let network_id = test_network_id(0x31);
         let state = minimal_state_with_account_and_network_id(&account, network_id);
         let wrong_network_id = test_network_id(0x32);
         let method = Method::POST;
-        let uri: Uri = "/v1/da/ingest".parse().expect("DA ingest URI");
+        let uri: Uri = "/v1/subscriptions".parse().expect("subscription URI");
         let body = br#"{"payload_public_key":"self-declared-only"}"#;
         let headers = signed_network_headers_for_test(
             &network_id,
@@ -1717,6 +1717,30 @@ mod tests {
             None,
         )
         .expect_err("a request signed for a different genesis lineage must fail");
+
+        let wrong_uri: Uri = "/v1/subscriptions/plans"
+            .parse()
+            .expect("subscription plan URI");
+        verify_canonical_network_request(
+            &state,
+            &network_id,
+            &headers,
+            &method,
+            &wrong_uri,
+            body,
+            None,
+        )
+        .expect_err("a signature for another subscription path must fail");
+        verify_canonical_network_request(
+            &state,
+            &network_id,
+            &headers,
+            &method,
+            &uri,
+            br#"{"payload_public_key":"tampered"}"#,
+            None,
+        )
+        .expect_err("a signature for another subscription body must fail");
 
         let verified = verify_canonical_network_request(
             &state,

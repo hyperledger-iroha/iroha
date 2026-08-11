@@ -1720,9 +1720,7 @@ impl DecryptionPublicRelationV1 {
         self.binding.validate(profile, parties)?;
         self.common_a.validate(profile)?;
         self.party_b.validate(profile)?;
-        if *self.common_a == RnsPolynomial::zero(profile)
-            || self.party_b == RnsPolynomial::zero(profile)
-        {
+        if self.common_a.is_zero() || self.party_b.is_zero() {
             return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
         }
         Ok(())
@@ -2044,6 +2042,7 @@ impl<'a> ZkAmsMkheDecryptionStatementV1<'a> {
 /// The callback must stream each complete canonical count-prefixed party-`b`
 /// object into the supplied hash. Its call order is fixed to the governed
 /// roster, and the common `a` polynomial is derived one release limb at a time.
+#[allow(dead_code)]
 pub(super) fn decryption_key_context_digest_from_bounded_cpk_v1<F>(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     cpk_transcript_digest: [u8; 32],
@@ -2149,7 +2148,7 @@ fn decryption_binding_from_statement(
     })
 }
 
-pub(super) fn decryption_binding_from_compact_axes_v1(
+fn decryption_binding_from_compact_axes_v1(
     roster: &ZkAmsMkheGovernedRosterWireV1,
     ciphertext: &ZkAmsMkheCollectiveCiphertextWireV1,
     ciphertext_digest: [u8; 32],

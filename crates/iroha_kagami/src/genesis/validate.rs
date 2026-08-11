@@ -1,13 +1,17 @@
 use std::{
-    fs,
     io::{BufWriter, Write},
     path::PathBuf,
 };
 
+#[cfg(test)]
+use std::fs;
+
 use clap::Parser;
 use color_eyre::eyre::{WrapErr as _, eyre};
 use iroha_data_model::{account::address::ChainDiscriminantGuard, name::Name};
-use iroha_genesis::{ManifestCrypto, RawGenesisTransaction, genesis_instructions_json};
+use iroha_genesis::{
+    ManifestCrypto, RawGenesisTransaction, genesis_instructions_json, read_genesis_manifest_bytes,
+};
 
 use crate::{
     Outcome, RunArgs,
@@ -30,19 +34,23 @@ struct Offense {
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         tui::status("Validating genesis manifest");
-        let bytes = fs::read(&self.genesis_file)?;
+        let bytes = read_genesis_manifest_bytes(&self.genesis_file)
+            .wrap_err("read genesis manifest under fixed resource bounds")?;
+        let manifest = RawGenesisTransaction::from_json_slice(&bytes)
+            .wrap_err("genesis manifest failed structural validation")?;
+        validate_consensus_manifest(&manifest, build_line_from_env())?;
+        let chain_discriminant = manifest.chain_discriminant();
+        drop(manifest);
+
         let json: norito::json::Value = norito::json::from_slice(&bytes)?;
+        drop(bytes);
         let consensus_mode = json.get("consensus_mode");
         if consensus_mode.is_none() || consensus_mode.is_some_and(norito::json::Value::is_null) {
             return Err(eyre!(
                 "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode <mode>`"
             ));
         }
-        let manifest = RawGenesisTransaction::from_path(&self.genesis_file)
-            .wrap_err("genesis manifest failed structural validation")?;
-        validate_consensus_manifest(&manifest, build_line_from_env())?;
-
-        let offenses = collect_offenses_from_value(&json, Some(manifest.chain_discriminant()));
+        let offenses = collect_offenses_from_value(&json, Some(chain_discriminant));
 
         if offenses.is_empty() {
             writeln!(writer, "OK: no offending identifiers found")?;
@@ -166,11 +174,10 @@ fn validate_instructions_array(
     let Some(instrs) = maybe_instrs else {
         return;
     };
-    let Some(arr) = instrs.as_array() else {
+    if !instrs.is_array() {
         return;
-    };
-    let wrapped = norito::json::Value::Array(arr.clone());
-    if let Err(err) = genesis_instructions_json::from_value(&wrapped) {
+    }
+    if let Err(err) = genesis_instructions_json::from_value(instrs) {
         offenses.push(Offense {
             path: path.to_owned(),
             message: format!("invalid instructions: {err}"),

@@ -13,7 +13,7 @@ use std::{
     convert::{Infallible, TryInto},
     fs,
     io::{self, Cursor},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::SocketAddr,
     num::{NonZeroU32, NonZeroUsize},
     path::{Component, Path as StdPath, PathBuf},
     str::FromStr,
@@ -164,10 +164,12 @@ use iroha_torii_shared::sorafs_moderation_api::{
 use mv::storage::StorageReadOnly;
 use norito::derive::{JsonDeserialize, NoritoDeserialize, NoritoSerialize};
 use norito::json::{self, Map, Number, Value};
+#[cfg(test)]
+use sorafs_car::FileEntry;
 use sorafs_car::verifier::CarVerifier;
 use sorafs_car::{
-    CarBuildPlan, CarChunk, CarStreamingWriter, ChunkFetchSpec, ChunkStoreError, FileEntry,
-    FilePlan, compute_chunk_plan_digest_sha3,
+    CarBuildPlan, CarChunk, CarStreamingWriter, ChunkFetchSpec, ChunkStoreError, FilePlan,
+    compute_chunk_plan_digest_sha3,
     por_json::sample_to_map,
     proof_stream::{ProofStreamItem, ProofStreamSequenceVerifier, ProofStreamVerificationContext},
     verifier::CarVerifyError,
@@ -218,15 +220,16 @@ use sorafs_node::reputation::runtime::{
     ReputationCommittedReadApiV1, ReputationCommittedReadProjectionV1,
 };
 use sorafs_node::{
-    GovernanceDagServiceError, ModerationAuthenticatedScreeningAdmissionError,
-    ModerationAuthenticatedScreeningEvidenceV1, ModerationAuthenticatedScreeningOutcomeV1,
-    ModerationAuthenticatedScreeningRequestV1, ModerationCorpusRegistryRecord,
-    ModerationModelRegistryError, ModerationModelRegistrySnapshot, ModerationQuarantineObjectError,
-    ModerationQuarantineObjectInput, ModerationQuarantineObjectPayload,
-    ModerationQuarantineObjectRecord, ModerationQuarantineRecord, ModerationQuarantineReleaseInput,
+    GovernanceDagServiceError, MODERATION_READ_VIEW_MAX_RECORDS_V1,
+    ModerationAuthenticatedScreeningAdmissionError, ModerationAuthenticatedScreeningEvidenceV1,
+    ModerationAuthenticatedScreeningOutcomeV1, ModerationAuthenticatedScreeningRequestV1,
+    ModerationCorpusRegistryRecord, ModerationModelRegistryError, ModerationModelRegistryReadView,
+    ModerationQuarantineObjectError, ModerationQuarantineObjectInput,
+    ModerationQuarantineObjectPayload, ModerationQuarantineObjectRecord,
+    ModerationQuarantineReadView, ModerationQuarantineRecord, ModerationQuarantineReleaseInput,
     ModerationQuarantineReviewInput, ModerationQuarantineState, ModerationReproRegistryRecord,
-    ModerationScreeningAuthenticationError, ModerationScreeningError, ModerationScreeningRecord,
-    ModerationScreeningSnapshot, NodeStorageError, PrivacyAggregateScheduleOutcome,
+    ModerationScreeningAuthenticationError, ModerationScreeningError, ModerationScreeningReadView,
+    ModerationScreeningRecord, NodeStorageError, PrivacyAggregateScheduleOutcome,
     PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric,
     store::{StorageError as StorageBackendError, StoredFileRecord, StoredManifest},
 };
@@ -246,10 +249,13 @@ use sorafs_orchestrator::appeals::{
     AppealSettlementConfig, AppealUrgency, AppealVerdict, parse_appeal_quantity_literal,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-use tokio::sync::{Mutex as AsyncMutex, RwLock, broadcast};
-use url::Host as UrlHost;
+use tokio::sync::{RwLock, broadcast};
 use urlencoding::decode;
 
+#[cfg(test)]
+use crate::sorafs::registry::{
+    PinRegistryMetricsSummary, PinRegistrySnapshot, collect_pin_registry,
+};
 use crate::{
     JsonBody, SharedAppState, json_entry, json_object,
     routing::MaybeTelemetry,
@@ -271,9 +277,9 @@ use crate::{
             PolicyViolation, RateLimitError, RegionCode, RequestContext, SORA_TLS_STATE_HEADER,
         },
         registry::{
-            CapacitySnapshot, GovernanceSummary, ManifestLineageSummary, PinRegistryMetricsSummary,
-            PinRegistrySnapshot, RegistryAlias, RegistryError, RegistryManifest,
-            RegistryReplicationOrder, collect_pin_registry, collect_snapshot, lineage_to_json,
+            CapacitySnapshot, GovernanceSummary, ManifestLineageSummary, PinRegistryError,
+            RegistryAlias, RegistryError, collect_alias_page, collect_replication_order_page,
+            collect_snapshot, lineage_to_json,
         },
         site::{
             content_type_for_path, decode_content_cid, encode_content_cid, find_site_binding,
@@ -2464,30 +2470,6 @@ const REPUTATION_WEIGHTS_PATH_V1: &str = "/v1/sorafs/reputation/weights";
 const REPUTATION_EVENTS_PATH_V1: &str = "/v1/sorafs/reputation/events";
 const REPUTATION_EVENTS_STREAM_PATH_V1: &str = "/v1/sorafs/reputation/events/stream";
 const REPUTATION_EVENTS_WEBSOCKET_PATH_V1: &str = "/v1/sorafs/reputation/events/ws";
-/// Maximum number of distinct approved providers attempted for one CID miss.
-const MAX_REMOTE_CID_SOURCES: usize = 16;
-/// Maximum registry orders inspected while resolving one CID miss.
-const MAX_REMOTE_REPLICATION_ORDERS_SCANNED: usize = 4_096;
-/// Maximum provider identifiers inspected from one replication order.
-const MAX_REMOTE_PROVIDERS_PER_ORDER: usize = 64;
-/// Maximum provider DNS lookups performed concurrently for one CID miss.
-const MAX_REMOTE_DNS_CONCURRENCY: usize = 4;
-/// Maximum number of active or recently completed CID hydration keys retained process-wide.
-const MAX_REMOTE_CID_HYDRATIONS: usize = 128;
-/// Maximum number of socket addresses accepted from one provider DNS answer.
-const MAX_REMOTE_SOURCE_ADDRESSES: usize = 8;
-/// Maximum remote response header count accepted after the HTTP parser.
-const MAX_REMOTE_RESPONSE_HEADERS: usize = 64;
-/// Maximum aggregate remote response header bytes accepted after the HTTP parser.
-const MAX_REMOTE_RESPONSE_HEADER_BYTES: usize = 32 * 1024;
-/// Maximum JSON metadata response accepted from a remote storage provider.
-const MAX_REMOTE_MANIFEST_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
-/// Maximum canonical Norito manifest accepted during remote hydration.
-const MAX_REMOTE_MANIFEST_BYTES: usize = 512 * 1024;
-/// Maximum remote directory entries reconstructed during hydration.
-const MAX_REMOTE_SITE_FILES: usize = 4_096;
-/// Hard in-memory payload ceiling for one remote hydration.
-const MAX_REMOTE_HYDRATION_PAYLOAD_BYTES: u64 = 32 * 1024 * 1024;
 /// Maximum bytes returned by one site response without explicit streaming support.
 const MAX_SITE_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 /// Maximum canonical local manifest bytes relayed by a metadata response.
@@ -2498,71 +2480,8 @@ const MAX_STORAGE_FETCH_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_CAR_RANGE_PAYLOAD_BYTES: u64 = 8 * 1024 * 1024;
 /// Maximum encoded canonical CAR bytes returned by one range response.
 const MAX_CAR_RANGE_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
-/// DNS resolution deadline used before constructing a pinned HTTP client.
-const REMOTE_DNS_TIMEOUT: Duration = Duration::from_secs(3);
-/// Full remote hydration request deadline.
-const REMOTE_FETCH_TIMEOUT: Duration = Duration::from_secs(20);
-/// TCP/TLS connection deadline for one approved provider route.
-const REMOTE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-/// Failure backoff shared by requests that joined the same CID hydration flight.
-const REMOTE_HYDRATION_FAILURE_BACKOFF: Duration = Duration::from_secs(5);
-/// Idle retention for bounded CID hydration admission entries.
-const REMOTE_HYDRATION_FLIGHT_RETENTION: Duration = Duration::from_secs(10);
-
-struct CidHydrationFlight {
-    gate: AsyncMutex<()>,
-    last_failure: Mutex<Option<Instant>>,
-    last_activity: Mutex<Instant>,
-}
-
-impl CidHydrationFlight {
-    fn new() -> Self {
-        Self {
-            gate: AsyncMutex::new(()),
-            last_failure: Mutex::new(None),
-            last_activity: Mutex::new(Instant::now()),
-        }
-    }
-
-    fn touch(&self) {
-        if let Ok(mut last_activity) = self.last_activity.lock() {
-            *last_activity = Instant::now();
-        }
-    }
-
-    fn record_failure(&self) {
-        if let Ok(mut last_failure) = self.last_failure.lock() {
-            *last_failure = Some(Instant::now());
-        }
-        self.touch();
-    }
-
-    fn clear_failure(&self) {
-        if let Ok(mut last_failure) = self.last_failure.lock() {
-            *last_failure = None;
-        }
-        self.touch();
-    }
-
-    fn failure_backoff_active(&self) -> bool {
-        self.last_failure.lock().map_or(true, |last_failure| {
-            last_failure
-                .is_some_and(|failed_at| failed_at.elapsed() < REMOTE_HYDRATION_FAILURE_BACKOFF)
-        })
-    }
-
-    fn is_expired(&self) -> bool {
-        let idle = self.last_activity.lock().map_or(false, |last_activity| {
-            last_activity.elapsed() >= REMOTE_HYDRATION_FLIGHT_RETENTION
-        });
-        idle && self.gate.try_lock().is_ok()
-    }
-}
-
-type CidHydrationFlights = BTreeMap<Vec<u8>, Arc<CidHydrationFlight>>;
-
-static CID_HYDRATION_FLIGHTS: LazyLock<Mutex<CidHydrationFlights>> =
-    LazyLock::new(|| Mutex::new(BTreeMap::new()));
+/// Error returned when a cache miss would require an authenticated remote stream capability.
+pub(crate) const REMOTE_HYDRATION_CAPABILITY_REQUIRED: &str = "remote SoraFS hydration requires a request-bound CAR/chunk stream capability; unsigned legacy storage fetch is retired";
 const REPUTATION_CACHE_CONTROL: &str = "private, max-age=30, must-revalidate";
 const REPUTATION_STREAM_CACHE_CONTROL: &str = "private, no-store";
 const REPUTATION_CACHE_VARY: &str =
@@ -13317,15 +13236,12 @@ pub(crate) async fn handle_get_sorafs_moderation_model_registry(
         Ok(query) => query,
         Err(err) => return err.into_response(),
     };
-    let limit = normalize_limit(query.limit);
-    let snapshot = match state
-        .sorafs_node
-        .export_moderation_model_registry_snapshot()
-    {
-        Ok(snapshot) => snapshot,
+    let limit = normalize_moderation_read_limit(query.limit);
+    let read_view = match state.sorafs_node.moderation_model_registry_read_view(limit) {
+        Ok(read_view) => read_view,
         Err(err) => return moderation_model_registry_error_response(err),
     };
-    JsonBody(moderation_model_registry_snapshot_json(&snapshot, limit)).into_response()
+    JsonBody(moderation_model_registry_snapshot_json(&read_view, limit)).into_response()
 }
 
 pub(crate) async fn handle_post_sorafs_moderation_model_registry_repro_manifest(
@@ -13427,12 +13343,12 @@ pub(crate) async fn handle_get_sorafs_moderation_screening_results(
         Ok(query) => query,
         Err(err) => return err.into_response(),
     };
-    let limit = normalize_limit(query.limit);
-    let snapshot = match state.sorafs_node.export_moderation_screening_snapshot() {
-        Ok(snapshot) => snapshot,
+    let limit = normalize_moderation_read_limit(query.limit);
+    let read_view = match state.sorafs_node.moderation_screening_read_view(limit) {
+        Ok(read_view) => read_view,
         Err(err) => return moderation_screening_error_response(err),
     };
-    JsonBody(moderation_screening_snapshot_json(&snapshot, limit)).into_response()
+    JsonBody(moderation_screening_snapshot_json(&read_view, limit)).into_response()
 }
 
 pub(crate) async fn handle_post_sorafs_moderation_screening_result(
@@ -13489,12 +13405,12 @@ pub(crate) async fn handle_get_sorafs_moderation_quarantine(
         Ok(query) => query,
         Err(err) => return err.into_response(),
     };
-    let limit = normalize_limit(query.limit);
-    let snapshot = match state.sorafs_node.export_moderation_screening_snapshot() {
-        Ok(snapshot) => snapshot,
+    let limit = normalize_moderation_read_limit(query.limit);
+    let read_view = match state.sorafs_node.moderation_quarantine_read_view(limit) {
+        Ok(read_view) => read_view,
         Err(err) => return moderation_screening_error_response(err),
     };
-    JsonBody(moderation_quarantine_snapshot_json(&snapshot, limit)).into_response()
+    JsonBody(moderation_quarantine_snapshot_json(&read_view, limit)).into_response()
 }
 
 pub(crate) async fn handle_get_sorafs_moderation_quarantine_operator_panel(
@@ -13528,32 +13444,26 @@ pub(crate) async fn handle_get_sorafs_moderation_quarantine_operator_panel(
         Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
     };
     let quarantine_id_hex = hex::encode(quarantine_id);
-    let snapshot = match state.sorafs_node.export_moderation_screening_snapshot() {
-        Ok(snapshot) => snapshot,
+    let record = match state
+        .sorafs_node
+        .moderation_quarantine_record(&quarantine_id)
+    {
+        Ok(record) => record,
         Err(err) => return moderation_screening_error_response(err),
     };
-    let Some(record) = snapshot
-        .quarantine_records
-        .iter()
-        .find(|record| record.quarantine_id == quarantine_id)
-        .cloned()
-    else {
+    let Some(record) = record else {
         return json_error(
             StatusCode::NOT_FOUND,
             format!("SoraFS moderation quarantine record `{quarantine_id_hex}` was not found"),
         );
     };
-    let object_snapshot = match state
+    let object = match state
         .sorafs_node
-        .export_moderation_quarantine_object_snapshot()
+        .moderation_quarantine_object_record(&quarantine_id)
     {
-        Ok(snapshot) => snapshot,
+        Ok(object) => object,
         Err(err) => return moderation_quarantine_object_error_response(err),
     };
-    let object = object_snapshot
-        .objects
-        .into_iter()
-        .find(|object| object.quarantine_id == quarantine_id);
     let finalized_snapshot = match cached_moderation_snapshot(&state) {
         Ok(snapshot) => snapshot,
         Err(response) => return response,
@@ -13711,16 +13621,14 @@ pub(crate) async fn handle_post_sorafs_moderation_quarantine_appeal_handoff(
         Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
     };
     let quarantine_id_hex = hex::encode(quarantine_id);
-    let snapshot = match state.sorafs_node.export_moderation_screening_snapshot() {
-        Ok(snapshot) => snapshot,
+    let record = match state
+        .sorafs_node
+        .moderation_quarantine_record(&quarantine_id)
+    {
+        Ok(record) => record,
         Err(err) => return moderation_screening_error_response(err),
     };
-    let Some(record) = snapshot
-        .quarantine_records
-        .iter()
-        .find(|record| record.quarantine_id == quarantine_id)
-        .cloned()
-    else {
+    let Some(record) = record else {
         return json_error(
             StatusCode::NOT_FOUND,
             format!("SoraFS moderation quarantine record `{quarantine_id_hex}` was not found"),
@@ -23109,21 +23017,19 @@ fn moderation_corpus_registry_admission_json(record: &ModerationCorpusRegistryRe
 }
 
 fn moderation_model_registry_snapshot_json(
-    snapshot: &ModerationModelRegistrySnapshot,
+    read_view: &ModerationModelRegistryReadView,
     limit: usize,
 ) -> Value {
-    let repro_count = snapshot.reproducibility_manifests.len();
-    let corpus_count = snapshot.adversarial_corpora.len();
-    let repro_manifests = snapshot
+    let repro_count = read_view.reproducibility_manifest_count;
+    let corpus_count = read_view.adversarial_corpus_count;
+    let repro_manifests = read_view
         .reproducibility_manifests
         .iter()
-        .take(limit)
         .map(moderation_repro_registry_record_json)
         .collect::<Vec<_>>();
-    let adversarial_corpora = snapshot
+    let adversarial_corpora = read_view
         .adversarial_corpora
         .iter()
-        .take(limit)
         .map(moderation_corpus_registry_record_json)
         .collect::<Vec<_>>();
 
@@ -23990,22 +23896,20 @@ fn appeal_finance_deposit_request_json(request: &AppealFinanceDepositRequestDto)
 }
 
 fn moderation_screening_snapshot_json(
-    snapshot: &ModerationScreeningSnapshot,
+    read_view: &ModerationScreeningReadView,
     limit: usize,
 ) -> Value {
-    let screening_count = snapshot.screening_records.len();
-    let quarantine_count = snapshot.quarantine_records.len();
-    let authenticated_admission_count = snapshot.authenticated_admissions.len();
-    let records = snapshot
+    let screening_count = read_view.screening_count;
+    let quarantine_count = read_view.quarantine_count;
+    let authenticated_admission_count = read_view.authenticated_admission_count;
+    let records = read_view
         .screening_records
         .iter()
-        .take(limit)
         .map(moderation_screening_record_json)
         .collect::<Vec<_>>();
-    let quarantines = snapshot
+    let quarantines = read_view
         .quarantine_records
         .iter()
-        .take(limit)
         .map(moderation_quarantine_record_json)
         .collect::<Vec<_>>();
     json_object(vec![
@@ -24040,14 +23944,13 @@ fn moderation_screening_snapshot_json(
 }
 
 fn moderation_quarantine_snapshot_json(
-    snapshot: &ModerationScreeningSnapshot,
+    read_view: &ModerationQuarantineReadView,
     limit: usize,
 ) -> Value {
-    let quarantine_count = snapshot.quarantine_records.len();
-    let quarantines = snapshot
+    let quarantine_count = read_view.quarantine_count;
+    let quarantines = read_view
         .quarantine_records
         .iter()
-        .take(limit)
         .map(moderation_quarantine_record_json)
         .collect::<Vec<_>>();
     json_object(vec![
@@ -26235,58 +26138,34 @@ pub(crate) async fn handle_get_sorafs_aliases(
         Err(err) => return err.into_response(),
     };
 
-    let (attestation, snapshot) = match pin_snapshot_with_attestation(&state) {
-        Ok(snapshot) => snapshot,
+    let limit = normalize_limit(query.limit);
+    let requested_offset = query.offset.unwrap_or(0) as usize;
+    let namespace_filter = query.namespace.as_deref();
+    let digest_filter = query.manifest_digest.as_deref();
+    let (attestation, page) = match pin_projection_with_attestation(&state, |world| {
+        collect_alias_page(
+            world,
+            requested_offset,
+            limit,
+            namespace_filter,
+            digest_filter,
+        )
+    }) {
+        Ok(page) => page,
         Err(err) => return err.into_response(),
     };
 
-    let namespace_filter = query.namespace.as_deref().map(str::to_ascii_lowercase);
-    let digest_filter = query.manifest_digest.as_deref();
-
-    let mut aliases: Vec<&RegistryAlias> = snapshot.aliases.iter().collect();
-    if let Some(namespace) = namespace_filter {
-        aliases.retain(|alias| alias.namespace().eq_ignore_ascii_case(&namespace));
-    }
-    if let Some(digest) = digest_filter {
-        aliases.retain(|alias| alias.manifest_digest_hex().eq_ignore_ascii_case(&digest));
-    }
-
-    let total = aliases.len();
-    let limit = normalize_limit(query.limit);
+    let total = page.total_count;
     let offset = normalize_offset(query.offset, total);
-    let end = offset.saturating_add(limit).min(total);
-
-    let page = &aliases[offset..end];
-    let mut alias_values = Vec::with_capacity(page.len());
+    let mut alias_values = Vec::with_capacity(page.entries.len());
     let policy = &state.sorafs_alias_cache_policy;
     let enforcement = state.sorafs_alias_enforcement;
     let now_secs = crate::sorafs::unix_now_secs();
-    for alias in page {
-        let lineage_summary = snapshot.lineage_for(alias.manifest_digest_hex());
-        let manifest_for_alias = match snapshot.manifest_by_digest(alias.manifest_digest_hex()) {
-            Some(manifest) => manifest,
-            None => {
-                error!(
-                    alias = alias.alias_label(),
-                    manifest = alias.manifest_digest_hex(),
-                    "alias references manifest missing from registry snapshot"
-                );
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!(
-                        "alias `{}` references unknown manifest `{}`",
-                        alias.alias_label(),
-                        alias.manifest_digest_hex()
-                    ),
-                )
-                .into_response();
-            }
-        };
-        let governance_summary = manifest_for_alias.governance_summary();
+    for entry in &page.entries {
         match prepare_alias_presentation(
-            alias,
-            &lineage_summary,
-            &governance_summary,
+            &entry.alias,
+            &entry.lineage,
+            &entry.governance,
             policy,
             enforcement,
             &state.telemetry,
@@ -26329,11 +26208,6 @@ pub(crate) async fn handle_get_sorafs_replication_orders(
         Err(err) => return err.into_response(),
     };
 
-    let (attestation, snapshot) = match pin_snapshot_with_attestation(&state) {
-        Ok(snapshot) => snapshot,
-        Err(err) => return err.into_response(),
-    };
-
     let status_filter = match query.status.as_deref() {
         Some(value) => match parse_replication_status_filter(value) {
             Some(filter) => Some(filter),
@@ -26349,26 +26223,34 @@ pub(crate) async fn handle_get_sorafs_replication_orders(
         None => None,
     };
 
-    let digest_filter = query
-        .manifest_digest
-        .as_deref()
-        .map(str::to_ascii_lowercase);
-
-    let mut orders: Vec<&RegistryReplicationOrder> = snapshot.replication_orders.iter().collect();
-    if let Some(filter) = status_filter {
-        orders.retain(|order| filter.matches(order.status_label()));
-    }
-    if let Some(digest) = digest_filter {
-        orders.retain(|order| order.manifest_digest_hex() == digest);
-    }
-
-    let total = orders.len();
+    let digest_filter = query.manifest_digest.as_deref().map(|raw| {
+        let mut bytes = [0_u8; 32];
+        hex::decode_to_slice(raw, &mut bytes)
+            .ok()
+            .map(ManifestDigest::new)
+    });
     let limit = normalize_limit(query.limit);
-    let offset = normalize_offset(query.offset, total);
-    let end = offset.saturating_add(limit).min(total);
-
-    let page = &orders[offset..end];
+    let requested_offset = query
+        .offset
+        .and_then(|offset| usize::try_from(offset).ok())
+        .unwrap_or(0);
+    let (attestation, page) = match pin_projection_with_attestation(&state, |world| {
+        collect_replication_order_page(world, requested_offset, limit, |record| {
+            status_filter.is_none_or(|filter| filter.matches_record(record.status))
+                && match digest_filter {
+                    None => true,
+                    Some(Some(digest)) => record.manifest_digest == digest,
+                    Some(None) => false,
+                }
+        })
+    }) {
+        Ok(page) => page,
+        Err(err) => return err.into_response(),
+    };
+    let total = page.total_count;
+    let offset = requested_offset.min(total);
     let order_values = match page
+        .orders
         .iter()
         .map(|order| order.to_json())
         .collect::<Result<Vec<_>, _>>()
@@ -26392,55 +26274,6 @@ pub(crate) async fn handle_get_sorafs_replication_orders(
         json_entry("replication_orders", Value::Array(order_values)),
     ]);
     crate::utils::respond_value_with_format(response, format)
-}
-
-fn build_plan_for_verified_storage_payload(
-    payload: &[u8],
-    profile: ChunkProfile,
-    files: Option<&[StorageFileLayout]>,
-) -> Result<CarBuildPlan, String> {
-    let Some(files) = files else {
-        return CarBuildPlan::single_file_with_profile(payload, profile)
-            .map_err(|err| format!("failed to derive chunk plan: {err}"));
-    };
-
-    if files.is_empty() {
-        return Err("files must not be empty when provided".to_string());
-    }
-
-    let mut cursor = 0usize;
-    let mut entries = Vec::with_capacity(files.len());
-    for file in files {
-        let size = usize::try_from(file.size)
-            .map_err(|_| format!("file `{}` exceeds host limits", file.path.join("/")))?;
-        let end = cursor
-            .checked_add(size)
-            .ok_or_else(|| format!("file `{}` overflows payload bounds", file.path.join("/")))?;
-        if end > payload.len() {
-            return Err(format!(
-                "file `{}` exceeds payload length",
-                file.path.join("/")
-            ));
-        }
-        entries.push(FileEntry {
-            path: file.path.clone(),
-            data: payload[cursor..end].to_vec(),
-        });
-        cursor = end;
-    }
-
-    if cursor != payload.len() {
-        return Err(format!(
-            "file sizes total {} but payload length is {}",
-            cursor,
-            payload.len()
-        ));
-    }
-
-    let (plan, rebuilt_payload) = CarBuildPlan::from_files_with_profile(entries, profile)
-        .map_err(|err| format!("failed to derive chunk plan: {err}"))?;
-    debug_assert_eq!(rebuilt_payload, payload);
-    Ok(plan)
 }
 
 #[cfg(test)]
@@ -26710,32 +26543,6 @@ async fn resolve_site_host(
     })
 }
 
-#[derive(Debug, Clone)]
-struct RemoteCidSource {
-    manifest_digest_hex: String,
-    provider_id_hex: String,
-    torii_base_url: reqwest::Url,
-    pinned_addrs: Vec<SocketAddr>,
-}
-
-struct UnresolvedRemoteCidSource {
-    manifest_digest_hex: String,
-    provider_id_hex: String,
-    torii_base_url: reqwest::Url,
-}
-
-struct RemoteSiteBundle {
-    manifest: ManifestV1,
-    payload: Vec<u8>,
-    plan: CarBuildPlan,
-    source_provider_id: [u8; 32],
-}
-
-enum RemoteFetchError {
-    Source(String),
-    Compliance(Response),
-}
-
 fn find_local_site_manifest_by_cid(
     state: &SharedAppState,
     cid_bytes: &[u8],
@@ -26744,423 +26551,10 @@ fn find_local_site_manifest_by_cid(
         return Err(storage_disabled_response());
     }
 
-    let manifests = state
+    state
         .sorafs_node
-        .stored_manifests()
-        .map_err(node_storage_error_response)?;
-    Ok(manifests
-        .into_iter()
-        .filter(|manifest| manifest.manifest_cid() == cid_bytes)
-        .max_by_key(|manifest| {
-            let files = manifest.files();
-            let has_index_document = files
-                .iter()
-                .any(|file| file.path.len() == 1 && file.path[0] == "index.html");
-            (has_index_document, files.len())
-        }))
-}
-
-fn normalize_provider_torii_base_url(host_pattern: &str) -> Result<reqwest::Url, String> {
-    let trimmed = host_pattern.trim();
-    if trimmed.is_empty() {
-        return Err("provider advert endpoint host pattern must not be empty".to_string());
-    }
-    if trimmed.bytes().any(|byte| byte.is_ascii_control())
-        || trimmed.contains('\\')
-        || trimmed.contains('%')
-    {
-        return Err("provider advert endpoint contains unsafe characters".to_string());
-    }
-
-    let with_scheme = if trimmed.contains("://") {
-        trimmed.to_owned()
-    } else {
-        format!("https://{trimmed}")
-    };
-    let authority_and_path = with_scheme
-        .split_once("://")
-        .map(|(_, value)| value)
-        .unwrap_or_default();
-    if authority_and_path
-        .split_once('/')
-        .is_some_and(|(_, path)| !path.is_empty())
-    {
-        return Err(
-            "provider advert Torii endpoint must use the origin root as its base path".to_string(),
-        );
-    }
-
-    let mut url = reqwest::Url::parse(&with_scheme)
-        .map_err(|err| format!("invalid provider advert endpoint `{trimmed}`: {err}"))?;
-    if url.scheme() != "https" {
-        return Err("provider advert Torii endpoints must use HTTPS".to_string());
-    }
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err("provider advert Torii endpoints must not contain credentials".to_string());
-    }
-    if url.query().is_some() || url.fragment().is_some() {
-        return Err(
-            "provider advert Torii endpoints must not contain a query or fragment".to_string(),
-        );
-    }
-    if url.host_str().is_none() {
-        return Err("provider advert Torii endpoint is missing a host".to_string());
-    }
-    if url.port() == Some(0) {
-        return Err("provider advert Torii endpoint port must be non-zero".to_string());
-    }
-    if url.path() != "/" {
-        return Err(
-            "provider advert Torii endpoint must use the origin root as its base path".to_string(),
-        );
-    }
-    url.set_path("/");
-    Ok(url)
-}
-
-fn ipv4_is_public(ip: Ipv4Addr) -> bool {
-    let [a, b, c, _] = ip.octets();
-    !(a == 0
-        || a == 10
-        || a == 127
-        || (a == 100 && (64..=127).contains(&b))
-        || (a == 169 && b == 254)
-        || (a == 172 && (16..=31).contains(&b))
-        || (a == 192 && b == 0 && c == 0)
-        || (a == 192 && b == 0 && c == 2)
-        || (a == 192 && b == 88 && c == 99)
-        || (a == 192 && b == 168)
-        || (a == 198 && (b == 18 || b == 19))
-        || (a == 198 && b == 51 && c == 100)
-        || (a == 203 && b == 0 && c == 113)
-        || a >= 224)
-}
-
-fn embedded_ipv4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
-    let segments = ip.segments();
-    let is_mapped = segments[..5] == [0; 5] && segments[5] == u16::MAX;
-    if !is_mapped {
-        return None;
-    }
-    let [a, b] = segments[6].to_be_bytes();
-    let [c, d] = segments[7].to_be_bytes();
-    Some(Ipv4Addr::new(a, b, c, d))
-}
-
-fn ipv6_is_public(ip: Ipv6Addr) -> bool {
-    if ip.is_unspecified() || ip.is_loopback() || ip.is_multicast() {
-        return false;
-    }
-    if let Some(ipv4) = embedded_ipv4(ip) {
-        return ipv4_is_public(ipv4);
-    }
-
-    let segments = ip.segments();
-    let first = segments[0];
-    let second = segments[1];
-    let global_unicast = first & 0xe000 == 0x2000;
-    let documentation =
-        (first == 0x2001 && second == 0x0db8) || (first == 0x3fff && second & 0xf000 == 0);
-    // The IANA special-purpose registry assigns 2001:0000::/23 to transition,
-    // benchmarking, ORCHID, and anycast functions. None are provider origins.
-    let special_purpose = first == 0x2001 && second <= 0x01ff;
-    let transition = first == 0x2002;
-
-    global_unicast && !documentation && !special_purpose && !transition
-}
-
-fn ip_is_public(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => ipv4_is_public(ip),
-        IpAddr::V6(ip) => ipv6_is_public(ip),
-    }
-}
-
-async fn resolve_public_endpoint(url: &reqwest::Url) -> Result<Vec<SocketAddr>, String> {
-    let parsed_host = url
-        .host()
-        .ok_or_else(|| "provider endpoint is missing a host".to_string())?;
-    let host = url
-        .host_str()
-        .ok_or_else(|| "provider endpoint is missing a host".to_string())?;
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| "provider endpoint is missing a port".to_string())?;
-
-    let addrs = match parsed_host {
-        UrlHost::Ipv4(ip) => vec![SocketAddr::new(IpAddr::V4(ip), port)],
-        UrlHost::Ipv6(ip) => vec![SocketAddr::new(IpAddr::V6(ip), port)],
-        UrlHost::Domain(domain) => {
-            let resolved =
-                tokio::time::timeout(REMOTE_DNS_TIMEOUT, tokio::net::lookup_host((domain, port)))
-                    .await
-                    .map_err(|_| format!("DNS resolution for `{host}` timed out"))?
-                    .map_err(|err| {
-                        format!("failed to resolve provider endpoint `{host}`: {err}")
-                    })?;
-            let mut addrs = Vec::with_capacity(MAX_REMOTE_SOURCE_ADDRESSES);
-            for addr in resolved {
-                if addrs.len() == MAX_REMOTE_SOURCE_ADDRESSES {
-                    return Err(format!(
-                        "provider endpoint `{host}` resolved to more than {MAX_REMOTE_SOURCE_ADDRESSES} addresses"
-                    ));
-                }
-                addrs.push(addr);
-            }
-            addrs
-        }
-    };
-
-    if addrs.is_empty() {
-        return Err(format!(
-            "provider endpoint `{host}` resolved to no addresses"
-        ));
-    }
-    if addrs.len() > MAX_REMOTE_SOURCE_ADDRESSES {
-        return Err(format!(
-            "provider endpoint `{host}` resolved to {} addresses; maximum is {MAX_REMOTE_SOURCE_ADDRESSES}",
-            addrs.len()
-        ));
-    }
-    if let Some(addr) = addrs.iter().find(|addr| !ip_is_public(addr.ip())) {
-        return Err(format!(
-            "provider endpoint `{host}` resolved to forbidden address {}",
-            addr.ip()
-        ));
-    }
-
-    let mut addrs = addrs;
-    addrs.sort_unstable();
-    addrs.dedup();
-    Ok(addrs)
-}
-
-fn storage_file_entries_from_manifest_response(
-    files: &[StorageStoredFileDto],
-    content_length: u64,
-) -> Result<Option<Vec<StorageFileLayout>>, String> {
-    if files.is_empty() {
-        return Ok(None);
-    }
-    if files.len() > MAX_REMOTE_SITE_FILES {
-        return Err(format!(
-            "remote manifest contains {} files; maximum is {MAX_REMOTE_SITE_FILES}",
-            files.len()
-        ));
-    }
-
-    let mut cursor = 0_u64;
-    let mut entries = Vec::with_capacity(files.len());
-    for file in files {
-        if file.path.is_empty()
-            || file.path.iter().any(|component| {
-                component.is_empty()
-                    || component == "."
-                    || component == ".."
-                    || component.contains('/')
-                    || component.contains('\\')
-                    || component.bytes().any(|byte| byte.is_ascii_control())
-            })
-        {
-            return Err("remote manifest contains an unsafe file path".to_string());
-        }
-        if file.offset != cursor {
-            return Err(format!(
-                "remote manifest layout is non-contiguous at `{}`: expected offset {cursor}, found {}",
-                file.path.join("/"),
-                file.offset,
-            ));
-        }
-        entries.push(StorageFileLayout {
-            path: file.path.clone(),
-            size: file.size,
-        });
-        cursor = cursor
-            .checked_add(file.size)
-            .ok_or_else(|| "remote manifest file layout overflows u64".to_string())?;
-        if cursor > content_length {
-            return Err(format!(
-                "remote manifest file `{}` exceeds declared content length",
-                file.path.join("/")
-            ));
-        }
-    }
-    if cursor != content_length {
-        return Err(format!(
-            "remote manifest file sizes total {cursor} but content length is {content_length}"
-        ));
-    }
-
-    Ok(Some(entries))
-}
-
-async fn resolve_remote_cid_sources(
-    state: &SharedAppState,
-    cid_bytes: &[u8],
-) -> Result<Option<Vec<RemoteCidSource>>, Response> {
-    enforce_governed_gateway_compliance_for_cid(state, cid_bytes)?;
-
-    let snapshot = match pin_snapshot_with_attestation(state) {
-        Ok((_, snapshot)) => snapshot,
-        Err(err) => return Err(err.into_response()),
-    };
-
-    let mut provider_specs = Vec::<(String, String)>::new();
-    'orders: for prefer_completed in [true, false] {
-        for order in snapshot
-            .replication_orders
-            .iter()
-            .take(MAX_REMOTE_REPLICATION_ORDERS_SCANNED)
-        {
-            if order.manifest_cid() != cid_bytes {
-                continue;
-            }
-            if order.is_expired() {
-                continue;
-            }
-            if prefer_completed != order.completion_epoch().is_some() {
-                continue;
-            }
-            let Some(manifest) = snapshot.manifest_by_digest(order.manifest_digest_hex()) else {
-                continue;
-            };
-            if manifest.status_label() != "approved" {
-                continue;
-            }
-            for provider_id_hex in order
-                .providers()
-                .iter()
-                .take(MAX_REMOTE_PROVIDERS_PER_ORDER)
-            {
-                if provider_specs.iter().any(|existing| {
-                    existing.0 == order.manifest_digest_hex() && existing.1 == *provider_id_hex
-                }) {
-                    continue;
-                }
-                provider_specs.push((
-                    order.manifest_digest_hex().to_owned(),
-                    provider_id_hex.clone(),
-                ));
-                if provider_specs.len() == MAX_REMOTE_CID_SOURCES {
-                    break 'orders;
-                }
-            }
-        }
-    }
-
-    if provider_specs.is_empty() {
-        return Ok(None);
-    }
-
-    let Some(cache) = state.sorafs_cache.clone() else {
-        return Err(json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "SoraFS discovery cache is not available for CID gateway fetch",
-        ));
-    };
-    let candidates = {
-        let cache = cache.read().await;
-        provider_specs
-            .into_iter()
-            .filter_map(|(manifest_digest_hex, provider_id_hex)| {
-                let provider_id = decode_hex_32(&provider_id_hex).ok()?;
-                if hex::encode(provider_id) != provider_id_hex {
-                    return None;
-                }
-                let manifest_digest = decode_hex_32(&manifest_digest_hex).ok()?;
-                if hex::encode(manifest_digest) != manifest_digest_hex {
-                    return None;
-                }
-                let record = cache.record_by_provider(&provider_id)?;
-                let endpoint = record
-                    .advert()
-                    .body
-                    .endpoints
-                    .iter()
-                    .find(|endpoint| endpoint.kind == EndpointKind::Torii)?;
-                Some((
-                    manifest_digest_hex,
-                    manifest_digest,
-                    provider_id_hex,
-                    provider_id,
-                    endpoint.host_pattern.clone(),
-                ))
-            })
-            .collect::<Vec<_>>()
-    };
-
-    let mut unresolved = Vec::with_capacity(candidates.len());
-    for (manifest_digest_hex, manifest_digest, provider_id_hex, provider_id, host_pattern) in
-        candidates
-    {
-        let torii_base_url = match normalize_provider_torii_base_url(&host_pattern) {
-            Ok(url) => url,
-            Err(_) => {
-                warn!(
-                    reason = "invalid_endpoint",
-                    "ignoring invalid Torii endpoint advertised for CID gateway fetch"
-                );
-                continue;
-            }
-        };
-        match enforce_governed_gateway_compliance_for_subjects(
-            state,
-            &manifest_digest,
-            cid_bytes,
-            provider_id,
-            Some(torii_base_url.as_str()),
-        ) {
-            Ok(()) => {}
-            Err(response) if response.status() == StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS => {
-                continue;
-            }
-            Err(response) => return Err(response),
-        }
-        unresolved.push(UnresolvedRemoteCidSource {
-            manifest_digest_hex,
-            provider_id_hex,
-            torii_base_url,
-        });
-    }
-
-    let mut resolved = stream::iter(unresolved.into_iter().enumerate())
-        .map(|(index, source)| async move {
-            let addresses = resolve_public_endpoint(&source.torii_base_url).await;
-            (index, source, addresses)
-        })
-        .buffer_unordered(MAX_REMOTE_DNS_CONCURRENCY)
-        .collect::<Vec<_>>()
-        .await;
-    resolved.sort_by_key(|(index, _, _)| *index);
-
-    let mut sources = Vec::with_capacity(resolved.len());
-    for (_, source, addresses) in resolved {
-        let pinned_addrs = match addresses {
-            Ok(addrs) => addrs,
-            Err(_) => {
-                warn!(
-                    reason = "endpoint_resolution_failed",
-                    "ignoring unsafe or unresolvable Torii endpoint advertised for CID gateway fetch"
-                );
-                continue;
-            }
-        };
-        sources.push(RemoteCidSource {
-            manifest_digest_hex: source.manifest_digest_hex,
-            provider_id_hex: source.provider_id_hex,
-            torii_base_url: source.torii_base_url,
-            pinned_addrs,
-        });
-    }
-
-    if sources.is_empty() {
-        return Err(json_error(
-            StatusCode::BAD_GATEWAY,
-            "no SoraFS Torii provider routes are available for the requested CID",
-        ));
-    }
-
-    Ok(Some(sources))
+        .manifest_metadata_by_cid(cid_bytes)
+        .map_err(node_storage_error_response)
 }
 
 fn chunk_profile_from_manifest_descriptor(manifest: &ManifestV1) -> Result<ChunkProfile, String> {
@@ -27201,512 +26595,6 @@ fn chunk_profile_from_manifest_descriptor(manifest: &ManifestV1) -> Result<Chunk
     Ok(descriptor.profile)
 }
 
-fn build_pinned_remote_client(source: &RemoteCidSource) -> Result<reqwest::Client, String> {
-    if source.pinned_addrs.is_empty()
-        || source
-            .pinned_addrs
-            .iter()
-            .any(|addr| !ip_is_public(addr.ip()))
-    {
-        return Err("provider endpoint has no safe pinned addresses".to_string());
-    }
-    match source.torii_base_url.host() {
-        Some(UrlHost::Ipv4(ip))
-            if source
-                .pinned_addrs
-                .iter()
-                .any(|addr| addr.ip() != IpAddr::V4(ip)) =>
-        {
-            return Err("provider IPv4 endpoint does not match its pinned address".to_string());
-        }
-        Some(UrlHost::Ipv6(ip))
-            if source
-                .pinned_addrs
-                .iter()
-                .any(|addr| addr.ip() != IpAddr::V6(ip)) =>
-        {
-            return Err("provider IPv6 endpoint does not match its pinned address".to_string());
-        }
-        Some(UrlHost::Domain(_)) => {}
-        Some(UrlHost::Ipv4(_) | UrlHost::Ipv6(_)) => {}
-        None => return Err("provider endpoint is missing a host".to_string()),
-    }
-    let mut builder = reqwest::Client::builder()
-        .https_only(true)
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .referer(false)
-        .timeout(REMOTE_FETCH_TIMEOUT)
-        .connect_timeout(REMOTE_CONNECT_TIMEOUT)
-        .http2_max_header_list_size(32 * 1024)
-        .pool_max_idle_per_host(1);
-    if let Some(domain) = source.torii_base_url.domain() {
-        builder = builder.resolve_to_addrs(domain, &source.pinned_addrs);
-    }
-    builder
-        .build()
-        .map_err(|err| format!("failed to build pinned CID gateway fetch client: {err}"))
-}
-
-async fn bounded_remote_response_bytes(
-    response: reqwest::Response,
-    max_bytes: usize,
-    label: &str,
-) -> Result<(StatusCode, Vec<u8>), String> {
-    if response.headers().len() > MAX_REMOTE_RESPONSE_HEADERS {
-        return Err(format!(
-            "{label} returned too many headers; maximum is {MAX_REMOTE_RESPONSE_HEADERS}"
-        ));
-    }
-    let header_bytes = response
-        .headers()
-        .iter()
-        .try_fold(0usize, |total, (name, value)| {
-            total
-                .checked_add(name.as_str().len())
-                .and_then(|total| total.checked_add(value.as_bytes().len()))
-        });
-    if header_bytes.is_none_or(|bytes| bytes > MAX_REMOTE_RESPONSE_HEADER_BYTES) {
-        return Err(format!(
-            "{label} response headers exceed {MAX_REMOTE_RESPONSE_HEADER_BYTES} bytes"
-        ));
-    }
-    if response
-        .headers()
-        .get(header::CONTENT_ENCODING)
-        .is_some_and(|value| {
-            value
-                .to_str()
-                .map_or(true, |value| !value.eq_ignore_ascii_case("identity"))
-        })
-    {
-        return Err(format!("{label} returned an unsupported content encoding"));
-    }
-    if !response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
-    {
-        return Err(format!("{label} did not return application/json"));
-    }
-    let declared_length = response.content_length();
-    if declared_length.is_some_and(|length| length > u64::try_from(max_bytes).unwrap_or(u64::MAX)) {
-        return Err(format!("{label} response exceeds {max_bytes} bytes"));
-    }
-
-    let status = response.status();
-    if status.is_redirection() {
-        return Err(format!(
-            "{label} returned redirect status {status}; redirects are forbidden"
-        ));
-    }
-    let mut body = Vec::with_capacity(
-        response
-            .content_length()
-            .and_then(|length| usize::try_from(length).ok())
-            .unwrap_or_default()
-            .min(max_bytes),
-    );
-    let mut response = response;
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|err| format!("failed to read {label} response: {err}"))?
-    {
-        let next_len = body
-            .len()
-            .checked_add(chunk.len())
-            .ok_or_else(|| format!("{label} response length overflow"))?;
-        if next_len > max_bytes {
-            return Err(format!("{label} response exceeds {max_bytes} bytes"));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    if declared_length.is_some_and(|length| usize::try_from(length).ok() != Some(body.len())) {
-        return Err(format!(
-            "{label} response length does not match Content-Length"
-        ));
-    }
-    Ok((status, body))
-}
-
-fn base64_encoded_length(decoded_len: u64) -> Result<usize, String> {
-    let groups = decoded_len
-        .checked_add(2)
-        .ok_or_else(|| "remote payload base64 length overflow".to_string())?
-        / 3;
-    let encoded = groups
-        .checked_mul(4)
-        .ok_or_else(|| "remote payload base64 length overflow".to_string())?;
-    usize::try_from(encoded).map_err(|_| "remote payload exceeds host limits".to_string())
-}
-
-async fn fetch_remote_site_bundle_from_source(
-    state: &SharedAppState,
-    source: &RemoteCidSource,
-    cid_bytes: &[u8],
-) -> Result<RemoteSiteBundle, RemoteFetchError> {
-    let client = build_pinned_remote_client(source).map_err(RemoteFetchError::Source)?;
-    fetch_remote_site_bundle_from_source_with_client(state, &client, source, cid_bytes).await
-}
-
-async fn fetch_remote_site_bundle_from_source_with_client(
-    state: &SharedAppState,
-    client: &reqwest::Client,
-    source: &RemoteCidSource,
-    cid_bytes: &[u8],
-) -> Result<RemoteSiteBundle, RemoteFetchError> {
-    let manifest_url = source
-        .torii_base_url
-        .join(&format!(
-            "v1/sorafs/storage/manifest/{}",
-            source.manifest_digest_hex
-        ))
-        .map_err(|err| {
-            RemoteFetchError::Source(format!("failed to build remote manifest URL: {err}"))
-        })?;
-    let manifest_response = client
-        .get(manifest_url)
-        .header(header::ACCEPT, "application/json")
-        .header(header::ACCEPT_ENCODING, "identity")
-        .send()
-        .await
-        .map_err(|err| {
-            RemoteFetchError::Source(format!("failed to fetch remote manifest metadata: {err}"))
-        })?;
-    let (manifest_status, manifest_body) = bounded_remote_response_bytes(
-        manifest_response,
-        MAX_REMOTE_MANIFEST_RESPONSE_BYTES,
-        "remote manifest endpoint",
-    )
-    .await
-    .map_err(RemoteFetchError::Source)?;
-    if !manifest_status.is_success() {
-        return Err(RemoteFetchError::Source(format!(
-            "remote manifest endpoint returned {manifest_status}"
-        )));
-    }
-    let manifest_response = norito::json::from_slice::<StorageManifestResponseDto>(&manifest_body)
-        .map_err(|err| {
-            RemoteFetchError::Source(format!(
-                "failed to decode remote manifest metadata response: {err}"
-            ))
-        })?;
-    if manifest_response.manifest_digest_hex != source.manifest_digest_hex {
-        return Err(RemoteFetchError::Source(format!(
-            "remote manifest digest mismatch: expected {}, found {}",
-            source.manifest_digest_hex, manifest_response.manifest_digest_hex
-        )));
-    }
-    if manifest_response.manifest_id_hex != source.manifest_digest_hex {
-        return Err(RemoteFetchError::Source(
-            "remote manifest identifier does not match the approved registry digest".to_string(),
-        ));
-    }
-    if manifest_response.manifest_b64.len()
-        > base64_encoded_length(u64::try_from(MAX_REMOTE_MANIFEST_BYTES).unwrap_or(u64::MAX))
-            .map_err(RemoteFetchError::Source)?
-    {
-        return Err(RemoteFetchError::Source(format!(
-            "remote manifest exceeds {MAX_REMOTE_MANIFEST_BYTES} bytes"
-        )));
-    }
-
-    let manifest_bytes = BASE64_STANDARD
-        .decode(manifest_response.manifest_b64.as_bytes())
-        .map_err(|err| {
-            RemoteFetchError::Source(format!("failed to decode remote manifest payload: {err}"))
-        })?;
-    if manifest_bytes.len() > MAX_REMOTE_MANIFEST_BYTES
-        || BASE64_STANDARD.encode(&manifest_bytes) != manifest_response.manifest_b64
-    {
-        return Err(RemoteFetchError::Source(
-            "remote manifest base64 is oversized or non-canonical".to_string(),
-        ));
-    }
-    let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes).map_err(|err| {
-        RemoteFetchError::Source(format!("failed to decode remote manifest bytes: {err}"))
-    })?;
-    let canonical_manifest_bytes = norito::to_bytes(&manifest).map_err(|err| {
-        RemoteFetchError::Source(format!("failed to re-encode remote manifest: {err}"))
-    })?;
-    if canonical_manifest_bytes != manifest_bytes {
-        return Err(RemoteFetchError::Source(
-            "remote manifest does not use canonical Norito encoding".to_string(),
-        ));
-    }
-    let manifest_constraints =
-        manifest_pin_policy_constraints_from_config(&state.state.gov.sorafs_pin_policy);
-    validate_manifest(&manifest, &manifest_constraints).map_err(|err| {
-        RemoteFetchError::Source(format!("remote manifest validation failed: {err}"))
-    })?;
-    if manifest.root_cid != cid_bytes {
-        return Err(RemoteFetchError::Source(
-            "remote manifest CID does not match requested CID".to_string(),
-        ));
-    }
-    let manifest_digest = manifest
-        .digest()
-        .map_err(|err| RemoteFetchError::Source(err.to_string()))?;
-    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    if manifest_digest_hex != source.manifest_digest_hex {
-        return Err(RemoteFetchError::Source(format!(
-            "decoded remote manifest digest mismatch: expected {}, found {manifest_digest_hex}",
-            source.manifest_digest_hex
-        )));
-    }
-    if manifest.content_length != manifest_response.content_length {
-        return Err(RemoteFetchError::Source(format!(
-            "remote manifest content length mismatch: manifest declares {}, metadata declares {}",
-            manifest.content_length, manifest_response.content_length
-        )));
-    }
-    let source_provider_id =
-        decode_hex_32(&source.provider_id_hex).map_err(RemoteFetchError::Source)?;
-    let manifest_digest_bytes: [u8; 32] = manifest_digest.into();
-    enforce_governed_gateway_compliance_for_subjects(
-        state,
-        &manifest_digest_bytes,
-        &manifest.root_cid,
-        source_provider_id,
-        Some(source.torii_base_url.as_str()),
-    )
-    .map_err(RemoteFetchError::Compliance)?;
-
-    let storage = state.sorafs_node.storage().ok_or_else(|| {
-        RemoteFetchError::Source("local SoraFS storage backend is unavailable".to_string())
-    })?;
-    let hydration_limit = storage
-        .available_capacity()
-        .min(MAX_REMOTE_HYDRATION_PAYLOAD_BYTES);
-    if manifest_response.content_length > hydration_limit {
-        return Err(RemoteFetchError::Source(format!(
-            "remote payload requires {} bytes but hydration limit is {hydration_limit} bytes",
-            manifest_response.content_length
-        )));
-    }
-
-    let fetch_body = norito::json::to_vec(&StorageFetchRequestDto {
-        manifest_id_hex: manifest_response.manifest_id_hex.clone(),
-        offset: 0,
-        length: manifest_response.content_length,
-    })
-    .map_err(|err| {
-        RemoteFetchError::Source(format!("failed to encode remote fetch request: {err}"))
-    })?;
-    let fetch_url = source
-        .torii_base_url
-        .join("v1/sorafs/storage/fetch")
-        .map_err(|err| {
-            RemoteFetchError::Source(format!("failed to build remote payload URL: {err}"))
-        })?;
-    let fetch_response = client
-        .post(fetch_url)
-        .header(header::CONTENT_TYPE.as_str(), "application/json")
-        .header(header::ACCEPT, "application/json")
-        .header(header::ACCEPT_ENCODING, "identity")
-        .header(HEADER_SORA_MANIFEST_ENVELOPE, "cid-gateway-fetch")
-        .body(fetch_body)
-        .send()
-        .await
-        .map_err(|err| {
-            RemoteFetchError::Source(format!("failed to fetch remote site payload: {err}"))
-        })?;
-    let encoded_payload_len = base64_encoded_length(manifest_response.content_length)
-        .map_err(RemoteFetchError::Source)?;
-    let fetch_response_limit = encoded_payload_len.checked_add(8 * 1024).ok_or_else(|| {
-        RemoteFetchError::Source("remote fetch response limit overflow".to_string())
-    })?;
-    let (fetch_status, fetch_body) = bounded_remote_response_bytes(
-        fetch_response,
-        fetch_response_limit,
-        "remote payload endpoint",
-    )
-    .await
-    .map_err(RemoteFetchError::Source)?;
-    if !fetch_status.is_success() {
-        return Err(RemoteFetchError::Source(format!(
-            "remote payload endpoint returned {fetch_status}"
-        )));
-    }
-    let fetch_response =
-        norito::json::from_slice::<StorageFetchResponseDto>(&fetch_body).map_err(|err| {
-            RemoteFetchError::Source(format!(
-                "failed to decode remote site payload response: {err}"
-            ))
-        })?;
-    if fetch_response.manifest_id_hex != manifest_response.manifest_id_hex
-        || fetch_response.offset != 0
-        || fetch_response.length != manifest_response.content_length
-    {
-        return Err(RemoteFetchError::Source(
-            "remote payload response does not match the exact requested manifest range".to_string(),
-        ));
-    }
-    if fetch_response.data_b64.len() != encoded_payload_len {
-        return Err(RemoteFetchError::Source(
-            "remote payload base64 length does not match declared content length".to_string(),
-        ));
-    }
-    let payload = BASE64_STANDARD
-        .decode(fetch_response.data_b64.as_bytes())
-        .map_err(|err| {
-            RemoteFetchError::Source(format!("failed to decode remote site payload bytes: {err}"))
-        })?;
-    if BASE64_STANDARD.encode(&payload) != fetch_response.data_b64 {
-        return Err(RemoteFetchError::Source(
-            "remote payload does not use canonical base64".to_string(),
-        ));
-    }
-    if u64::try_from(payload.len()).ok() != Some(manifest_response.content_length) {
-        return Err(RemoteFetchError::Source(format!(
-            "remote payload length mismatch: expected {}, found {}",
-            manifest_response.content_length,
-            payload.len()
-        )));
-    }
-    let expected_payload_digest =
-        decode_hex_32(&manifest_response.payload_digest_hex).map_err(RemoteFetchError::Source)?;
-    if hex::encode(expected_payload_digest) != manifest_response.payload_digest_hex
-        || blake3_hash(&payload).as_bytes() != &expected_payload_digest
-    {
-        return Err(RemoteFetchError::Source(
-            "remote payload digest does not match manifest metadata".to_string(),
-        ));
-    }
-
-    let files = storage_file_entries_from_manifest_response(
-        &manifest_response.files,
-        manifest_response.content_length,
-    )
-    .map_err(RemoteFetchError::Source)?;
-    let profile =
-        chunk_profile_from_manifest_descriptor(&manifest).map_err(RemoteFetchError::Source)?;
-    let plan = build_plan_for_verified_storage_payload(&payload, profile, files.as_deref())
-        .map_err(RemoteFetchError::Source)?;
-    if u64::try_from(plan.chunks.len()).ok() != Some(manifest_response.chunk_count)
-        || plan.payload_digest.as_bytes() != &expected_payload_digest
-    {
-        return Err(RemoteFetchError::Source(
-            "remote payload chunk plan does not match manifest metadata".to_string(),
-        ));
-    }
-    let expected_profile_handle = format!(
-        "{}.{}@{}",
-        manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
-    );
-    if manifest_response.chunk_profile_handle != expected_profile_handle {
-        return Err(RemoteFetchError::Source(
-            "remote chunk profile handle does not match the manifest".to_string(),
-        ));
-    }
-    if manifest_response.files.len() != plan.files.len()
-        || manifest_response
-            .files
-            .iter()
-            .zip(&plan.files)
-            .any(|(remote, planned)| {
-                usize::try_from(remote.first_chunk).ok() != Some(planned.first_chunk)
-                    || usize::try_from(remote.chunk_count).ok() != Some(planned.chunk_count)
-            })
-    {
-        return Err(RemoteFetchError::Source(
-            "remote file chunk layout does not match the verified payload plan".to_string(),
-        ));
-    }
-
-    Ok(RemoteSiteBundle {
-        manifest,
-        payload,
-        plan,
-        source_provider_id,
-    })
-}
-
-async fn fetch_remote_site_bundle(
-    state: &SharedAppState,
-    cid_bytes: &[u8],
-) -> Result<Option<RemoteSiteBundle>, Response> {
-    let Some(sources) = resolve_remote_cid_sources(state, cid_bytes).await? else {
-        return Ok(None);
-    };
-    for source in &sources {
-        match fetch_remote_site_bundle_from_source(state, source, cid_bytes).await {
-            Ok(bundle) => return Ok(Some(bundle)),
-            Err(RemoteFetchError::Compliance(response)) => return Err(response),
-            Err(RemoteFetchError::Source(_)) => {
-                warn!(
-                    reason = "remote_fetch_failed",
-                    "failed to hydrate CID gateway cache from remote provider"
-                );
-            }
-        }
-    }
-
-    Err(json_error(
-        StatusCode::BAD_GATEWAY,
-        "failed to fetch the requested CID from approved remote SoraFS providers",
-    ))
-}
-
-fn cache_remote_site_bundle(
-    state: &SharedAppState,
-    bundle: RemoteSiteBundle,
-) -> Result<StoredManifest, Response> {
-    let manifest_digest: [u8; 32] = bundle
-        .manifest
-        .digest()
-        .map_err(|err| {
-            json_error(
-                StatusCode::BAD_GATEWAY,
-                format!("failed to digest remote manifest: {err}"),
-            )
-        })?
-        .into();
-    enforce_governed_gateway_compliance_for_subjects(
-        state,
-        &manifest_digest,
-        &bundle.manifest.root_cid,
-        bundle.source_provider_id,
-        None,
-    )?;
-    let _verified_provider_material = (&bundle.payload, &bundle.plan);
-    Err(json_error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "remote HTTP hydration cannot mutate provider storage; wait for the finalized-ledger ingest outbox",
-    ))
-}
-
-fn cid_hydration_flight(cid_bytes: &[u8]) -> Result<Arc<CidHydrationFlight>, Response> {
-    let mut flights = CID_HYDRATION_FLIGHTS.lock().map_err(|_| {
-        json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "CID hydration admission state is unavailable",
-        )
-    })?;
-    flights.retain(|_, flight| !flight.is_expired());
-    if let Some(flight) = flights.get(cid_bytes) {
-        flight.touch();
-        return Ok(Arc::clone(flight));
-    }
-    if flights.len() >= MAX_REMOTE_CID_HYDRATIONS {
-        let mut response = json_error(
-            StatusCode::TOO_MANY_REQUESTS,
-            "too many distinct CID hydrations are already in progress",
-        );
-        response
-            .headers_mut()
-            .insert(RETRY_AFTER, HeaderValue::from_static("1"));
-        return Err(response);
-    }
-
-    let flight = Arc::new(CidHydrationFlight::new());
-    flights.insert(cid_bytes.to_vec(), Arc::clone(&flight));
-    Ok(flight)
-}
-
 pub(crate) async fn resolve_site_manifest_by_cid_unchecked(
     state: &SharedAppState,
     cid: &str,
@@ -27716,43 +26604,11 @@ pub(crate) async fn resolve_site_manifest_by_cid_unchecked(
     if let Some(stored) = find_local_site_manifest_by_cid(state, &cid_bytes)? {
         return Ok(stored);
     }
-
-    let hydration_flight = cid_hydration_flight(&cid_bytes)?;
-    let _hydration_guard = hydration_flight.gate.lock().await;
-    let stored = match find_local_site_manifest_by_cid(state, &cid_bytes)? {
-        Some(stored) => stored,
-        None => {
-            if hydration_flight.failure_backoff_active() {
-                return Err(json_error(
-                    StatusCode::BAD_GATEWAY,
-                    "the shared CID hydration attempt failed; retry later",
-                ));
-            }
-            let bundle = match fetch_remote_site_bundle(state, &cid_bytes).await {
-                Ok(Some(bundle)) => bundle,
-                Ok(None) => {
-                    hydration_flight.record_failure();
-                    return Err(StatusCode::NOT_FOUND.into_response());
-                }
-                Err(response) => {
-                    hydration_flight.record_failure();
-                    return Err(response);
-                }
-            };
-            match cache_remote_site_bundle(state, bundle) {
-                Ok(stored) => {
-                    hydration_flight.clear_failure();
-                    stored
-                }
-                Err(response) => {
-                    hydration_flight.record_failure();
-                    return Err(response);
-                }
-            }
-        }
-    };
-
-    Ok(stored)
+    enforce_governed_gateway_compliance_for_cid(state, &cid_bytes)?;
+    Err(json_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        REMOTE_HYDRATION_CAPABILITY_REQUIRED,
+    ))
 }
 
 async fn resolve_site_manifest_by_cid(
@@ -28553,51 +27409,27 @@ fn is_canonical_lower_hex(value: &str, maximum_bytes: usize) -> bool {
 }
 
 #[cfg(feature = "app_api")]
-fn stream_token_api_token_required_response() -> Response {
-    let mut response = json_error(
-        StatusCode::UNAUTHORIZED,
-        "a valid Torii API token is required to issue a SoraFS stream token",
-    );
-    response.headers_mut().insert(
-        header::WWW_AUTHENTICATE,
-        HeaderValue::from_static("IrohaApiToken realm=\"sorafs-stream-token\""),
-    );
-    response
-}
-
-#[cfg(feature = "app_api")]
 fn authenticated_stream_token_quota_subject(
-    state: &SharedAppState,
-    headers: &HeaderMap,
+    authenticated_operator: Option<
+        Extension<crate::operator_signatures::AuthenticatedOperatorPublicKey>,
+    >,
 ) -> Result<StreamTokenQuotaSubject, Response> {
-    if state.api_tokens_set.is_empty() {
-        let mut response = json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "stream token issuance requires at least one configured Torii API token",
-        );
-        response
-            .headers_mut()
-            .insert(RETRY_AFTER, HeaderValue::from_static("1"));
-        return Err(response);
-    }
-
-    let mut values = headers.get_all(crate::HEADER_API_TOKEN).iter();
-    let Some(token) = values
-        .next()
-        .and_then(|value| value.to_str().ok())
-        .filter(|token| state.api_tokens_set.contains(*token))
-    else {
-        return Err(stream_token_api_token_required_response());
+    let Some(Extension(authenticated_operator)) = authenticated_operator else {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            "stream token issuance requires an exact-network operator signature",
+        ));
     };
-    if values.next().is_some() {
-        return Err(stream_token_api_token_required_response());
-    }
-
-    Ok(StreamTokenQuotaSubject::from_validated_api_token(token))
+    Ok(StreamTokenQuotaSubject::from_authenticated_operator(
+        &authenticated_operator.0,
+    ))
 }
 
 #[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_sorafs_storage_token(
+pub(crate) async fn handle_post_sorafs_storage_token_authenticated(
+    authenticated_operator: Option<
+        Extension<crate::operator_signatures::AuthenticatedOperatorPublicKey>,
+    >,
     State(state): State<SharedAppState>,
     headers: HeaderMap,
     JsonOnly(req): JsonOnly<StreamTokenRequestDto>,
@@ -28610,7 +27442,7 @@ pub(crate) async fn handle_post_sorafs_storage_token(
         return feature_disabled("stream token issuance is not enabled on this node");
     };
 
-    let quota_subject = match authenticated_stream_token_quota_subject(&state, &headers) {
+    let quota_subject = match authenticated_stream_token_quota_subject(authenticated_operator) {
         Ok(subject) => subject,
         Err(response) => return response,
     };
@@ -32971,6 +31803,16 @@ mod app_api_tests {
     }
 
     #[test]
+    fn moderation_readback_limit_matches_runtime_clone_ceiling() {
+        assert_eq!(normalize_moderation_read_limit(None), DEFAULT_LIST_LIMIT);
+        assert_eq!(normalize_moderation_read_limit(Some(0)), 1);
+        assert_eq!(
+            normalize_moderation_read_limit(Some(u32::MAX)),
+            MODERATION_READ_VIEW_MAX_RECORDS_V1
+        );
+    }
+
+    #[test]
     fn capacity_state_readback_query_parses_limits() {
         let query = CapacityStateReadbackQuery::parse(Some("limit=2&ignored=true"))
             .expect("parse capacity state readback query");
@@ -33354,9 +32196,10 @@ fn snapshot_to_json(snapshot: CapacitySnapshot, limit: usize) -> Result<Value, j
     ]))
 }
 
-fn pin_snapshot_with_attestation(
+fn pin_projection_with_attestation<T>(
     state: &SharedAppState,
-) -> ApiResult<(Value, PinRegistrySnapshot)> {
+    project: impl FnOnce(&iroha_core::state::WorldView<'_>) -> Result<T, PinRegistryError>,
+) -> ApiResult<(Value, T)> {
     // The full state view retries across concurrent commits, keeping the world
     // projection, height, block hash, and chain id on one committed generation.
     let view = state.state.view();
@@ -33375,10 +32218,10 @@ fn pin_snapshot_with_attestation(
         }
     };
 
-    match collect_pin_registry(view.world()) {
-        Ok(snapshot) => Ok((attestation, snapshot)),
+    match project(view.world()) {
+        Ok(projection) => Ok((attestation, projection)),
         Err(err) => {
-            error!(?err, "failed to collect pin registry snapshot");
+            error!(?err, "failed to collect pin registry projection");
             Err(json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "failed to collect pin registry snapshot",
@@ -33386,6 +32229,13 @@ fn pin_snapshot_with_attestation(
             .into())
         }
     }
+}
+
+#[cfg(test)]
+fn pin_snapshot_with_attestation(
+    state: &SharedAppState,
+) -> ApiResult<(Value, PinRegistrySnapshot)> {
+    pin_projection_with_attestation(state, collect_pin_registry)
 }
 
 fn parse_manifest_digest_hex(hex_str: &str) -> ApiResult<[u8; 32]> {
@@ -33449,6 +32299,12 @@ fn normalize_limit(limit: Option<u32>) -> usize {
     clamped as usize
 }
 
+fn normalize_moderation_read_limit(limit: Option<u32>) -> usize {
+    let requested = limit.unwrap_or(DEFAULT_LIST_LIMIT as u32);
+    let maximum = u32::try_from(MODERATION_READ_VIEW_MAX_RECORDS_V1).unwrap_or(u32::MAX);
+    requested.clamp(1, maximum) as usize
+}
+
 fn limit_governance_readback_values(mut entries: Vec<Value>, limit: usize) -> (Vec<Value>, bool) {
     let truncated = entries.len() > limit;
     entries.truncate(limit);
@@ -33456,17 +32312,17 @@ fn limit_governance_readback_values(mut entries: Vec<Value>, limit: usize) -> (V
 }
 
 fn normalize_offset(offset: Option<u32>, total: usize) -> usize {
-    let requested = offset.unwrap_or(0);
-    requested.min(total as u32) as usize
+    (offset.unwrap_or(0) as usize).min(total)
 }
 
 impl ReplicationStatusFilter {
-    fn matches(self, status: &str) -> bool {
-        match self {
-            ReplicationStatusFilter::Pending => status.eq_ignore_ascii_case("pending"),
-            ReplicationStatusFilter::Completed => status.eq_ignore_ascii_case("completed"),
-            ReplicationStatusFilter::Expired => status.eq_ignore_ascii_case("expired"),
-        }
+    fn matches_record(self, status: ReplicationOrderStatus) -> bool {
+        matches!(
+            (self, status),
+            (Self::Pending, ReplicationOrderStatus::Pending)
+                | (Self::Completed, ReplicationOrderStatus::Completed(_))
+                | (Self::Expired, ReplicationOrderStatus::Expired(_))
+        )
     }
 }
 
@@ -34739,6 +33595,7 @@ mod advert_tests {
     };
 
     include!("api/exact_network_auth_tests.rs");
+    include!("api/alias_page_tests.rs");
 
     #[test]
     fn finalized_capacity_worker_preserves_bounded_restart_semantics() {
@@ -42508,6 +41365,70 @@ mod advert_tests {
         assert_eq!(summary.deadline_slack_epochs, vec![15.0]);
     }
 
+    #[test]
+    fn replication_page_decodes_only_the_bounded_selection() {
+        let state = make_state();
+        let issuer = test_account();
+        let manifest_digest = ManifestDigest::new([0x71; 32]);
+        let manifest_root_cid = canonical_fixture_manifest_root_cid();
+        let valid_id = ReplicationOrderId::new([0x11; 32]);
+        let poisoned_id = ReplicationOrderId::new([0x22; 32]);
+        let mut block = state.block(default_block_header());
+        let mut tx = block.transaction();
+
+        for (order_id, canonical_order) in [
+            (
+                valid_id,
+                encode_replication_order_bytes(
+                    &valid_id,
+                    &manifest_digest,
+                    &manifest_root_cid,
+                    1,
+                    10,
+                ),
+            ),
+            (poisoned_id, vec![0xFF]),
+        ] {
+            tx.world_mut_for_testing()
+                .replication_orders_mut_for_testing()
+                .insert(
+                    order_id,
+                    ReplicationOrderRecord {
+                        order_id,
+                        manifest_digest,
+                        manifest_root_cid: manifest_root_cid.clone(),
+                        musubi_archive: None,
+                        issued_by: issuer.clone(),
+                        issued_epoch: 1,
+                        deadline_epoch: 10,
+                        canonical_order,
+                        assignment_revision: 1,
+                        provider_completions: Vec::new(),
+                        status: ReplicationOrderStatus::Pending,
+                    },
+                );
+        }
+        tx.apply();
+        block.commit().expect("commit replication page fixture");
+
+        let view = state.view();
+        let page = collect_replication_order_page(view.world(), 0, 1, |_| true)
+            .expect("the selected valid order should decode");
+        assert_eq!(page.total_count, 2);
+        assert_eq!(page.orders.len(), 1);
+        let projected = page.orders[0].to_json().expect("project selected order");
+        let expected_id = hex::encode(valid_id.as_bytes());
+        assert_eq!(
+            projected.get("order_id_hex").and_then(Value::as_str),
+            Some(expected_id.as_str())
+        );
+
+        assert!(
+            collect_replication_order_page(view.world(), 1, 1, |_| true).is_err(),
+            "the poisoned order must fail only when its page is selected"
+        );
+    }
+
     fn encode_replication_order_bytes_with_providers(
         order_id: &ReplicationOrderId,
         manifest_digest: &ManifestDigest,
@@ -43380,26 +42301,36 @@ mod advert_tests {
             ..iroha_config::parameters::actual::SorafsTokenConfig::default()
         };
         let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer;
-        StreamTokenIssuer::from_config(
-            &cfg,
-            &[String::from(TEST_STREAM_TOKEN_API_TOKEN)],
-            Some(runtime_signer),
-        )
-        .expect("valid config")
-        .expect("issuer enabled")
+        StreamTokenIssuer::from_config(&cfg, Some(runtime_signer))
+            .expect("valid config")
+            .expect("issuer enabled")
     }
 
     fn stream_token_issuer_for_tests() -> StreamTokenIssuer {
         stream_token_issuer_for_tests_with_mode(ApiTestStreamTokenSignerMode::Sign)
     }
 
-    const TEST_STREAM_TOKEN_API_TOKEN: &str = "stream-token-api-credential";
+    fn test_stream_token_operator()
+    -> Option<Extension<crate::operator_signatures::AuthenticatedOperatorPublicKey>> {
+        Some(Extension(
+            crate::operator_signatures::AuthenticatedOperatorPublicKey(
+                checked_test_keypair(0x73).public_key().clone(),
+            ),
+        ))
+    }
 
-    fn insert_stream_token_api_credential(headers: &mut HeaderMap) {
-        headers.insert(
-            crate::HEADER_API_TOKEN,
-            HeaderValue::from_static(TEST_STREAM_TOKEN_API_TOKEN),
-        );
+    async fn handle_post_sorafs_storage_token(
+        state: State<SharedAppState>,
+        headers: HeaderMap,
+        request: JsonOnly<StreamTokenRequestDto>,
+    ) -> Response {
+        handle_post_sorafs_storage_token_authenticated(
+            test_stream_token_operator(),
+            state,
+            headers,
+            request,
+        )
+        .await
     }
 
     fn token_enabled_state() -> (SharedAppState, TempDir, String) {
@@ -43426,9 +42357,6 @@ mod advert_tests {
         let issuer = stream_token_issuer_for_tests();
         inner.sorafs_node = node;
         inner.stream_token_issuer = Some(Arc::new(issuer));
-        inner.api_tokens_set = Arc::new(std::collections::HashSet::from([String::from(
-            TEST_STREAM_TOKEN_API_TOKEN,
-        )]));
 
         (Arc::new(inner), temp_dir, manifest_id)
     }
@@ -43737,19 +42665,12 @@ mod advert_tests {
         };
 
         let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer;
-        let issuer = StreamTokenIssuer::from_config(
-            &token_config,
-            &[String::from(TEST_STREAM_TOKEN_API_TOKEN)],
-            Some(runtime_signer),
-        )
-        .expect("token config valid")
-        .expect("stream token issuer enabled");
+        let issuer = StreamTokenIssuer::from_config(&token_config, Some(runtime_signer))
+            .expect("token config valid")
+            .expect("stream token issuer enabled");
         let issuer = Arc::new(issuer);
         let verifying_key_hex = hex::encode(issuer.verifying_key_bytes());
         app.stream_token_issuer = Some(issuer);
-        app.api_tokens_set = Arc::new(std::collections::HashSet::from([String::from(
-            TEST_STREAM_TOKEN_API_TOKEN,
-        )]));
 
         let chunker_handle = format!(
             "{}.{}@{}",
@@ -43782,7 +42703,6 @@ mod advert_tests {
 
     async fn issue_token_base64(context: &TokenTestContext, overrides: TokenOverrides) -> String {
         let mut headers = HeaderMap::new();
-        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_CLIENT),
             header_value(&context.client_id, "X-SoraFS-Client"),
@@ -45631,117 +44551,13 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn cid_gateway_transport_hook_hydrates_verified_bundle_without_weakening_https_policy() {
-        let index_bytes = b"<!doctype html><title>Gateway</title>";
-        let asset_bytes = b"console.log('gateway-cache');";
-        let (plan, payload) = CarBuildPlan::from_files_with_profile(
-            vec![
-                FileEntry {
-                    path: vec!["assets".to_owned(), "app.js".to_owned()],
-                    data: asset_bytes.to_vec(),
-                },
-                FileEntry {
-                    path: vec!["index.html".to_owned()],
-                    data: index_bytes.to_vec(),
-                },
-            ],
-            sorafs_chunker::ChunkProfile::DEFAULT,
-        )
-        .expect("directory plan");
+    async fn cid_gateway_cache_miss_requires_capability_before_remote_work() {
+        let payload = b"remote hydration must not be attempted".to_vec();
         let manifest = manifest_for_payload(0xE4, &payload);
         let manifest_digest: [u8; 32] = manifest.digest().expect("compute manifest digest").into();
-        let manifest_id_hex = hex::encode(manifest_digest);
         let content_cid = encode_content_cid(&manifest.root_cid);
 
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind remote storage listener");
-        let remote_addr = listener.local_addr().expect("listener addr");
-        let remote_origin = format!("http://{remote_addr}");
-        let manifest_requests = Arc::new(AtomicUsize::new(0));
-        let fetch_requests = Arc::new(AtomicUsize::new(0));
-        let remote_provider_id_hex = hex::encode([0x11; 32]);
-        let mut remote_files = Vec::with_capacity(plan.files.len());
-        let mut remote_offset = 0_u64;
-        for file in &plan.files {
-            remote_files.push(StorageStoredFileDto {
-                path: file.path.clone(),
-                offset: remote_offset,
-                size: file.size,
-                first_chunk: file.first_chunk as u64,
-                chunk_count: file.chunk_count as u64,
-            });
-            remote_offset = remote_offset.saturating_add(file.size);
-        }
-        let manifest_response_value = norito::json::to_value(&StorageManifestResponseDto {
-            manifest_id_hex: manifest_id_hex.clone(),
-            manifest_b64: BASE64_STANDARD
-                .encode(norito::to_bytes(&manifest).expect("encode manifest")),
-            manifest_digest_hex: manifest_id_hex.clone(),
-            payload_digest_hex: hex::encode(plan.payload_digest.as_bytes()),
-            content_length: plan.content_length,
-            chunk_count: plan.chunks.len() as u64,
-            chunk_profile_handle: format!(
-                "{}.{}@{}",
-                manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
-            ),
-            stored_at_unix_secs: 1_700_000_000,
-            files: remote_files,
-        })
-        .expect("serialize remote manifest response");
-        let fetch_response_value = norito::json::to_value(&StorageFetchResponseDto {
-            manifest_id_hex: manifest_id_hex.clone(),
-            offset: 0,
-            length: payload.len() as u64,
-            data_b64: BASE64_STANDARD.encode(payload.as_slice()),
-        })
-        .expect("serialize remote fetch response");
-        let remote_router = Router::new()
-            .route(
-                "/v1/sorafs/storage/manifest/{manifest_id_hex}",
-                get({
-                    let manifest_requests = Arc::clone(&manifest_requests);
-                    let manifest_id_hex = manifest_id_hex.clone();
-                    let manifest_response_value = manifest_response_value.clone();
-                    move |AxumPath(requested_manifest_id_hex): AxumPath<String>| {
-                        let manifest_requests = Arc::clone(&manifest_requests);
-                        let manifest_id_hex = manifest_id_hex.clone();
-                        let manifest_response_value = manifest_response_value.clone();
-                        async move {
-                            manifest_requests.fetch_add(1, Ordering::SeqCst);
-                            assert_eq!(requested_manifest_id_hex, manifest_id_hex);
-                            crate::JsonBody(manifest_response_value).into_response()
-                        }
-                    }
-                }),
-            )
-            .route(
-                "/v1/sorafs/storage/fetch",
-                post({
-                    let fetch_requests = Arc::clone(&fetch_requests);
-                    let manifest_id_hex = manifest_id_hex.clone();
-                    let fetch_response_value = fetch_response_value.clone();
-                    move |body: Bytes| {
-                        let fetch_requests = Arc::clone(&fetch_requests);
-                        let manifest_id_hex = manifest_id_hex.clone();
-                        let fetch_response_value = fetch_response_value.clone();
-                        async move {
-                            fetch_requests.fetch_add(1, Ordering::SeqCst);
-                            let request = norito::json::from_slice::<StorageFetchRequestDto>(&body)
-                                .expect("decode remote fetch request");
-                            assert_eq!(request.manifest_id_hex, manifest_id_hex);
-                            crate::JsonBody(fetch_response_value).into_response()
-                        }
-                    }
-                }),
-            );
-        let remote_server = tokio::spawn(async move {
-            axum::serve(listener, remote_router)
-                .await
-                .expect("serve remote storage routes");
-        });
-
-        let fixture = make_signed_advert_with_host(&remote_origin);
+        let fixture = make_signed_advert_with_host("https://provider.invalid");
         let app = app_state_with_seeded_cache(&fixture);
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         seed_registry_manifest_for_gateway(&inner.state, &manifest, fixture.provider_id());
@@ -45766,84 +44582,17 @@ mod advert_tests {
             format!("/sorafs/cid/{content_cid}")
                 .parse::<Uri>()
                 .expect("remote cid root uri"),
-            Path(content_cid.clone()),
+            Path(content_cid),
         )
         .await;
-        assert_eq!(cid_root.status(), StatusCode::BAD_GATEWAY);
-        assert_eq!(manifest_requests.load(Ordering::SeqCst), 0);
-        assert_eq!(fetch_requests.load(Ordering::SeqCst), 0);
+        assert_eq!(cid_root.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert!(
             state
                 .sorafs_node
                 .manifest_metadata_by_digest(&manifest_digest)
                 .is_err(),
-            "an insecure provider must not populate the local cache",
+            "a capability-required miss must not populate the local cache",
         );
-
-        let invalid_tls_client = reqwest::Client::builder()
-            .https_only(true)
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .resolve("provider.invalid", remote_addr)
-            .timeout(Duration::from_secs(2))
-            .build()
-            .expect("strict TLS test client");
-        let tls_error = invalid_tls_client
-            .get(format!("https://provider.invalid:{}/", remote_addr.port()))
-            .send()
-            .await
-            .expect_err("plaintext endpoint must fail the TLS handshake");
-        assert!(tls_error.is_connect() || tls_error.is_request() || tls_error.is_timeout());
-        assert_eq!(manifest_requests.load(Ordering::SeqCst), 0);
-        assert_eq!(fetch_requests.load(Ordering::SeqCst), 0);
-
-        // Deterministic transport injection exercises the complete remote protocol and
-        // verification path without permitting HTTP in production discovery. The production
-        // wrapper above already proved that the same advertised URL is refused before connect.
-        let test_source = RemoteCidSource {
-            manifest_digest_hex: manifest_id_hex,
-            provider_id_hex: remote_provider_id_hex,
-            torii_base_url: reqwest::Url::parse(&format!("{remote_origin}/"))
-                .expect("test source URL"),
-            pinned_addrs: vec![remote_addr],
-        };
-        let test_client = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(5))
-            .build()
-            .expect("deterministic transport client");
-        let cid_bytes = decode_canonical_content_cid(&content_cid).expect("canonical content CID");
-        let bundle = fetch_remote_site_bundle_from_source_with_client(
-            &state,
-            &test_client,
-            &test_source,
-            &cid_bytes,
-        )
-        .await
-        .unwrap_or_else(|err| match err {
-            RemoteFetchError::Source(err) => panic!("verified transport fetch failed: {err}"),
-            RemoteFetchError::Compliance(response) => {
-                panic!(
-                    "fixture unexpectedly denied by governed compliance: {}",
-                    response.status()
-                )
-            }
-        });
-        let rejected =
-            cache_remote_site_bundle(&state, bundle).expect_err("HTTP hydration must not store");
-        assert_eq!(rejected.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(manifest_requests.load(Ordering::SeqCst), 1);
-        assert_eq!(fetch_requests.load(Ordering::SeqCst), 1);
-        assert!(
-            state
-                .sorafs_node
-                .manifest_metadata_by_digest(&manifest_digest)
-                .is_err(),
-            "verified remote bytes still require finalized provider-outbox admission",
-        );
-
-        remote_server.abort();
     }
 
     #[tokio::test]
@@ -46576,7 +45325,6 @@ mod advert_tests {
     async fn storage_token_issues_signed_response() {
         let context = token_test_context();
         let mut headers = HeaderMap::new();
-        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NONCE),
             HeaderValue::from_static("nonce-token-1"),
@@ -46694,7 +45442,6 @@ mod advert_tests {
                 mode,
             );
             let mut headers = HeaderMap::new();
-            insert_stream_token_api_credential(&mut headers);
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_NONCE),
                 HeaderValue::from_static("runtime-signer-failure"),
@@ -46792,7 +45539,6 @@ mod advert_tests {
             State(context.app.clone()),
             {
                 let mut headers = HeaderMap::new();
-                insert_stream_token_api_credential(&mut headers);
                 headers.insert(
                     header::HeaderName::from_static(HEADER_SORA_CLIENT),
                     header_value(&context.client_id, "X-SoraFS-Client"),
@@ -46836,7 +45582,6 @@ mod advert_tests {
             (HEADER_SORA_NONCE, "nonce with spaces".to_string()),
         ] {
             let mut headers = HeaderMap::new();
-            insert_stream_token_api_credential(&mut headers);
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_CLIENT),
                 HeaderValue::from_static("client-a"),
@@ -46863,7 +45608,6 @@ mod advert_tests {
         }
 
         let mut headers = HeaderMap::new();
-        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_CLIENT),
             HeaderValue::from_static("client-a"),
@@ -46898,7 +45642,6 @@ mod advert_tests {
         let context = token_test_context();
         let headers = || {
             let mut headers = HeaderMap::new();
-            insert_stream_token_api_credential(&mut headers);
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_CLIENT),
                 HeaderValue::from_static("client-a"),
@@ -47071,7 +45814,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn storage_token_requires_a_configured_valid_api_credential() {
+    async fn storage_token_requires_an_authenticated_operator_identity() {
         let context = token_test_context();
         let request = || StreamTokenRequestDto {
             manifest_id_hex: context.manifest_id_hex.clone(),
@@ -47081,63 +45824,29 @@ mod advert_tests {
             rate_limit_bytes: None,
             requests_per_minute: None,
         };
-        let headers = || {
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                header::HeaderName::from_static(HEADER_SORA_CLIENT),
-                HeaderValue::from_static("credential-auth-test"),
-            );
-            headers.insert(
-                header::HeaderName::from_static(HEADER_SORA_NONCE),
-                HeaderValue::from_static("credential-auth-nonce"),
-            );
-            headers
-        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_CLIENT),
+            HeaderValue::from_static("operator-auth-test"),
+        );
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_NONCE),
+            HeaderValue::from_static("operator-auth-nonce"),
+        );
 
-        let missing = handle_post_sorafs_storage_token(
+        let missing = handle_post_sorafs_storage_token_authenticated(
+            None,
             State(context.app.clone()),
-            headers(),
+            headers.clone(),
             JsonOnly(request()),
         )
         .await;
-        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
-        assert!(missing.headers().contains_key(header::WWW_AUTHENTICATE));
+        assert_eq!(missing.status(), StatusCode::FORBIDDEN);
 
-        let mut invalid_headers = headers();
-        invalid_headers.insert(
-            crate::HEADER_API_TOKEN,
-            HeaderValue::from_static("invalid-credential"),
-        );
-        let invalid = handle_post_sorafs_storage_token(
+        let valid = handle_post_sorafs_storage_token_authenticated(
+            test_stream_token_operator(),
             State(context.app.clone()),
-            invalid_headers,
-            JsonOnly(request()),
-        )
-        .await;
-        assert_eq!(invalid.status(), StatusCode::UNAUTHORIZED);
-
-        let mut duplicate_headers = headers();
-        duplicate_headers.append(
-            crate::HEADER_API_TOKEN,
-            HeaderValue::from_static(TEST_STREAM_TOKEN_API_TOKEN),
-        );
-        duplicate_headers.append(
-            crate::HEADER_API_TOKEN,
-            HeaderValue::from_static(TEST_STREAM_TOKEN_API_TOKEN),
-        );
-        let duplicate = handle_post_sorafs_storage_token(
-            State(context.app.clone()),
-            duplicate_headers,
-            JsonOnly(request()),
-        )
-        .await;
-        assert_eq!(duplicate.status(), StatusCode::UNAUTHORIZED);
-
-        let mut valid_headers = headers();
-        insert_stream_token_api_credential(&mut valid_headers);
-        let valid = handle_post_sorafs_storage_token(
-            State(context.app.clone()),
-            valid_headers.clone(),
+            headers,
             JsonOnly(request()),
         )
         .await;
@@ -47148,25 +45857,12 @@ mod advert_tests {
                 .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
                 .and_then(|value| value.to_str().ok()),
             Some("2"),
-            "rejected credentials must not consume the authenticated quota"
-        );
-
-        let app_without_credentials = mk_app_state_for_tests();
-        let unavailable =
-            authenticated_stream_token_quota_subject(&app_without_credentials, &valid_headers)
-                .expect_err("missing server-side credential configuration must fail closed");
-        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            unavailable
-                .headers()
-                .get(RETRY_AFTER)
-                .and_then(|value| value.to_str().ok()),
-            Some("1")
+            "rejected unauthenticated calls must not consume operator quota"
         );
     }
 
     #[tokio::test]
-    async fn storage_token_client_label_rotation_cannot_escape_credential_quota() {
+    async fn storage_token_client_label_rotation_cannot_escape_operator_quota() {
         let context = token_test_context();
 
         let request_builder = || StreamTokenRequestDto {
@@ -47181,7 +45877,6 @@ mod advert_tests {
         let expected = ["2", "1", "0"];
         for (idx, quota_remaining) in expected.into_iter().enumerate() {
             let mut headers = HeaderMap::new();
-            insert_stream_token_api_credential(&mut headers);
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_NONCE),
                 header_value(format!("nonce-quota-{idx}"), "X-SoraFS-Nonce"),
@@ -47207,7 +45902,6 @@ mod advert_tests {
         }
 
         let mut headers = HeaderMap::new();
-        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NONCE),
             header_value("nonce-quota-3", "X-SoraFS-Nonce"),
@@ -47293,7 +45987,6 @@ mod advert_tests {
     async fn storage_token_requires_client_header() {
         let (app, _dir, manifest_id) = token_enabled_state();
         let mut headers = HeaderMap::new();
-        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NONCE),
             HeaderValue::from_static("nonce-test"),
@@ -47323,7 +46016,6 @@ mod advert_tests {
             hex::encode(issuer.verifying_key_bytes())
         };
         let mut headers = HeaderMap::new();
-        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NONCE),
             HeaderValue::from_static("nonce-123"),

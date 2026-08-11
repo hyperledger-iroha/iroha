@@ -111,20 +111,17 @@ python -m iroha_python.examples.connect_flow \
   --app-icon-hash deadbeef \
   --frame-output ./connect-open.hex \
   --frame-json-output ./connect-open.json \
-  --status-json-output ./connect-status.json \
   --send-open
 ```
 
-The helper prints the typed `ConnectSessionInfo`, current policy limits, and
-optionally posts the encoded Open control frame back to Torii when `--send-open`
-is set. Outputs:
+The app-focused helper prints the typed `ConnectSessionInfo` and optionally
+posts the encoded Open control frame back to Torii when `--send-open` is set.
+It does not read node aggregate status, which requires a runtime-only operator
+signing context. Outputs:
 
 - `connect-open.hex` — hex-encoded envelope suitable for regressions or manual
   relay.
 - `connect-open.json` — base64 representation for dashboards/telemetry.
-- `connect-status.json` — typed snapshot of `/v1/connect/status` (mirrors the
-  dataclasses in `iroha_python.connect`).
-
 Use `--write-app-metadata-template <path>` to generate the JSON metadata stub
 shipped alongside the script, or pass `--app-metadata-file metadata.json` to
 reuse existing metadata blobs. The same dataclasses power the Connect
@@ -233,8 +230,8 @@ locally:
 pytest -m nb python/iroha_python/tests/test_connect_notebook.py
 ```
 
-The test asserts that `/v1/connect/session`, `/v1/connect/status`, and the
-control endpoints are exercised, and it inspects the decoded frame contents to
+The test asserts that `/v1/connect/session` and the control endpoints are
+exercised, and it inspects the decoded frame contents to
 catch drift before fixtures update. Attach the generated artefacts to roadmap
 evidence when closing PY6-P2 items.
 

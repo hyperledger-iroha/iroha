@@ -28,7 +28,9 @@ use super::{
         rns_polynomial_digest,
     },
     persistent_membership_evidence::ZK_AMS_MKHE_PERSISTENT_MEMBERSHIP_CHUNKS_V1,
-    phase23_rns_link::ZkAmsPhase23NativeBgvOpeningVerifierPermitV1,
+    phase23_rns_link::{
+        ZkAmsPhase23NativeBgvOpeningVerifierPermitV1, ZkAmsPhase23QNativeRelationAdapterSinkV1,
+    },
     wire::{
         ZkAmsMkheCollectiveCiphertextWireV1, ZkAmsMkheGovernedRosterWireV1,
         ZkAmsMkheRnsPolynomialWireV1, ZkAmsMkheWireBindingV1, governed_roster_digest,
@@ -46,6 +48,9 @@ use crate::vega::{
     sponge::{Keccak256, keccak256},
 };
 
+#[path = "collective/incremental_source.rs"]
+mod incremental_source;
+
 pub(super) const COLLECTIVE_CIPHERTEXT_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.compact-collective-ciphertext";
 const COLLECTIVE_PARTY_SHARE_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-public-key-share";
@@ -53,6 +58,8 @@ const COLLECTIVE_PARTY_SHARE_ACTIVE_ADMISSION_DOMAIN_V1: &[u8] =
     b"iroha.zk-ams.v1.mkhe.collective-public-key-share.active-admission";
 const COLLECTIVE_PUBLIC_KEY_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-public-key";
 const COLLECTIVE_ENCRYPTION_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-encryption";
+const COLLECTIVE_ENCRYPTION_NONCE_DOMAIN_V1: &[u8] =
+    b"iroha.zk-ams.v1.mkhe.collective-encryption-nonce";
 const COLLECTIVE_ADD_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-add";
 const COLLECTIVE_SUB_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-sub";
 const COLLECTIVE_PLAINTEXT_MUL_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.mkhe.collective-plaintext-mul";
@@ -211,6 +218,50 @@ impl Drop for ZeroizingEntropyProbe {
     }
 }
 
+/// Heap-stable owner for the opening-only fresh-encryption nonce.
+///
+/// The allocation is created while it is still all zero, then filled in
+/// place. Moving this owner therefore moves only a pointer, never live nonce
+/// bytes.
+struct ZeroizingEncryptionNonce(Box<[u8; 32]>);
+
+#[cfg(test)]
+std::thread_local! {
+    static ENCRYPTION_NONCE_ZEROIZED_DROPS_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+impl ZeroizingEncryptionNonce {
+    fn zeroed() -> Self {
+        Self(Box::new([0; 32]))
+    }
+
+    fn as_bytes(&self) -> &[u8; 32] {
+        self.0.as_ref()
+    }
+
+    fn as_mut_bytes(&mut self) -> &mut [u8; 32] {
+        self.0.as_mut()
+    }
+
+    fn is_zero(&self) -> bool {
+        self.as_bytes() == &[0; 32]
+    }
+}
+
+impl Drop for ZeroizingEncryptionNonce {
+    fn drop(&mut self) {
+        clear_secret_bytes_v1(self.0.as_mut());
+
+        #[cfg(test)]
+        if self.is_zero() {
+            let _ = ENCRYPTION_NONCE_ZEROIZED_DROPS_V1
+                .try_with(|drops| drops.set(drops.get().saturating_add(1)));
+        }
+    }
+}
+
 struct ZeroizingRandomByte([u8; 1]);
 
 impl Drop for ZeroizingRandomByte {
@@ -220,34 +271,40 @@ impl Drop for ZeroizingRandomByte {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CollectiveEncryptionInputIdentityV1 {
+struct CollectiveEncryptionInputTopologyV1 {
     layout_digest: [u8; 32],
-    plaintext_digest: [u8; 32],
     plaintext_chunk_index: u32,
     plaintext_used_slots: u32,
 }
 
-impl CollectiveEncryptionInputIdentityV1 {
+impl CollectiveEncryptionInputTopologyV1 {
     const fn from_packed(
         layout: ZkAmsT256PackingLayoutV1,
         plaintext: &ZkAmsT256PackedPlaintextV1,
     ) -> Self {
         Self {
             layout_digest: layout.digest,
-            plaintext_digest: plaintext.digest,
             plaintext_chunk_index: plaintext.chunk_index,
             plaintext_used_slots: plaintext.used_slots,
         }
     }
 }
 
+/// Move-only fresh-encryption identity. The opaque nonce never enters the
+/// public ciphertext; only its domain-separated transcript digest does.
+struct CollectiveEncryptionInputIdentityV1 {
+    topology: CollectiveEncryptionInputTopologyV1,
+    encryption_nonce: ZeroizingEncryptionNonce,
+}
+
 /// Secret encryption witness retained only long enough for a sibling proof
 /// adapter to consume it.
 ///
 /// This value intentionally implements neither `Clone` nor serialization.
-/// Its only sibling-visible witness boundary validates the complete public
-/// context and both RLWE equations before lending ephemeral references to the
-/// proof builder. Public encryption drops it immediately.
+/// Its production boundary consumes the owner, validates the complete public
+/// context and both RLWE equations, and advances only a topology sink; no
+/// witness reference crosses that boundary. Reference lending exists only in
+/// the `cfg(test)` algebra check. Public encryption drops it immediately.
 pub(super) struct ZkAmsMkheCollectiveEncryptionOpeningV1 {
     profile_digest: [u8; 32],
     security_certificate_digest: [u8; 32],
@@ -294,7 +351,8 @@ impl core::fmt::Debug for ZkAmsMkheCollectiveEncryptionOpeningV1 {
                 &hex::encode(self.ciphertext_transcript_digest),
             )
             .field("sample_index", &self.sample_index)
-            .field("input_identity", &self.input_identity)
+            .field("input_topology", &self.input_identity.topology)
+            .field("encryption_nonce", &"[REDACTED]")
             .field("ciphertext_digest", &hex::encode(self.ciphertext_digest))
             .field("canonical_plaintext", &"[REDACTED]")
             .field("plaintext_lift", &"[REDACTED]")
@@ -307,6 +365,7 @@ impl core::fmt::Debug for ZkAmsMkheCollectiveEncryptionOpeningV1 {
 
 impl Drop for ZkAmsMkheCollectiveEncryptionOpeningV1 {
     fn drop(&mut self) {
+        clear_secret_bytes_v1(self.input_identity.encryption_nonce.as_mut_bytes());
         clear_secret_canonical_plaintext_v1(&mut self.canonical_plaintext.0);
         clear_secret_u64_slice_v1(&mut self.plaintext_lift.0.coefficients);
         clear_secret_i64_slice_v1(&mut self.ephemeral.coefficients);
@@ -315,11 +374,12 @@ impl Drop for ZkAmsMkheCollectiveEncryptionOpeningV1 {
 
         #[cfg(test)]
         if let Some(audit) = &self.drop_audit {
-            let zeroized = self
-                .canonical_plaintext
-                .0
-                .iter()
-                .all(|coefficient| *coefficient == [0; 32])
+            let zeroized = self.input_identity.encryption_nonce.is_zero()
+                && self
+                    .canonical_plaintext
+                    .0
+                    .iter()
+                    .all(|coefficient| *coefficient == [0; 32])
                 && self
                     .plaintext_lift
                     .0
@@ -931,8 +991,8 @@ impl ZkAmsMkheCollectivePublicKeyV1 {
         }
         self.public_a.validate(profile)?;
         self.collective_public_b.validate(profile)?;
-        if self.public_a == RnsPolynomial::zero(profile)
-            || self.collective_public_b == RnsPolynomial::zero(profile)
+        if self.public_a.is_zero()
+            || self.collective_public_b.is_zero()
             || self.digest == [0; 32]
             || self.digest != collective_public_key_digest(self, profile)?
         {
@@ -1252,6 +1312,7 @@ fn validate_collective_public_key_share_active_admission_v1(
 /// evidence. Thus substituted legacy proof bytes cannot alter a supposedly
 /// native-equivalent share digest without replaying the allocation-heavy proof
 /// verifier inside this bounded path.
+#[allow(dead_code)]
 pub(super) fn validate_collective_public_key_share_for_verified_cpk_compact_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     transcript_digest: [u8; 32],
@@ -1322,6 +1383,7 @@ pub(super) fn validate_collective_public_key_share_for_verified_cpk_compact_v1(
 /// The output is exactly [`collective_public_key_digest`] for the same ordered
 /// shares. Common `a` is derived one limb at a time and no aggregate-key object
 /// or second complete RNS polynomial is constructed.
+#[allow(dead_code)]
 pub(super) fn collective_public_key_digest_from_bounded_cpk_v1(
     roster: &ZkAmsMkheGovernedActiveRosterV1,
     transcript_digest: [u8; 32],
@@ -1465,10 +1527,10 @@ pub(super) fn cpk_party_b_payload_blake3_v1(
 
 /// Exact native collective ciphertext containing only `(c_0, c_1)`.
 ///
-/// The transcript digest is the artifact-lineage commitment.  Constructors
-/// for encryption and evaluation derive it from the frozen security
-/// certificate, collective-key digest, exact input identity, and operation;
-/// callers never provide a replacement lineage digest to those APIs.
+/// The transcript digest is the artifact-lineage commitment. Fresh encryption
+/// binds public topology plus an opening-owned opaque nonce; evaluation binds
+/// its separately documented public operands. The nonce itself is never part
+/// of this public object, and callers cannot replace constructor lineage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZkAmsMkheCollectiveCiphertextV1 {
     profile_digest: [u8; 32],
@@ -1731,7 +1793,8 @@ impl ZkAmsMkheCollectiveEncryptionOpeningV1 {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn verify_and_consume_phase23_native_bgv_opening_v1(
         self,
-        _permit: ZkAmsPhase23NativeBgvOpeningVerifierPermitV1,
+        permit: ZkAmsPhase23NativeBgvOpeningVerifierPermitV1,
+        relation_sink: &mut ZkAmsPhase23QNativeRelationAdapterSinkV1,
         key: &ZkAmsMkheCollectivePublicKeyV1,
         layout: ZkAmsT256PackingLayoutV1,
         plaintext: &ZkAmsT256PackedPlaintextV1,
@@ -1749,25 +1812,13 @@ impl ZkAmsMkheCollectiveEncryptionOpeningV1 {
             return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
         }
         let expected_message = ZeroizingRns(packed_plaintext_to_rns_v1(layout, plaintext)?);
-        let input_identity = CollectiveEncryptionInputIdentityV1::from_packed(layout, plaintext);
-        let expected_transcript_digest = collective_lineage_digest(
-            COLLECTIVE_ENCRYPTION_DOMAIN_V1,
-            key,
-            &[],
-            &[
-                layout.digest.as_slice(),
-                plaintext.digest.as_slice(),
-                &plaintext.chunk_index.to_be_bytes(),
-                &ciphertext.sample_index.to_be_bytes(),
-            ],
-        );
+        let input_topology = CollectiveEncryptionInputTopologyV1::from_packed(layout, plaintext);
         self.validate_against(
             &profile,
             key,
             &expected_message.0,
             &plaintext.coefficients,
-            input_identity,
-            expected_transcript_digest,
+            input_topology,
             ciphertext,
         )?;
         let effective_error_zero = derive_natural_lift_effective_error_zero(
@@ -1791,7 +1842,7 @@ impl ZkAmsMkheCollectiveEncryptionOpeningV1 {
         {
             return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
         }
-        Ok(())
+        relation_sink.absorb_validated_opening_topology_v1(&permit)
     }
 
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -1802,8 +1853,7 @@ impl ZkAmsMkheCollectiveEncryptionOpeningV1 {
         key: &ZkAmsMkheCollectivePublicKeyV1,
         expected_message: &RnsPolynomial,
         expected_canonical_plaintext: &[[u8; 32]],
-        input_identity: CollectiveEncryptionInputIdentityV1,
-        expected_transcript_digest: [u8; 32],
+        input_topology: CollectiveEncryptionInputTopologyV1,
         ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
         adapter: impl FnOnce(
             &[[u8; 32]],
@@ -1818,8 +1868,7 @@ impl ZkAmsMkheCollectiveEncryptionOpeningV1 {
             key,
             expected_message,
             expected_canonical_plaintext,
-            input_identity,
-            expected_transcript_digest,
+            input_topology,
             ciphertext,
         )?;
         adapter(
@@ -1838,20 +1887,25 @@ impl ZkAmsMkheCollectiveEncryptionOpeningV1 {
         key: &ZkAmsMkheCollectivePublicKeyV1,
         expected_message: &RnsPolynomial,
         expected_canonical_plaintext: &[[u8; 32]],
-        input_identity: CollectiveEncryptionInputIdentityV1,
-        expected_transcript_digest: [u8; 32],
+        input_topology: CollectiveEncryptionInputTopologyV1,
         ciphertext: &ZkAmsMkheCollectiveCiphertextV1,
     ) -> Result<(), ZkAmsMkheErrorV1> {
         profile.validate()?;
         key.validate(profile)?;
         expected_message.validate(profile)?;
         validate_compact_for_key(ciphertext, key, profile)?;
+        let expected_transcript_digest = collective_encryption_transcript_digest_v1(
+            key,
+            input_topology,
+            self.sample_index,
+            self.input_identity.encryption_nonce.as_bytes(),
+        );
         if expected_transcript_digest == [0; 32]
-            || input_identity.layout_digest == [0; 32]
-            || input_identity.plaintext_digest == [0; 32]
-            || input_identity.plaintext_used_slots == 0
-            || usize::try_from(input_identity.plaintext_used_slots)
+            || input_topology.layout_digest == [0; 32]
+            || input_topology.plaintext_used_slots == 0
+            || usize::try_from(input_topology.plaintext_used_slots)
                 .map_or(true, |used_slots| used_slots > profile.ring_degree)
+            || self.input_identity.encryption_nonce.is_zero()
             || expected_canonical_plaintext.len() != profile.ring_degree
             || self.profile_digest != profile.digest()?
             || self.profile_digest != key.profile_digest
@@ -1864,7 +1918,7 @@ impl ZkAmsMkheCollectiveEncryptionOpeningV1 {
             || self.ciphertext_transcript_digest != expected_transcript_digest
             || self.ciphertext_transcript_digest != ciphertext.transcript_digest
             || self.sample_index != ciphertext.sample_index
-            || self.input_identity != input_identity
+            || self.input_identity.topology != input_topology
             || self.ciphertext_digest != ciphertext.digest
             || ciphertext.level != 0
             || self.canonical_plaintext.0.as_slice() != expected_canonical_plaintext
@@ -1961,25 +2015,13 @@ pub(super) fn encrypt_zk_ams_mkhe_collective_packed_with_opening_v1<
     // before secret randomness or ciphertext-sized output is allocated.
     let message = ZeroizingRns(packed_plaintext_to_rns_v1(layout, plaintext)?);
     let canonical_plaintext = ZeroizingCanonicalPlaintext(plaintext.coefficients.clone());
-    let input_identity = CollectiveEncryptionInputIdentityV1::from_packed(layout, plaintext);
-    let transcript_digest = collective_lineage_digest(
-        COLLECTIVE_ENCRYPTION_DOMAIN_V1,
-        key,
-        &[],
-        &[
-            layout.digest.as_slice(),
-            plaintext.digest.as_slice(),
-            &plaintext.chunk_index.to_be_bytes(),
-            &sample_index.to_be_bytes(),
-        ],
-    );
+    let input_topology = CollectiveEncryptionInputTopologyV1::from_packed(layout, plaintext);
     encrypt_collective_native_with_opening(
         &profile,
         key,
         message,
         canonical_plaintext,
-        input_identity,
-        transcript_digest,
+        input_topology,
         sample_index,
         random,
     )
@@ -2005,6 +2047,9 @@ impl ZkAmsMkheCollectiveCiphertextV1 {
     }
 
     /// Multiply both components by one exact canonical packed plaintext.
+    ///
+    /// This evaluation operand is public and its digest remains in evaluated
+    /// ciphertext lineage. It is separate from fresh-encryption nonce hiding.
     pub fn mul_plaintext(
         &self,
         key: &ZkAmsMkheCollectivePublicKeyV1,
@@ -2304,6 +2349,9 @@ impl ZkAmsMkheCollectiveLevelOneV1 {
     }
 
     /// Multiply all three level-one components by a canonical packed plaintext.
+    ///
+    /// This evaluation operand is public and its digest remains in evaluated
+    /// ciphertext lineage. It is separate from fresh-encryption nonce hiding.
     pub fn mul_plaintext(
         &self,
         key: &ZkAmsMkheCollectivePublicKeyV1,
@@ -2584,8 +2632,7 @@ fn encrypt_collective_native_with_opening<R: MaskedRelaxedRandomSourceV1>(
     key: &ZkAmsMkheCollectivePublicKeyV1,
     message: ZeroizingRns,
     canonical_plaintext: ZeroizingCanonicalPlaintext,
-    input_identity: CollectiveEncryptionInputIdentityV1,
-    transcript_digest: [u8; 32],
+    input_topology: CollectiveEncryptionInputTopologyV1,
     sample_index: u64,
     random: &mut R,
 ) -> Result<
@@ -2597,18 +2644,29 @@ fn encrypt_collective_native_with_opening<R: MaskedRelaxedRandomSourceV1>(
 > {
     key.validate(profile)?;
     message.0.validate(profile)?;
-    if transcript_digest == [0; 32]
-        || input_identity.layout_digest == [0; 32]
-        || input_identity.plaintext_digest == [0; 32]
-        || input_identity.plaintext_used_slots == 0
-        || usize::try_from(input_identity.plaintext_used_slots)
+    if input_topology.layout_digest == [0; 32]
+        || input_topology.plaintext_used_slots == 0
+        || usize::try_from(input_topology.plaintext_used_slots)
             .map_or(true, |used_slots| used_slots > profile.ring_degree)
         || canonical_plaintext.0.len() != profile.ring_degree
     {
         return Err(ZkAmsMkheErrorV1::InvalidCiphertext);
     }
     checked_ring_multiplication_work(profile, 2)?;
-    validate_collective_encryption_entropy(random)?;
+    let encryption_nonce = derive_collective_encryption_nonce_v1(random)?;
+    let input_identity = CollectiveEncryptionInputIdentityV1 {
+        topology: input_topology,
+        encryption_nonce,
+    };
+    let transcript_digest = collective_encryption_transcript_digest_v1(
+        key,
+        input_topology,
+        sample_index,
+        input_identity.encryption_nonce.as_bytes(),
+    );
+    if transcript_digest == [0; 32] {
+        return Err(ZkAmsMkheErrorV1::RandomUnavailable);
+    }
     let ephemeral = sample_nonzero_ternary_zeroizing(profile, random)?;
     let error_zero = sample_bounded_error(profile, random)?;
     let error_one = sample_bounded_error(profile, random)?;
@@ -2658,8 +2716,7 @@ fn encrypt_collective_native_with_opening<R: MaskedRelaxedRandomSourceV1>(
         key,
         &opening.plaintext_lift.0,
         &opening.canonical_plaintext.0,
-        input_identity,
-        transcript_digest,
+        input_topology,
         &ciphertext,
     )?;
     Ok((ciphertext, opening))
@@ -2693,6 +2750,47 @@ fn collective_lineage_digest(
         frame.extend_from_slice(value);
     }
     keccak256(&frame)
+}
+
+fn collective_encryption_transcript_digest_v1(
+    key: &ZkAmsMkheCollectivePublicKeyV1,
+    topology: CollectiveEncryptionInputTopologyV1,
+    sample_index: u64,
+    encryption_nonce: &[u8; 32],
+) -> [u8; 32] {
+    // Stream the nonce directly into the sponge instead of copying it into the
+    // heap frame used by generic public evaluation lineage.
+    // Allocate the all-zero sponge before it absorbs the opening nonce. Every
+    // later move therefore transports only the `Box` pointer.
+    let chunk_index = topology.plaintext_chunk_index.to_be_bytes();
+    let used_slots = topology.plaintext_used_slots.to_be_bytes();
+    let sample_index = sample_index.to_be_bytes();
+    let mut hash = Box::new(Keccak256::new());
+    hash.update(COLLECTIVE_ENCRYPTION_DOMAIN_V1);
+    hash.update(&[MKHE_VERSION_V1]);
+    hash.update(&key.profile_digest);
+    hash.update(&key.security_certificate_digest);
+    hash.update(&key.roster_digest);
+    hash.update(&key.key_material_digest);
+    hash.update(&key.epoch.to_be_bytes());
+    hash.update(&key.transcript_digest);
+    hash.update(&key.digest);
+    hash.update(&0_u32.to_be_bytes());
+    hash.update(&5_u32.to_be_bytes());
+    hash.update(&32_u32.to_be_bytes());
+    hash.update(&topology.layout_digest);
+    hash.update(&4_u32.to_be_bytes());
+    hash.update(&chunk_index);
+    hash.update(&4_u32.to_be_bytes());
+    hash.update(&used_slots);
+    hash.update(&8_u32.to_be_bytes());
+    hash.update(&sample_index);
+    hash.update(&32_u32.to_be_bytes());
+    hash.update(encryption_nonce);
+    let mut digest = [0_u8; 32];
+    hash.finalize_into(&mut digest);
+    drop(hash);
+    digest
 }
 
 fn scaled_public_error(
@@ -2737,9 +2835,9 @@ fn sample_nonzero_ternary_zeroizing<R: MaskedRelaxedRandomSourceV1>(
     Err(ZkAmsMkheErrorV1::RandomUnavailable)
 }
 
-fn validate_collective_encryption_entropy<R: MaskedRelaxedRandomSourceV1>(
+fn derive_collective_encryption_nonce_v1<R: MaskedRelaxedRandomSourceV1>(
     random: &mut R,
-) -> Result<(), ZkAmsMkheErrorV1> {
+) -> Result<ZeroizingEncryptionNonce, ZkAmsMkheErrorV1> {
     let mut first = ZeroizingEntropyProbe([0; 32]);
     let mut second = ZeroizingEntropyProbe([0; 32]);
     random
@@ -2754,16 +2852,28 @@ fn validate_collective_encryption_entropy<R: MaskedRelaxedRandomSourceV1>(
     {
         return Err(ZkAmsMkheErrorV1::RandomUnavailable);
     }
-    Ok(())
+    // Both live nonce material and its absorbing sponge have stable heap
+    // addresses from first secret write through optimizer-resistant drop.
+    let mut hash = Box::new(Keccak256::new());
+    hash.update(COLLECTIVE_ENCRYPTION_NONCE_DOMAIN_V1);
+    hash.update(&[MKHE_VERSION_V1]);
+    hash.update(&first.0);
+    hash.update(&second.0);
+    let mut nonce = ZeroizingEncryptionNonce::zeroed();
+    hash.finalize_into(nonce.as_mut_bytes());
+    drop(hash);
+    if nonce.is_zero() {
+        return Err(ZkAmsMkheErrorV1::RandomUnavailable);
+    }
+    Ok(nonce)
 }
 
 fn entropy_probe_has_short_period(probe: &[u8; 32]) -> bool {
     (1..=probe.len() / 2).any(|period| {
-        probe.len().is_multiple_of(period)
-            && probe
-                .iter()
-                .enumerate()
-                .all(|(index, byte)| *byte == probe[index % period])
+        probe[period..]
+            .iter()
+            .zip(&probe[..probe.len() - period])
+            .all(|(current, prior)| current == prior)
     })
 }
 
@@ -2901,7 +3011,7 @@ mod tests {
     const TEST_MODULI: [u64; 2] = [2_013_265_921, 1_811_939_329];
     const TEST_ROOTS: [u64; 2] = [1_400_279_418, 677_356_115];
 
-    fn test_profile() -> BgvProfile {
+    pub(super) fn test_profile() -> BgvProfile {
         BgvProfile {
             profile_id: [0x61; 32],
             ring_degree: 8,
@@ -2921,13 +3031,13 @@ mod tests {
         }
     }
 
-    struct KatRandom {
+    pub(super) struct KatRandom {
         state: [u8; 32],
         counter: u64,
     }
 
     impl KatRandom {
-        fn new(label: &[u8]) -> Self {
+        pub(super) fn new(label: &[u8]) -> Self {
             Self {
                 state: keccak256(label),
                 counter: 0,
@@ -3142,6 +3252,31 @@ mod tests {
         }
     }
 
+    struct DistinctOddPeriodProbeRandom {
+        calls: usize,
+    }
+
+    impl DistinctOddPeriodProbeRandom {
+        const fn new() -> Self {
+            Self { calls: 0 }
+        }
+    }
+
+    impl MaskedRelaxedRandomSourceV1 for DistinctOddPeriodProbeRandom {
+        fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), MaskedRelaxedRandomErrorV1> {
+            let pattern = if self.calls == 0 {
+                [0x19, 0x4d, 0xc2]
+            } else {
+                [0x27, 0xa6, 0x58]
+            };
+            for (index, byte) in destination.iter_mut().enumerate() {
+                *byte = pattern[index % pattern.len()];
+            }
+            self.calls = self.calls.saturating_add(1);
+            Ok(())
+        }
+    }
+
     struct ProbeThenConstantRandom {
         calls: usize,
     }
@@ -3185,7 +3320,7 @@ mod tests {
         .unwrap()
     }
 
-    fn test_key(label: u8) -> (ZkAmsMkheCollectivePublicKeyV1, SecretPolynomial) {
+    pub(super) fn test_key(label: u8) -> (ZkAmsMkheCollectivePublicKeyV1, SecretPolynomial) {
         let profile = test_profile();
         profile.validate().unwrap();
         let parties = test_parties();
@@ -3296,7 +3431,7 @@ mod tests {
         (layout, plaintext, ciphertext, opening)
     }
 
-    fn test_canonical_plaintext(values: &[u64; 8]) -> Vec<[u8; 32]> {
+    pub(super) fn test_canonical_plaintext(values: &[u64; 8]) -> Vec<[u8; 32]> {
         values
             .iter()
             .map(|value| {
@@ -3307,23 +3442,18 @@ mod tests {
             .collect()
     }
 
-    fn test_input_identity(
+    pub(super) fn test_input_topology(
         profile: &BgvProfile,
-        message: &RnsPolynomial,
         label: &[u8],
-    ) -> CollectiveEncryptionInputIdentityV1 {
-        let mut plaintext_hash = Keccak256::new();
-        plaintext_hash.update(b"iroha.zk-ams.test.collective-opening-plaintext");
-        update_rns_hash(&mut plaintext_hash, profile, message).unwrap();
-        CollectiveEncryptionInputIdentityV1 {
+    ) -> CollectiveEncryptionInputTopologyV1 {
+        CollectiveEncryptionInputTopologyV1 {
             layout_digest: keccak256(&[b"layout".as_slice(), label].concat()),
-            plaintext_digest: plaintext_hash.finalize(),
             plaintext_chunk_index: 0,
             plaintext_used_slots: u32::try_from(profile.ring_degree).unwrap(),
         }
     }
 
-    fn encrypt_test_with_opening(
+    pub(super) fn encrypt_test_with_opening(
         profile: &BgvProfile,
         key: &ZkAmsMkheCollectivePublicKeyV1,
         values: &[u64; 8],
@@ -3334,34 +3464,32 @@ mod tests {
         ZkAmsMkheCollectiveEncryptionOpeningV1,
         RnsPolynomial,
         Vec<[u8; 32]>,
-        CollectiveEncryptionInputIdentityV1,
+        CollectiveEncryptionInputTopologyV1,
         [u8; 32],
     ) {
         let message = RnsPolynomial::from_test_plaintext(profile, values).unwrap();
         let canonical_plaintext = test_canonical_plaintext(values);
-        let input_identity = test_input_identity(profile, &message, label);
-        let transcript_digest = keccak256(label);
+        let input_topology = test_input_topology(profile, label);
         let (ciphertext, opening) = encrypt_collective_native_with_opening(
             profile,
             key,
             ZeroizingRns(message.clone()),
             ZeroizingCanonicalPlaintext(canonical_plaintext.clone()),
-            input_identity,
-            transcript_digest,
+            input_topology,
             sample_index,
             &mut KatRandom::new(label),
         )
         .unwrap();
+        let transcript_digest = ciphertext.transcript_digest;
         (
             ciphertext,
             opening,
             message,
             canonical_plaintext,
-            input_identity,
+            input_topology,
             transcript_digest,
         )
     }
-
     fn try_encrypt_test_with_random<R: MaskedRelaxedRandomSourceV1>(
         profile: &BgvProfile,
         key: &ZkAmsMkheCollectivePublicKeyV1,
@@ -3378,14 +3506,13 @@ mod tests {
     > {
         let message = RnsPolynomial::from_test_plaintext(profile, values).unwrap();
         let canonical_plaintext = test_canonical_plaintext(values);
-        let input_identity = test_input_identity(profile, &message, label);
+        let input_topology = test_input_topology(profile, label);
         encrypt_collective_native_with_opening(
             profile,
             key,
             ZeroizingRns(message),
             ZeroizingCanonicalPlaintext(canonical_plaintext),
-            input_identity,
-            keccak256(label),
+            input_topology,
             sample_index,
             random,
         )
@@ -3747,7 +3874,7 @@ mod tests {
         let profile = test_profile();
         let (key, _) = test_key(0x72);
         let values = [1, 16, 3, 14, 5, 12, 7, 10];
-        let (ciphertext, opening, message, canonical, input_identity, transcript_digest) =
+        let (ciphertext, opening, message, canonical, input_topology, _) =
             encrypt_test_with_opening(&profile, &key, &values, 29, b"opening-equations");
 
         opening
@@ -3756,8 +3883,7 @@ mod tests {
                 &key,
                 &message,
                 &canonical,
-                input_identity,
-                transcript_digest,
+                input_topology,
                 &ciphertext,
                 |actual_canonical, actual_message, ephemeral, error_zero, error_one| {
                     assert_eq!(actual_canonical, canonical.as_slice());
@@ -3891,7 +4017,7 @@ mod tests {
         let (key, _) = test_key(0x73);
         let (other_key, _) = test_key(0x74);
         let values = [2, 4, 6, 8, 10, 12, 14, 16];
-        let (ciphertext, opening, message, canonical, identity, transcript_digest) =
+        let (ciphertext, opening, message, canonical, topology, transcript_digest) =
             encrypt_test_with_opening(&profile, &key, &values, 31, b"opening-splices");
 
         assert!(
@@ -3901,8 +4027,7 @@ mod tests {
                     &other_key,
                     &message,
                     &canonical,
-                    identity,
-                    transcript_digest,
+                    topology,
                     &ciphertext,
                 )
                 .is_err()
@@ -3922,8 +4047,7 @@ mod tests {
                     &key,
                     &message,
                     &canonical,
-                    identity,
-                    other_ciphertext.transcript_digest,
+                    topology,
                     &other_ciphertext,
                 )
                 .is_err()
@@ -3938,8 +4062,7 @@ mod tests {
                     &key,
                     &wrong_message,
                     &canonical,
-                    identity,
-                    transcript_digest,
+                    topology,
                     &ciphertext,
                 )
                 .is_err()
@@ -3954,20 +4077,18 @@ mod tests {
                     &key,
                     &message,
                     &wrong_canonical,
-                    identity,
-                    transcript_digest,
+                    topology,
                     &ciphertext,
                 )
                 .is_err()
         );
 
-        for axis in 0..4 {
-            let mut wrong_identity = identity;
+        for axis in 0..3 {
+            let mut wrong_topology = topology;
             match axis {
-                0 => wrong_identity.layout_digest[0] ^= 1,
-                1 => wrong_identity.plaintext_digest[0] ^= 1,
-                2 => wrong_identity.plaintext_chunk_index ^= 1,
-                _ => wrong_identity.plaintext_used_slots -= 1,
+                0 => wrong_topology.layout_digest[0] ^= 1,
+                1 => wrong_topology.plaintext_chunk_index ^= 1,
+                _ => wrong_topology.plaintext_used_slots -= 1,
             }
             assert!(
                 opening
@@ -3976,8 +4097,7 @@ mod tests {
                         &key,
                         &message,
                         &canonical,
-                        wrong_identity,
-                        transcript_digest,
+                        wrong_topology,
                         &ciphertext,
                     )
                     .is_err(),
@@ -3985,8 +4105,11 @@ mod tests {
             );
         }
 
-        let mut wrong_transcript = transcript_digest;
-        wrong_transcript[0] ^= 1;
+        let mut wrong_transcript_ciphertext = ciphertext.clone();
+        wrong_transcript_ciphertext.transcript_digest[0] ^= 1;
+        wrong_transcript_ciphertext.digest = wrong_transcript_ciphertext
+            .compute_digest(&profile)
+            .unwrap();
         assert!(
             opening
                 .validate_against(
@@ -3994,9 +4117,28 @@ mod tests {
                     &key,
                     &message,
                     &canonical,
-                    identity,
-                    wrong_transcript,
-                    &ciphertext,
+                    topology,
+                    &wrong_transcript_ciphertext,
+                )
+                .is_err()
+        );
+        assert_ne!(
+            wrong_transcript_ciphertext.transcript_digest,
+            transcript_digest
+        );
+
+        let mut wrong_sample_ciphertext = ciphertext.clone();
+        wrong_sample_ciphertext.sample_index ^= 1;
+        wrong_sample_ciphertext.digest = wrong_sample_ciphertext.compute_digest(&profile).unwrap();
+        assert!(
+            opening
+                .validate_against(
+                    &profile,
+                    &key,
+                    &message,
+                    &canonical,
+                    topology,
+                    &wrong_sample_ciphertext,
                 )
                 .is_err()
         );
@@ -4009,11 +4151,20 @@ mod tests {
                     &key,
                     &message,
                     &canonical,
-                    identity,
-                    transcript_digest,
+                    topology,
                     &corrupted_ciphertext,
                 )
                 .is_err()
+        );
+
+        let (ciphertext, mut opening, message, canonical, topology, _) =
+            encrypt_test_with_opening(&profile, &key, &values, 31, b"opening-nonce-splice");
+        opening.input_identity.encryption_nonce.as_mut_bytes()[0] ^= 1;
+        assert!(
+            opening
+                .validate_against(&profile, &key, &message, &canonical, topology, &ciphertext,)
+                .is_err(),
+            "an opening-owned encryption nonce splice was accepted"
         );
     }
 
@@ -4024,7 +4175,7 @@ mod tests {
         let values = [1, 2, 3, 4, 5, 6, 7, 8];
 
         for axis in 0..4 {
-            let (ciphertext, mut opening, message, canonical, identity, transcript_digest) =
+            let (ciphertext, mut opening, message, canonical, topology, _) =
                 encrypt_test_with_opening(
                     &profile,
                     &key,
@@ -4042,15 +4193,7 @@ mod tests {
             }
             assert!(
                 opening
-                    .validate_against(
-                        &profile,
-                        &key,
-                        &message,
-                        &canonical,
-                        identity,
-                        transcript_digest,
-                        &ciphertext,
-                    )
+                    .validate_against(&profile, &key, &message, &canonical, topology, &ciphertext,)
                     .is_err(),
                 "secret witness tamper axis {axis} was accepted"
             );
@@ -4058,30 +4201,249 @@ mod tests {
     }
 
     #[test]
+    fn changed_plaintext_is_rejected_by_the_constant_rlwe_equation() {
+        let profile = test_profile();
+        let (key, _) = test_key(0x78);
+        let original = [2, 4, 6, 8, 10, 12, 14, 16];
+        let changed = [3, 4, 6, 8, 10, 12, 14, 16];
+        let (ciphertext, mut opening, _, _, topology, _) =
+            encrypt_test_with_opening(&profile, &key, &original, 48, b"changed-plaintext-equation");
+        let changed_message = RnsPolynomial::from_test_plaintext(&profile, &changed).unwrap();
+        let changed_canonical = test_canonical_plaintext(&changed);
+
+        // Make the retained canonical views agree with the hostile caller so
+        // rejection cannot rely on the removed deterministic plaintext
+        // lineage. The unchanged RLWE constant must still fail independently.
+        opening.plaintext_lift = ZeroizingRns(changed_message.clone());
+        opening.canonical_plaintext = ZeroizingCanonicalPlaintext(changed_canonical.clone());
+        let ephemeral_rns = ZeroizingRns(opening.ephemeral.as_rns(&profile).unwrap());
+        let scaled_error_zero = scaled_public_error(&profile, &opening.error_zero).unwrap();
+        let product = ZeroizingRns(
+            key.collective_public_b
+                .mul(&ephemeral_rns.0, &profile)
+                .unwrap(),
+        );
+        let with_error = ZeroizingRns(product.0.add(&scaled_error_zero.0, &profile).unwrap());
+        let hostile_constant = ZeroizingRns(with_error.0.add(&changed_message, &profile).unwrap());
+        assert_ne!(hostile_constant.0, *ciphertext.constant());
+        assert!(
+            opening
+                .validate_against(
+                    &profile,
+                    &key,
+                    &changed_message,
+                    &changed_canonical,
+                    topology,
+                    &ciphertext,
+                )
+                .is_err(),
+            "changed plaintext passed the constant RLWE equation"
+        );
+    }
+
+    #[test]
+    fn independent_entropy_gives_same_input_distinct_public_lineage() {
+        let profile = test_profile();
+        let (key, _) = test_key(0x79);
+        let values = [1, 1, 2, 3, 5, 8, 13, 16];
+        let mut first_random = KatRandom::new(b"lineage-independent-entropy-one");
+        let mut second_random = KatRandom::new(b"lineage-independent-entropy-two");
+        let (first, first_opening) = try_encrypt_test_with_random(
+            &profile,
+            &key,
+            &values,
+            49,
+            b"identical-public-topology",
+            &mut first_random,
+        )
+        .unwrap();
+        let (second, second_opening) = try_encrypt_test_with_random(
+            &profile,
+            &key,
+            &values,
+            49,
+            b"identical-public-topology",
+            &mut second_random,
+        )
+        .unwrap();
+
+        assert_eq!(
+            first_opening.input_identity.topology,
+            second_opening.input_identity.topology
+        );
+        assert_ne!(
+            first_opening.input_identity.encryption_nonce.as_bytes(),
+            second_opening.input_identity.encryption_nonce.as_bytes()
+        );
+        assert_ne!(first.transcript_digest, second.transcript_digest);
+        drop(first_opening);
+        drop(second_opening);
+    }
+
+    #[test]
+    fn fresh_encryption_lineage_source_excludes_plaintext_identity() {
+        let source = include_str!("collective.rs");
+        let production = source
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("production source prefix");
+        assert!(!production.contains("plaintext_digest"));
+
+        let identity = production
+            .split("struct CollectiveEncryptionInputIdentityV1")
+            .nth(1)
+            .expect("private encryption identity")
+            .split("pub(super) struct ZkAmsMkheCollectiveEncryptionOpeningV1")
+            .next()
+            .expect("identity source slice");
+        assert!(identity.contains("encryption_nonce: ZeroizingEncryptionNonce"));
+        assert!(production.contains("struct ZeroizingEncryptionNonce(Box<[u8; 32]>)"));
+        assert!(production.contains("Self(Box::new([0; 32]))"));
+        assert!(!identity.contains("plaintext"));
+        assert!(!production.contains("fn encryption_nonce("));
+        assert!(!production.contains("pub encryption_nonce"));
+        assert!(production.contains(".field(\"encryption_nonce\", &\"[REDACTED]\")"));
+
+        let public_ciphertext = production
+            .split("pub struct ZkAmsMkheCollectiveCiphertextV1")
+            .nth(1)
+            .expect("public ciphertext")
+            .split("impl ZkAmsMkheCollectiveCiphertextV1")
+            .next()
+            .expect("public ciphertext source slice");
+        assert!(public_ciphertext.contains("transcript_digest: [u8; 32]"));
+        assert!(!public_ciphertext.contains("encryption_nonce"));
+
+        let fresh_encryption = production
+            .split("fn encrypt_zk_ams_mkhe_collective_packed_with_opening_v1")
+            .nth(1)
+            .expect("fresh encryption implementation")
+            .split("impl ZkAmsMkheCollectiveCiphertextV1")
+            .next()
+            .expect("fresh encryption source slice");
+        assert!(!fresh_encryption.contains("plaintext.digest"));
+        assert!(fresh_encryption.contains("CollectiveEncryptionInputTopologyV1::from_packed"));
+
+        let opening_verifier = production
+            .split("fn verify_and_consume_phase23_native_bgv_opening_v1")
+            .nth(1)
+            .expect("opening verifier")
+            .split("fn with_validated_native_proof_witness_v1")
+            .next()
+            .expect("opening verifier source slice");
+        assert!(!opening_verifier.contains("plaintext.digest"));
+
+        let transcript = production
+            .split("fn collective_encryption_transcript_digest_v1")
+            .nth(1)
+            .expect("fresh encryption transcript")
+            .split("fn scaled_public_error")
+            .next()
+            .expect("transcript source slice");
+        for binding in [
+            "hash.update(&topology.layout_digest)",
+            "hash.update(&chunk_index)",
+            "hash.update(&used_slots)",
+            "hash.update(&sample_index)",
+            "hash.update(encryption_nonce)",
+        ] {
+            assert!(
+                transcript.contains(binding),
+                "missing lineage binding: {binding}"
+            );
+        }
+        assert!(!transcript.contains("plaintext.digest"));
+        assert!(!transcript.contains("rns_polynomial_digest"));
+        assert!(!transcript.contains("collective_lineage_digest("));
+        assert!(!transcript.contains("Vec<"));
+        assert!(transcript.contains("let mut hash = Box::new(Keccak256::new())"));
+        assert!(transcript.contains("hash.finalize_into(&mut digest)"));
+        assert!(transcript.contains("drop(hash)"));
+        assert!(!transcript.contains("hash.finalize()"));
+
+        let entropy = production
+            .split("fn derive_collective_encryption_nonce_v1")
+            .nth(1)
+            .expect("nonce derivation")
+            .split("fn entropy_probe_has_short_period")
+            .next()
+            .expect("nonce derivation source slice");
+        assert_eq!(entropy.matches(".fill_bytes").count(), 2);
+        assert!(entropy.contains("COLLECTIVE_ENCRYPTION_NONCE_DOMAIN_V1"));
+        assert_eq!(entropy.matches("ZeroizingEntropyProbe([0; 32])").count(), 2);
+        assert!(entropy.contains("hash.update(&first.0)"));
+        assert!(entropy.contains("hash.update(&second.0)"));
+        assert!(entropy.contains("let mut hash = Box::new(Keccak256::new())"));
+        assert!(entropy.contains("let mut nonce = ZeroizingEncryptionNonce::zeroed()"));
+        assert!(entropy.contains("hash.finalize_into(nonce.as_mut_bytes())"));
+        assert!(entropy.contains("drop(hash)"));
+        assert!(entropy.contains("nonce.is_zero()"));
+        assert!(!entropy.contains("let nonce = hash.finalize()"));
+
+        let short_period = production
+            .split("fn entropy_probe_has_short_period")
+            .nth(1)
+            .expect("short-period rejection")
+            .split("fn sample_ternary_zeroizing")
+            .next()
+            .expect("short-period source slice");
+        assert!(short_period.contains("probe[period..]"));
+        assert!(short_period.contains(".zip(&probe[..probe.len() - period])"));
+        assert!(!short_period.contains("is_multiple_of"));
+
+        let native_encryption = production
+            .split("fn encrypt_collective_native_with_opening")
+            .nth(1)
+            .expect("native encryption")
+            .split("fn collective_lineage_digest")
+            .next()
+            .expect("native encryption source slice");
+        let nonce_position = native_encryption
+            .find("derive_collective_encryption_nonce_v1(random)?")
+            .expect("nonce derivation before witnesses");
+        let witness_position = native_encryption
+            .find("sample_nonzero_ternary_zeroizing(profile, random)?")
+            .expect("ephemeral witness sampling");
+        assert!(nonce_position < witness_position);
+
+        // Public multipliers deliberately retain their own digest-bound
+        // evaluation lineage; this test certifies fresh encryption only.
+        assert_eq!(production.matches("plaintext.digest.as_slice()").count(), 2);
+        assert!(production.contains("This evaluation operand is public"));
+    }
+
+    #[test]
     fn collective_encryption_rejects_zero_repeating_and_failing_entropy() {
         let mut healthy = KatRandom::new(b"entropy-healthy");
-        validate_collective_encryption_entropy(&mut healthy).unwrap();
+        let nonce = derive_collective_encryption_nonce_v1(&mut healthy).unwrap();
+        assert_ne!(nonce.as_bytes(), &[0; 32]);
+        drop(nonce);
 
         let mut zero = ConstantRandom(0);
-        assert_eq!(
-            validate_collective_encryption_entropy(&mut zero),
+        assert!(matches!(
+            derive_collective_encryption_nonce_v1(&mut zero),
             Err(ZkAmsMkheErrorV1::RandomUnavailable)
-        );
+        ));
         let mut constant = ConstantRandom(0xa5);
-        assert_eq!(
-            validate_collective_encryption_entropy(&mut constant),
+        assert!(matches!(
+            derive_collective_encryption_nonce_v1(&mut constant),
             Err(ZkAmsMkheErrorV1::RandomUnavailable)
-        );
+        ));
         let mut repeating = RepeatedHealthyBlockRandom;
-        assert_eq!(
-            validate_collective_encryption_entropy(&mut repeating),
+        assert!(matches!(
+            derive_collective_encryption_nonce_v1(&mut repeating),
             Err(ZkAmsMkheErrorV1::RandomUnavailable)
-        );
+        ));
+        let mut odd_period = DistinctOddPeriodProbeRandom::new();
+        assert!(matches!(
+            derive_collective_encryption_nonce_v1(&mut odd_period),
+            Err(ZkAmsMkheErrorV1::RandomUnavailable)
+        ));
         let mut failing = FailingRandom;
-        assert_eq!(
-            validate_collective_encryption_entropy(&mut failing),
+        assert!(matches!(
+            derive_collective_encryption_nonce_v1(&mut failing),
             Err(ZkAmsMkheErrorV1::RandomUnavailable)
-        );
+        ));
 
         let profile = test_profile();
         let (key, _) = test_key(0x76);
@@ -4112,6 +4474,55 @@ mod tests {
     }
 
     #[test]
+    fn encryption_nonce_allocation_is_stable_and_zeroizes_on_success_error_and_unwind() {
+        let reset_drops = || ENCRYPTION_NONCE_ZEROIZED_DROPS_V1.with(|drops| drops.set(0));
+        let drop_count = || {
+            ENCRYPTION_NONCE_ZEROIZED_DROPS_V1
+                .try_with(std::cell::Cell::get)
+                .unwrap_or(0)
+        };
+
+        reset_drops();
+        let mut nonce = ZeroizingEncryptionNonce::zeroed();
+        nonce.as_mut_bytes().fill(0x39);
+        let address = nonce.as_bytes().as_ptr();
+        let moved = nonce;
+        assert_eq!(moved.as_bytes().as_ptr(), address);
+        drop(moved);
+        assert_eq!(drop_count(), 1);
+
+        reset_drops();
+        let error = (|| -> Result<(), ZkAmsMkheErrorV1> {
+            let mut nonce = ZeroizingEncryptionNonce::zeroed();
+            nonce.as_mut_bytes().fill(0x72);
+            Err(ZkAmsMkheErrorV1::RandomUnavailable)
+        })();
+        assert_eq!(error, Err(ZkAmsMkheErrorV1::RandomUnavailable));
+        assert_eq!(drop_count(), 1);
+
+        reset_drops();
+        let unwind = std::panic::catch_unwind(|| {
+            let mut nonce = ZeroizingEncryptionNonce::zeroed();
+            nonce.as_mut_bytes().fill(0xa4);
+            let address = nonce.as_bytes().as_ptr();
+            let moved = nonce;
+            assert_eq!(moved.as_bytes().as_ptr(), address);
+            panic!("exercise heap-stable nonce drop during unwind");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(drop_count(), 1);
+
+        let production = include_str!("collective.rs")
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("production source prefix");
+        assert!(production.contains("struct ZeroizingEncryptionNonce(Box<[u8; 32]>)"));
+        assert!(production.contains("Self(Box::new([0; 32]))"));
+        assert!(production.contains("clear_secret_bytes_v1(self.0.as_mut())"));
+        assert!(!production.contains("struct ZeroizingEncryptionNonce([u8; 32])"));
+    }
+
+    #[test]
     fn collective_opening_debug_is_redacted_and_drop_zeroizes_every_witness() {
         let profile = test_profile();
         let (key, _) = test_key(0x77);
@@ -4123,7 +4534,10 @@ mod tests {
             b"opening-redaction-drop",
         );
         let debug = format!("{opening:?}");
-        assert_eq!(debug.matches("[REDACTED]").count(), 5);
+        assert_eq!(debug.matches("[REDACTED]").count(), 6);
+        assert!(!debug.contains(&hex::encode(
+            opening.input_identity.encryption_nonce.as_bytes()
+        )));
         assert!(!debug.contains("coefficients:"));
 
         let audit = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

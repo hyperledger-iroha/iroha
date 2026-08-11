@@ -6,6 +6,7 @@
 
 use std::{
     any::type_name,
+    collections::BTreeSet,
     fmt::{Debug, Write as _},
 };
 
@@ -82,6 +83,7 @@ const INSTRUCTION_PROVIDER_1_SEED: u8 = 0x90;
 const INSTRUCTION_PROVIDER_2_SEED: u8 = 0x91;
 const INSTRUCTION_PROVIDER_3_SEED: u8 = 0x92;
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) const MUSUBI_FIXTURE_OUTPUTS: [&str; 2] = [
     "fixtures/musubi/instructions_v1.json",
     "fixtures/musubi/sdk_v1.json",

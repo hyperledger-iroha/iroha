@@ -19,15 +19,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use iroha_config::parameters::{
-    defaults::sorafs::storage::provider_ingest_runtime::outbox as provider_ingest_outbox_defaults,
-    is_production_runtime_handle,
-};
-use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature as IrohaSignature};
+use iroha_config::parameters::is_production_runtime_handle;
+use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
 use iroha_data_model::{
     NetworkId,
     account::AccountId,
-    block::BlockHeader,
     musubi::{
         ArchiveId, MUSUBI_REGISTRY_VERSION_V1, MusubiArchiveCommitmentV1,
         MusubiArtifactDescriptorV1, MusubiContentDigestV1,

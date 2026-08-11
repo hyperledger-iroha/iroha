@@ -200,8 +200,20 @@ where
             bytes.len()
         )));
     }
-    let value = decode_from_bytes_with_limits::<T>(bytes, STATE_LIMITS)
-        .map_err(|error| corrupt_state(format!("failed to decode {label}: {error}")))?;
+    let limits = crate::smartcontracts::isi::query::singular_query_decode_limits(
+        bytes.len(),
+        STATE_LIMITS,
+    )
+    .map_err(InstructionExecutionError::Query)?;
+    let value = decode_from_bytes_with_limits::<T>(bytes, limits).map_err(|error| {
+        if crate::smartcontracts::isi::query::singular_query_limits_active()
+            && error.is_decode_resource_limit()
+        {
+            InstructionExecutionError::Query(QueryExecutionFail::CapacityLimit)
+        } else {
+            corrupt_state(format!("failed to decode {label}: {error}"))
+        }
+    })?;
     if encode_state(&value, label)? != bytes {
         return Err(corrupt_state(format!(
             "{label} is not exact canonical Norito"
@@ -1162,7 +1174,10 @@ impl Execute for SubmitSorafsProofOutcome {
 }
 
 fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
-    QueryExecutionFail::Conversion(error.to_string())
+    match error {
+        InstructionExecutionError::Query(error) => error,
+        error => QueryExecutionFail::Conversion(error.to_string()),
+    }
 }
 
 fn resolve_finalized_cursor(
@@ -1247,13 +1262,22 @@ fn resolve_committed_event(
             event.sequence
         )));
     }
-    Ok(ProofOutcomeFinalizedEventV1 {
-        sequence: event.sequence,
-        block_height: event.target_block_height,
-        block_hash,
-        event_index: event.event_index,
-        outcome: event.outcome.clone(),
-    })
+    crate::smartcontracts::isi::query::own_singular_query_struct::<ProofOutcomeFinalizedEventV1, 5>(
+        [
+            &event.sequence,
+            &event.target_block_height,
+            &block_hash,
+            &event.event_index,
+            &event.outcome,
+        ],
+        || ProofOutcomeFinalizedEventV1 {
+            sequence: event.sequence,
+            block_height: event.target_block_height,
+            block_hash,
+            event_index: event.event_index,
+            outcome: event.outcome.clone(),
+        },
+    )
 }
 
 fn charge_state_bytes(total: &mut usize, amount: usize) -> Result<(), QueryExecutionFail> {
@@ -1273,16 +1297,17 @@ fn charge_state_bytes(total: &mut usize, amount: usize) -> Result<(), QueryExecu
 fn ensure_page_budget<T: norito::core::NoritoSerialize>(
     value: &T,
 ) -> Result<(), QueryExecutionFail> {
-    let length = norito::to_bytes(value)
-        .map_err(|error| {
-            QueryExecutionFail::Conversion(format!(
-                "failed to encode proof-outcome event page: {error}"
-            ))
-        })?
-        .len();
-    if length > PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+    let maximum = crate::smartcontracts::isi::query::singular_query_frame_limit(
+        PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+    );
+    let length = norito::core::encoded_frame_len(value).map_err(|error| {
+        QueryExecutionFail::Conversion(format!(
+            "failed to size proof-outcome event page: {error}"
+        ))
+    })?;
+    if length > maximum {
         return Err(QueryExecutionFail::Conversion(format!(
-            "proof-outcome event page encodes to {length} bytes, above {PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1}"
+            "proof-outcome event page encodes to {length} bytes, above {maximum}"
         )));
     }
     Ok(())
@@ -1397,8 +1422,11 @@ fn query_event_page(
     let mut sequence = query
         .after
         .map_or(Some(1), |after| after.sequence.checked_add(1));
-    let mut events = Vec::with_capacity(limit);
-    let payload_budget = PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1.saturating_sub(1_024);
+    let mut events = crate::smartcontracts::isi::query::SingularQueryVecBuilder::new(limit)?;
+    let page_bytes_limit = crate::smartcontracts::isi::query::singular_query_frame_limit(
+        PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+    );
+    let payload_budget = page_bytes_limit.saturating_sub(1_024);
     let mut encoded_event_bytes = 0usize;
     let mut inspected_records = 0usize;
     let inspected_budget = limit.saturating_add(4);
@@ -1440,13 +1468,11 @@ fn query_event_page(
                 })?,
         )?;
         let resolved = resolve_committed_event(state_ro, &event)?;
-        let resolved_bytes = norito::to_bytes(&resolved)
-            .map_err(|error| {
-                QueryExecutionFail::Conversion(format!(
-                    "failed to encode committed proof-outcome event: {error}"
-                ))
-            })?
-            .len();
+        let resolved_bytes = norito::core::encoded_frame_len(&resolved).map_err(|error| {
+            QueryExecutionFail::Conversion(format!(
+                "failed to size committed proof-outcome event: {error}"
+            ))
+        })?;
         let next_bytes = encoded_event_bytes
             .checked_add(resolved_bytes)
             .ok_or_else(|| {
@@ -1457,14 +1483,14 @@ fn query_event_page(
         if next_bytes > payload_budget {
             if events.is_empty() {
                 return Err(QueryExecutionFail::Conversion(format!(
-                    "one proof-outcome event cannot fit within the {PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1}-byte page budget"
+                    "one proof-outcome event cannot fit within the {page_bytes_limit}-byte page budget"
                 )));
             }
             break;
         }
         encoded_event_bytes = next_bytes;
         previous = Some(event);
-        events.push(resolved);
+        events.try_push(resolved)?;
         sequence = current_sequence.checked_add(1);
     }
     let has_more = events
@@ -1478,7 +1504,7 @@ fn query_event_page(
     });
     let page = ProofOutcomeFinalizedEventPageV1 {
         finalized_cursor,
-        events,
+        events: events.into_vec(),
         has_more,
         next_after,
     };

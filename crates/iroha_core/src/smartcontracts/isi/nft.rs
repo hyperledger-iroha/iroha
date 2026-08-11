@@ -705,7 +705,16 @@ pub mod query {
     impl ValidSingularQuery for FindNftById {
         #[metrics(+"find_nft_by_id")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Nft, Error> {
-            Ok(nft_from_entry(state_ro.world().nft(self.nft_id())?))
+            let entry = state_ro.world().nft(self.nft_id())?;
+            let details = entry.value().as_ref();
+            crate::smartcontracts::isi::query::own_singular_query_struct::<Nft, 3>(
+                [entry.id(), &details.content, &details.owned_by],
+                || Nft {
+                    id: entry.id().clone(),
+                    content: details.content.clone(),
+                    owned_by: details.owned_by.clone(),
+                },
+            )
         }
     }
 

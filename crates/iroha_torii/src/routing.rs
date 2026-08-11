@@ -8,6 +8,8 @@
     clippy::struct_excessive_bools
 )]
 
+#[cfg(feature = "app_api")]
+use core::ops::ControlFlow;
 use core::str::FromStr;
 use std::{
     sync::{Arc, LazyLock, RwLock},
@@ -717,259 +719,9 @@ mod pagination_tests {
     }
 }
 
-#[cfg(feature = "app_api")]
-#[derive(Debug)]
-struct PageEntry<K, T> {
-    key: K,
-    seq: usize,
-    item: T,
-}
+include!("routing/pagination_ordering.rs");
 
-#[cfg(feature = "app_api")]
-#[derive(Clone)]
-enum SortKeyValue {
-    Text(String),
-    Numeric(iroha_primitives::numeric::Numeric),
-}
-
-#[cfg(feature = "app_api")]
-impl SortKeyValue {
-    fn variant_ord(&self) -> usize {
-        match self {
-            SortKeyValue::Text(_) => 0,
-            SortKeyValue::Numeric(_) => 1,
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl From<String> for SortKeyValue {
-    fn from(value: String) -> Self {
-        SortKeyValue::Text(value)
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl From<&String> for SortKeyValue {
-    fn from(value: &String) -> Self {
-        SortKeyValue::Text(value.clone())
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl From<&str> for SortKeyValue {
-    fn from(value: &str) -> Self {
-        SortKeyValue::Text(value.to_owned())
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl From<iroha_primitives::numeric::Numeric> for SortKeyValue {
-    fn from(value: iroha_primitives::numeric::Numeric) -> Self {
-        SortKeyValue::Numeric(value)
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl From<&iroha_primitives::numeric::Numeric> for SortKeyValue {
-    fn from(value: &iroha_primitives::numeric::Numeric) -> Self {
-        SortKeyValue::Numeric(value.clone())
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl PartialEq for SortKeyValue {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (SortKeyValue::Text(lhs), SortKeyValue::Text(rhs)) => lhs == rhs,
-            (SortKeyValue::Numeric(lhs), SortKeyValue::Numeric(rhs)) => lhs == rhs,
-            _ => false,
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl Eq for SortKeyValue {}
-
-#[cfg(feature = "app_api")]
-impl Ord for SortKeyValue {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match (self, other) {
-            (SortKeyValue::Text(lhs), SortKeyValue::Text(rhs)) => lhs.cmp(rhs),
-            (SortKeyValue::Numeric(lhs), SortKeyValue::Numeric(rhs)) => lhs.cmp(rhs),
-            _ => self.variant_ord().cmp(&other.variant_ord()),
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl PartialOrd for SortKeyValue {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Clone, Eq, PartialEq)]
-struct SortKeyComponent {
-    value: SortKeyValue,
-    ascending: bool,
-}
-
-#[cfg(feature = "app_api")]
-impl SortKeyComponent {
-    fn asc<V: Into<SortKeyValue>>(value: V) -> Self {
-        Self {
-            value: value.into(),
-            ascending: true,
-        }
-    }
-
-    fn desc<V: Into<SortKeyValue>>(value: V) -> Self {
-        Self {
-            value: value.into(),
-            ascending: false,
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Clone, Eq, PartialEq)]
-struct MultiSortKey {
-    components: Vec<SortKeyComponent>,
-}
-
-#[cfg(feature = "app_api")]
-impl MultiSortKey {
-    fn new(components: Vec<SortKeyComponent>) -> Self {
-        Self { components }
-    }
-
-    fn push(&mut self, component: SortKeyComponent) {
-        self.components.push(component);
-    }
-
-    fn is_empty(&self) -> bool {
-        self.components.is_empty()
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl Ord for MultiSortKey {
-    fn cmp(&self, other: &Self) -> Ordering {
-        for (lhs, rhs) in self.components.iter().zip(other.components.iter()) {
-            let ord = if lhs.ascending {
-                lhs.value.cmp(&rhs.value)
-            } else {
-                rhs.value.cmp(&lhs.value)
-            };
-            if !ord.is_eq() {
-                return ord;
-            }
-        }
-        self.components.len().cmp(&other.components.len())
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl PartialOrd for MultiSortKey {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl<K: Ord, T> PartialEq for PageEntry<K, T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.seq == other.seq && self.key == other.key
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl<K: Ord, T> Eq for PageEntry<K, T> {}
-
-#[cfg(feature = "app_api")]
-impl<K: Ord, T> PartialOrd for PageEntry<K, T> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl<K: Ord, T> Ord for PageEntry<K, T> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match self.key.cmp(&other.key) {
-            Ordering::Equal => self.seq.cmp(&other.seq),
-            ord => ord,
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn collect_page_streaming<K, T, I>(
-    iter: I,
-    offset: u64,
-    limit: Option<u64>,
-    cap: Option<u64>,
-) -> (Vec<T>, usize)
-where
-    I: IntoIterator<Item = (K, T)>,
-    K: Ord,
-{
-    let offset_usize = if offset > usize::MAX as u64 {
-        usize::MAX
-    } else {
-        offset as usize
-    };
-    let limit_usize = limit
-        .filter(|&lim| lim > 0)
-        .map(|lim| cap.map_or(lim, |c| lim.min(c)))
-        .map(|lim| lim.min(usize::MAX as u64) as usize);
-    let page_cap = limit_usize.map(|lim| offset_usize.saturating_add(lim));
-
-    let mut matched: usize = 0;
-    let mut seq: usize = 0;
-    let mut heap: BinaryHeap<PageEntry<K, T>> = BinaryHeap::new();
-    let mut collected: Vec<PageEntry<K, T>> = Vec::new();
-
-    for (key, item) in iter.into_iter() {
-        let entry = PageEntry { key, seq, item };
-        seq = seq.wrapping_add(1);
-        matched = matched.saturating_add(1);
-        if let Some(capacity) = page_cap {
-            heap.push(entry);
-            if heap.len() > capacity {
-                heap.pop();
-            }
-        } else {
-            collected.push(entry);
-        }
-    }
-
-    let mut entries = if page_cap.is_some() {
-        heap.into_vec()
-    } else {
-        collected
-    };
-
-    entries.sort_by(|a, b| match a.key.cmp(&b.key) {
-        Ordering::Equal => a.seq.cmp(&b.seq),
-        ord => ord,
-    });
-
-    let skip = offset_usize.min(entries.len());
-    let mut page: Vec<T> = Vec::new();
-    for entry in entries.into_iter().skip(skip) {
-        if let Some(lim) = limit_usize {
-            if page.len() >= lim {
-                break;
-            }
-        }
-        page.push(entry.item);
-    }
-
-    (page, matched)
-}
+include!("routing/legacy_streaming_page.rs");
 
 #[cfg(feature = "app_api")]
 struct PageResult<T> {
@@ -1010,6 +762,13 @@ fn app_count_mode(raw: Option<&str>, endpoint: &'static str) -> AppCountMode {
             AppCountMode::Bounded
         }
     }
+}
+
+#[cfg(feature = "app_api")]
+fn app_transaction_count_mode(raw: Option<&str>, endpoint: &'static str) -> AppCountMode {
+    raw.map_or(AppCountMode::Bounded, |raw| {
+        app_count_mode(Some(raw), endpoint)
+    })
 }
 
 #[cfg(feature = "app_api")]
@@ -1190,11 +949,6 @@ static QUERY_PROJECTION_ARCHIVE_CACHE: LazyLock<RwLock<QueryProjectionArchiveHot
     LazyLock::new(|| RwLock::new(QueryProjectionArchiveHotCache::default()));
 
 #[cfg(feature = "app_api")]
-static QUERY_PROJECTION_ARCHIVE_HYDRATION_LOCKS: LazyLock<
-    tokio::sync::Mutex<BTreeMap<QueryProjectionArchiveCacheKey, Arc<tokio::sync::Mutex<()>>>>,
-> = LazyLock::new(|| tokio::sync::Mutex::new(BTreeMap::new()));
-
-#[cfg(feature = "app_api")]
 fn query_projection_block_hash_hex(hash: Option<HashOf<BlockHeader>>) -> Option<String> {
     hash.map(|hash| hex::encode(hash.as_ref().as_ref()))
 }
@@ -1296,6 +1050,22 @@ fn enforce_app_pagination(
         Some(lim) => Some(lim),
         None => Some(default_limit),
     };
+    let page_limit = effective_limit.unwrap_or(default_limit);
+    let window = offset
+        .checked_add(page_limit)
+        .ok_or_else(|| Error::AppQueryValidation {
+            code: "invalid_pagination",
+            message: format!("pagination window overflows for {endpoint}"),
+        })?;
+    if window > limits.max_fetch_size {
+        return Err(Error::AppQueryValidation {
+            code: "invalid_pagination",
+            message: format!(
+                "offset plus limit must not exceed the configured fetch budget of {} rows for {endpoint}",
+                limits.max_fetch_size
+            ),
+        });
+    }
     Ok(EffectivePagination {
         limit: effective_limit,
         offset,
@@ -1474,7 +1244,43 @@ fn insert_bounded_page_metadata<T>(top: &mut norito::json::Map, page: &PageResul
 mod streaming_pager_tests {
     use std::{cell::Cell, rc::Rc};
 
-    use super::{MultiSortKey, SortKeyComponent, collect_page_linear, collect_page_streaming};
+    use super::{
+        AppCountMode, MultiSortKey, SortKeyComponent, app_query_limits, app_transaction_count_mode,
+        collect_page_linear, collect_page_streaming, enforce_app_pagination,
+    };
+
+    #[test]
+    fn omitted_count_mode_is_bounded() {
+        assert_eq!(
+            app_transaction_count_mode(None, "/v1/test/bounded"),
+            AppCountMode::Bounded
+        );
+        assert_eq!(
+            app_transaction_count_mode(Some("exact"), "/v1/test/bounded"),
+            AppCountMode::Exact
+        );
+    }
+
+    #[test]
+    fn pagination_window_cannot_exceed_the_configured_fetch_budget() {
+        let limits = app_query_limits();
+        let error = match enforce_app_pagination(
+            Some(1),
+            limits.max_fetch_size,
+            limits.max_page_limit,
+            "/v1/test/bounded",
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("offset plus limit must not exceed max_fetch_size"),
+        };
+        assert!(matches!(
+            error,
+            crate::Error::AppQueryValidation {
+                code: "invalid_pagination",
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn collects_expected_page_with_limit() {
@@ -1918,6 +1724,18 @@ pub struct KaigiRelayFormatParams {
     pub reserved: Option<String>,
 }
 
+/// Maximum number of relay records a single Kaigi diagnostic snapshot may inspect or return.
+///
+/// The hard bound prevents relay metadata from being materialized into an unbounded
+/// response-sized allocation. A deployment must keep its active relay registry within this cap.
+#[cfg(feature = "app_api")]
+pub const KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS: usize =
+    defaults::torii::APP_API_MAX_LIST_LIMIT as usize;
+
+/// Maximum retained JSON bytes for one Kaigi call-signal result page.
+#[cfg(feature = "app_api")]
+pub const KAIGI_CALL_SIGNALS_MAX_RETAINED_BYTES: u64 = 4 * 1024 * 1024;
+
 #[cfg(feature = "app_api")]
 #[derive(
     Clone,
@@ -2185,9 +2003,63 @@ impl KaigiRelayEventKind {
 }
 
 #[cfg(feature = "app_api")]
-fn collect_kaigi_relays(state: &CoreState) -> Result<Vec<KaigiRelaySnapshot>, Error> {
+fn increment_kaigi_relay_diagnostic_count(count: &mut usize) -> Result<(), Error> {
+    if *count >= KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS {
+        return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+    }
+    *count += 1;
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn find_kaigi_relay(
+    state: &CoreState,
+    relay_id: &AccountId,
+) -> Result<Option<KaigiRelaySnapshot>, Error> {
+    let registration_key = iroha_data_model::kaigi::kaigi_relay_metadata_key(relay_id)
+        .map_err(|err| conversion_error(format!("invalid Kaigi relay identifier: {err}")))?;
+    let feedback_key = iroha_data_model::kaigi::kaigi_relay_feedback_key(relay_id)
+        .map_err(|err| conversion_error(format!("invalid Kaigi relay identifier: {err}")))?;
     let world = state.world_view();
-    let mut out = Vec::new();
+    for domain in world.domains_iter() {
+        let Some(value) = domain.metadata().get(&registration_key) else {
+            continue;
+        };
+        let registration = value
+            .try_into_any_norito::<KaigiRelayRegistration>()
+            .map_err(|err| {
+                Error::Query(iroha_data_model::ValidationFail::InternalError(
+                    err.to_string(),
+                ))
+            })?;
+        if registration.relay_id != *relay_id {
+            return Err(Error::Query(
+                iroha_data_model::ValidationFail::InternalError(
+                    "Kaigi relay metadata key does not match its embedded relay identifier"
+                        .to_owned(),
+                ),
+            ));
+        }
+        let feedback = domain
+            .metadata()
+            .get(&feedback_key)
+            .and_then(|json| json.try_into_any_norito::<KaigiRelayFeedback>().ok());
+        return Ok(Some(KaigiRelaySnapshot {
+            domain: domain.id().clone(),
+            registration,
+            feedback,
+        }));
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "app_api")]
+fn visit_kaigi_relays_bounded(
+    state: &CoreState,
+    mut visit: impl FnMut(KaigiRelaySnapshot) -> ControlFlow<()>,
+) -> Result<usize, Error> {
+    let world = state.world_view();
+    let mut count = 0usize;
     for domain in world.domains_iter() {
         let domain_id = domain.id().clone();
         for (key, value) in domain.metadata().iter() {
@@ -2195,8 +2067,9 @@ fn collect_kaigi_relays(state: &CoreState) -> Result<Vec<KaigiRelaySnapshot>, Er
             if !key_str.starts_with("kaigi_relay__") {
                 continue;
             }
+            increment_kaigi_relay_diagnostic_count(&mut count)?;
             let registration: KaigiRelayRegistration =
-                value.clone().try_into_any_norito().map_err(|err| {
+                value.try_into_any_norito().map_err(|err| {
                     Error::Query(iroha_data_model::ValidationFail::InternalError(
                         err.to_string(),
                     ))
@@ -2204,11 +2077,10 @@ fn collect_kaigi_relays(state: &CoreState) -> Result<Vec<KaigiRelaySnapshot>, Er
 
             let feedback =
                 match iroha_data_model::kaigi::kaigi_relay_feedback_key(&registration.relay_id) {
-                    Ok(feedback_key) => domain.metadata().get(&feedback_key).and_then(|json| {
-                        json.clone()
-                            .try_into_any_norito::<KaigiRelayFeedback>()
-                            .ok()
-                    }),
+                    Ok(feedback_key) => domain
+                        .metadata()
+                        .get(&feedback_key)
+                        .and_then(|json| json.try_into_any_norito::<KaigiRelayFeedback>().ok()),
                     Err(err) => {
                         return Err(Error::Query(
                             iroha_data_model::ValidationFail::InternalError(err.to_string()),
@@ -2216,14 +2088,18 @@ fn collect_kaigi_relays(state: &CoreState) -> Result<Vec<KaigiRelaySnapshot>, Er
                     }
                 };
 
-            out.push(KaigiRelaySnapshot {
+            if visit(KaigiRelaySnapshot {
                 domain: domain_id.clone(),
                 registration,
                 feedback,
-            });
+            })
+            .is_break()
+            {
+                return Ok(count);
+            }
         }
     }
-    Ok(out)
+    Ok(count)
 }
 
 #[cfg(feature = "app_api")]
@@ -2402,115 +2278,28 @@ fn kaigi_signal_from_transaction(
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
-fn collect_kaigi_gauge_statuses(
+fn kaigi_domain_counters(
     metrics: &iroha_telemetry::metrics::Metrics,
-) -> BTreeMap<(String, String), KaigiRelayHealthStatus> {
-    let mut map = BTreeMap::new();
-    for family in metrics.kaigi_relay_health_state.collect() {
-        for metric in family.get_metric() {
-            let mut domain = None;
-            let mut relay = None;
-            for label in metric.get_label() {
-                match label.name() {
-                    "domain" => domain = Some(label.value().to_string()),
-                    "relay" => relay = Some(label.value().to_string()),
-                    _ => {}
-                }
-            }
-            let Some(domain) = domain else {
-                continue;
-            };
-            let Some(relay) = relay else {
-                continue;
-            };
-            let status = match metric.get_gauge().get_value().round() as i64 {
-                0 => KaigiRelayHealthStatus::Healthy,
-                1 => KaigiRelayHealthStatus::Degraded,
-                2 => KaigiRelayHealthStatus::Unavailable,
-                _ => continue,
-            };
-            map.insert((domain, relay), status);
-        }
+    domain: &str,
+) -> KaigiDomainCounters {
+    KaigiDomainCounters {
+        registrations: metrics
+            .kaigi_relay_registered_total
+            .with_label_values(&[domain])
+            .get(),
+        manifest_updates: metrics
+            .kaigi_relay_manifest_updates_by_domain_total
+            .with_label_values(&[domain])
+            .get(),
+        failovers: metrics
+            .kaigi_relay_failovers_by_domain_total
+            .with_label_values(&[domain])
+            .get(),
+        health_reports: metrics
+            .kaigi_relay_health_reports_by_domain_total
+            .with_label_values(&[domain])
+            .get(),
     }
-    map
-}
-
-#[cfg(all(feature = "app_api", feature = "telemetry"))]
-fn counter_value(metric: &prometheus::proto::Metric) -> u64 {
-    let value = metric.get_counter().get_value();
-    if value.is_sign_negative() {
-        return 0;
-    }
-    let clamped = value.min(u64::MAX as f64);
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-    {
-        clamped as u64
-    }
-}
-
-#[cfg(all(feature = "app_api", feature = "telemetry"))]
-fn collect_kaigi_domain_counters(
-    metrics: &iroha_telemetry::metrics::Metrics,
-) -> BTreeMap<String, KaigiDomainCounters> {
-    let mut map: BTreeMap<String, KaigiDomainCounters> = BTreeMap::new();
-
-    for family in metrics.kaigi_relay_registered_total.collect() {
-        for metric in family.get_metric() {
-            if let Some(domain) = metric
-                .get_label()
-                .iter()
-                .find(|label| label.name() == "domain")
-                .map(|label| label.value().to_string())
-            {
-                let entry = map.entry(domain).or_default();
-                entry.registrations += counter_value(metric);
-            }
-        }
-    }
-
-    for family in metrics.kaigi_relay_manifest_updates_total.collect() {
-        for metric in family.get_metric() {
-            if let Some(domain) = metric
-                .get_label()
-                .iter()
-                .find(|label| label.name() == "domain")
-                .map(|label| label.value().to_string())
-            {
-                let entry = map.entry(domain).or_default();
-                entry.manifest_updates += counter_value(metric);
-            }
-        }
-    }
-
-    for family in metrics.kaigi_relay_failover_total.collect() {
-        for metric in family.get_metric() {
-            if let Some(domain) = metric
-                .get_label()
-                .iter()
-                .find(|label| label.name() == "domain")
-                .map(|label| label.value().to_string())
-            {
-                let entry = map.entry(domain).or_default();
-                entry.failovers += counter_value(metric);
-            }
-        }
-    }
-
-    for family in metrics.kaigi_relay_health_reports_total.collect() {
-        for metric in family.get_metric() {
-            if let Some(domain) = metric
-                .get_label()
-                .iter()
-                .find(|label| label.name() == "domain")
-                .map(|label| label.value().to_string())
-            {
-                let entry = map.entry(domain).or_default();
-                entry.health_reports += counter_value(metric);
-            }
-        }
-    }
-
-    map
 }
 
 #[derive(
@@ -5274,6 +5063,11 @@ fn verify_signed_query_request_at(
 ) -> Result<iroha_data_model::query::QueryRequestWithAuthority> {
     validate_signed_query_context_at(&query.payload, admission, now_ms)?;
     query.verify_signature().map_err(|error| {
+        if matches!(error, SignedQueryValidationError::DecodeResourceLimit) {
+            return Error::from(ValidationFail::QueryFailed(
+                QueryExecutionFail::CapacityLimit,
+            ));
+        }
         let reason = match error {
             SignedQueryValidationError::AuthorityNotSingleKey => {
                 "signed query authority must use a single-key controller".to_owned()
@@ -5287,6 +5081,9 @@ fn verify_signed_query_request_at(
             SignedQueryValidationError::InvalidRequest(reason) => {
                 format!("signed query request is invalid: {reason}")
             }
+            SignedQueryValidationError::DecodeResourceLimit => unreachable!(
+                "decode resource failure returned before validation diagnostic construction"
+            ),
         };
         Error::from(ValidationFail::NotPermitted(reason))
     })?;
@@ -5733,7 +5530,8 @@ pub(crate) async fn execute_verified_query_with_opts(
     tel: MaybeTelemetry,
     opts: QueryOptions,
 ) -> Result<iroha_data_model::query::QueryResponse> {
-    execute_verified_query_with_opts_inner(live_query_store, state, query, tel, opts, None).await
+    execute_verified_query_with_opts_inner(live_query_store, state, query, tel, opts, None, None)
+        .await
 }
 
 /// Execute a previously verified query while retaining its physical-work admission permit.
@@ -5753,6 +5551,44 @@ pub(crate) async fn execute_admitted_verified_query_with_opts(
         tel,
         opts,
         Some(admission),
+        None,
+    )
+    .await
+}
+
+/// Output-specific Core limits carried by one server-owned fanout execution.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum FanoutQueryOutputLimits {
+    /// Canonical top-k retention limits for an admitted iterable query.
+    Iterable(iroha_core::smartcontracts::isi::query::CanonicalQueryOutputLimits),
+    /// Bounded producer/ownership limits for an admitted singular query.
+    Singular(iroha_core::smartcontracts::isi::query::SingularQueryOutputLimits),
+}
+
+/// Execute an admitted verified query in the server-owned bounded fanout lane.
+///
+/// This entry point always uses ephemeral cursor semantics and carries both the
+/// deterministic scan-work budget and output-specific memory limits into Core
+/// before any query result is projected or materialized.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub(crate) async fn execute_admitted_verified_query_for_fanout(
+    live_query_store: LiveQueryStoreHandle,
+    state: Arc<CoreState>,
+    query: iroha_data_model::query::QueryRequestWithAuthority,
+    tel: MaybeTelemetry,
+    output_limits: FanoutQueryOutputLimits,
+    execution_budget: iroha_core::smartcontracts::isi::query::QueryExecutionBudget,
+    admission: crate::QueryAdmissionPermit,
+    fanout_reservation: crate::QueryFanoutMemoryReservation,
+) -> Result<iroha_data_model::query::QueryResponse> {
+    execute_verified_query_with_opts_inner(
+        live_query_store,
+        state,
+        query,
+        tel,
+        QueryOptions::default(),
+        Some(admission),
+        Some((output_limits, execution_budget, fanout_reservation)),
     )
     .await
 }
@@ -5765,10 +5601,16 @@ async fn execute_verified_query_with_opts_inner(
     tel: MaybeTelemetry,
     opts: QueryOptions,
     admission: Option<crate::QueryAdmissionPermit>,
+    fanout_execution: Option<(
+        FanoutQueryOutputLimits,
+        iroha_core::smartcontracts::isi::query::QueryExecutionBudget,
+        crate::QueryFanoutMemoryReservation,
+    )>,
 ) -> Result<iroha_data_model::query::QueryResponse> {
     use iroha_core::{
         query::snapshot::{
             CursorMode as LaneCursorMode, SnapshotQueryError,
+            run_on_snapshot_ephemeral_with_budget_arc,
             run_on_snapshot_with_mode_arc_and_start_budget,
         },
         smartcontracts::isi::query::{QueryCountMode, QueryLimits},
@@ -5781,7 +5623,9 @@ async fn execute_verified_query_with_opts_inner(
     let pipeline = state.pipeline_snapshot();
 
     // Map config cursor mode to lane cursor mode (with query override)
-    let mode = {
+    let mode = if fanout_execution.is_some() {
+        LaneCursorMode::Ephemeral
+    } else {
         match opts.cursor_mode.as_deref() {
             Some("ephemeral") => LaneCursorMode::Ephemeral,
             Some("stored") => LaneCursorMode::Stored,
@@ -5858,21 +5702,44 @@ async fn execute_verified_query_with_opts_inner(
             QueryCountMode::Bounded
         }
     };
-    let limits = QueryLimits::new(app_query_limits().max_fetch_size).with_count_mode(count_mode);
+    let mut limits =
+        QueryLimits::new(app_query_limits().max_fetch_size).with_count_mode(count_mode);
+    if let Some((output_limits, _, _)) = fanout_execution.as_ref() {
+        limits = match output_limits {
+            FanoutQueryOutputLimits::Iterable(canonical) => {
+                limits.with_canonical_output_limits(*canonical)
+            }
+            FanoutQueryOutputLimits::Singular(singular) => {
+                limits.with_singular_output_limits(*singular)
+            }
+        };
+    }
     let resp = tokio::task::spawn_blocking(move || {
-        // A cancelled HTTP future detaches `spawn_blocking`. Keep the owned
-        // admission permit in the physical worker until validation and query
-        // execution have actually stopped.
+        // A cancelled HTTP future detaches `spawn_blocking`. Keep both the
+        // physical-work admission and the shared fanout-memory reservation in
+        // this worker until validation and execution have actually stopped.
         let _admission = admission;
-        run_on_snapshot_with_mode_arc_and_start_budget(
-            &state_cloned,
-            &store_cloned,
-            &authority_cloned,
-            request,
-            mode,
-            limits,
-            stored_start_budget,
-        )
+        match fanout_execution {
+            Some((_, execution_budget, _fanout_reservation)) => {
+                run_on_snapshot_ephemeral_with_budget_arc(
+                    &state_cloned,
+                    &store_cloned,
+                    &authority_cloned,
+                    request,
+                    limits,
+                    execution_budget,
+                )
+            }
+            None => run_on_snapshot_with_mode_arc_and_start_budget(
+                &state_cloned,
+                &store_cloned,
+                &authority_cloned,
+                request,
+                mode,
+                limits,
+                stored_start_budget,
+            ),
+        }
     })
     .await
     .map_err(|e| ValidationFail::InternalError(format!("query worker join error: {e}")))
@@ -5915,6 +5782,7 @@ async fn execute_verified_query_with_opts_inner(
 
 #[cfg(feature = "connect")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+#[norito(deny_unknown_fields)]
 #[allow(dead_code)]
 /// Request body for creating a Connect session.
 pub struct ConnectSessionRequest {
@@ -6092,7 +5960,6 @@ mod connect_session_tests {
 
     use super::*;
 
-    #[derive(Debug)]
     struct FailingConnectSessionRng;
 
     #[derive(Debug)]
@@ -6103,8 +5970,6 @@ mod connect_session_tests {
             f.write_str("failing Connect session RNG")
         }
     }
-
-    impl std::error::Error for FailingConnectSessionRngError {}
 
     impl TryRngCore for FailingConnectSessionRng {
         type Error = FailingConnectSessionRngError;
@@ -6241,6 +6106,8 @@ mod connect_session_tests {
             other => panic!("expected Connect session RNG internal error, got {other:?}"),
         }
     }
+
+    include!("routing/connect_session_request_decode_tests.rs");
 }
 
 // ------------------------ ZK convenience DTOs (examples) ------------------------
@@ -6728,23 +6595,32 @@ pub async fn handle_v1_sumeragi_checkpoints(
     Ok(resp)
 }
 
-/// GET /v1/sumeragi/consensus-keys — Registered consensus/committee keys (sorted by activation height desc)
+/// Maximum registered consensus-key records returned by the operator snapshot.
+const CONSENSUS_KEY_RESPONSE_CAP: usize = 128;
+
+fn bounded_consensus_key_records<'a>(
+    records: impl IntoIterator<Item = &'a ConsensusKeyRecord>,
+) -> Vec<ConsensusKeyRecord> {
+    let (selected, _) = collect_bounded_ranked_page(
+        records
+            .into_iter()
+            .map(|record| ((Reverse(record.activation_height), &record.id), record)),
+        0,
+        CONSENSUS_KEY_RESPONSE_CAP,
+        CONSENSUS_KEY_RESPONSE_CAP,
+    );
+    selected.into_iter().cloned().collect()
+}
+
+/// GET /v1/sumeragi/consensus-keys — newest registered consensus/committee keys.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_consensus_keys(
     app: &SharedAppState,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let world = app.state.world_view();
-    let mut records: Vec<ConsensusKeyRecord> = world
-        .consensus_keys()
-        .iter()
-        .map(|(_, rec)| rec.clone())
-        .collect();
-    records.sort_by(|a, b| {
-        b.activation_height
-            .cmp(&a.activation_height)
-            .then_with(|| a.id.cmp(&b.id))
-    });
+    let records =
+        bounded_consensus_key_records(world.consensus_keys().iter().map(|(_, record)| record));
 
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
@@ -6762,6 +6638,47 @@ pub async fn handle_v1_sumeragi_consensus_keys(
         axum::http::HeaderValue::from_static("application/json"),
     );
     Ok(resp)
+}
+
+#[cfg(test)]
+mod consensus_key_response_bounds_tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::consensus::{
+        ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
+    };
+
+    use super::{CONSENSUS_KEY_RESPONSE_CAP, bounded_consensus_key_records};
+
+    #[test]
+    fn consensus_key_snapshot_keeps_only_the_newest_named_protocol_bound() {
+        let public_key = KeyPair::random_with_algorithm(Algorithm::Ed25519)
+            .public_key()
+            .clone();
+        let records: Vec<_> = (0..CONSENSUS_KEY_RESPONSE_CAP + 2)
+            .map(|height| ConsensusKeyRecord {
+                id: ConsensusKeyId::new(ConsensusKeyRole::Validator, "bounded-key"),
+                public_key: public_key.clone(),
+                pop: None,
+                activation_height: height as u64,
+                expiry_height: None,
+                hsm: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            })
+            .collect();
+
+        let selected = bounded_consensus_key_records(&records);
+
+        assert_eq!(selected.len(), CONSENSUS_KEY_RESPONSE_CAP);
+        assert_eq!(
+            selected.first().map(|record| record.activation_height),
+            Some((CONSENSUS_KEY_RESPONSE_CAP + 1) as u64)
+        );
+        assert_eq!(
+            selected.last().map(|record| record.activation_height),
+            Some(2)
+        );
+    }
 }
 
 /// Maximum number of commit certificates returned in a single response.
@@ -10074,34 +9991,79 @@ pub async fn handle_v1_sumeragi_phases(
     Ok(crate::utils::respond_with_format(payload, format))
 }
 
-/// GET /v1/sumeragi/bls-keys — map of network public keys -> BLS public keys (hex strings)
+/// Maximum voting-roster identities returned by the BLS-key operator snapshot.
+const BLS_KEY_RESPONSE_CAP: usize =
+    iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT;
+
+fn bounded_bls_key_map<'a>(
+    peers: impl IntoIterator<Item = &'a PeerId>,
+) -> std::collections::BTreeMap<String, Option<String>> {
+    peers
+        .into_iter()
+        .take(BLS_KEY_RESPONSE_CAP)
+        .map(|peer| {
+            let public_key = peer.public_key();
+            let network_key = public_key.to_string();
+            let bls_key = matches!(
+                public_key.try_algorithm(),
+                Ok(iroha_crypto::Algorithm::BlsNormal)
+            )
+            .then(|| public_key.to_string());
+            (network_key, bls_key)
+        })
+        .collect()
+}
+
+/// GET /v1/sumeragi/bls-keys — map of current voting-roster network keys to BLS keys.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_bls_keys(
     State(state): State<Arc<CoreState>>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    // Debug/operator endpoint; non-consensus. Build mapping from world peers where identity key is BLS-normal.
-    let world = state.world_view();
-    let peers = world.peers().clone();
-    let mut obj: std::collections::BTreeMap<String, Option<String>> =
-        std::collections::BTreeMap::new();
-    for p in peers {
-        let net_pk = p.public_key().to_string();
-        let bls_pk_val = if matches!(
-            p.public_key().try_algorithm(),
-            Ok(iroha_crypto::Algorithm::BlsNormal)
-        ) {
-            Some(p.public_key().to_string())
-        } else {
-            None
-        };
-        obj.insert(net_pk, bls_pk_val);
-    }
+    // The commit topology is the authoritative voting roster and is intrinsically bounded by
+    // MAX_VALIDATORS_PER_HEIGHT. Do not clone or traverse the unbounded global peer registry.
+    let commit_topology = state.commit_topology_snapshot();
+    let obj = bounded_bls_key_map(&commit_topology);
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
     Ok(crate::utils::respond_with_format(obj, format))
+}
+
+#[cfg(test)]
+mod bls_key_response_bounds_tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    use super::{BLS_KEY_RESPONSE_CAP, PeerId, bounded_bls_key_map};
+
+    #[test]
+    fn bls_key_snapshot_is_capped_at_the_voting_roster_protocol_bound() {
+        let peers: Vec<_> = (1..=BLS_KEY_RESPONSE_CAP + 2)
+            .map(|seed| {
+                let seed = u8::try_from(seed).expect("test roster cap fits u8");
+                let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    .expect("checked peer fixture key");
+                PeerId::new(key_pair.public_key().clone())
+            })
+            .collect();
+
+        let response = bounded_bls_key_map(&peers);
+
+        assert_eq!(response.len(), BLS_KEY_RESPONSE_CAP);
+        assert!(
+            peers
+                .iter()
+                .take(BLS_KEY_RESPONSE_CAP)
+                .all(|peer| response.contains_key(&peer.public_key().to_string()))
+        );
+        assert!(
+            peers
+                .iter()
+                .skip(BLS_KEY_RESPONSE_CAP)
+                .all(|peer| !response.contains_key(&peer.public_key().to_string()))
+        );
+    }
 }
 
 /// GET /v1/sumeragi/leader — expected leader for the authoritative v2 round.
@@ -11137,6 +11099,11 @@ pub async fn handle_v1_sumeragi_evidence_count(
     ))
 }
 
+/// Maximum evidence records returned by one operator page.
+const EVIDENCE_LIST_LIMIT_CAP: usize = 1_000;
+/// Maximum evidence records an operator may skip before the bounded page.
+const EVIDENCE_LIST_OFFSET_CAP: usize = 10_000;
+
 #[derive(
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
@@ -11144,7 +11111,7 @@ pub async fn handle_v1_sumeragi_evidence_count(
 pub struct EvidenceListQuery {
     /// Maximum number of entries to return (1..=1000). Default 50.
     pub limit: Option<usize>,
-    /// Offset into the snapshot list. Default 0.
+    /// Offset into the snapshot list (0..=10000). Default 0.
     pub offset: Option<usize>,
     /// Optional filter by kind: one of DoublePrepare, DoubleCommit, InvalidQc,
     /// InvalidProposal, Censorship, SumeragiV2Equivocation
@@ -11216,7 +11183,7 @@ fn validate_evidence_list_query(
     query: &EvidenceListQuery,
 ) -> Result<Option<iroha_core::sumeragi::consensus::EvidenceKind>, Error> {
     if let Some(limit) = query.limit
-        && !(1..=1000).contains(&limit)
+        && !(1..=EVIDENCE_LIST_LIMIT_CAP).contains(&limit)
     {
         return Err(invalid_evidence_list_pagination(
             "limit",
@@ -11224,11 +11191,30 @@ fn validate_evidence_list_query(
             "an integer in 1..=1000",
         ));
     }
+    if let Some(offset) = query.offset
+        && offset > EVIDENCE_LIST_OFFSET_CAP
+    {
+        return Err(invalid_evidence_list_pagination(
+            "offset",
+            &offset.to_string(),
+            "an integer in 0..=10000",
+        ));
+    }
     query
         .kind
         .as_deref()
         .map(parse_evidence_list_kind)
         .transpose()
+}
+
+fn evidence_page_capacity(offset: usize, limit: usize) -> Result<usize, Error> {
+    offset.checked_add(limit).ok_or_else(|| {
+        invalid_evidence_list_pagination(
+            "offset",
+            &offset.to_string(),
+            "an offset whose sum with limit is representable by this server",
+        )
+    })
 }
 
 impl TryFrom<EvidenceListStringQuery> for EvidenceListQuery {
@@ -11324,6 +11310,29 @@ mod evidence_list_query_contract_tests {
             assert_eq!(code, "sumeragi_evidence_pagination_invalid");
         }
     }
+
+    #[test]
+    fn evidence_offset_boundary_and_capacity_overflow_fail_before_state_scan() {
+        let boundary = EvidenceListQuery {
+            limit: Some(EVIDENCE_LIST_LIMIT_CAP),
+            offset: Some(EVIDENCE_LIST_OFFSET_CAP),
+            kind: None,
+        };
+        validate_evidence_list_query(&boundary).expect("bounded offset must remain valid");
+        assert_eq!(
+            evidence_page_capacity(EVIDENCE_LIST_OFFSET_CAP, EVIDENCE_LIST_LIMIT_CAP)
+                .expect("bounded page capacity"),
+            EVIDENCE_LIST_OFFSET_CAP + EVIDENCE_LIST_LIMIT_CAP
+        );
+
+        let over_cap = EvidenceListQuery {
+            limit: Some(1),
+            offset: Some(EVIDENCE_LIST_OFFSET_CAP + 1),
+            kind: None,
+        };
+        assert!(validate_evidence_list_query(&over_cap).is_err());
+        assert!(evidence_page_capacity(usize::MAX, 1).is_err());
+    }
 }
 
 /// GET /v1/sumeragi/evidence — list recent evidence entries (in-memory audit snapshot).
@@ -11334,31 +11343,24 @@ pub async fn handle_v1_sumeragi_evidence_list(
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let kind_filter = validate_evidence_list_query(&q)?;
-    let world = state.world_view();
-    let mut records: Vec<_> = world
-        .consensus_evidence()
-        .iter()
-        .map(|(_, record)| record.clone())
-        .collect();
-    records.sort_by(|a, b| {
-        (a.recorded_at_height, a.recorded_at_view, a.recorded_at_ms)
-            .cmp(&(b.recorded_at_height, b.recorded_at_view, b.recorded_at_ms))
-            .reverse()
-    });
-    // Optional kind filter
-    if let Some(kind) = kind_filter {
-        records.retain(|record| record.evidence.kind == kind);
-    }
-    // Apply offset/limit
     let offset = q.offset.unwrap_or(0);
     let limit = q.limit.unwrap_or(50);
-    let total = records.len();
-    let slice = if offset >= total {
-        &[][..]
-    } else {
-        let end = core::cmp::min(total, offset + limit);
-        &records[offset..end]
-    };
+    let capacity = evidence_page_capacity(offset, limit)?;
+    let world = state.world_view();
+    let iter = world.consensus_evidence().iter().filter_map(|(_, record)| {
+        if kind_filter.is_some_and(|kind| record.evidence.kind != kind) {
+            return None;
+        }
+        Some((
+            (
+                Reverse(record.recorded_at_height),
+                Reverse(record.recorded_at_view),
+                Reverse(record.recorded_at_ms),
+            ),
+            record,
+        ))
+    });
+    let (records, total) = collect_bounded_ranked_page(iter, offset, limit, capacity);
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -11366,15 +11368,18 @@ pub async fn handle_v1_sumeragi_evidence_list(
 
     if matches!(format, crate::utils::ResponseFormat::Norito) {
         let wire = EvidenceListWire {
-            total: total as u64,
-            items: slice.to_vec(),
+            total: u64::try_from(total).unwrap_or(u64::MAX),
+            items: records.iter().map(|record| (**record).clone()).collect(),
         };
         return Ok(crate::NoritoBody(wire).into_response());
     }
     // Map to Norito-JSON response
-    let items: Vec<norito::json::Value> = slice.iter().map(evidence_to_json).collect();
+    let items: Vec<norito::json::Value> = records
+        .iter()
+        .map(|record| evidence_to_json(record))
+        .collect();
     let payload = json_object(vec![
-        json_entry("total", total as u64),
+        json_entry("total", u64::try_from(total).unwrap_or(u64::MAX)),
         json_entry("items", items),
     ]);
     let body = json::to_json_pretty(&payload).map_err(norito_internal_error)?;
@@ -30872,116 +30877,183 @@ pub async fn handle_get_proof_record(
     Ok(NoritoBody(rec))
 }
 
-fn compute_prunable_proofs(
-    mut items: Vec<(iroha_data_model::proof::ProofId, u64)>,
+fn prunable_proof_count(
+    records: u64,
+    expired_by_grace: u64,
     cap: usize,
-    grace_blocks: u64,
     prune_batch: usize,
-    current_height: u64,
-) -> Vec<iroha_data_model::proof::ProofId> {
-    if items.is_empty() {
-        return Vec::new();
-    }
-    items.sort_by(|(id_a, height_a), (id_b, height_b)| {
-        height_a.cmp(height_b).then_with(|| id_a.cmp(id_b))
-    });
-    let retention_floor = if grace_blocks == 0 {
-        u64::MAX
+) -> u64 {
+    let retained = records.saturating_sub(expired_by_grace);
+    let overflow = if cap == 0 {
+        0
     } else {
-        current_height.saturating_sub(grace_blocks)
+        retained.saturating_sub(u64::try_from(cap).unwrap_or(u64::MAX))
     };
+    let prunable = expired_by_grace.saturating_add(overflow);
+    if prune_batch == 0 {
+        prunable
+    } else {
+        prunable.min(u64::try_from(prune_batch).unwrap_or(u64::MAX))
+    }
+}
 
-    let mut removals = Vec::new();
-    let mut retained = Vec::new();
+#[derive(Default)]
+struct ProofRetentionBackendSummary {
+    records: u64,
+    expired_by_grace: u64,
+    oldest_height: Option<u64>,
+    newest_height: Option<u64>,
+}
 
-    for (id, height) in items {
-        if grace_blocks > 0 && height < retention_floor {
-            removals.push(id);
-        } else {
-            retained.push((id, height));
-        }
+fn record_proof_retention_backend<'a>(
+    per_backend: &mut BTreeMap<&'a str, ProofRetentionBackendSummary>,
+    backend: &'a str,
+    height: u64,
+    retention_floor: u64,
+    grace_blocks: u64,
+) -> Result<()> {
+    if !per_backend.contains_key(backend)
+        && per_backend.len() >= iroha_torii_shared::PROOF_RETENTION_STATUS_MAX_BACKENDS
+    {
+        return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
     }
 
-    if cap > 0 && retained.len() > cap {
-        let overflow = retained.len() - cap;
-        removals.extend(retained.into_iter().take(overflow).map(|(id, _)| id));
+    let summary = per_backend.entry(backend).or_default();
+    summary.records = summary.records.saturating_add(1);
+    if grace_blocks > 0 && height < retention_floor {
+        summary.expired_by_grace = summary.expired_by_grace.saturating_add(1);
     }
-
-    if prune_batch > 0 && removals.len() > prune_batch {
-        removals.truncate(prune_batch);
-    }
-    removals
+    summary.oldest_height = Some(
+        summary
+            .oldest_height
+            .map_or(height, |oldest| oldest.min(height)),
+    );
+    summary.newest_height = Some(
+        summary
+            .newest_height
+            .map_or(height, |newest| newest.max(height)),
+    );
+    Ok(())
 }
 
 /// Report proof retention configuration and current counts.
 pub fn handle_proof_retention_status(
     state: Arc<CoreState>,
-) -> iroha_torii_shared::ProofRetentionStatus {
+) -> Result<iroha_torii_shared::ProofRetentionStatus> {
     let world = state.world_view();
     let height_hint = u64::try_from(state.committed_height()).unwrap_or(0);
     let cap = state.zk.proof_history_cap;
     let grace_blocks = state.zk.proof_retention_grace_blocks;
     let prune_batch = state.zk.proof_prune_batch;
 
-    let mut per_backend: std::collections::BTreeMap<
-        String,
-        Vec<(iroha_data_model::proof::ProofId, u64)>,
-    > = std::collections::BTreeMap::new();
+    let retention_floor = height_hint.saturating_sub(grace_blocks);
+    let mut per_backend: std::collections::BTreeMap<&str, ProofRetentionBackendSummary> =
+        std::collections::BTreeMap::new();
     for (id, record) in world.proofs().iter() {
         let height = record.verified_at_height.unwrap_or(0);
-        per_backend
-            .entry(id.backend.clone())
-            .or_default()
-            .push((id.clone(), height));
+        record_proof_retention_backend(
+            &mut per_backend,
+            id.backend.as_str(),
+            height,
+            retention_floor,
+            grace_blocks,
+        )?;
     }
 
     let mut backends = Vec::new();
     let mut total_records: u64 = 0;
     let mut total_prunable: u64 = 0;
 
-    for (backend, entries) in per_backend {
+    for (backend, summary) in per_backend {
         let prunable =
-            compute_prunable_proofs(entries.clone(), cap, grace_blocks, prune_batch, height_hint);
-        let mut oldest: Option<u64> = None;
-        let mut newest: Option<u64> = None;
-        for (_, height) in &entries {
-            if let Some(old) = oldest {
-                if *height < old {
-                    oldest = Some(*height);
-                }
-            } else {
-                oldest = Some(*height);
-            }
-            if let Some(new) = newest {
-                if *height > new {
-                    newest = Some(*height);
-                }
-            } else {
-                newest = Some(*height);
-            }
-        }
+            prunable_proof_count(summary.records, summary.expired_by_grace, cap, prune_batch);
 
-        total_records += entries.len() as u64;
-        total_prunable += prunable.len() as u64;
+        total_records = total_records.saturating_add(summary.records);
+        total_prunable = total_prunable.saturating_add(prunable);
 
         backends.push(iroha_torii_shared::ProofRetentionBackendStatus {
-            backend,
-            records: entries.len() as u64,
-            prunable: prunable.len() as u64,
-            oldest_height: oldest,
-            newest_height: newest,
+            backend: backend.to_owned(),
+            records: summary.records,
+            prunable,
+            oldest_height: summary.oldest_height,
+            newest_height: summary.newest_height,
         });
     }
 
-    backends.sort_by(|a, b| a.backend.cmp(&b.backend));
-
-    iroha_torii_shared::ProofRetentionStatus {
+    Ok(iroha_torii_shared::ProofRetentionStatus {
         cap_per_backend: cap,
         grace_blocks,
         prune_batch,
         total_records,
         total_prunable,
         backends,
+    })
+}
+
+#[cfg(test)]
+mod proof_retention_summary_tests {
+    use super::{
+        ProofRetentionBackendSummary, prunable_proof_count, record_proof_retention_backend,
+    };
+    use crate::Error;
+    use iroha_data_model::ValidationFail;
+    use iroha_torii_shared::PROOF_RETENTION_STATUS_MAX_BACKENDS;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn count_matches_grace_cap_and_batch_semantics_without_record_materialization() {
+        assert_eq!(prunable_proof_count(10, 3, 5, 0), 5);
+        assert_eq!(prunable_proof_count(10, 3, 5, 2), 2);
+        assert_eq!(prunable_proof_count(10, 3, 0, 0), 3);
+        assert_eq!(prunable_proof_count(3, 3, 1, 0), 3);
+    }
+
+    #[test]
+    fn backend_summary_accepts_the_protocol_boundary_and_existing_backend_updates() {
+        let labels: Vec<_> = (0..PROOF_RETENTION_STATUS_MAX_BACKENDS)
+            .map(|index| format!("backend-{index:04}"))
+            .collect();
+        let mut summaries = BTreeMap::<&str, ProofRetentionBackendSummary>::new();
+
+        for label in &labels {
+            record_proof_retention_backend(&mut summaries, label, 10, 8, 2)
+                .expect("backend at or below the protocol ceiling must be summarized");
+        }
+        record_proof_retention_backend(&mut summaries, &labels[0], 5, 8, 2)
+            .expect("an existing backend remains valid at the protocol ceiling");
+
+        assert_eq!(summaries.len(), PROOF_RETENTION_STATUS_MAX_BACKENDS);
+        let first = summaries
+            .get(labels[0].as_str())
+            .expect("first backend summary");
+        assert_eq!(first.records, 2);
+        assert_eq!(first.expired_by_grace, 1);
+        assert_eq!(first.oldest_height, Some(5));
+        assert_eq!(first.newest_height, Some(10));
+    }
+
+    #[test]
+    fn backend_summary_rejects_the_first_backend_over_the_protocol_ceiling() {
+        let labels: Vec<_> = (0..=PROOF_RETENTION_STATUS_MAX_BACKENDS)
+            .map(|index| format!("backend-{index:04}"))
+            .collect();
+        let mut summaries = BTreeMap::<&str, ProofRetentionBackendSummary>::new();
+        for label in labels.iter().take(PROOF_RETENTION_STATUS_MAX_BACKENDS) {
+            record_proof_retention_backend(&mut summaries, label, 10, 8, 2)
+                .expect("backend at or below the protocol ceiling must be summarized");
+        }
+
+        let error = record_proof_retention_backend(
+            &mut summaries,
+            &labels[PROOF_RETENTION_STATUS_MAX_BACKENDS],
+            10,
+            8,
+            2,
+        )
+        .expect_err("the first distinct backend over the protocol ceiling must fail closed");
+
+        assert!(matches!(error, Error::Query(ValidationFail::TooComplex)));
+        assert_eq!(summaries.len(), PROOF_RETENTION_STATUS_MAX_BACKENDS);
     }
 }
 
@@ -37387,10 +37459,9 @@ fn account_history_index_cache_key(state: &CoreState) -> AccountHistoryIndexCach
 
 #[cfg(feature = "app_api")]
 fn committed_block_hash_string_at_height(state: &CoreState, height: usize) -> Option<String> {
-    let index = height.checked_sub(1)?;
+    let height = u64::try_from(height).ok()?;
     state
-        .committed_block_hashes_snapshot()
-        .get(index)
+        .committed_block_hash_at_height(height)
         .map(|hash| format!("{hash}"))
 }
 
@@ -41773,21 +41844,16 @@ pub(crate) fn committed_transactions_snapshot(
     state: &CoreState,
 ) -> Result<Vec<iroha_data_model::query::CommittedTransaction>> {
     let view = state.view();
-    iroha_core::smartcontracts::isi::tx::committed_transactions_snapshot(&view)
-        .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))
+    iroha_core::smartcontracts::isi::tx::committed_transactions_bounded_snapshot(
+        &view,
+        iroha_data_model::query::dsl::CompoundPredicate::PASS,
+        app_query_limits().max_fetch_size,
+        defaults::torii::MAX_CONTENT_LEN.get(),
+    )
+    .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))
 }
 
-#[cfg(feature = "app_api")]
-fn committed_transactions_indexed_snapshot(
-    state: &CoreState,
-    filter: iroha_data_model::query::dsl::CompoundPredicate<
-        iroha_data_model::query::CommittedTransaction,
-    >,
-) -> Result<Vec<iroha_data_model::query::CommittedTransaction>> {
-    let view = state.view();
-    iroha_core::smartcontracts::isi::tx::committed_transactions_indexed_snapshot(&view, filter)
-        .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))
-}
+include!("routing/committed_transaction_pagination.rs");
 
 /// POST /v1/accounts/{account_id}/transactions/query
 ///
@@ -41918,8 +41984,7 @@ pub async fn handle_v1_account_transactions_with_policy(
         );
     }
 
-    let committed_txs = committed_transactions_snapshot(state.as_ref())?;
-    let count_mode = app_count_mode(
+    let count_mode = app_transaction_count_mode(
         envelope.count_mode.as_deref(),
         ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
     );
@@ -41970,32 +42035,27 @@ pub async fn handle_v1_account_transactions_with_policy(
         if sort_spec.is_empty() {
             let filter_ref = filter_clone.as_ref();
             let select_ref = &select_clone;
-            let filtered_iter = committed_txs.iter().filter_map(|tx| {
-                if !predicate.applies(tx) {
-                    return None;
-                }
-                if !tx_matches_account_history_subject(tx, &account_id) {
-                    return None;
-                }
-                if let Some(expected) = allowed_asset_selector.as_ref() {
-                    if !tx_matches_asset_selector(tx, expected) {
-                        return None;
-                    }
-                }
-                let include = filter_ref.map(|expr| filter_tx(expr, tx)).unwrap_or(true);
-                if include {
-                    Some(project_tx(tx, select_ref))
-                } else {
-                    None
-                }
-            });
-            collect_page_linear_for_mode(
-                filtered_iter,
-                pagination.offset,
-                pagination.limit,
+            collect_committed_transaction_page(
+                state.as_ref(),
+                predicate,
+                pagination,
                 fetch_size,
                 count_mode,
-            )
+                |tx| {
+                    if !tx_matches_account_history_subject(tx, &account_id) {
+                        return None;
+                    }
+                    if let Some(expected) = allowed_asset_selector.as_ref()
+                        && !tx_matches_asset_selector(tx, expected)
+                    {
+                        return None;
+                    }
+                    filter_ref
+                        .map(|expr| filter_tx(expr, tx))
+                        .unwrap_or(true)
+                        .then(|| project_tx(tx, select_ref))
+                },
+            )?
         } else {
             // NOTE: Materialize+sort for correctness and stable tie-breaking.
             // The previous bounded-heap top-K selection introduced subtle
@@ -42004,6 +42064,7 @@ pub async fn handle_v1_account_transactions_with_policy(
             // behavior in tests, we collect, sort, and then slice.
             let filter_ref = filter_clone.as_ref();
             let select_ref = &select_clone;
+            let committed_txs = committed_transactions_snapshot(state.as_ref())?;
             let mut projections: Vec<TxProjection> = Vec::new();
             let debug_filter = torii_debug_match_enabled();
             for tx in &committed_txs {
@@ -42349,8 +42410,7 @@ async fn handle_v1_transactions_query_scoped_with_policy(
         );
     }
 
-    let committed_txs = committed_transactions_snapshot(state.as_ref())?;
-    let count_mode = app_count_mode(envelope.count_mode.as_deref(), endpoint);
+    let count_mode = app_transaction_count_mode(envelope.count_mode.as_deref(), endpoint);
     let page = {
         let predicate = if let Some(ref expr_wrap) = envelope.filter {
             let expr = expr_wrap;
@@ -42393,60 +42453,33 @@ async fn handle_v1_transactions_query_scoped_with_policy(
         if sort_spec.is_empty() {
             let filter_ref = filter_clone.as_ref();
             let select_ref = &select_clone;
-            let filtered_iter = committed_txs.iter().filter_map(|tx| {
-                if !predicate.applies(tx) {
-                    return None;
-                }
-                if visibility
-                    .as_ref()
-                    .is_some_and(|scope| !tx_matches_history_visibility_scope(tx, scope))
-                {
-                    return None;
-                }
-                if let Some(expected) = allowed_asset_selector.as_ref() {
-                    if !tx_matches_asset_selector(tx, expected) {
-                        return None;
-                    }
-                }
-                let include = filter_ref.map(|expr| filter_tx(expr, tx)).unwrap_or(true);
-                if include {
-                    Some(project_tx(tx, select_ref))
-                } else {
-                    None
-                }
-            });
-            collect_page_linear_for_mode(
-                filtered_iter,
-                pagination.offset,
-                pagination.limit,
+            collect_committed_transaction_page(
+                state.as_ref(),
+                predicate,
+                pagination,
                 fetch_size,
                 count_mode,
-            )
+                |tx| {
+                    if visibility
+                        .as_ref()
+                        .is_some_and(|scope| !tx_matches_history_visibility_scope(tx, scope))
+                    {
+                        return None;
+                    }
+                    if let Some(expected) = allowed_asset_selector.as_ref()
+                        && !tx_matches_asset_selector(tx, expected)
+                    {
+                        return None;
+                    }
+                    filter_ref
+                        .map(|expr| filter_tx(expr, tx))
+                        .unwrap_or(true)
+                        .then(|| project_tx(tx, select_ref))
+                },
+            )?
         } else {
             let filter_ref = filter_clone.as_ref();
             let select_ref = &select_clone;
-            let mut projections: Vec<TxProjection> = Vec::new();
-            for tx in &committed_txs {
-                if !predicate.applies(tx) {
-                    continue;
-                }
-                if visibility
-                    .as_ref()
-                    .is_some_and(|scope| !tx_matches_history_visibility_scope(tx, scope))
-                {
-                    continue;
-                }
-                if let Some(expected) = allowed_asset_selector.as_ref() {
-                    if !tx_matches_asset_selector(tx, expected) {
-                        continue;
-                    }
-                }
-                let include = filter_ref.map(|expr| filter_tx(expr, tx)).unwrap_or(true);
-                if include {
-                    projections.push(project_tx(tx, select_ref));
-                }
-            }
-
             let spec_keys = sort_spec;
             let has_entry = spec_keys.iter().any(|k| k.key.0 == "entrypoint_hash");
             let has_auth = spec_keys.iter().any(|k| k.key.0 == "authority");
@@ -42502,14 +42535,31 @@ async fn handle_v1_transactions_query_scoped_with_policy(
                 MultiSortKey::new(comps)
             };
 
-            let iter = projections.into_iter().map(|p| (sort_key(&p), p));
-            collect_page_streaming_for_mode(
-                iter,
-                pagination.offset,
-                pagination.limit,
-                Some(pagination.cap),
+            collect_sorted_committed_transaction_page(
+                state.as_ref(),
+                predicate,
+                pagination,
+                fetch_size,
                 count_mode,
-            )
+                |tx| {
+                    if visibility
+                        .as_ref()
+                        .is_some_and(|scope| !tx_matches_history_visibility_scope(tx, scope))
+                    {
+                        return None;
+                    }
+                    if let Some(expected) = allowed_asset_selector.as_ref()
+                        && !tx_matches_asset_selector(tx, expected)
+                    {
+                        return None;
+                    }
+                    if !filter_ref.map(|expr| filter_tx(expr, tx)).unwrap_or(true) {
+                        return None;
+                    }
+                    let projection = project_tx(tx, select_ref);
+                    Some((sort_key(&projection), projection))
+                },
+            )?
         }
     };
 
@@ -42595,10 +42645,10 @@ pub async fn handle_v1_account_transactions_get_with_policy(
     )?;
     let cap = app_query_page_cap(&state);
     let query_subject = account_id;
-    let count_mode = app_count_mode(params.count_mode.as_deref(), ENDPOINT_ACCOUNTS_TRANSACTIONS);
+    let count_mode =
+        app_transaction_count_mode(params.count_mode.as_deref(), ENDPOINT_ACCOUNTS_TRANSACTIONS);
     let page = {
         let limits = app_query_limits();
-        let committed_txs = committed_transactions_snapshot(state.as_ref())?;
         let world = state.world_view();
         let now_ms = asset_alias_observation_time_ms(&state);
         let asset_filter = resolve_tx_history_asset_selector(
@@ -42616,28 +42666,28 @@ pub async fn handle_v1_account_transactions_get_with_policy(
         let fetch_cap = limits
             .clamp_fetch_size(None)?
             .map(|v| v.min(pagination.cap));
-        let filtered = committed_txs.iter().filter_map({
-            let query_subject = query_subject.clone();
-            let asset_filter = asset_filter.clone();
-            move |tx| {
-                if !tx_matches_account_history_subject(tx, &query_subject) {
-                    return None;
-                }
-                if let Some(expected) = asset_filter.as_ref() {
-                    if !tx_matches_asset_selector(tx, expected) {
-                        return None;
-                    }
-                }
-                Some(project_tx(tx, &None))
-            }
-        });
-        collect_page_streaming_for_mode(
-            filtered.map(|proj| ((), proj)),
-            pagination.offset,
-            pagination.limit,
+        collect_committed_transaction_page(
+            state.as_ref(),
+            iroha_data_model::query::dsl::CompoundPredicate::PASS,
+            pagination,
             fetch_cap,
             count_mode,
-        )
+            {
+                let query_subject = query_subject.clone();
+                let asset_filter = asset_filter.clone();
+                move |tx| {
+                    if !tx_matches_account_history_subject(tx, &query_subject) {
+                        return None;
+                    }
+                    if let Some(expected) = asset_filter.as_ref() {
+                        if !tx_matches_asset_selector(tx, expected) {
+                            return None;
+                        }
+                    }
+                    Some(project_tx(tx, &None))
+                }
+            },
+        )?
     };
     #[cfg(feature = "telemetry")]
     let item_count = page.items.len();
@@ -42857,10 +42907,10 @@ pub async fn handle_v1_transactions_history_get(
     let start = Instant::now();
     let cap = app_query_page_cap(&state);
 
-    let count_mode = app_count_mode(params.count_mode.as_deref(), "/v1/transactions/history");
+    let count_mode =
+        app_transaction_count_mode(params.count_mode.as_deref(), "/v1/transactions/history");
     let page = {
         let limits = app_query_limits();
-        let committed_txs = committed_transactions_snapshot(state.as_ref())?;
         let world = state.world_view();
         let now_ms = asset_alias_observation_time_ms(&state);
         let asset_filter = resolve_tx_history_asset_selector(
@@ -42874,28 +42924,28 @@ pub async fn handle_v1_transactions_history_get(
         let fetch_cap = limits
             .clamp_fetch_size(None)?
             .map(|v| v.min(pagination.cap));
-        let filtered = committed_txs.iter().filter_map({
-            let visibility = visibility.clone();
-            let asset_filter = asset_filter.clone();
-            move |tx| {
-                if let Some(expected) = asset_filter.as_ref() {
-                    if !tx_matches_asset_selector(tx, expected) {
-                        return None;
-                    }
-                }
-                if !tx_matches_history_visibility_scope(tx, &visibility) {
-                    return None;
-                }
-                Some(project_tx(tx, &None))
-            }
-        });
-        collect_page_streaming_for_mode(
-            filtered.map(|proj| ((), proj)),
-            pagination.offset,
-            pagination.limit,
+        collect_committed_transaction_page(
+            state.as_ref(),
+            iroha_data_model::query::dsl::CompoundPredicate::PASS,
+            pagination,
             fetch_cap,
             count_mode,
-        )
+            {
+                let visibility = visibility.clone();
+                let asset_filter = asset_filter.clone();
+                move |tx| {
+                    if let Some(expected) = asset_filter.as_ref() {
+                        if !tx_matches_asset_selector(tx, expected) {
+                            return None;
+                        }
+                    }
+                    if !tx_matches_history_visibility_scope(tx, &visibility) {
+                        return None;
+                    }
+                    Some(project_tx(tx, &None))
+                }
+            },
+        )?
     };
     #[cfg(feature = "telemetry")]
     let item_count = page.items.len();
@@ -44968,7 +45018,12 @@ mod tx_query_filter_tests {
 
 #[cfg(all(test, feature = "app_api"))]
 mod explorer_lookup_tests {
-    use std::{borrow::Cow, num::NonZeroU64, sync::Arc, time::Duration};
+    use std::{
+        borrow::Cow,
+        num::{NonZeroU64, NonZeroUsize},
+        sync::Arc,
+        time::Duration,
+    };
 
     use http_body_util::BodyExt as _;
     use iroha_core::{
@@ -45082,6 +45137,83 @@ mod explorer_lookup_tests {
         let (state, mut hashes) = build_state_with_transactions(vec![instructions]);
         let target_hash = hashes.remove(0);
         (state, target_hash)
+    }
+
+    fn explorer_pending_for_state(state: &State) -> ExplorerPendingBlock {
+        let height = state.committed_height();
+        let height_u64 = u64::try_from(height).expect("test height fits u64");
+        let height = NonZeroUsize::new(height).expect("test state has a committed block");
+        ExplorerPendingBlock {
+            block: state
+                .block_by_height(height)
+                .expect("test committed block remains available"),
+            height: height_u64,
+            entrypoint_index: 0,
+            current_entrypoint: None,
+            instruction_index: 0,
+            block_emitted: false,
+        }
+    }
+
+    #[test]
+    fn explorer_stream_serializes_one_item_at_a_time() {
+        let first: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "first".to_owned()).into();
+        let second: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "second".to_owned()).into();
+        let third: dm::InstructionBox = dm::Log::new(dm::Level::INFO, "third".to_owned()).into();
+        let (state, _) = build_state_with_transactions(vec![vec![first, second], vec![third]]);
+
+        let mut blocks = explorer_pending_for_state(&state);
+        assert!(blocks.next_payload(ExplorerStreamKind::Blocks).is_some());
+        assert!(blocks.next_payload(ExplorerStreamKind::Blocks).is_none());
+
+        let mut transactions = explorer_pending_for_state(&state);
+        assert!(
+            transactions
+                .next_payload(ExplorerStreamKind::Transactions)
+                .is_some()
+        );
+        assert_eq!(transactions.entrypoint_index, 1);
+        assert!(
+            transactions
+                .next_payload(ExplorerStreamKind::Transactions)
+                .is_some()
+        );
+        assert_eq!(transactions.entrypoint_index, 2);
+        assert!(
+            transactions
+                .next_payload(ExplorerStreamKind::Transactions)
+                .is_none()
+        );
+
+        let mut instructions = explorer_pending_for_state(&state);
+        assert!(
+            instructions
+                .next_payload(ExplorerStreamKind::Instructions)
+                .is_some()
+        );
+        assert_eq!(instructions.entrypoint_index, 1);
+        assert_eq!(instructions.instruction_index, 1);
+        assert!(instructions.current_entrypoint.is_some());
+        assert!(
+            instructions
+                .next_payload(ExplorerStreamKind::Instructions)
+                .is_some()
+        );
+        assert_eq!(instructions.entrypoint_index, 1);
+        assert_eq!(instructions.instruction_index, 2);
+        assert!(
+            instructions
+                .next_payload(ExplorerStreamKind::Instructions)
+                .is_some()
+        );
+        assert_eq!(instructions.entrypoint_index, 2);
+        assert_eq!(instructions.instruction_index, 1);
+        assert!(
+            instructions
+                .next_payload(ExplorerStreamKind::Instructions)
+                .is_none()
+        );
+        assert!(instructions.current_entrypoint.is_none());
     }
 
     fn build_state_with_unindexed_kura_transaction(
@@ -46418,28 +46550,26 @@ fn explorer_stream(
         ExplorerStreamState {
             rx: events.subscribe(),
             kura,
-            pending: VecDeque::new(),
+            pending: None,
             kind,
             keepalive_interval,
         },
         |mut state| async move {
             use tokio::sync::broadcast::error::RecvError;
             loop {
-                if let Some(payload) = state.pending.pop_front() {
-                    let ev = SseEvent::default().data(payload);
-                    return Some((Ok(ev), state));
+                if let Some(pending) = state.pending.as_mut() {
+                    if let Some(payload) = pending.next_payload(state.kind) {
+                        let ev = SseEvent::default().data(payload);
+                        return Some((Ok(ev), state));
+                    }
+                    state.pending = None;
                 }
                 tokio::select! {
                     recv = state.rx.recv() => {
                         match recv {
                             Ok(event) => {
                                 if let Some(height) = committed_block_height(&event) {
-                                    populate_explorer_queue(
-                                        &state.kura,
-                                        height,
-                                        state.kind,
-                                        &mut state.pending,
-                                    );
+                                    state.pending = explorer_pending_block(&state.kura, height);
                                 }
                             }
                             Err(RecvError::Lagged(_)) => {
@@ -46464,101 +46594,155 @@ fn explorer_stream(
 struct ExplorerStreamState {
     rx: tokio::sync::broadcast::Receiver<EventBox>,
     kura: Arc<Kura>,
-    pending: VecDeque<String>,
+    pending: Option<ExplorerPendingBlock>,
     kind: ExplorerStreamKind,
     keepalive_interval: tokio::time::Interval,
 }
 
 #[cfg(feature = "app_api")]
-fn populate_explorer_queue(
-    kura: &Arc<Kura>,
+struct ExplorerPendingBlock {
+    block: Arc<SignedBlock>,
     height: u64,
-    kind: ExplorerStreamKind,
-    queue: &mut VecDeque<String>,
-) {
-    match kind {
-        ExplorerStreamKind::Blocks => {
-            let height_usize: usize = match height.try_into() {
-                Ok(value) => value,
-                Err(_) => {
-                    iroha_logger::warn!(
-                        height,
-                        "failed to emit explorer block SSE payload: block height exceeds host pointer width"
-                    );
-                    return;
-                }
-            };
-            let nonzero_height = match NonZeroUsize::new(height_usize) {
-                Some(value) => value,
-                None => {
-                    iroha_logger::warn!(
-                        height,
-                        "failed to emit explorer block SSE payload: block height must be at least 1"
-                    );
-                    return;
-                }
-            };
-            let Some(block) = kura.get_block(nonzero_height) else {
-                return;
-            };
-            let dto = crate::explorer::ExplorerBlockDto::from_block(&block);
-            if let Ok(body) = norito::json::to_json(&dto) {
-                queue.push_back(body);
-            } else {
-                iroha_logger::warn!(height, "failed to serialize explorer block SSE payload");
+    entrypoint_index: usize,
+    current_entrypoint: Option<(usize, HashOf<TransactionEntrypoint>)>,
+    instruction_index: usize,
+    block_emitted: bool,
+}
+
+#[cfg(feature = "app_api")]
+fn explorer_pending_block(kura: &Kura, height: u64) -> Option<ExplorerPendingBlock> {
+    let height_usize: usize = match height.try_into() {
+        Ok(value) => value,
+        Err(_) => {
+            iroha_logger::warn!(
+                height,
+                "failed to emit explorer SSE payload: block height exceeds host pointer width"
+            );
+            return None;
+        }
+    };
+    let Some(nonzero_height) = NonZeroUsize::new(height_usize) else {
+        iroha_logger::warn!(
+            height,
+            "failed to emit explorer SSE payload: block height must be at least 1"
+        );
+        return None;
+    };
+    Some(ExplorerPendingBlock {
+        block: kura.get_block(nonzero_height)?,
+        height,
+        entrypoint_index: 0,
+        current_entrypoint: None,
+        instruction_index: 0,
+        block_emitted: false,
+    })
+}
+
+#[cfg(feature = "app_api")]
+impl ExplorerPendingBlock {
+    fn next_payload(&mut self, kind: ExplorerStreamKind) -> Option<String> {
+        match kind {
+            ExplorerStreamKind::Blocks => self.next_block_payload(),
+            ExplorerStreamKind::Transactions => self.next_transaction_payload(),
+            ExplorerStreamKind::Instructions => self.next_instruction_payload(),
+        }
+    }
+
+    fn next_block_payload(&mut self) -> Option<String> {
+        if self.block_emitted {
+            return None;
+        }
+        self.block_emitted = true;
+        let dto = crate::explorer::ExplorerBlockDto::from_block(&self.block);
+        match norito::json::to_json(&dto) {
+            Ok(body) => Some(body),
+            Err(error) => {
+                iroha_logger::warn!(
+                    height = self.height,
+                    %error,
+                    "failed to serialize explorer block SSE payload"
+                );
+                None
             }
         }
-        ExplorerStreamKind::Transactions => {
-            let filters = ExplorerTransactionFilters {
-                authority: None,
-                status: None,
-                block: Some(height),
-                asset_id: None,
+    }
+
+    fn next_transaction_payload(&mut self) -> Option<String> {
+        while self.entrypoint_index < self.block.external_entrypoint_count() {
+            let index = self.entrypoint_index;
+            self.entrypoint_index = self.entrypoint_index.saturating_add(1);
+            let Some((entrypoint_hash, transaction, result)) =
+                external_signed_transaction_result_at(&self.block, index)
+            else {
+                continue;
             };
-            match collect_transaction_summaries_from_kura(kura, height, &filters) {
-                Ok(items) => {
-                    for dto in items {
-                        if let Ok(body) = norito::json::to_json(&dto) {
-                            queue.push_back(body);
-                        } else {
-                            iroha_logger::warn!(
-                                height,
-                                "failed to serialize explorer transaction SSE payload"
-                            );
-                        }
-                    }
-                }
-                Err(error) => {
-                    iroha_logger::warn!(%error, "failed to collect explorer transactions for SSE");
-                }
+            let dto = crate::explorer::transaction_summary_dto_with_hash(
+                transaction,
+                entrypoint_hash,
+                self.height,
+                result,
+            );
+            match norito::json::to_json(&dto) {
+                Ok(body) => return Some(body),
+                Err(error) => iroha_logger::warn!(
+                    height = self.height,
+                    %error,
+                    "failed to serialize explorer transaction SSE payload"
+                ),
             }
         }
-        ExplorerStreamKind::Instructions => {
-            let filters = ExplorerInstructionFilters {
-                account: None,
-                authority: None,
-                transaction_hash: None,
-                status: None,
-                block: Some(height),
-                kind: None,
-                asset_id: None,
+        None
+    }
+
+    fn next_instruction_payload(&mut self) -> Option<String> {
+        loop {
+            if self.current_entrypoint.is_none() {
+                while self.entrypoint_index < self.block.external_entrypoint_count() {
+                    let index = self.entrypoint_index;
+                    self.entrypoint_index = self.entrypoint_index.saturating_add(1);
+                    let Some((entrypoint_hash, _)) =
+                        self.block.external_signed_transaction_at(index)
+                    else {
+                        continue;
+                    };
+                    self.current_entrypoint = Some((index, entrypoint_hash));
+                    break;
+                }
+            }
+            let (entrypoint_index, entrypoint_hash) = self.current_entrypoint?;
+            let transaction = self
+                .block
+                .external_signed_transaction_ref_at(entrypoint_index)?;
+            let result = self.block.results().nth(entrypoint_index)?;
+            let Some(instruction) = transaction
+                .instructions()
+                .explicit_instructions()
+                .nth(self.instruction_index)
+            else {
+                self.current_entrypoint = None;
+                self.instruction_index = 0;
+                continue;
             };
-            match collect_instruction_history_from_kura(kura, height, &filters) {
-                Ok(items) => {
-                    for dto in items {
-                        if let Ok(body) = norito::json::to_json(&dto) {
-                            queue.push_back(body);
-                        } else {
-                            iroha_logger::warn!(
-                                height,
-                                "failed to serialize explorer instruction SSE payload"
-                            );
-                        }
-                    }
-                }
-                Err(error) => {
-                    iroha_logger::warn!(%error, "failed to collect explorer instructions for SSE");
-                }
+            let instruction_index = self.instruction_index;
+            self.instruction_index = self.instruction_index.saturating_add(1);
+            let kind = crate::explorer::instruction_kind(instruction);
+            let index = u32::try_from(instruction_index).unwrap_or(u32::MAX);
+            let dto = crate::explorer::instruction_dto_with_kind_and_hash(
+                transaction,
+                entrypoint_hash,
+                self.height,
+                result,
+                instruction,
+                kind,
+                index,
+            );
+            match norito::json::to_json(&dto) {
+                Ok(body) => return Some(body),
+                Err(error) => iroha_logger::warn!(
+                    height = self.height,
+                    %error,
+                    "failed to serialize explorer instruction SSE payload"
+                ),
             }
         }
     }
@@ -47185,69 +47369,7 @@ where
     }
 }
 
-#[cfg(all(test, feature = "app_api", feature = "telemetry"))]
-mod kaigi_response_format_tests {
-    use axum::http::header::CONTENT_TYPE;
-    use http_body_util::BodyExt as _;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn kaigi_json_document_response_renders_json() {
-        let payload = KaigiRelaySummaryListDto {
-            total: 1,
-            items: Vec::new(),
-        };
-
-        let response =
-            respond_kaigi_json_document_with_format(&payload, crate::utils::ResponseFormat::Json);
-
-        assert_eq!(
-            response
-                .headers()
-                .get(CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok()),
-            Some("application/json")
-        );
-        let bytes = response
-            .into_body()
-            .collect()
-            .await
-            .expect("collect JSON body")
-            .to_bytes();
-        let decoded: norito::json::Value =
-            norito::json::from_slice(&bytes).expect("decode JSON body");
-        assert_eq!(decoded["total"].as_u64(), Some(1));
-    }
-
-    #[tokio::test]
-    async fn kaigi_json_document_response_wraps_json_string_as_norito() {
-        let payload = KaigiRelaySummaryListDto {
-            total: 1,
-            items: Vec::new(),
-        };
-
-        let response =
-            respond_kaigi_json_document_with_format(&payload, crate::utils::ResponseFormat::Norito);
-
-        assert_eq!(
-            response
-                .headers()
-                .get(CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok()),
-            Some(crate::utils::NORITO_MIME_TYPE)
-        );
-        let bytes = response
-            .into_body()
-            .collect()
-            .await
-            .expect("collect Norito body")
-            .to_bytes();
-        let json: String = norito::decode_from_bytes(&bytes).expect("decode Norito JSON string");
-        let decoded: norito::json::Value = norito::json::from_str(&json).expect("decode JSON body");
-        assert_eq!(decoded["total"].as_u64(), Some(1));
-    }
-}
+include!("routing/kaigi_response_format_tests.rs");
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 /// GET `/v1/kaigi/relays` — summary snapshot of registered relays and health indicators.
@@ -47267,19 +47389,10 @@ pub async fn handle_v1_kaigi_relays(
 
     record_account_literal_selection(&telemetry, ENDPOINT_KAIGI_RELAYS);
 
-    let relays = collect_kaigi_relays(&state)?;
-    let metrics = telemetry.metrics().await;
-    let gauge_statuses = collect_kaigi_gauge_statuses(metrics);
-
-    let mut items = Vec::with_capacity(relays.len());
-    for snapshot in relays {
+    let mut items = Vec::with_capacity(KAIGI_RELAY_DIAGNOSTIC_MAX_RELAYS);
+    let total = visit_kaigi_relays_bounded(&state, |snapshot| {
         let domain_label = snapshot.domain.to_string();
-        let relay_label = snapshot.registration.relay_id.to_string();
-        let status = snapshot.feedback.as_ref().map(|fb| fb.status).or_else(|| {
-            gauge_statuses
-                .get(&(domain_label.clone(), relay_label.clone()))
-                .copied()
-        });
+        let status = snapshot.feedback.as_ref().map(|fb| fb.status);
         let reported_at_ms = snapshot.feedback.as_ref().map(|fb| fb.reported_at_ms);
         let fingerprint = Hash::new(&snapshot.registration.hpke_public_key);
         items.push(KaigiRelaySummaryDto {
@@ -47290,10 +47403,11 @@ pub async fn handle_v1_kaigi_relays(
             status,
             reported_at_ms,
         });
-    }
+        ControlFlow::Continue(())
+    })?;
 
     let payload = KaigiRelaySummaryListDto {
-        total: items.len() as u64,
+        total: u64::try_from(total).unwrap_or(u64::MAX),
         items,
     };
     Ok(respond_kaigi_json_document_with_format(&payload, format))
@@ -47344,28 +47458,16 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
         CONTEXT_KAIGI_RELAY_DETAIL,
     )?;
 
-    let relays = collect_kaigi_relays(&state)?;
-    let relay_controller = relay_id.controller().clone();
-    let Some(snapshot) = relays.into_iter().find(|entry| {
-        entry.registration.relay_id == relay_id
-            || entry.registration.relay_id.controller() == &relay_controller
-    }) else {
+    let Some(snapshot) = find_kaigi_relay(&state, &relay_id)? else {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         )));
     };
 
     let metrics = telemetry.metrics().await;
-    let gauge_statuses = collect_kaigi_gauge_statuses(metrics);
-    let domain_counters = collect_kaigi_domain_counters(metrics);
 
     let domain_label = snapshot.domain.to_string();
-    let relay_label = snapshot.registration.relay_id.to_string();
-    let status = snapshot.feedback.as_ref().map(|fb| fb.status).or_else(|| {
-        gauge_statuses
-            .get(&(domain_label.clone(), relay_label.clone()))
-            .copied()
-    });
+    let status = snapshot.feedback.as_ref().map(|fb| fb.status);
     let reported_at_ms = snapshot.feedback.as_ref().map(|fb| fb.reported_at_ms);
     let fingerprint = Hash::new(&snapshot.registration.hpke_public_key);
     let relay_summary = KaigiRelaySummaryDto {
@@ -47387,15 +47489,14 @@ pub async fn handle_v1_kaigi_relay_detail_with_policy(
                 fb.notes.clone(),
             )
         });
-    let metrics = domain_counters
-        .get(&domain_label)
-        .map(|counters| KaigiRelayDomainMetricsDto {
-            domain: domain_label.clone(),
-            registrations_total: counters.registrations,
-            manifest_updates_total: counters.manifest_updates,
-            failovers_total: counters.failovers,
-            health_reports_total: counters.health_reports,
-        });
+    let counters = kaigi_domain_counters(metrics, &domain_label);
+    let metrics = Some(KaigiRelayDomainMetricsDto {
+        domain: domain_label,
+        registrations_total: counters.registrations,
+        manifest_updates_total: counters.manifest_updates,
+        failovers_total: counters.failovers,
+        health_reports_total: counters.health_reports,
+    });
 
     let detail = KaigiRelayDetailDto {
         relay: relay_summary,
@@ -47423,46 +47524,52 @@ pub async fn handle_v1_kaigi_relays_health(
         ));
     }
 
-    let relays = collect_kaigi_relays(&state)?;
-    let metrics = telemetry.metrics().await;
-    let gauge_statuses = collect_kaigi_gauge_statuses(metrics);
-    let domain_counters = collect_kaigi_domain_counters(metrics);
-
     let mut healthy_total = 0u64;
     let mut degraded_total = 0u64;
     let mut unavailable_total = 0u64;
-
-    for snapshot in &relays {
+    let mut domain_labels = BTreeSet::new();
+    visit_kaigi_relays_bounded(&state, |snapshot| {
         let domain_label = snapshot.domain.to_string();
-        let relay_label = snapshot.registration.relay_id.to_string();
-        let status = snapshot
-            .feedback
-            .as_ref()
-            .map(|fb| fb.status)
-            .or_else(|| gauge_statuses.get(&(domain_label, relay_label)).copied());
-        match status {
-            Some(KaigiRelayHealthStatus::Healthy) => healthy_total += 1,
-            Some(KaigiRelayHealthStatus::Degraded) => degraded_total += 1,
-            Some(KaigiRelayHealthStatus::Unavailable) => unavailable_total += 1,
+        domain_labels.insert(domain_label);
+        match snapshot.feedback.as_ref().map(|feedback| feedback.status) {
+            Some(KaigiRelayHealthStatus::Healthy) => {
+                healthy_total = healthy_total.saturating_add(1);
+            }
+            Some(KaigiRelayHealthStatus::Degraded) => {
+                degraded_total = degraded_total.saturating_add(1);
+            }
+            Some(KaigiRelayHealthStatus::Unavailable) => {
+                unavailable_total = unavailable_total.saturating_add(1);
+            }
             None => {}
         }
-    }
+        ControlFlow::Continue(())
+    })?;
 
-    let mut domains: Vec<KaigiRelayDomainMetricsDto> = domain_counters
-        .iter()
-        .map(|(domain, counters)| KaigiRelayDomainMetricsDto {
-            domain: domain.clone(),
-            registrations_total: counters.registrations,
-            manifest_updates_total: counters.manifest_updates,
-            failovers_total: counters.failovers,
-            health_reports_total: counters.health_reports,
+    let metrics = telemetry.metrics().await;
+    let domains: Vec<KaigiRelayDomainMetricsDto> = domain_labels
+        .into_iter()
+        .map(|domain| {
+            let counters = kaigi_domain_counters(metrics, &domain);
+            KaigiRelayDomainMetricsDto {
+                domain,
+                registrations_total: counters.registrations,
+                manifest_updates_total: counters.manifest_updates,
+                failovers_total: counters.failovers,
+                health_reports_total: counters.health_reports,
+            }
         })
         .collect();
-    domains.sort_unstable_by(|a, b| a.domain.cmp(&b.domain));
 
-    let reports_total = domains.iter().map(|entry| entry.health_reports_total).sum();
-    let registrations_total = domains.iter().map(|entry| entry.registrations_total).sum();
-    let failovers_total = domains.iter().map(|entry| entry.failovers_total).sum();
+    let reports_total = domains.iter().fold(0u64, |total, entry| {
+        total.saturating_add(entry.health_reports_total)
+    });
+    let registrations_total = domains.iter().fold(0u64, |total, entry| {
+        total.saturating_add(entry.registrations_total)
+    });
+    let failovers_total = domains.iter().fold(0u64, |total, entry| {
+        total.saturating_add(entry.failovers_total)
+    });
 
     let snapshot = KaigiRelayHealthSnapshotDto {
         healthy_total,
@@ -47497,34 +47604,118 @@ pub async fn handle_v1_kaigi_call_signals(
     let reveal_authorities =
         record.privacy_mode == iroha_data_model::kaigi::KaigiPrivacyMode::Transparent;
     let after_timestamp_ms = params.after_timestamp_ms;
-    let limit = params
-        .limit
-        .map(|value| usize::try_from(value).unwrap_or(usize::MAX))
-        .unwrap_or(50)
-        .max(1);
-    let offset = params
-        .offset
-        .map(|value| usize::try_from(value).unwrap_or(usize::MAX))
-        .unwrap_or(0);
+    let pagination = enforce_app_pagination(
+        params.limit.or(Some(50)),
+        params.offset.unwrap_or(0),
+        app_query_page_cap(state.as_ref()),
+        "/v1/kaigi/calls/{call_id}/signals",
+    )?;
+    let limit = usize::try_from(pagination.limit.unwrap_or(pagination.cap))
+        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    let offset = usize::try_from(pagination.offset)
+        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    let page_window = offset
+        .checked_add(limit)
+        .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    let canonical_max_fetch = iroha_data_model::query::parameters::MAX_FETCH_SIZE.get();
+    if u64::try_from(page_window).unwrap_or(u64::MAX) > canonical_max_fetch {
+        return Err(Error::AppQueryValidation {
+            code: "invalid_pagination",
+            message: format!(
+                "offset plus limit must not exceed the canonical fetch budget of \
+                 {canonical_max_fetch} rows for /v1/kaigi/calls/{{call_id}}/signals"
+            ),
+        });
+    }
 
     let call_literal = call_id.to_string();
-    let mut items = committed_transactions_snapshot(state.as_ref())?
-        .into_iter()
-        .filter_map(|tx| kaigi_signal_from_transaction(&tx, reveal_authorities))
-        .filter(|signal| signal.call_id == call_literal)
-        .filter(|signal| {
-            after_timestamp_ms.is_none_or(|minimum| {
-                signal.created_at_ms >= minimum
-                    || signal
-                        .timestamp_ms
-                        .is_some_and(|timestamp| timestamp >= minimum)
-            })
-        })
-        .collect::<Vec<_>>();
+    let mut heap: BinaryHeap<PageEntry<u64, (KaigiCallSignalDto, u64)>> = BinaryHeap::new();
+    heap.try_reserve(page_window)
+        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    let mut retained_bytes = 0u64;
+    let mut total = 0u64;
+    let mut sequence = 0usize;
+    let view = state.view();
+    let max_carrier_work = app_query_limits().max_fetch_size.min(canonical_max_fetch);
+    iroha_core::smartcontracts::isi::tx::visit_committed_transactions_bounded(
+        &view,
+        iroha_data_model::query::dsl::CompoundPredicate::PASS,
+        max_carrier_work,
+        |transaction, _matches| {
+            let Some(signal) = kaigi_signal_from_transaction(&transaction, reveal_authorities)
+            else {
+                return Ok(ControlFlow::Continue(()));
+            };
+            if signal.call_id != call_literal
+                || !after_timestamp_ms.is_none_or(|minimum| {
+                    signal.created_at_ms >= minimum
+                        || signal
+                            .timestamp_ms
+                            .is_some_and(|timestamp| timestamp >= minimum)
+                })
+            {
+                return Ok(ControlFlow::Continue(()));
+            }
 
-    items.sort_unstable_by(|left, right| left.created_at_ms.cmp(&right.created_at_ms));
-    let total = items.len() as u64;
-    let items = items.into_iter().skip(offset).take(limit).collect();
+            total = total.saturating_add(1);
+            let entry = PageEntry {
+                key: signal.created_at_ms,
+                seq: sequence,
+                item: (signal, 0),
+            };
+            sequence = sequence.wrapping_add(1);
+            if heap.len() == page_window
+                && heap
+                    .peek()
+                    .is_some_and(|largest| entry.cmp(largest).is_ge())
+            {
+                return Ok(ControlFlow::Continue(()));
+            }
+
+            let encoded_len = u64::try_from(
+                norito::json::to_vec(&entry.item.0)
+                    .map_err(|_| {
+                        iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded
+                    })?
+                    .len(),
+            )
+            .unwrap_or(u64::MAX);
+            if heap.len() == page_window {
+                let removed = heap
+                    .pop()
+                    .expect("a full Kaigi call-signal page heap is non-empty");
+                retained_bytes = retained_bytes.saturating_sub(removed.item.1);
+            }
+            retained_bytes = retained_bytes
+                .checked_add(encoded_len)
+                .filter(|bytes| *bytes <= KAIGI_CALL_SIGNALS_MAX_RETAINED_BYTES)
+                .ok_or(iroha_data_model::query::error::QueryExecutionFail::GasBudgetExceeded)?;
+            let PageEntry {
+                key,
+                seq,
+                item: (signal, _),
+            } = entry;
+            heap.push(PageEntry {
+                key,
+                seq,
+                item: (signal, encoded_len),
+            });
+            Ok(ControlFlow::Continue(()))
+        },
+    )
+    .map_err(|error| Error::Query(iroha_data_model::ValidationFail::QueryFailed(error)))?;
+
+    let mut entries = heap.into_vec();
+    entries.sort_by(|left, right| match left.key.cmp(&right.key) {
+        Ordering::Equal => left.seq.cmp(&right.seq),
+        ordering => ordering,
+    });
+    let items = entries
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .map(|entry| entry.item.0)
+        .collect();
     Ok(JsonBody(KaigiCallSignalListDto { total, items }).into_response())
 }
 
@@ -57720,6 +57911,267 @@ fn repo_filter_candidate_ids_extracts_safe_indexed_constraints() {
 
 // ---------------------- Domains listing ----------------------
 
+#[cfg(feature = "app_api")]
+const DOMAINS_LIVE_MAX_EXAMINED_ROWS: usize = 65_536;
+#[cfg(feature = "app_api")]
+const DOMAINS_LIVE_MAX_RETAINED_BYTES: usize = 4 * 1024 * 1024;
+#[cfg(feature = "app_api")]
+const ASSET_HOLDERS_LIVE_MAX_EXAMINED_ROWS: usize = 65_536;
+#[cfg(feature = "app_api")]
+const ASSET_HOLDERS_LIVE_MAX_RETAINED_BYTES: usize = 8 * 1024 * 1024;
+
+#[cfg(feature = "app_api")]
+#[derive(Clone)]
+struct DomainProj {
+    id: String,
+}
+
+#[cfg(feature = "app_api")]
+enum LiveIndexedSource<I, F> {
+    Indexed(I),
+    Full(F),
+}
+
+#[cfg(feature = "app_api")]
+impl<T, I, F> Iterator for LiveIndexedSource<I, F>
+where
+    I: Iterator<Item = T>,
+    F: Iterator<Item = T>,
+{
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Indexed(iter) => iter.next(),
+            Self::Full(iter) => iter.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Indexed(iter) => iter.size_hint(),
+            Self::Full(iter) => iter.size_hint(),
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn app_live_budget_error(
+    endpoint: &'static str,
+    code: &'static str,
+    message: impl Into<String>,
+) -> Error {
+    Error::AppQueryValidation {
+        code,
+        message: format!("{endpoint}: {}", message.into()),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn checked_retained_bytes(
+    current: usize,
+    additional: usize,
+    max_retained_bytes: usize,
+    endpoint: &'static str,
+) -> Result<usize> {
+    let next = current.checked_add(additional).ok_or_else(|| {
+        app_live_budget_error(
+            endpoint,
+            "response_budget_exceeded",
+            "retained-byte accounting overflowed",
+        )
+    })?;
+    if next > max_retained_bytes {
+        return Err(app_live_budget_error(
+            endpoint,
+            "response_budget_exceeded",
+            format!("live query retained-byte ceiling of {max_retained_bytes} bytes was exceeded"),
+        ));
+    }
+    Ok(next)
+}
+
+#[cfg(feature = "app_api")]
+fn collect_live_page_with_budget<S, K, T, I, P, W>(
+    iter: I,
+    offset: u64,
+    limit: Option<u64>,
+    cap: Option<u64>,
+    count_mode: AppCountMode,
+    max_examined_rows: usize,
+    max_retained_bytes: usize,
+    endpoint: &'static str,
+    mut project: P,
+    retained_weight: W,
+) -> Result<PageResult<T>>
+where
+    I: IntoIterator<Item = S>,
+    K: Ord,
+    P: FnMut(S) -> Option<(K, T)>,
+    W: Fn(&K, &T) -> usize,
+{
+    let offset = usize::try_from(offset).map_err(|_| {
+        app_live_budget_error(
+            endpoint,
+            "scan_budget_exceeded",
+            "pagination offset is not representable on this host",
+        )
+    })?;
+    let take = limit
+        .filter(|limit| *limit > 0)
+        .map(|limit| cap.map_or(limit, |cap| limit.min(cap)))
+        .or(cap)
+        .map_or(usize::MAX, |limit| {
+            usize::try_from(limit).unwrap_or(usize::MAX)
+        });
+    let probe_cap = offset
+        .checked_add(take)
+        .and_then(|window| window.checked_add(1))
+        .ok_or_else(|| {
+            app_live_budget_error(
+                endpoint,
+                "scan_budget_exceeded",
+                "pagination working-set size overflowed",
+            )
+        })?;
+
+    let mut examined = 0usize;
+    let mut matched = 0usize;
+    let mut retained = 0usize;
+    let mut heap: BinaryHeap<PageEntry<K, (T, usize)>> = BinaryHeap::new();
+    for source in iter {
+        examined = examined.checked_add(1).ok_or_else(|| {
+            app_live_budget_error(
+                endpoint,
+                "scan_budget_exceeded",
+                "examined-row accounting overflowed",
+            )
+        })?;
+        if examined > max_examined_rows {
+            return Err(app_live_budget_error(
+                endpoint,
+                "scan_budget_exceeded",
+                format!("live query examined-row ceiling of {max_examined_rows} rows was exceeded"),
+            ));
+        }
+        let Some((key, item)) = project(source) else {
+            continue;
+        };
+        matched = matched.saturating_add(1);
+
+        if probe_cap == 0 {
+            continue;
+        }
+        // Charge two inline slots per retained entry so geometric heap capacity growth remains
+        // inside the advertised byte ceiling as well as the item-owned allocations.
+        let item_weight = core::mem::size_of::<PageEntry<K, (T, usize)>>()
+            .saturating_mul(2)
+            .saturating_add(retained_weight(&key, &item));
+        if item_weight > max_retained_bytes {
+            return Err(app_live_budget_error(
+                endpoint,
+                "response_budget_exceeded",
+                format!(
+                    "one live query row exceeds the retained-byte ceiling of {max_retained_bytes} bytes"
+                ),
+            ));
+        }
+        let entry = PageEntry {
+            key,
+            seq: matched - 1,
+            item: (item, item_weight),
+        };
+        if heap.len() == probe_cap {
+            let Some(largest) = heap.peek() else {
+                continue;
+            };
+            if entry.cmp(largest) != Ordering::Less {
+                continue;
+            }
+            if let Some(removed) = heap.pop() {
+                retained = retained.saturating_sub(removed.item.1);
+            }
+        }
+        retained = checked_retained_bytes(retained, item_weight, max_retained_bytes, endpoint)?;
+        heap.push(entry);
+    }
+
+    let mut entries = heap.into_vec();
+    entries.sort_by(|left, right| match left.key.cmp(&right.key) {
+        Ordering::Equal => left.seq.cmp(&right.seq),
+        ordering => ordering,
+    });
+    let has_more = matched.saturating_sub(offset) > take;
+    let items = entries
+        .into_iter()
+        .skip(offset)
+        .take(take)
+        .map(|entry| entry.item.0)
+        .collect();
+    Ok(PageResult {
+        items,
+        total: (count_mode == AppCountMode::Exact).then_some(matched),
+        has_more,
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn collect_live_rows_with_budget<S, T, I, P, W>(
+    iter: I,
+    max_examined_rows: usize,
+    max_retained_bytes: usize,
+    endpoint: &'static str,
+    mut project: P,
+    retained_weight: W,
+) -> Result<Vec<T>>
+where
+    I: IntoIterator<Item = S>,
+    P: FnMut(S) -> Option<T>,
+    W: Fn(&T) -> usize,
+{
+    let mut rows = Vec::new();
+    let mut retained = 0usize;
+    let mut examined = 0usize;
+    for source in iter {
+        examined = examined.checked_add(1).ok_or_else(|| {
+            app_live_budget_error(
+                endpoint,
+                "scan_budget_exceeded",
+                "examined-row accounting overflowed",
+            )
+        })?;
+        if examined > max_examined_rows {
+            return Err(app_live_budget_error(
+                endpoint,
+                "scan_budget_exceeded",
+                format!("live query examined-row ceiling of {max_examined_rows} rows was exceeded"),
+            ));
+        }
+        let Some(row) = project(source) else {
+            continue;
+        };
+        // `Vec` may retain geometric spare capacity, so charge two inline slots per owned row.
+        let row_weight = core::mem::size_of::<T>()
+            .saturating_mul(2)
+            .saturating_add(retained_weight(&row));
+        retained = checked_retained_bytes(retained, row_weight, max_retained_bytes, endpoint)?;
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+#[cfg(feature = "app_api")]
+fn retained_json_text_bytes(text: &str) -> usize {
+    // JSON may expand one input byte to a six-byte escape. The fixed charge covers the owned
+    // string, map/node bookkeeping, and allocator metadata retained alongside the payload.
+    256usize.saturating_add(text.len().saturating_mul(6))
+}
+
+#[cfg(feature = "app_api")]
+fn domain_projection_retained_bytes(domain: &DomainProj) -> usize {
+    retained_json_text_bytes(&domain.id)
+}
+
 /// GET /v1/domains — List domains with basic pagination.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
@@ -57727,30 +58179,27 @@ pub async fn handle_v1_domains(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<PaginationParams>,
 ) -> Result<impl IntoResponse> {
-    let world = state.world_view();
-    let domains: Vec<_> = world.domains_iter().cloned().collect();
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_DOMAINS_LIST)?;
     let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_DOMAINS_LIST);
-
-    #[derive(Clone)]
-    struct DomainProj {
-        id: String,
-    }
-    let page = collect_page_streaming_for_mode(
-        domains.into_iter().map(|dom| {
-            (
-                dom.id().to_string(),
-                DomainProj {
-                    id: dom.id().to_string(),
-                },
-            )
-        }),
+    let world = state.world_view();
+    let page = collect_live_page_with_budget(
+        world.domains_iter(),
         pagination.offset,
         pagination.limit,
         None,
         count_mode,
-    );
+        DOMAINS_LIVE_MAX_EXAMINED_ROWS,
+        DOMAINS_LIVE_MAX_RETAINED_BYTES,
+        ENDPOINT_DOMAINS_LIST,
+        |domain| {
+            let id = domain.id().to_string();
+            Some((id.clone(), DomainProj { id }))
+        },
+        |key, domain| {
+            retained_json_text_bytes(key).saturating_add(domain_projection_retained_bytes(domain))
+        },
+    )?;
 
     // Norito JSON response
     let mut arr = Vec::with_capacity(page.items.len());
@@ -57835,14 +58284,6 @@ pub async fn handle_v1_domains_query(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
 ) -> Result<impl IntoResponse> {
-    let world = state.world_view();
-    let domains: Vec<_> = world.domains_iter().cloned().collect();
-
-    #[derive(Clone)]
-    struct DomainProj {
-        id: String,
-    }
-
     let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let sort = envelope.sort.clone();
     let pagination_controls = envelope.pagination;
@@ -57859,11 +58300,24 @@ pub async fn handle_v1_domains_query(
         .clamp_fetch_size(fetch_size_requested)
         .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
     let count_mode = app_count_mode(envelope.count_mode.as_deref(), ENDPOINT_DOMAINS_QUERY);
+    let world = state.world_view();
 
     if generic_mode {
-        let rows = domains.into_iter().map(|dom| {
+        let domains = collect_live_rows_with_budget(
+            world.domains_iter(),
+            DOMAINS_LIVE_MAX_EXAMINED_ROWS,
+            DOMAINS_LIVE_MAX_RETAINED_BYTES,
+            ENDPOINT_DOMAINS_QUERY,
+            |domain| {
+                Some(DomainProj {
+                    id: domain.id().to_string(),
+                })
+            },
+            |domain| domain_projection_retained_bytes(domain).saturating_mul(2),
+        )?;
+        let rows = domains.into_iter().map(|domain| {
             let mut row = Map::new();
-            row.insert("id".into(), Value::from(dom.id().to_string()));
+            row.insert("id".into(), Value::from(domain.id));
             row
         });
         return execute_generic_resource_query(
@@ -57876,23 +58330,23 @@ pub async fn handle_v1_domains_query(
     }
 
     let selectors = compile_domain_sort_spec(&sort);
-    let mapped_iter = domains.into_iter().map({
-        let selectors = selectors;
-        move |dom| {
-            let id = dom.id().to_string();
-            let key = domain_sort_key(&id, &selectors);
-            let projected = DomainProj { id };
-            (key, projected)
-        }
-    });
-
-    let page = collect_page_streaming_for_mode(
-        mapped_iter,
+    let page = collect_live_page_with_budget(
+        world.domains_iter(),
         pagination.offset,
         pagination.limit,
         fetch_size,
         count_mode,
-    );
+        DOMAINS_LIVE_MAX_EXAMINED_ROWS,
+        DOMAINS_LIVE_MAX_RETAINED_BYTES,
+        ENDPOINT_DOMAINS_QUERY,
+        move |domain| {
+            let id = domain.id().to_string();
+            let key = domain_sort_key(&id, &selectors);
+            let projected = DomainProj { id };
+            Some((key, projected))
+        },
+        |_key, domain| domain_projection_retained_bytes(domain).saturating_mul(2),
+    )?;
 
     // Norito JSON
     let mut arr = Vec::with_capacity(page.items.len());
@@ -58006,6 +58460,92 @@ mod pagination_enforcement_tests {
             Err(other) => panic!("unexpected error: {other:?}"),
             Ok(_) => panic!("expected pagination error"),
         }
+    }
+
+    #[test]
+    fn live_page_budget_accepts_exact_examined_and_retained_boundaries() {
+        let entry_bytes = core::mem::size_of::<PageEntry<u8, (String, usize)>>().saturating_mul(2);
+        let retained_cap = entry_bytes.saturating_mul(2).saturating_add(3);
+        let page = collect_live_page_with_budget(
+            [(2_u8, "bb".to_owned()), (1_u8, "a".to_owned())],
+            0,
+            Some(1),
+            None,
+            AppCountMode::Exact,
+            2,
+            retained_cap,
+            ENDPOINT_DOMAINS_LIST,
+            Some,
+            |_key, value| value.len(),
+        )
+        .expect("exact scan and retained-byte boundaries must remain valid");
+
+        assert_eq!(page.items, vec!["a"]);
+        assert_eq!(page.total, Some(2));
+        assert!(page.has_more);
+    }
+
+    #[test]
+    fn live_page_budget_charges_filtered_rows_to_the_examined_ceiling() {
+        let error = match collect_live_page_with_budget(
+            [3_u8, 2_u8, 1_u8],
+            0,
+            Some(1),
+            None,
+            AppCountMode::Bounded,
+            2,
+            usize::MAX,
+            ENDPOINT_DOMAINS_LIST,
+            |_source| None::<(u8, ())>,
+            |_key, _value| 0,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("the first row past the scan ceiling must fail closed"),
+        };
+
+        let Error::AppQueryValidation { code, .. } = error else {
+            panic!("unexpected error: {error:?}");
+        };
+        assert_eq!(code, "scan_budget_exceeded");
+    }
+
+    #[test]
+    fn live_page_and_materialized_rows_reject_retained_byte_overflow() {
+        let entry_bytes = core::mem::size_of::<PageEntry<u8, (String, usize)>>().saturating_mul(2);
+        let page_error = match collect_live_page_with_budget(
+            [(2_u8, "bb".to_owned()), (1_u8, "a".to_owned())],
+            0,
+            Some(1),
+            None,
+            AppCountMode::Exact,
+            2,
+            entry_bytes.saturating_mul(2).saturating_add(2),
+            ENDPOINT_DOMAINS_LIST,
+            Some,
+            |_key, value| value.len(),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("ranked page retention must fail one byte past its ceiling"),
+        };
+        let Error::AppQueryValidation { code, .. } = page_error else {
+            panic!("unexpected error: {page_error:?}");
+        };
+        assert_eq!(code, "response_budget_exceeded");
+
+        let row_bytes = core::mem::size_of::<String>().saturating_mul(2);
+        let rows_error = collect_live_rows_with_budget(
+            ["aa".to_owned(), "b".to_owned()],
+            2,
+            row_bytes.saturating_mul(2).saturating_add(2),
+            ENDPOINT_ASSET_HOLDERS_QUERY,
+            Some,
+            |value| value.len(),
+        )
+        .expect_err("generic row retention must fail one byte past its ceiling");
+        let Error::AppQueryValidation { code, .. } = rows_error else {
+            panic!("unexpected error: {rows_error:?}");
+        };
+        assert_eq!(code, "response_budget_exceeded");
     }
 
     #[tokio::test]
@@ -59136,7 +59676,7 @@ pub struct AccountFaucetResponseDto {
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct AccountFaucetPuzzleDto {
     pub algorithm: &'static str,
-    pub chain_id: String,
+    pub network_id: iroha_data_model::NetworkId,
     pub chain_discriminant: u16,
     pub difficulty_bits: u8,
     pub anchor_height: u64,
@@ -59288,9 +59828,9 @@ fn faucet_invalid_request(reason: &str) -> Error {
 }
 
 #[cfg(feature = "app_api")]
-const FAUCET_POW_ALGORITHM: &str = "scrypt-leading-zero-bits-v1";
+const FAUCET_POW_ALGORITHM: &str = "scrypt-leading-zero-bits-v2";
 #[cfg(feature = "app_api")]
-const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v2";
+const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v3";
 
 #[cfg(feature = "app_api")]
 fn leading_zero_bits(bytes: &[u8]) -> u32 {
@@ -59498,7 +60038,10 @@ fn faucet_pow_effective_difficulty_bits(
         faucet.pow_adaptive_claims_per_extra_bit,
         faucet.pow_adaptive_max_extra_bits,
     );
-    Ok(faucet.pow_difficulty_bits.saturating_add(adaptive_bits))
+    Ok(faucet
+        .pow_difficulty_bits
+        .get()
+        .saturating_add(adaptive_bits))
 }
 
 #[cfg(feature = "app_api")]
@@ -59525,6 +60068,7 @@ fn faucet_pow_challenge_salt(
 
 #[cfg(feature = "app_api")]
 fn faucet_pow_challenge(
+    network_id: &iroha_data_model::NetworkId,
     account_id: &AccountId,
     anchor_height: u64,
     anchor_hash: &HashOf<BlockHeader>,
@@ -59532,6 +60076,7 @@ fn faucet_pow_challenge(
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(FAUCET_POW_DOMAIN_SEPARATOR);
+    hasher.update(network_id.as_bytes());
     hasher.update(account_id.to_string().as_bytes());
     hasher.update(anchor_height.to_be_bytes());
     hasher.update(anchor_hash.as_ref());
@@ -59577,10 +60122,6 @@ fn verify_faucet_pow(
     anchor_height: Option<u64>,
     nonce_hex: Option<&str>,
 ) -> Result<()> {
-    if faucet.pow_difficulty_bits == 0 && faucet.pow_adaptive_max_extra_bits == 0 {
-        return Ok(());
-    }
-
     let anchor_height =
         anchor_height.ok_or_else(|| faucet_invalid_request("faucet pow anchor height required"))?;
     let current_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
@@ -59595,10 +60136,6 @@ fn verify_faucet_pow(
 
     let effective_difficulty_bits =
         faucet_pow_effective_difficulty_bits(app, faucet, anchor_height)?;
-    if effective_difficulty_bits == 0 {
-        return Ok(());
-    }
-
     let nonce_hex = nonce_hex
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -59612,6 +60149,7 @@ fn verify_faucet_pow(
     let anchor_hash = faucet_pow_anchor_hash(app, anchor_height)?;
     let challenge_salt = faucet_pow_challenge_salt(app, faucet, anchor_height)?;
     let challenge = faucet_pow_challenge(
+        app.state.network_id_ref(),
         account_id,
         anchor_height,
         &anchor_hash,
@@ -59627,62 +60165,8 @@ fn verify_faucet_pow(
 }
 
 #[cfg(all(feature = "app_api", test))]
-mod faucet_pow_tests {
-    use super::adaptive_faucet_pow_extra_bits;
-
-    #[test]
-    fn adaptive_faucet_pow_extra_bits_scales_and_caps() {
-        assert_eq!(adaptive_faucet_pow_extra_bits(0, 4, 6), 0);
-        assert_eq!(adaptive_faucet_pow_extra_bits(3, 4, 6), 0);
-        assert_eq!(adaptive_faucet_pow_extra_bits(4, 4, 6), 1);
-        assert_eq!(adaptive_faucet_pow_extra_bits(12, 4, 6), 3);
-        assert_eq!(adaptive_faucet_pow_extra_bits(999, 4, 6), 6);
-        assert_eq!(adaptive_faucet_pow_extra_bits(10, 0, 6), 0);
-        assert_eq!(adaptive_faucet_pow_extra_bits(10, 4, 0), 0);
-    }
-
-    #[test]
-    fn faucet_invalid_request_returns_specific_app_error() {
-        let err = super::faucet_invalid_request("invalid account id literal");
-        match err {
-            crate::Error::AppQueryValidation { code, message } => {
-                assert_eq!(code, "invalid_account_id");
-                assert_eq!(message, "invalid account id literal");
-            }
-            other => panic!("unexpected error variant: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn onboarding_error_metadata_classifies_noncanonical_account_id() {
-        let (code, hint) = super::onboarding_error_metadata(
-            "account_id must use the canonical domainless representation",
-        );
-        assert_eq!(code, "noncanonical_account_id");
-        assert!(hint.is_some());
-    }
-
-    #[test]
-    fn onboarding_error_metadata_classifies_disallowed_permission() {
-        let (code, hint) = super::onboarding_error_metadata(
-            "requested permission is not in account_onboarding.additional_permissions",
-        );
-        assert_eq!(code, "requested_permission_not_allowed");
-        assert!(hint.is_some());
-    }
-
-    #[test]
-    fn onboarding_invalid_request_preserves_structured_code() {
-        let err = super::onboarding_invalid_request("invalid canonical account_id");
-        match err {
-            crate::Error::AccountOnboardingValidation { code, hint, .. } => {
-                assert_eq!(code, "invalid_account_id");
-                assert!(hint.is_some());
-            }
-            other => panic!("unexpected error variant: {other:?}"),
-        }
-    }
-}
+#[path = "routing/faucet_pow_tests.rs"]
+mod faucet_pow_tests;
 
 struct NormalizedAccountOnboarding {
     request: AccountOnboardingPlanRequestDto,
@@ -60555,7 +61039,7 @@ pub async fn handle_v1_accounts_faucet_puzzle(
     };
     let response = AccountFaucetPuzzleDto {
         algorithm: FAUCET_POW_ALGORITHM,
-        chain_id: app.chain_id.to_string(),
+        network_id: *app.state.network_id_ref(),
         chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
         difficulty_bits,
         anchor_height,
@@ -61876,46 +62360,54 @@ pub async fn handle_v1_space_directory_manifests(
         None => SpaceDirectoryManifestStatus::default(),
     };
 
-    let offset = query.offset.unwrap_or(0);
-    let limit = query.limit.filter(|&lim| lim > 0);
+    let pagination = enforce_app_pagination(
+        query.limit,
+        query.offset.unwrap_or(0),
+        app_query_limits().max_page_limit,
+        ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
+    )?;
+    let offset = pagination.offset;
+    let limit = pagination.limit;
     let count_mode = app_count_mode(
         query.count_mode.as_deref(),
         ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
     );
-    let (projections, total, filtered_total) =
-        if let Some(set) = world.space_directory_manifests().get(&uaid) {
-            let dataspace_filter = filter;
-            let total = set
-                .iter()
-                .filter(|&(dataspace_id, _)| match dataspace_filter {
-                    Some(target) => *dataspace_id == target,
-                    None => true,
-                })
-                .count();
-            let status_filter = status_filter;
-            let iter_filter = dataspace_filter;
-            let iter = set.iter().filter_map(move |(dataspace_id, record)| {
-                if let Some(target) = iter_filter {
-                    if *dataspace_id != target {
-                        return None;
-                    }
-                }
-                if !manifest_status_matches(record, status_filter) {
+    let (projections, total, filtered_total) = if let Some(set) =
+        world.space_directory_manifests().get(&uaid)
+    {
+        let dataspace_filter = filter;
+        let total = set
+            .iter()
+            .filter(|&(dataspace_id, _)| match dataspace_filter {
+                Some(target) => *dataspace_id == target,
+                None => true,
+            })
+            .count();
+        let status_filter = status_filter;
+        let iter_filter = dataspace_filter;
+        let iter = set.iter().filter_map(move |(dataspace_id, record)| {
+            if let Some(target) = iter_filter {
+                if *dataspace_id != target {
                     return None;
                 }
-                Some((
-                    dataspace_id.as_u64(),
-                    ManifestProjection {
-                        dataspace_id: *dataspace_id,
-                        record,
-                    },
-                ))
-            });
-            let (items, filtered_total) = collect_page_streaming(iter, offset, limit, None);
-            (items, total, filtered_total)
-        } else {
-            (Vec::new(), 0, 0)
-        };
+            }
+            if !manifest_status_matches(record, status_filter) {
+                return None;
+            }
+            Some((
+                dataspace_id.as_u64(),
+                ManifestProjection {
+                    dataspace_id: *dataspace_id,
+                    record,
+                },
+            ))
+        });
+        let (items, filtered_total) =
+            collect_page_streaming(iter, offset, limit, Some(app_query_limits().max_fetch_size));
+        (items, total, filtered_total)
+    } else {
+        (Vec::new(), 0, 0)
+    };
 
     for projection in projections {
         let entry = manifest_entry_to_json(
@@ -63001,473 +63493,7 @@ mod space_directory_manifest_helper_tests {
     }
 }
 
-#[cfg(all(test, feature = "app_api"))]
-mod accounts_query_tests {
-    use std::sync::Arc;
-
-    use axum::http::StatusCode;
-    use http_body_util::BodyExt as _;
-    use iroha_core::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
-    use iroha_crypto::Algorithm;
-    use iroha_data_model::prelude as dm;
-
-    use super::*;
-
-    fn checked_accounts_query_authority(seed: u8, context: &'static str) -> dm::AccountId {
-        dm::AccountId::new(
-            checked_routing_fixture_keypair(seed, Algorithm::Ed25519, context)
-                .public_key()
-                .clone(),
-        )
-    }
-
-    #[tokio::test]
-    async fn accounts_query_streams_without_sort() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let exec_authority =
-            checked_accounts_query_authority(0xB0, "derive accounts-query executor key");
-        let exec_id = exec_authority.clone();
-        let domain = dm::Domain::new(domain_id.clone()).build(&exec_authority);
-        let mut accounts = vec![dm::Account::new(exec_id.account().clone()).build(&exec_authority)];
-        for seed in 0xB1..=0xB5 {
-            let authority = checked_accounts_query_authority(
-                seed,
-                "derive accounts-query streamed account key",
-            );
-            let account_id = authority.clone();
-            accounts.push(dm::Account::new(account_id.account().clone()).build(&authority));
-        }
-        let state = Arc::new(State::new_for_testing(
-            World::with([domain], accounts, []),
-            kura,
-            query,
-        ));
-
-        // Query with limit + fetch_size smaller than number of accounts.
-        let env = crate::filter::QueryEnvelope {
-            query: None,
-            filter: None,
-            select: None,
-            aggregate: None,
-            sort: Vec::new(),
-            pagination: crate::filter::Pagination {
-                limit: Some(2),
-                offset: 0,
-            },
-            fetch_size: Some(2),
-            count_mode: Some("exact".to_owned()),
-        };
-        let resp = handle_v1_accounts_query(
-            state,
-            crate::utils::extractors::NoritoJson(env),
-            crate::routing::MaybeTelemetry::for_tests(),
-        )
-        .await
-        .expect("handler ok")
-        .into_response();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = resp.into_body().collect().await.unwrap().to_bytes();
-        let doc: norito::json::Value = norito::json::from_slice(&body).unwrap();
-        assert_eq!(doc["items"].as_array().unwrap().len(), 2);
-        assert_eq!(doc["total"].as_u64(), Some(4));
-    }
-
-    #[tokio::test]
-    async fn accounts_query_filter_accepts_canonical_and_alias_and_rejects_non_canonical_i105_literals()
-     {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let domain_id: dm::DomainId =
-            DomainId::try_new("aliases", "universal").expect("valid domain");
-        let exec_authority =
-            checked_accounts_query_authority(0xB6, "derive accounts-query alias executor key");
-        let exec_id = exec_authority.clone();
-        let domain = dm::Domain::new(domain_id.clone()).build(&exec_authority);
-
-        let labelled_authority =
-            checked_accounts_query_authority(0xB7, "derive accounts-query labelled account key");
-        let account_id = labelled_authority.clone();
-        let label = dm::AccountAlias::new(
-            "primary".parse().expect("valid label name"),
-            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                domain_id.name().clone(),
-            )),
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
-        );
-        let state = Arc::new(State::new_for_testing(
-            World::with(
-                [domain],
-                [
-                    dm::Account::new(exec_id.account().clone()).build(&exec_authority),
-                    dm::Account::new(account_id.account().clone()).build(&labelled_authority),
-                ],
-                [],
-            ),
-            kura,
-            query,
-        ));
-
-        let expected = account_id.account().to_string();
-        let non_canonical_i105_literal = expected.replacen("sora", "ｓｏｒａ", 1);
-
-        let alias_literal = label
-            .to_literal(&state.nexus_snapshot().dataspace_catalog)
-            .expect("canonical alias literal");
-        bind_account_alias_for_test(&state, &account_id, &alias_literal);
-        let alias_env = crate::filter::QueryEnvelope {
-            query: None,
-            filter: Some(crate::filter::FilterExpr::Eq(
-                crate::filter::FieldPath("id".to_string()),
-                Value::String(alias_literal.clone()),
-            )),
-            select: None,
-            aggregate: None,
-            sort: Vec::new(),
-            pagination: crate::filter::Pagination {
-                limit: Some(8),
-                offset: 0,
-            },
-            fetch_size: None,
-            count_mode: None,
-        };
-        let alias_result = handle_v1_accounts_query(
-            state.clone(),
-            crate::utils::extractors::NoritoJson(alias_env),
-            crate::routing::MaybeTelemetry::for_tests(),
-        )
-        .await
-        .expect("alias handler ok")
-        .into_response();
-        assert_eq!(
-            alias_result.status(),
-            StatusCode::OK,
-            "alias literal `{alias_literal}` should resolve to the canonical account id"
-        );
-        let alias_body = alias_result
-            .into_body()
-            .collect()
-            .await
-            .expect("alias body bytes")
-            .to_bytes();
-        let alias_doc: norito::json::Value =
-            norito::json::from_slice(&alias_body).expect("valid alias JSON");
-        let alias_ids: Vec<String> = alias_doc
-            .get("items")
-            .and_then(norito::json::Value::as_array)
-            .expect("alias items array")
-            .iter()
-            .filter_map(|item| {
-                item.get("id")
-                    .and_then(norito::json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .collect();
-        assert!(
-            alias_ids.iter().any(|id| id == &expected),
-            "alias literal `{alias_literal}` should resolve to `{expected}`, got {alias_ids:?}"
-        );
-        assert!(
-            alias_ids.iter().all(|id| !id.contains('@')),
-            "alias queries must still return canonical account ids, got {alias_ids:?}"
-        );
-
-        let canonical_env = crate::filter::QueryEnvelope {
-            query: None,
-            filter: Some(crate::filter::FilterExpr::Eq(
-                crate::filter::FieldPath("id".to_string()),
-                Value::String(expected.clone()),
-            )),
-            select: None,
-            aggregate: None,
-            sort: Vec::new(),
-            pagination: crate::filter::Pagination {
-                limit: Some(8),
-                offset: 0,
-            },
-            fetch_size: None,
-            count_mode: None,
-        };
-        let resp = handle_v1_accounts_query(
-            state.clone(),
-            crate::utils::extractors::NoritoJson(canonical_env),
-            crate::routing::MaybeTelemetry::for_tests(),
-        )
-        .await
-        .expect("handler ok")
-        .into_response();
-        assert_eq!(
-            resp.status(),
-            StatusCode::OK,
-            "canonical literal `{expected}` should be accepted"
-        );
-        let body = resp
-            .into_body()
-            .collect()
-            .await
-            .expect("body bytes")
-            .to_bytes();
-        let doc: norito::json::Value = norito::json::from_slice(&body).expect("valid JSON");
-        let items = doc
-            .get("items")
-            .and_then(norito::json::Value::as_array)
-            .expect("items array");
-        let ids: Vec<String> = items
-            .iter()
-            .filter_map(|item| {
-                item.get("id")
-                    .and_then(norito::json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .collect();
-        assert!(
-            ids.iter().any(|id| id == &expected),
-            "canonical literal `{expected}` should resolve to `{expected}`, got {ids:?}"
-        );
-        assert!(
-            ids.iter().all(|id| !id.contains('@')),
-            "response should expose canonical ids, got {ids:?}"
-        );
-
-        let i105_env = crate::filter::QueryEnvelope {
-            query: None,
-            filter: Some(crate::filter::FilterExpr::Eq(
-                crate::filter::FieldPath("id".to_string()),
-                Value::String(non_canonical_i105_literal.clone()),
-            )),
-            select: None,
-            aggregate: None,
-            sort: Vec::new(),
-            pagination: crate::filter::Pagination {
-                limit: Some(8),
-                offset: 0,
-            },
-            fetch_size: None,
-            count_mode: None,
-        };
-        let i105_result = handle_v1_accounts_query(
-            state.clone(),
-            crate::utils::extractors::NoritoJson(i105_env),
-            crate::routing::MaybeTelemetry::for_tests(),
-        )
-        .await;
-        assert!(
-            i105_result.is_err(),
-            "non-canonical I105 literal `{non_canonical_i105_literal}` must be rejected"
-        );
-    }
-
-    #[tokio::test]
-    async fn accounts_list_filter_accepts_alias_and_returns_canonical_i105_ids() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let domain_id: dm::DomainId =
-            DomainId::try_new("aliases-list", "universal").expect("valid domain");
-        let exec_authority =
-            checked_accounts_query_authority(0xB8, "derive accounts-list alias executor key");
-        let exec_id = exec_authority.clone();
-        let domain = dm::Domain::new(domain_id.clone()).build(&exec_authority);
-
-        let labelled_authority =
-            checked_accounts_query_authority(0xB9, "derive accounts-list labelled account key");
-        let account_id = labelled_authority.clone();
-        let label = dm::AccountAlias::new(
-            "primary".parse().expect("valid label name"),
-            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                domain_id.name().clone(),
-            )),
-            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
-        );
-        let state = Arc::new(State::new_for_testing(
-            World::with(
-                [domain],
-                [
-                    dm::Account::new(exec_id.account().clone()).build(&exec_authority),
-                    dm::Account::new(account_id.account().clone()).build(&labelled_authority),
-                ],
-                [],
-            ),
-            kura,
-            query,
-        ));
-
-        let expected = account_id.account().to_string();
-        let alias_literal = label
-            .to_literal(&state.nexus_snapshot().dataspace_catalog)
-            .expect("canonical alias literal");
-        bind_account_alias_for_test(&state, &account_id, &alias_literal);
-        let filter = crate::filter::FilterExpr::Eq(
-            crate::filter::FieldPath("id".to_owned()),
-            Value::String(alias_literal.clone()),
-        );
-        let params = ListFilterParams {
-            filter: Some(
-                norito::json::to_string(
-                    &norito::json::to_value(&filter).expect("filter should encode to JSON value"),
-                )
-                .expect("filter JSON"),
-            ),
-            limit: Some(8),
-            offset: 0,
-            sort: None,
-            count_mode: None,
-        };
-
-        let response = handle_v1_accounts(
-            state,
-            crate::NoritoQuery(params),
-            crate::routing::MaybeTelemetry::for_tests(),
-        )
-        .await
-        .expect("list handler ok")
-        .into_response();
-        assert_eq!(
-            response.status(),
-            StatusCode::OK,
-            "alias literal `{alias_literal}` should resolve on GET /v1/accounts"
-        );
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("response bytes")
-            .to_bytes();
-        let doc: norito::json::Value = norito::json::from_slice(&body).expect("valid list JSON");
-        let ids: Vec<String> = doc
-            .get("items")
-            .and_then(norito::json::Value::as_array)
-            .expect("items array")
-            .iter()
-            .filter_map(|item| {
-                item.get("id")
-                    .and_then(norito::json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .collect();
-        assert!(
-            ids.iter().any(|id| id == &expected),
-            "alias literal `{alias_literal}` should resolve to `{expected}`, got {ids:?}"
-        );
-        assert!(
-            ids.iter().all(|id| !id.contains('@')),
-            "GET /v1/accounts must still emit canonical account ids, got {ids:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn accounts_query_aggregate_groups_by_primary_alias_domain() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let domain_id: dm::DomainId =
-            DomainId::try_new("aggregate-aliases", "universal").expect("valid domain");
-        let exec_authority =
-            checked_accounts_query_authority(0xBA, "derive accounts-aggregate executor key");
-        let exec_id = exec_authority.clone();
-        let domain = dm::Domain::new(domain_id).build(&exec_authority);
-
-        let hbl_authority =
-            checked_accounts_query_authority(0xBB, "derive accounts-aggregate hbl account key");
-        let hbl_id = hbl_authority.clone();
-        let ubl_authority =
-            checked_accounts_query_authority(0xBC, "derive accounts-aggregate ubl account key");
-        let ubl_id = ubl_authority.clone();
-
-        let state = Arc::new(State::new_for_testing(
-            World::with(
-                [domain],
-                [
-                    dm::Account::new(exec_id.account().clone()).build(&exec_authority),
-                    dm::Account::new(hbl_id.account().clone()).build(&hbl_authority),
-                    dm::Account::new(ubl_id.account().clone()).build(&ubl_authority),
-                ],
-                [],
-            ),
-            kura,
-            query,
-        ));
-        bind_account_alias_for_test(&state, &hbl_id, "alice@hbl.universal");
-        bind_account_alias_for_test(&state, &ubl_id, "bob@ubl.universal");
-
-        let env = crate::filter::QueryEnvelope {
-            query: None,
-            filter: Some(crate::filter::FilterExpr::In(
-                crate::filter::FieldPath("primary_alias_domain".into()),
-                vec![
-                    norito::json::Value::from("hbl.universal"),
-                    norito::json::Value::from("ubl.universal"),
-                ],
-            )),
-            select: None,
-            aggregate: Some(crate::filter::AggregateSpec {
-                group_by: vec![crate::filter::FieldPath("primary_alias_domain".into())],
-                metrics: vec![
-                    crate::filter::AggregateMetric {
-                        alias: "row_count".into(),
-                        r#fn: crate::filter::AggregateFn::Count,
-                        field: None,
-                    },
-                    crate::filter::AggregateMetric {
-                        alias: "user_count".into(),
-                        r#fn: crate::filter::AggregateFn::DistinctCount,
-                        field: Some(crate::filter::FieldPath("id".into())),
-                    },
-                ],
-                having: None,
-            }),
-            sort: vec![crate::filter::SortKey {
-                key: crate::filter::FieldPath("primary_alias_domain".into()),
-                order: crate::filter::Order::Asc,
-            }],
-            pagination: crate::filter::Pagination {
-                limit: Some(8),
-                offset: 0,
-            },
-            fetch_size: None,
-            count_mode: Some("exact".to_owned()),
-        };
-
-        let response = handle_v1_accounts_query(
-            state,
-            crate::utils::extractors::NoritoJson(env),
-            crate::routing::MaybeTelemetry::for_tests(),
-        )
-        .await
-        .expect("handler ok")
-        .into_response();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("response bytes")
-            .to_bytes();
-        let doc: norito::json::Value = norito::json::from_slice(&body).expect("valid JSON");
-
-        assert_eq!(doc["total"].as_u64(), Some(2));
-        assert!(doc["indexed_height"].as_u64().is_some());
-        assert!(doc["indexed_block_hash"].is_string() || doc["indexed_block_hash"].is_null());
-
-        let items = doc["items"].as_array().expect("items array");
-        assert_eq!(items.len(), 2);
-        assert_eq!(
-            items[0]["primary_alias_domain"].as_str(),
-            Some("hbl.universal")
-        );
-        assert_eq!(items[0]["row_count"].as_u64(), Some(1));
-        assert_eq!(items[0]["user_count"].as_u64(), Some(1));
-        assert_eq!(
-            items[1]["primary_alias_domain"].as_str(),
-            Some("ubl.universal")
-        );
-        assert_eq!(items[1]["row_count"].as_u64(), Some(1));
-        assert_eq!(items[1]["user_count"].as_u64(), Some(1));
-    }
-}
+include!("routing/accounts_query_tests.rs");
 
 #[cfg(all(test, feature = "app_api"))]
 mod asset_definitions_query_tests {
@@ -63983,10 +64009,9 @@ pub async fn handle_v1_explorer_blocks(
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
-        let committed_hashes = state.committed_block_hashes_snapshot();
-        let total_items = u64::try_from(committed_hashes.len()).unwrap_or(u64::MAX);
+        let total_items = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
         let page = pagination.page.max(1);
-        let per_page = pagination.per_page.max(1);
+        let per_page = crate::explorer::normalize_history_per_page(pagination.per_page);
         let total_pages = total_items.div_ceil(per_page);
         let start_index = (page.saturating_sub(1)).saturating_mul(per_page);
         let end_index = (start_index + per_page).min(total_items);
@@ -64002,7 +64027,7 @@ pub async fn handle_v1_explorer_blocks(
                 let dto = state
                     .block_by_height(nonzero_height)
                     .map(|block| crate::explorer::ExplorerBlockDto::from_block(&block))
-                    .or_else(|| explorer_hash_only_block_dto(&committed_hashes, nonzero_height))
+                    .or_else(|| explorer_hash_only_block_dto(state.as_ref(), nonzero_height))
                     .ok_or_else(explorer_not_found)?;
                 items.push(dto);
             }
@@ -64435,7 +64460,7 @@ pub async fn handle_v1_explorer_transactions_latest(
             state.as_ref(),
             max_height,
             &filters,
-            pagination.per_page.max(1),
+            crate::explorer::normalize_history_per_page(pagination.per_page),
         )?;
         let body = crate::explorer::ExplorerLatestTransactionsResponse {
             sampled_at: crate::explorer::now_rfc3339(),
@@ -64571,7 +64596,7 @@ pub async fn handle_v1_explorer_instructions_latest(
             state.as_ref(),
             max_height,
             &filters,
-            pagination.per_page.max(1),
+            crate::explorer::normalize_history_per_page(pagination.per_page),
         )?;
         let body = crate::explorer::ExplorerLatestInstructionsResponse {
             sampled_at: crate::explorer::now_rfc3339(),
@@ -64639,66 +64664,26 @@ fn external_signed_transaction_results(
 ) -> impl Iterator<
     Item = (
         HashOf<TransactionEntrypoint>,
-        SignedTransaction,
+        &SignedTransaction,
         &TransactionResult,
     ),
 > + '_ {
-    let external_total = block.external_entrypoint_count();
-    block
-        .external_entrypoints_cloned()
-        .take(external_total)
-        .zip(block.results().take(external_total))
-        .filter_map(|(entrypoint, result)| {
-            let entrypoint_hash = entrypoint.hash();
-            let signed = match entrypoint {
-                TransactionEntrypoint::External(signed) => signed,
-                TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction().clone(),
-                TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => {
-                    return None;
-                }
-            };
-            Some((entrypoint_hash, signed, result))
-        })
+    (0..block.external_entrypoint_count())
+        .filter_map(move |index| external_signed_transaction_result_at(block, index))
 }
 
 #[cfg(feature = "app_api")]
-fn collect_transaction_summaries_from_kura(
-    kura: &Kura,
-    start_height: u64,
-    filters: &ExplorerTransactionFilters,
-) -> Result<Vec<crate::explorer::ExplorerTransactionDto>, Error> {
-    let mut out = Vec::new();
-    if start_height == 0 {
-        return Ok(out);
-    }
-    let mut height = filters.block.unwrap_or(start_height);
-    let lower_bound = filters.block.unwrap_or(1);
-    while height >= lower_bound {
-        let height_usize: usize = height
-            .try_into()
-            .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
-        let nonzero_height = NonZeroUsize::new(height_usize)
-            .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-        let block = kura
-            .get_block(nonzero_height)
-            .ok_or_else(explorer_not_found)?;
-        let block_ref = block.as_ref();
-        for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
-            if filters.matches(&tx, height, result) {
-                out.push(crate::explorer::transaction_summary_dto_with_hash(
-                    &tx,
-                    entrypoint_hash,
-                    height,
-                    result,
-                ));
-            }
-        }
-        if height == lower_bound || height == 1 {
-            break;
-        }
-        height -= 1;
-    }
-    Ok(out)
+fn external_signed_transaction_result_at(
+    block: &SignedBlock,
+    index: usize,
+) -> Option<(
+    HashOf<TransactionEntrypoint>,
+    &SignedTransaction,
+    &TransactionResult,
+)> {
+    let (entrypoint_hash, signed) = block.external_signed_transaction_at(index)?;
+    let result = block.results().nth(index)?;
+    Some((entrypoint_hash, signed, result))
 }
 
 #[cfg(feature = "app_api")]
@@ -64726,11 +64711,11 @@ fn collect_latest_transaction_summaries(
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
         for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
-            if !filters.matches(&tx, height, result) {
+            if !filters.matches(tx, height, result) {
                 continue;
             }
             out.push(crate::explorer::transaction_summary_dto_with_hash(
-                &tx,
+                tx,
                 entrypoint_hash,
                 height,
                 result,
@@ -64749,7 +64734,7 @@ fn collect_latest_transaction_summaries(
 
 #[cfg(feature = "app_api")]
 fn explorer_pagination_window(page: u64, per_page: u64) -> (u64, u64, u64) {
-    let per_page = per_page.max(1);
+    let per_page = crate::explorer::normalize_history_per_page(per_page);
     let start_index = page.saturating_sub(1).saturating_mul(per_page);
     let end_index = start_index.saturating_add(per_page);
     (per_page, start_index, end_index)
@@ -64802,10 +64787,10 @@ fn collect_transaction_summaries(
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
         for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
-            if filters.matches(&tx, height, result) {
+            if filters.matches(tx, height, result) {
                 if total_items >= start_index && total_items < end_index {
                     out.push(crate::explorer::transaction_summary_dto_with_hash(
-                        &tx,
+                        tx,
                         entrypoint_hash,
                         height,
                         result,
@@ -64820,67 +64805,6 @@ fn collect_transaction_summaries(
         height -= 1;
     }
     Ok((out, explorer_pagination_meta(page, per_page, total_items)))
-}
-
-#[cfg(feature = "app_api")]
-fn collect_instruction_history_from_kura(
-    kura: &Kura,
-    start_height: u64,
-    filters: &ExplorerInstructionFilters,
-) -> Result<Vec<ExplorerInstructionDto>, Error> {
-    let mut out = Vec::new();
-    if start_height == 0 {
-        return Ok(out);
-    }
-    let mut height = filters.block.unwrap_or(start_height);
-    let lower_bound = filters.block.unwrap_or(1);
-    while height >= lower_bound {
-        let height_usize: usize = height
-            .try_into()
-            .map_err(|_| conversion_error("block height exceeds host pointer width".into()))?;
-        let nonzero_height = NonZeroUsize::new(height_usize)
-            .ok_or_else(|| conversion_error("block height must be at least 1".into()))?;
-        let block = kura
-            .get_block(nonzero_height)
-            .ok_or_else(explorer_not_found)?;
-        let block_ref = block.as_ref();
-        for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
-            if !filters.matches_transaction(entrypoint_hash, &tx, height, result) {
-                continue;
-            }
-            for (idx, instruction) in tx.instructions().explicit_instructions().enumerate() {
-                let kind = crate::explorer::instruction_kind(instruction);
-                if !filters.matches_instruction(kind) {
-                    continue;
-                }
-                if let Some(expected) = filters.account.as_ref() {
-                    if !instruction_matches_account_id(instruction, expected) {
-                        continue;
-                    }
-                }
-                if let Some(expected) = filters.asset_id.as_ref() {
-                    if !instruction_matches_asset_id(instruction, expected) {
-                        continue;
-                    }
-                }
-                let index = u32::try_from(idx).unwrap_or(u32::MAX);
-                out.push(crate::explorer::instruction_dto_with_kind_and_hash(
-                    &tx,
-                    entrypoint_hash,
-                    height,
-                    result,
-                    instruction,
-                    kind,
-                    index,
-                ));
-            }
-        }
-        if height == lower_bound || height == 1 {
-            break;
-        }
-        height -= 1;
-    }
-    Ok(out)
 }
 
 #[cfg(feature = "app_api")]
@@ -64922,7 +64846,7 @@ fn collect_latest_instruction_history(
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
         for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
-            if !filters.matches_transaction(entrypoint_hash, &tx, height, result) {
+            if !filters.matches_transaction(entrypoint_hash, tx, height, result) {
                 continue;
             }
             for (idx, instruction) in tx.instructions().explicit_instructions().enumerate() {
@@ -64942,7 +64866,7 @@ fn collect_latest_instruction_history(
                 }
                 let index = u32::try_from(idx).unwrap_or(u32::MAX);
                 out.push(crate::explorer::instruction_dto_with_kind_and_hash(
-                    &tx,
+                    tx,
                     entrypoint_hash,
                     height,
                     result,
@@ -65010,7 +64934,7 @@ fn collect_instruction_history(
             .ok_or_else(explorer_not_found)?;
         let block_ref = block.as_ref();
         for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
-            if !filters.matches_transaction(entrypoint_hash, &tx, height, result) {
+            if !filters.matches_transaction(entrypoint_hash, tx, height, result) {
                 continue;
             }
             for (idx, instruction) in tx.instructions().explicit_instructions().enumerate() {
@@ -65031,7 +64955,7 @@ fn collect_instruction_history(
                 if total_items >= start_index && total_items < end_index {
                     let index = u32::try_from(idx).unwrap_or(u32::MAX);
                     out.push(crate::explorer::instruction_dto_with_kind_and_hash(
-                        &tx,
+                        tx,
                         entrypoint_hash,
                         height,
                         result,
@@ -65136,7 +65060,7 @@ fn transaction_detail_at_height(
     for (entrypoint_hash, tx, result) in external_signed_transaction_results(block_ref) {
         if entrypoint_hash == target {
             return Ok(Some(crate::explorer::transaction_detail_dto_with_hash(
-                &tx,
+                tx,
                 entrypoint_hash,
                 height,
                 result,
@@ -65194,7 +65118,7 @@ fn instruction_detail_at_height(
         let kind = crate::explorer::instruction_kind(instruction);
         let index_u32 = u32::try_from(lookup_index).unwrap_or(u32::MAX);
         return Ok(Some(crate::explorer::instruction_dto_with_kind_and_hash(
-            &tx,
+            tx,
             entrypoint_hash,
             height,
             result,
@@ -65317,12 +65241,70 @@ pub async fn handle_v1_explorer_asset_definition_detail(
 }
 
 #[cfg(feature = "app_api")]
+/// First-release ceiling for holder rows examined by one explorer distribution snapshot.
+const EXPLORER_SNAPSHOT_MAX_EXAMINED_HOLDERS_V1: usize = 65_536;
+#[cfg(feature = "app_api")]
+/// First-release ceiling for distinct participant identities retained by one econometrics scan.
+const EXPLORER_ECONOMETRICS_MAX_RETAINED_PARTICIPANTS_V1: usize = 65_536;
+
+#[cfg(feature = "app_api")]
+fn retain_explorer_snapshot_holder(
+    holders: &mut Vec<(AccountId, Quantity)>,
+    account_id: &AccountId,
+    balance: &Quantity,
+    max_examined_holders: usize,
+) -> Result<()> {
+    if holders.len() >= max_examined_holders {
+        return Err(Error::AppServiceUnavailable {
+            code: "explorer_snapshot_holder_limit_exceeded",
+            message: format!(
+                "asset-definition snapshot exceeds the first-release ceiling of \
+                 {max_examined_holders} examined holders"
+            ),
+        });
+    }
+    holders
+        .try_reserve(1)
+        .map_err(|_| Error::AppServiceUnavailable {
+            code: "explorer_snapshot_allocation_failed",
+            message: "Torii could not reserve bounded holder storage for the explorer snapshot"
+                .to_owned(),
+        })?;
+    holders.push((account_id.clone(), balance.clone()));
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn mark_explorer_econometrics_participant(
+    participants: &mut BTreeMap<AccountId, u8>,
+    participant: &AccountId,
+    membership_bit: u8,
+    max_retained_participants: usize,
+) -> Result<bool> {
+    debug_assert!(membership_bit.is_power_of_two());
+    if let Some(memberships) = participants.get_mut(participant) {
+        let is_new_membership = *memberships & membership_bit == 0;
+        *memberships |= membership_bit;
+        return Ok(is_new_membership);
+    }
+    if participants.len() >= max_retained_participants {
+        return Err(Error::AppServiceUnavailable {
+            code: "explorer_econometrics_participant_limit_exceeded",
+            message: format!(
+                "asset-definition econometrics exceeds the first-release ceiling of \
+                 {max_retained_participants} retained participant identities"
+            ),
+        });
+    }
+    participants.insert(participant.clone(), membership_bit);
+    Ok(true)
+}
+
+#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_asset_definition_snapshot(
     state: Arc<CoreState>,
     definition_id: AssetDefinitionId,
 ) -> Result<AxResponse, Error> {
-    use core::cmp::Ordering;
-
     use iroha_primitives::numeric::{Numeric, Quantity};
 
     const TOP_HOLDERS: usize = 10;
@@ -65349,22 +65331,28 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         if asset.id().definition() != &definition_id {
             continue;
         }
-        let balance = asset.value().as_ref().clone();
+        let balance = asset.value().as_ref();
+        retain_explorer_snapshot_holder(
+            &mut holders,
+            asset.id().account(),
+            balance,
+            EXPLORER_SNAPSHOT_MAX_EXAMINED_HOLDERS_V1,
+        )?;
         total_supply = total_supply
-            .checked_add(&balance)
+            .checked_add(balance)
             .map_err(|_| conversion_error("quantity overflow computing total supply".into()))?;
-        holders.push((asset.id().account().clone(), balance));
     }
 
     let holders_total: u64 = holders.len().try_into().unwrap_or(u64::MAX);
 
-    // Top holders (by balance desc, then account id asc for stable ordering).
-    let mut top_sorted = holders.clone();
-    top_sorted.sort_by(|(a_id, a_balance), (b_id, b_balance)| {
-        b_balance.cmp(a_balance).then_with(|| a_id.cmp(b_id))
+    // One ordering serves exact quantiles and every distribution pass. Reversing it yields
+    // balance descending with account id ascending, which is the public top-holder order.
+    holders.sort_unstable_by(|(a_id, a_balance), (b_id, b_balance)| {
+        a_balance.cmp(b_balance).then_with(|| b_id.cmp(a_id))
     });
-    let top_holders: Vec<crate::explorer::ExplorerEconometricsTopHolderDto> = top_sorted
+    let top_holders: Vec<crate::explorer::ExplorerEconometricsTopHolderDto> = holders
         .iter()
+        .rev()
         .take(TOP_HOLDERS)
         .map(
             |(account_id, balance)| crate::explorer::ExplorerEconometricsTopHolderDto {
@@ -65374,33 +65362,39 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         )
         .collect();
 
-    let mut values_f64: Vec<f64> = holders
-        .iter()
-        .map(|(_, value)| value.as_numeric().to_f64_lossy())
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .collect();
-    values_f64.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-
-    let total_f64: f64 = values_f64.iter().sum();
+    let distribution_values = || {
+        holders.iter().filter_map(|(_, value)| {
+            let value = value.as_numeric().to_f64_lossy();
+            (value.is_finite() && value >= 0.0).then_some(value)
+        })
+    };
+    let distribution_values_desc = || {
+        holders.iter().rev().filter_map(|(_, value)| {
+            let value = value.as_numeric().to_f64_lossy();
+            (value.is_finite() && value >= 0.0).then_some(value)
+        })
+    };
+    let distribution_value_count = distribution_values().count();
+    let total_f64: f64 = distribution_values().sum();
     let has_total = total_f64.is_finite() && total_f64 > 0.0;
 
     // Distribution metrics (among holders in the snapshot).
-    let gini = if values_f64.is_empty() || !has_total {
+    let gini = if distribution_value_count == 0 || !has_total {
         0.0
     } else {
-        let n = values_f64.len() as f64;
+        let n = distribution_value_count as f64;
         let mut weighted_sum = 0.0;
-        for (idx, value) in values_f64.iter().enumerate() {
+        for (idx, value) in distribution_values().enumerate() {
             weighted_sum += value * (idx as f64 + 1.0);
         }
         let g = (2.0 * weighted_sum) / (total_f64 * n) - (n + 1.0) / n;
         g.clamp(0.0, 1.0)
     };
 
-    let hhi = if values_f64.is_empty() || !has_total {
+    let hhi = if distribution_value_count == 0 || !has_total {
         0.0
     } else {
-        let sum_sq: f64 = values_f64.iter().map(|v| v * v).sum();
+        let sum_sq: f64 = distribution_values().map(|value| value * value).sum();
         let denom = total_f64 * total_f64;
         if denom > 0.0 && denom.is_finite() {
             (sum_sq / denom).clamp(0.0, 1.0)
@@ -65409,17 +65403,17 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         }
     };
 
-    let n = values_f64.len();
+    let n = distribution_value_count;
     let theil = if n <= 1 || !has_total {
         0.0
     } else {
         let n_f64 = n as f64;
         let mut t = 0.0;
-        for v in &values_f64 {
-            if *v <= 0.0 {
+        for value in distribution_values() {
+            if value <= 0.0 {
                 continue;
             }
-            let share = v / total_f64;
+            let share = value / total_f64;
             if !share.is_finite() || share <= 0.0 {
                 continue;
             }
@@ -65428,15 +65422,15 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         t.max(0.0)
     };
 
-    let entropy = if values_f64.is_empty() || !has_total {
+    let entropy = if distribution_value_count == 0 || !has_total {
         0.0
     } else {
         let mut h = 0.0;
-        for v in &values_f64 {
-            if *v <= 0.0 {
+        for value in distribution_values() {
+            if value <= 0.0 {
                 continue;
             }
-            let share = v / total_f64;
+            let share = value / total_f64;
             if !share.is_finite() || share <= 0.0 {
                 continue;
             }
@@ -65445,7 +65439,7 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
         h.max(0.0)
     };
 
-    let positive_count = values_f64.iter().filter(|v| **v > 0.0).count();
+    let positive_count = distribution_values().filter(|value| *value > 0.0).count();
     let entropy_normalized = if positive_count <= 1 {
         0.0
     } else {
@@ -65458,62 +65452,58 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
     };
 
     let (top1, top5, top10, nakamoto_33, nakamoto_51, nakamoto_67) =
-        if values_f64.is_empty() || !has_total {
+        if distribution_value_count == 0 || !has_total {
             (0.0, 0.0, 0.0, 0, 0, 0)
         } else {
-            let mut desc = values_f64.clone();
-            desc.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
-
-            let sum_top = |k: usize| -> f64 {
-                let sum = desc.iter().take(k).sum::<f64>();
-                if sum.is_finite() { sum } else { 0.0 }
-            };
-
-            let nakamoto = |threshold: f64| -> u64 {
-                if desc.is_empty() {
-                    return 0;
-                }
-                if !threshold.is_finite() {
-                    return 0;
-                }
-                let target = threshold.clamp(0.0, 1.0);
-                if target <= 0.0 {
-                    return 0;
-                }
-
-                let mut acc = 0.0;
-                for (idx, value) in desc.iter().enumerate() {
-                    acc += *value;
-                    let share = acc / total_f64;
-                    if share.is_finite() && share >= target {
-                        return (idx + 1) as u64;
+            let mut top_sums = [0.0_f64; 3];
+            let top_limits = [1_usize, 5, 10];
+            let thresholds = [0.33_f64, 0.51, 0.67];
+            let mut nakamoto = [None; 3];
+            let mut cumulative = 0.0;
+            for (idx, value) in distribution_values_desc().enumerate() {
+                for (sum, limit) in top_sums.iter_mut().zip(top_limits) {
+                    if idx < limit {
+                        *sum += value;
                     }
                 }
-                desc.len().try_into().unwrap_or(u64::MAX)
-            };
+                cumulative += value;
+                let share = cumulative / total_f64;
+                if share.is_finite() {
+                    for (result, threshold) in nakamoto.iter_mut().zip(thresholds) {
+                        if result.is_none() && share >= threshold {
+                            *result = Some(u64::try_from(idx + 1).unwrap_or(u64::MAX));
+                        }
+                    }
+                }
+            }
+
+            let distribution_value_count_u64 =
+                u64::try_from(distribution_value_count).unwrap_or(u64::MAX);
+            let finite_top_sum = |sum: f64| if sum.is_finite() { sum } else { 0.0 };
 
             (
-                (sum_top(1) / total_f64).clamp(0.0, 1.0),
-                (sum_top(5) / total_f64).clamp(0.0, 1.0),
-                (sum_top(10) / total_f64).clamp(0.0, 1.0),
-                nakamoto(0.33),
-                nakamoto(0.51),
-                nakamoto(0.67),
+                (finite_top_sum(top_sums[0]) / total_f64).clamp(0.0, 1.0),
+                (finite_top_sum(top_sums[1]) / total_f64).clamp(0.0, 1.0),
+                (finite_top_sum(top_sums[2]) / total_f64).clamp(0.0, 1.0),
+                nakamoto[0].unwrap_or(distribution_value_count_u64),
+                nakamoto[1].unwrap_or(distribution_value_count_u64),
+                nakamoto[2].unwrap_or(distribution_value_count_u64),
             )
         };
 
     // Quantiles (exact holder balances; p90/p99 use "nearest-rank" without interpolation).
-    let mut values_numeric: Vec<Quantity> = holders.iter().map(|(_, v)| v.clone()).collect();
-    values_numeric.sort();
-
-    let median = if values_numeric.is_empty() {
+    let median = if holders.is_empty() {
         None
-    } else if values_numeric.len() % 2 == 1 {
-        values_numeric.get(values_numeric.len() / 2).cloned()
+    } else if holders.len() % 2 == 1 {
+        holders
+            .get(holders.len() / 2)
+            .map(|(_, balance)| balance.clone())
     } else {
-        let mid = values_numeric.len() / 2;
-        let a = values_numeric.get(mid.saturating_sub(1)).cloned();
-        let b = values_numeric.get(mid).cloned();
+        let mid = holders.len() / 2;
+        let a = holders
+            .get(mid.saturating_sub(1))
+            .map(|(_, balance)| balance.clone());
+        let b = holders.get(mid).map(|(_, balance)| balance.clone());
         match (a, b) {
             (Some(a), Some(b)) => a
                 .checked_add(&b)
@@ -65524,25 +65514,23 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
     };
 
     let pick_quantile = |q: f64| -> Option<Quantity> {
-        if values_numeric.is_empty() {
+        if holders.is_empty() {
             return None;
         }
         if !q.is_finite() {
             return None;
         }
         let clamped = q.clamp(0.0, 1.0);
-        let rank = (clamped * (values_numeric.len() as f64)).ceil() as usize;
-        let idx = rank
-            .saturating_sub(1)
-            .min(values_numeric.len().saturating_sub(1));
-        values_numeric.get(idx).cloned()
+        let rank = (clamped * (holders.len() as f64)).ceil() as usize;
+        let idx = rank.saturating_sub(1).min(holders.len().saturating_sub(1));
+        holders.get(idx).map(|(_, balance)| balance.clone())
     };
 
     let p90 = pick_quantile(0.9);
     let p99 = pick_quantile(0.99);
 
     let lorenz: Vec<crate::explorer::ExplorerEconometricsLorenzPointDto> =
-        if values_f64.is_empty() || !has_total {
+        if distribution_value_count == 0 || !has_total {
             vec![
                 crate::explorer::ExplorerEconometricsLorenzPointDto {
                     population: 0.0,
@@ -65554,23 +65542,16 @@ pub async fn handle_v1_explorer_asset_definition_snapshot(
                 },
             ]
         } else {
-            let n = values_f64.len();
-            let mut prefix: Vec<f64> = Vec::with_capacity(n + 1);
-            prefix.push(0.0);
-            for value in &values_f64 {
-                let next = prefix.last().copied().unwrap_or(0.0) + value;
-                prefix.push(next);
-            }
-
             (0..=LORENZ_POINTS)
                 .map(|i| {
                     let p = (i as f64) / (LORENZ_POINTS as f64);
-                    let idx = p * (n as f64);
+                    let idx = p * (distribution_value_count as f64);
                     let base = idx.floor() as usize;
                     let frac = idx - (base as f64);
-                    let base_sum = prefix.get(base.min(n)).copied().unwrap_or(0.0);
-                    let interpolated = if base < n && frac > 0.0 {
-                        base_sum + values_f64.get(base).copied().unwrap_or(0.0) * frac
+                    let mut values = distribution_values();
+                    let base_sum = values.by_ref().take(base).sum::<f64>();
+                    let interpolated = if base < distribution_value_count && frac > 0.0 {
+                        base_sum + values.next().unwrap_or(0.0) * frac
                     } else {
                         base_sum
                     };
@@ -65622,8 +65603,6 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
     state: Arc<CoreState>,
     definition_id: AssetDefinitionId,
 ) -> Result<AxResponse, Error> {
-    use std::collections::BTreeSet;
-
     use iroha_data_model::{
         isi::{BurnBox, MintBox, TransferAssetBatch, TransferBox},
         transaction::executable::Executable,
@@ -65656,8 +65635,8 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
         window_ms: u64,
         start_ms: u64,
         transfers: u64,
-        senders: BTreeSet<AccountId>,
-        receivers: BTreeSet<AccountId>,
+        unique_senders: u64,
+        unique_receivers: u64,
         amount: Quantity,
     }
 
@@ -65686,11 +65665,14 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
             window_ms: *window_ms,
             start_ms: now_ms.saturating_sub(*window_ms),
             transfers: 0,
-            senders: BTreeSet::new(),
-            receivers: BTreeSet::new(),
+            unique_senders: 0,
+            unique_receivers: 0,
             amount: Quantity::zero(),
         })
         .collect();
+    // Each identity is owned once; the low six bits record sender/receiver membership for the
+    // three fixed windows. This replaces six separately allocating identity sets.
+    let mut participant_memberships: BTreeMap<AccountId, u8> = BTreeMap::new();
 
     let mut issuance_accs: Vec<IssuanceAcc> = windows
         .iter()
@@ -65762,17 +65744,33 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                             if asset_transfer.source().definition() != &definition_id {
                                 continue;
                             }
-                            let sender = asset_transfer.source().account().clone();
-                            let receiver = asset_transfer.destination().clone();
+                            let sender = asset_transfer.source().account();
+                            let receiver = asset_transfer.destination();
                             let amount = asset_transfer.object().clone();
 
-                            for acc in &mut velocity_accs {
+                            for (window_index, acc) in velocity_accs.iter_mut().enumerate() {
                                 if tx_ms < acc.start_ms {
                                     continue;
                                 }
                                 acc.transfers = acc.transfers.saturating_add(1);
-                                acc.senders.insert(sender.clone());
-                                acc.receivers.insert(receiver.clone());
+                                let sender_bit = 1_u8 << (window_index * 2);
+                                let receiver_bit = 1_u8 << (window_index * 2 + 1);
+                                if mark_explorer_econometrics_participant(
+                                    &mut participant_memberships,
+                                    sender,
+                                    sender_bit,
+                                    EXPLORER_ECONOMETRICS_MAX_RETAINED_PARTICIPANTS_V1,
+                                )? {
+                                    acc.unique_senders = acc.unique_senders.saturating_add(1);
+                                }
+                                if mark_explorer_econometrics_participant(
+                                    &mut participant_memberships,
+                                    receiver,
+                                    receiver_bit,
+                                    EXPLORER_ECONOMETRICS_MAX_RETAINED_PARTICIPANTS_V1,
+                                )? {
+                                    acc.unique_receivers = acc.unique_receivers.saturating_add(1);
+                                }
                                 acc.amount = acc.amount.try_add(&amount).map_err(|error| {
                                     conversion_error(format!(
                                         "quantity overflow computing explorer transfer velocity: {error}"
@@ -65788,17 +65786,33 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                             if entry.asset_definition() != &definition_id {
                                 continue;
                             }
-                            let sender = entry.from().clone();
-                            let receiver = entry.to().clone();
+                            let sender = entry.from();
+                            let receiver = entry.to();
                             let amount = entry.amount().clone();
 
-                            for acc in &mut velocity_accs {
+                            for (window_index, acc) in velocity_accs.iter_mut().enumerate() {
                                 if tx_ms < acc.start_ms {
                                     continue;
                                 }
                                 acc.transfers = acc.transfers.saturating_add(1);
-                                acc.senders.insert(sender.clone());
-                                acc.receivers.insert(receiver.clone());
+                                let sender_bit = 1_u8 << (window_index * 2);
+                                let receiver_bit = 1_u8 << (window_index * 2 + 1);
+                                if mark_explorer_econometrics_participant(
+                                    &mut participant_memberships,
+                                    sender,
+                                    sender_bit,
+                                    EXPLORER_ECONOMETRICS_MAX_RETAINED_PARTICIPANTS_V1,
+                                )? {
+                                    acc.unique_senders = acc.unique_senders.saturating_add(1);
+                                }
+                                if mark_explorer_econometrics_participant(
+                                    &mut participant_memberships,
+                                    receiver,
+                                    receiver_bit,
+                                    EXPLORER_ECONOMETRICS_MAX_RETAINED_PARTICIPANTS_V1,
+                                )? {
+                                    acc.unique_receivers = acc.unique_receivers.saturating_add(1);
+                                }
                                 acc.amount = acc.amount.try_add(&amount).map_err(|error| {
                                     conversion_error(format!(
                                         "quantity overflow computing explorer transfer velocity: {error}"
@@ -65895,8 +65909,8 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                 start_ms: acc.start_ms,
                 end_ms: now_ms,
                 transfers: acc.transfers,
-                unique_senders: u64::try_from(acc.senders.len()).unwrap_or(u64::MAX),
-                unique_receivers: u64::try_from(acc.receivers.len()).unwrap_or(u64::MAX),
+                unique_senders: acc.unique_senders,
+                unique_receivers: acc.unique_receivers,
                 amount: acc.amount.clone(),
             },
         )
@@ -65977,6 +65991,51 @@ mod explorer_asset_definition_econometrics_tests {
         context: &'static str,
     ) -> KeyPair {
         checked_routing_fixture_keypair(seed, algorithm, context)
+    }
+
+    #[test]
+    fn econometrics_participant_cap_is_aggregate_and_precedes_insertion() {
+        let alice = dm::AccountId::new(
+            checked_econometrics_keypair(
+                0xC0,
+                Algorithm::Ed25519,
+                "derive econometrics participant-cap Alice fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
+        let bob = dm::AccountId::new(
+            checked_econometrics_keypair(
+                0xC1,
+                Algorithm::Ed25519,
+                "derive econometrics participant-cap Bob fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
+        let mut participants = BTreeMap::new();
+
+        assert!(
+            mark_explorer_econometrics_participant(&mut participants, &alice, 0b000001, 1)
+                .expect("first participant fits")
+        );
+        assert!(
+            mark_explorer_econometrics_participant(&mut participants, &alice, 0b000010, 1)
+                .expect("an existing participant may join another window/role")
+        );
+        assert!(
+            !mark_explorer_econometrics_participant(&mut participants, &alice, 0b000010, 1)
+                .expect("repeated membership is idempotent")
+        );
+
+        let error = mark_explorer_econometrics_participant(&mut participants, &bob, 0b000001, 1)
+            .expect_err("a second retained identity exceeds the aggregate cap");
+        let Error::AppServiceUnavailable { code, .. } = error else {
+            panic!("unexpected participant-cap error")
+        };
+        assert_eq!(code, "explorer_econometrics_participant_limit_exceeded");
+        assert_eq!(participants.len(), 1);
+        assert!(!participants.contains_key(&bob));
     }
 
     #[tokio::test]
@@ -66333,6 +66392,39 @@ mod explorer_asset_definition_snapshot_tests {
 
     fn checked_snapshot_keypair(seed: u8, algorithm: Algorithm, context: &'static str) -> KeyPair {
         checked_routing_fixture_keypair(seed, algorithm, context)
+    }
+
+    #[test]
+    fn snapshot_holder_cap_rejects_before_cap_plus_one_retention() {
+        let alice = dm::AccountId::new(
+            checked_snapshot_keypair(
+                0xCF,
+                Algorithm::Ed25519,
+                "derive snapshot holder-cap Alice fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
+        let bob = dm::AccountId::new(
+            checked_snapshot_keypair(
+                0xD0,
+                Algorithm::Ed25519,
+                "derive snapshot holder-cap Bob fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
+        let mut holders = Vec::new();
+
+        retain_explorer_snapshot_holder(&mut holders, &alice, &Quantity::from(1_u32), 1)
+            .expect("first holder fits");
+        let error = retain_explorer_snapshot_holder(&mut holders, &bob, &Quantity::from(2_u32), 1)
+            .expect_err("second holder exceeds the cap");
+        let Error::AppServiceUnavailable { code, .. } = error else {
+            panic!("unexpected holder-cap error")
+        };
+        assert_eq!(code, "explorer_snapshot_holder_limit_exceeded");
+        assert_eq!(holders, vec![(alice, Quantity::from(1_u32))]);
     }
 
     #[tokio::test]
@@ -66714,31 +66806,20 @@ enum ExplorerBlockIdentifier {
 
 #[cfg(feature = "app_api")]
 fn explorer_hash_only_block_dto(
-    committed_hashes: &[HashOf<BlockHeader>],
+    state: &CoreState,
     height: NonZeroUsize,
 ) -> Option<crate::explorer::ExplorerBlockDto> {
-    let index = height.get().checked_sub(1)?;
-    let hash = committed_hashes.get(index).copied()?;
-    let prev_block_hash = index
-        .checked_sub(1)
-        .and_then(|prev_index| committed_hashes.get(prev_index).copied());
     let height_u64 = u64::try_from(height.get()).ok()?;
+    let hash = state.committed_block_hash_at_height(height_u64)?;
+    let prev_block_hash = height_u64
+        .checked_sub(1)
+        .filter(|height| *height > 0)
+        .and_then(|height| state.committed_block_hash_at_height(height));
     Some(crate::explorer::ExplorerBlockDto::from_hash_only(
         height_u64,
         hash,
         prev_block_hash,
     ))
-}
-
-#[cfg(feature = "app_api")]
-fn height_for_committed_hash(
-    committed_hashes: &[HashOf<BlockHeader>],
-    hash: HashOf<BlockHeader>,
-) -> Option<NonZeroUsize> {
-    committed_hashes
-        .iter()
-        .position(|candidate| *candidate == hash)
-        .and_then(|index| NonZeroUsize::new(index.saturating_add(1)))
 }
 
 #[cfg(feature = "app_api")]
@@ -66770,20 +66851,19 @@ pub async fn handle_v1_explorer_block_detail(
     let started = std::time::Instant::now();
     let response = (|| -> Result<AxResponse, Error> {
         let lookup = parse_block_identifier(&identifier)?;
-        let committed_hashes = state.committed_block_hashes_snapshot();
         let dto = match lookup {
             ExplorerBlockIdentifier::Height(height) => state
                 .block_by_height(height)
                 .map(|block| crate::explorer::ExplorerBlockDto::from_block(block.as_ref()))
-                .or_else(|| explorer_hash_only_block_dto(&committed_hashes, height)),
+                .or_else(|| explorer_hash_only_block_dto(state.as_ref(), height)),
             ExplorerBlockIdentifier::Hash(hash) => state
                 .block_by_hash(hash)
                 .map(|block| crate::explorer::ExplorerBlockDto::from_block(block.as_ref()))
                 .or_else(|| {
                     state
                         .block_height_by_hash(hash)
-                        .or_else(|| height_for_committed_hash(&committed_hashes, hash))
-                        .and_then(|height| explorer_hash_only_block_dto(&committed_hashes, height))
+                        .or_else(|| state.committed_block_height_for_hash(hash))
+                        .and_then(|height| explorer_hash_only_block_dto(state.as_ref(), height))
                 }),
         }
         .ok_or_else(explorer_not_found)?;
@@ -66877,68 +66957,6 @@ fn validate_accounts_filter_adapter(expr: &FilterExpr) -> Result<()> {
             Err(Error::Query(iroha_data_model::ValidationFail::TooComplex))
         }
     }
-}
-
-#[cfg(all(test, feature = "app_api"))]
-#[test]
-fn account_filter_candidate_ids_extracts_safe_exact_constraints() {
-    let first = AccountId::new(
-        checked_routing_fixture_keypair(
-            0xF0,
-            Algorithm::Ed25519,
-            "derive account-filter first candidate fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
-    let second = AccountId::new(
-        checked_routing_fixture_keypair(
-            0xF1,
-            Algorithm::Ed25519,
-            "derive account-filter second candidate fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
-    let exact = FilterExpr::Eq(
-        FieldPath("id".to_owned()),
-        norito::json::Value::from(first.to_string()),
-    );
-
-    let candidates = account_filter_candidate_ids(Some(&exact))
-        .expect("account id equality should produce direct lookup candidates");
-    assert_eq!(candidates, BTreeSet::from([first.clone()]));
-
-    let combined = FilterExpr::And(vec![
-        exact.clone(),
-        FilterExpr::Eq(
-            FieldPath("has_primary_alias".to_owned()),
-            norito::json::Value::from(false),
-        ),
-    ]);
-    let candidates = account_filter_candidate_ids(Some(&combined))
-        .expect("AND should preserve safe account id candidates");
-    assert_eq!(candidates, BTreeSet::from([first]));
-
-    let many = FilterExpr::In(
-        FieldPath("id".to_owned()),
-        vec![
-            norito::json::Value::from("not-an-account-id"),
-            norito::json::Value::from(second.to_string()),
-        ],
-    );
-    let candidates =
-        account_filter_candidate_ids(Some(&many)).expect("account id IN should produce candidates");
-    assert_eq!(candidates, BTreeSet::from([second]));
-
-    let unsafe_or = FilterExpr::Or(vec![
-        exact,
-        FilterExpr::Eq(
-            FieldPath("has_primary_alias".to_owned()),
-            norito::json::Value::from(false),
-        ),
-    ]);
-    assert!(account_filter_candidate_ids(Some(&unsafe_or)).is_none());
 }
 
 #[cfg(feature = "app_api")]
@@ -71233,6 +71251,39 @@ struct AssetHolderListItem {
 }
 
 #[cfg(feature = "app_api")]
+fn live_asset_holder_item(
+    asset_id: &AssetId,
+    quantity: &iroha_primitives::numeric::Quantity,
+    asset: &str,
+    asset_alias: Option<&String>,
+) -> AssetHolderListItem {
+    // `AssetId` uniquely keys `(account, definition, scope)`, so one indexed asset entry is
+    // already one holder partition; retaining a second aggregation map cannot combine rows.
+    let account_id = asset_id.account().clone();
+    AssetHolderListItem {
+        canonical_id: account_id.to_string(),
+        account_id,
+        asset: asset.to_owned(),
+        asset_alias: asset_alias.cloned(),
+        scope: asset_balance_scope_literal(asset_id.scope()),
+        quantity: quantity.clone(),
+        primary_alias: PrimaryAliasProjection::default(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn asset_holder_projection_retained_bytes(item: &AssetHolderListItem) -> usize {
+    let mut retained = retained_json_text_bytes(&item.canonical_id)
+        .saturating_add(retained_json_text_bytes(&item.asset))
+        .saturating_add(retained_json_text_bytes(&item.scope))
+        .saturating_add(retained_json_text_bytes(&item.quantity.to_string()));
+    if let Some(alias) = item.asset_alias.as_deref() {
+        retained = retained.saturating_add(retained_json_text_bytes(alias));
+    }
+    retained.saturating_add(512)
+}
+
+#[cfg(feature = "app_api")]
 fn accumulate_asset_holder_quantity(
     map: &mut BTreeMap<
         (AccountId, iroha_data_model::asset::AssetBalanceScope),
@@ -71516,8 +71567,6 @@ pub async fn handle_v1_asset_holders(
     crate::NoritoQuery(p): crate::NoritoQuery<AssetHolderGetParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use std::collections::BTreeMap;
-
     let account_filter = canonicalize_query_account_literal(
         "account_id",
         p.account_id.as_deref(),
@@ -71538,47 +71587,6 @@ pub async fn handle_v1_asset_holders(
         .filter(|raw| !raw.is_empty())
         .map(parse_asset_balance_scope_literal)
         .transpose()?;
-
-    let now_ms = asset_alias_observation_time_ms(&state);
-    let world = state.world_view();
-    let def_id = resolve_asset_definition_selector(&world, &definition_id, now_ms)?;
-    let asset_alias = world
-        .asset_definition(&def_id)
-        .ok()
-        .and_then(|definition| definition.alias().as_ref().map(ToString::to_string));
-    // Aggregate balances per account and scope.
-    let mut map: BTreeMap<
-        (AccountId, iroha_data_model::asset::AssetBalanceScope),
-        iroha_primitives::numeric::Quantity,
-    > = BTreeMap::new();
-    if let Some(account_id) = account_filter.as_ref() {
-        for asset in world.assets_in_account_by_definition_iter(account_id, &def_id) {
-            accumulate_asset_holder_quantity(
-                &mut map,
-                asset.id(),
-                asset.value().as_ref(),
-                scope_filter.as_ref(),
-            )?;
-        }
-    } else {
-        for asset in world.asset_entries_by_definition_iter(&def_id) {
-            accumulate_asset_holder_quantity(
-                &mut map,
-                asset.id(),
-                asset.value().as_ref(),
-                scope_filter.as_ref(),
-            )?;
-        }
-    }
-    let catalog = state.nexus_snapshot().dataspace_catalog;
-    let alias_cache = primary_alias_projection_batch_for_account_ids(
-        &world,
-        &catalog,
-        asset_alias_observation_time_ms(&state),
-        map.keys().map(|(account_id, _)| account_id.clone()),
-    );
-    drop(world);
-    record_account_literal_selection(&telemetry, ENDPOINT_ASSET_HOLDERS);
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ASSET_HOLDERS)?;
     let count_mode = app_count_mode(p.count_mode.as_deref(), ENDPOINT_ASSET_HOLDERS);
@@ -71587,30 +71595,51 @@ pub async fn handle_v1_asset_holders(
         .clamp_fetch_size(None)?
         .map(|cap| cap.min(pagination.cap));
 
-    let page = collect_page_streaming_for_mode(
-        map.into_iter().map(|((account_id, scope), quantity)| {
-            let canonical_id = account_id.to_string();
-            let asset = def_id.to_string();
-            let scope = asset_balance_scope_literal(&scope);
-            let primary_alias = alias_cache.get(&account_id).cloned().unwrap_or_default();
-            (
-                format!("{canonical_id}:{scope}"),
-                AssetHolderListItem {
-                    account_id,
-                    canonical_id,
-                    asset,
-                    asset_alias: asset_alias.clone(),
-                    scope,
-                    quantity,
-                    primary_alias,
-                },
-            )
-        }),
+    let now_ms = asset_alias_observation_time_ms(&state);
+    let world = state.world_view();
+    let def_id = resolve_asset_definition_selector(&world, &definition_id, now_ms)?;
+    let asset_alias = world
+        .asset_definition(&def_id)
+        .ok()
+        .and_then(|definition| definition.alias().as_ref().map(ToString::to_string));
+    record_account_literal_selection(&telemetry, ENDPOINT_ASSET_HOLDERS);
+    let asset_literal = def_id.to_string();
+    let source = if let Some(account_id) = account_filter.as_ref() {
+        LiveIndexedSource::Indexed(world.assets_in_account_by_definition_iter(account_id, &def_id))
+    } else {
+        LiveIndexedSource::Full(world.asset_entries_by_definition_iter(&def_id))
+    };
+    let page = collect_live_page_with_budget(
+        source,
         pagination.offset,
         pagination.limit,
         fetch_cap,
         count_mode,
-    );
+        ASSET_HOLDERS_LIVE_MAX_EXAMINED_ROWS,
+        ASSET_HOLDERS_LIVE_MAX_RETAINED_BYTES,
+        ENDPOINT_ASSET_HOLDERS,
+        |entry| {
+            if scope_filter
+                .as_ref()
+                .is_some_and(|scope| entry.id().scope() != scope)
+            {
+                return None;
+            }
+            let projected = live_asset_holder_item(
+                entry.id(),
+                entry.value().as_ref(),
+                &asset_literal,
+                asset_alias.as_ref(),
+            );
+            let key = format!("{}:{}", projected.canonical_id, projected.scope);
+            Some((key, projected))
+        },
+        |key, holder| {
+            retained_json_text_bytes(key)
+                .saturating_add(asset_holder_projection_retained_bytes(holder).saturating_mul(2))
+        },
+    )?;
+    drop(world);
     // Norito JSON response
     let mut arr = Vec::with_capacity(page.items.len());
     for it in &page.items {
@@ -71679,8 +71708,6 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
 ) -> Result<Response> {
-    use std::collections::BTreeMap;
-
     let generic_mode = envelope.select.is_some() || envelope.aggregate.is_some();
     let mut generic_envelope = envelope.clone();
     let now_ms = asset_alias_observation_time_ms(&state);
@@ -71745,6 +71772,18 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
     }
     generic_envelope.filter = filter.clone();
     let account_candidates = asset_holder_filter_account_candidates(filter.as_ref());
+    if account_candidates
+        .as_ref()
+        .is_some_and(|accounts| accounts.len() > ASSET_HOLDERS_LIVE_MAX_EXAMINED_ROWS)
+    {
+        return Err(app_live_budget_error(
+            ENDPOINT_ASSET_HOLDERS_QUERY,
+            "scan_budget_exceeded",
+            format!(
+                "account candidate count exceeds the live query ceiling of {ASSET_HOLDERS_LIVE_MAX_EXAMINED_ROWS} rows"
+            ),
+        ));
+    }
     if generic_mode {
         if let Some((rows, indexed_snapshot, query_source)) = asset_holder_projection_query_rows(
             app.as_ref(),
@@ -71786,50 +71825,37 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
         );
     }
     let world = state.world_view();
-    let mut map: BTreeMap<
-        (AccountId, iroha_data_model::asset::AssetBalanceScope),
-        iroha_primitives::numeric::Quantity,
-    > = BTreeMap::new();
-    if let Some(account_candidates) = account_candidates.as_ref() {
-        for account_id in account_candidates {
-            for asset in world.assets_in_account_by_definition_iter(account_id, &def_id) {
-                accumulate_asset_holder_quantity(
-                    &mut map,
-                    asset.id(),
-                    asset.value().as_ref(),
-                    None,
-                )?;
-            }
-        }
+    let asset_literal = def_id.to_string();
+    let world_ref = &world;
+    let def_id_ref = &def_id;
+    let source = if let Some(accounts) = account_candidates.as_ref() {
+        LiveIndexedSource::Indexed(accounts.iter().flat_map(move |account_id| {
+            world_ref.assets_in_account_by_definition_iter(account_id, def_id_ref)
+        }))
     } else {
-        for asset in world.asset_entries_by_definition_iter(&def_id) {
-            accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value().as_ref(), None)?;
-        }
-    }
-    let catalog = state.nexus_snapshot().dataspace_catalog;
-    let alias_cache = primary_alias_projection_batch_for_account_ids(
-        &world,
-        &catalog,
-        asset_alias_observation_time_ms(&state),
-        map.keys().map(|(account_id, _)| account_id.clone()),
-    );
-    drop(world);
+        LiveIndexedSource::Full(world_ref.asset_entries_by_definition_iter(def_id_ref))
+    };
 
     if generic_mode {
-        let rows = map.into_iter().map(|((account_id, scope), quantity)| {
-            let canonical_id = account_id.to_string();
-            let primary_alias = alias_cache.get(&account_id).cloned().unwrap_or_default();
-            let projected = AssetHolderListItem {
-                account_id,
-                canonical_id,
-                asset: def_id.to_string(),
-                asset_alias: asset_alias.clone(),
-                scope: asset_balance_scope_literal(&scope),
-                quantity,
-                primary_alias,
-            };
-            asset_holder_item_to_query_row(&projected)
-        });
+        let holders = collect_live_rows_with_budget(
+            source,
+            ASSET_HOLDERS_LIVE_MAX_EXAMINED_ROWS,
+            ASSET_HOLDERS_LIVE_MAX_RETAINED_BYTES,
+            ENDPOINT_ASSET_HOLDERS_QUERY,
+            |entry| {
+                Some(live_asset_holder_item(
+                    entry.id(),
+                    entry.value().as_ref(),
+                    &asset_literal,
+                    asset_alias.as_ref(),
+                ))
+            },
+            |holder| asset_holder_projection_retained_bytes(holder).saturating_mul(2),
+        )?;
+        drop(world);
+        let rows = holders
+            .into_iter()
+            .map(|holder| asset_holder_item_to_query_row(&holder));
         return execute_generic_resource_query(
             state.as_ref(),
             crate::generic_query::RESOURCE_ASSET_HOLDERS,
@@ -71841,24 +71867,22 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
 
     let filter_ref = filter.as_ref();
     let selectors = compile_asset_holder_sort_spec(&sort);
-    let mapped_iter = map.into_iter().filter_map({
-        let filter_ref = filter_ref;
-        let selectors = selectors;
-        let asset = def_id.to_string();
-        let asset_alias = asset_alias.clone();
-        move |((account_id, scope), quantity)| {
-            let canonical_id = account_id.to_string();
-            let scope = asset_balance_scope_literal(&scope);
-            let primary_alias = alias_cache.get(&account_id).cloned().unwrap_or_default();
-            let projected = AssetHolderListItem {
-                account_id,
-                canonical_id,
-                asset: asset.clone(),
-                asset_alias: asset_alias.clone(),
-                scope,
-                quantity,
-                primary_alias,
-            };
+    let page = collect_live_page_with_budget(
+        source,
+        pagination.offset,
+        pagination.limit,
+        fetch_size,
+        count_mode,
+        ASSET_HOLDERS_LIVE_MAX_EXAMINED_ROWS,
+        ASSET_HOLDERS_LIVE_MAX_RETAINED_BYTES,
+        ENDPOINT_ASSET_HOLDERS_QUERY,
+        move |entry| {
+            let projected = live_asset_holder_item(
+                entry.id(),
+                entry.value().as_ref(),
+                &asset_literal,
+                asset_alias.as_ref(),
+            );
             if let Some(expr) = filter_ref {
                 if !filter_asset_holder_item(expr, &projected) {
                     return None;
@@ -71866,15 +71890,10 @@ pub(crate) async fn handle_v1_asset_holders_query_with_app(
             }
             let key = asset_holder_sort_key(&projected, &selectors);
             Some((key, projected))
-        }
-    });
-    let page = collect_page_streaming_for_mode(
-        mapped_iter,
-        pagination.offset,
-        pagination.limit,
-        fetch_size,
-        count_mode,
-    );
+        },
+        |_key, holder| asset_holder_projection_retained_bytes(holder).saturating_mul(2),
+    )?;
+    drop(world);
     // Norito JSON response
     let mut arr = Vec::with_capacity(page.items.len());
     for it in &page.items {
@@ -72920,19 +72939,35 @@ fn asset_holder_projection_row_to_query_row(
 }
 
 #[cfg(feature = "app_api")]
+fn archived_asset_holder_retained_bytes(
+    asset: &str,
+    asset_alias: Option<&str>,
+    row: &QueryProjectionAssetHolderRow,
+) -> usize {
+    let mut retained = retained_json_text_bytes(asset)
+        .saturating_add(retained_json_text_bytes(&row.account_id))
+        .saturating_add(retained_json_text_bytes(&row.scope))
+        .saturating_add(retained_json_text_bytes(&row.quantity.to_string()));
+    for value in [
+        asset_alias,
+        row.primary_alias.as_deref(),
+        row.primary_alias_name.as_deref(),
+        row.primary_alias_dataspace.as_deref(),
+        row.primary_alias_domain.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        retained = retained.saturating_add(retained_json_text_bytes(value));
+    }
+    retained.saturating_add(512)
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QueryProjectionArchiveResolutionSource {
     HotCache,
     LocalDurableStore,
-    RemoteHydrated,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone)]
-struct RemoteProjectionArchiveSource {
-    manifest_digest_hex: String,
-    provider_id_hex: String,
-    torii_base_url: reqwest::Url,
 }
 
 #[cfg(feature = "app_api")]
@@ -72964,17 +72999,16 @@ async fn asset_holder_projection_query_rows(
         return Ok(None);
     }
 
-    let mut query_source = "projection_da_cache";
+    let query_source = "projection_da_cache";
     let mut rows = Vec::new();
+    let mut examined_rows = 0usize;
+    let mut retained_bytes = 0usize;
     for shard in shards {
-        let Some((archive, source)) =
+        let Some((archive, _source)) =
             resolve_query_projection_archive_for_shard(app, state, &checkpoint, shard).await?
         else {
             return Ok(None);
         };
-        if source == QueryProjectionArchiveResolutionSource::RemoteHydrated {
-            query_source = "projection_da_hydrated";
-        }
         let rowset = validate_query_projection_asset_holder_archive(
             &archive,
             &checkpoint,
@@ -72986,6 +73020,32 @@ async fn asset_holder_projection_query_rows(
             .as_deref()
             .or(endpoint_asset_alias.map(String::as_str));
         for row in rowset.rows {
+            examined_rows = examined_rows.checked_add(1).ok_or_else(|| {
+                app_live_budget_error(
+                    ENDPOINT_ASSET_HOLDERS_QUERY,
+                    "scan_budget_exceeded",
+                    "projection examined-row accounting overflowed",
+                )
+            })?;
+            if examined_rows > ASSET_HOLDERS_LIVE_MAX_EXAMINED_ROWS {
+                return Err(app_live_budget_error(
+                    ENDPOINT_ASSET_HOLDERS_QUERY,
+                    "scan_budget_exceeded",
+                    format!(
+                        "projection examined-row ceiling of {ASSET_HOLDERS_LIVE_MAX_EXAMINED_ROWS} rows was exceeded"
+                    ),
+                ));
+            }
+            let row_weight = core::mem::size_of::<norito::json::Map>()
+                .saturating_mul(2)
+                .saturating_add(
+                    archived_asset_holder_retained_bytes(
+                        &asset_definition_id,
+                        row_asset_alias,
+                        &row,
+                    )
+                    .saturating_mul(2),
+                );
             let projected = asset_holder_projection_row_to_query_row(
                 &asset_definition_id,
                 row_asset_alias,
@@ -72994,6 +73054,12 @@ async fn asset_holder_projection_query_rows(
             if filter.is_some_and(|expr| !evaluate_filter_on_aggregate_row(expr, &projected)) {
                 continue;
             }
+            retained_bytes = checked_retained_bytes(
+                retained_bytes,
+                row_weight,
+                ASSET_HOLDERS_LIVE_MAX_RETAINED_BYTES,
+                ENDPOINT_ASSET_HOLDERS_QUERY,
+            )?;
             rows.push(projected);
         }
     }
@@ -73092,6 +73158,16 @@ fn validate_query_projection_asset_holder_archive(
         },
     };
 
+    if archive.row_count > u64::try_from(ASSET_HOLDERS_LIVE_MAX_EXAMINED_ROWS).unwrap_or(u64::MAX) {
+        return Err(query_projection_archive_validation_error(format!(
+            "asset holder projection row count exceeds the route ceiling of {ASSET_HOLDERS_LIVE_MAX_EXAMINED_ROWS} rows"
+        )));
+    }
+    if archive.payload.len() > ASSET_HOLDERS_LIVE_MAX_RETAINED_BYTES {
+        return Err(query_projection_archive_validation_error(format!(
+            "asset holder projection payload exceeds the route ceiling of {ASSET_HOLDERS_LIVE_MAX_RETAINED_BYTES} bytes"
+        )));
+    }
     let archive_payload = archive.build_da_payload().map_err(|err| {
         query_projection_archive_validation_error(format!(
             "failed to verify query projection archive payload: {err}"
@@ -73151,6 +73227,11 @@ fn validate_query_projection_asset_holder_archive(
             "query projection archive does not match checkpoint shard",
         ));
     }
+    if u64::try_from(rowset.rows.len()).unwrap_or(u64::MAX) != archive.row_count {
+        return Err(query_projection_archive_validation_error(
+            "query projection archive row count does not match its decoded holder rowset",
+        ));
+    }
 
     Ok(rowset)
 }
@@ -73158,7 +73239,7 @@ fn validate_query_projection_asset_holder_archive(
 #[cfg(feature = "app_api")]
 async fn resolve_query_projection_archive_for_shard(
     app: Option<&crate::SharedAppState>,
-    state: &CoreState,
+    _state: &CoreState,
     checkpoint: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpoint,
     shard: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpointShard,
 ) -> Result<
@@ -73187,47 +73268,9 @@ async fn resolve_query_projection_archive_for_shard(
             QueryProjectionArchiveResolutionSource::LocalDurableStore,
         )));
     }
-
-    let hydration_lock = {
-        let mut locks = QUERY_PROJECTION_ARCHIVE_HYDRATION_LOCKS.lock().await;
-        locks
-            .entry(key.clone())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .clone()
-    };
-    let _guard = hydration_lock.lock().await;
-
-    if let Some(archive) = query_projection_archive_from_hot_cache(&key) {
-        return Ok(Some((
-            archive,
-            QueryProjectionArchiveResolutionSource::HotCache,
-        )));
-    }
-    if let Some(archive) = load_query_projection_archive_from_local_store(app, shard)? {
-        cache_query_projection_archive_for_query(archive.clone());
-        return Ok(Some((
-            archive,
-            QueryProjectionArchiveResolutionSource::LocalDurableStore,
-        )));
-    }
-
-    let hydrated = hydrate_query_projection_archive_from_remote(app, state, shard).await?;
-    {
-        let mut locks = QUERY_PROJECTION_ARCHIVE_HYDRATION_LOCKS.lock().await;
-        if Arc::strong_count(&hydration_lock) <= 2 {
-            locks.remove(&key);
-        }
-    }
-
-    if let Some(archive) = hydrated {
-        cache_query_projection_archive_for_query(archive.clone());
-        return Ok(Some((
-            archive,
-            QueryProjectionArchiveResolutionSource::RemoteHydrated,
-        )));
-    }
-
-    Ok(None)
+    Err(query_projection_archive_validation_error(
+        crate::sorafs::api::REMOTE_HYDRATION_CAPABILITY_REQUIRED,
+    ))
 }
 
 #[cfg(feature = "app_api")]
@@ -73288,301 +73331,6 @@ fn decode_query_projection_archive_payload(
             ))
         })?;
     Ok(Some(archive))
-}
-
-#[cfg(feature = "app_api")]
-async fn hydrate_query_projection_archive_from_remote(
-    app: &crate::SharedAppState,
-    state: &CoreState,
-    shard: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpointShard,
-) -> Result<Option<QueryProjectionShardArchive>, Error> {
-    let manifest_digest_hex = hex::encode(shard.manifest_digest.as_bytes());
-    let Some(sources) =
-        resolve_remote_projection_archive_sources(app, state, manifest_digest_hex.as_str()).await?
-    else {
-        return Ok(None);
-    };
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|err| {
-            query_projection_archive_validation_error(format!(
-                "failed to build query projection hydrate client: {err}"
-            ))
-        })?;
-
-    let mut last_error = None;
-    for source in &sources {
-        match fetch_remote_query_projection_archive_from_source(&client, source).await {
-            Ok((_manifest, payload)) => return decode_query_projection_archive_payload(&payload),
-            Err(err) => {
-                iroha_logger::warn!(
-                    provider_id_hex = %source.provider_id_hex,
-                    manifest_digest_hex = %source.manifest_digest_hex,
-                    %err,
-                    "failed to hydrate query projection archive from remote provider"
-                );
-                last_error = Some(err);
-            }
-        }
-    }
-
-    Err(query_projection_archive_validation_error(format!(
-        "failed to hydrate query projection archive from remote providers{}",
-        last_error
-            .as_deref()
-            .map(|err| format!(": {err}"))
-            .unwrap_or_default()
-    )))
-}
-
-#[cfg(feature = "app_api")]
-async fn resolve_remote_projection_archive_sources(
-    app: &crate::SharedAppState,
-    state: &CoreState,
-    manifest_digest_hex: &str,
-) -> Result<Option<Vec<RemoteProjectionArchiveSource>>, Error> {
-    use crate::sorafs::{EndpointKind, registry::collect_pin_registry};
-
-    let snapshot = {
-        let world = state.world_view();
-        collect_pin_registry(&world).map_err(|err| {
-            query_projection_archive_validation_error(format!(
-                "failed to collect pin registry for query projection hydration: {err}"
-            ))
-        })?
-    };
-
-    let mut provider_specs = Vec::<String>::new();
-    for prefer_completed in [true, false] {
-        for order in &snapshot.replication_orders {
-            if order.manifest_digest_hex() != manifest_digest_hex {
-                continue;
-            }
-            if order.is_expired() {
-                continue;
-            }
-            if prefer_completed != order.completion_epoch().is_some() {
-                continue;
-            }
-            let Some(manifest) = snapshot.manifest_by_digest(order.manifest_digest_hex()) else {
-                continue;
-            };
-            if manifest.status_label() != "approved" {
-                continue;
-            }
-            for provider_id_hex in order.providers() {
-                if !provider_specs
-                    .iter()
-                    .any(|existing| existing == provider_id_hex)
-                {
-                    provider_specs.push(provider_id_hex.clone());
-                }
-            }
-        }
-    }
-
-    if provider_specs.is_empty() {
-        return Ok(None);
-    }
-
-    let Some(cache) = app.sorafs_cache() else {
-        return Err(query_projection_archive_validation_error(
-            "SoraFS discovery cache is not available for query projection hydration",
-        ));
-    };
-
-    let cache = cache.read().await;
-    let mut sources = Vec::new();
-    for provider_id_hex in provider_specs {
-        let Ok(provider_bytes) = hex::decode(provider_id_hex.as_str()) else {
-            continue;
-        };
-        let Ok(provider_id) = <[u8; 32]>::try_from(provider_bytes.as_slice()) else {
-            continue;
-        };
-        let Some(record) = cache.record_by_provider(&provider_id) else {
-            continue;
-        };
-        let Some(endpoint) = record
-            .advert()
-            .body
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.kind == EndpointKind::Torii)
-        else {
-            continue;
-        };
-        let torii_base_url =
-            normalize_query_projection_provider_torii_base_url(&endpoint.host_pattern)
-                .map_err(query_projection_archive_validation_error)?;
-        sources.push(RemoteProjectionArchiveSource {
-            manifest_digest_hex: manifest_digest_hex.to_owned(),
-            provider_id_hex,
-            torii_base_url,
-        });
-    }
-
-    if sources.is_empty() {
-        return Err(query_projection_archive_validation_error(
-            "no SoraFS Torii provider routes are available for the requested projection shard",
-        ));
-    }
-
-    Ok(Some(sources))
-}
-
-#[cfg(feature = "app_api")]
-fn normalize_query_projection_provider_torii_base_url(
-    host_pattern: &str,
-) -> Result<reqwest::Url, String> {
-    let trimmed = host_pattern.trim();
-    if trimmed.is_empty() {
-        return Err("provider advert endpoint host pattern must not be empty".to_string());
-    }
-
-    let with_scheme = if trimmed.contains("://") {
-        trimmed.to_owned()
-    } else {
-        let lower = trimmed.to_ascii_lowercase();
-        let scheme = if lower.starts_with("localhost")
-            || lower.starts_with("127.")
-            || lower.starts_with("[::1]")
-            || lower.starts_with("::1")
-        {
-            "http"
-        } else {
-            "https"
-        };
-        format!("{scheme}://{trimmed}")
-    };
-
-    let mut url = reqwest::Url::parse(&with_scheme)
-        .map_err(|err| format!("invalid provider advert endpoint `{trimmed}`: {err}"))?;
-    if !url.path().ends_with('/') {
-        let normalized = format!("{}/", url.path());
-        url.set_path(&normalized);
-    }
-    Ok(url)
-}
-
-#[cfg(feature = "app_api")]
-async fn fetch_remote_query_projection_archive_from_source(
-    client: &reqwest::Client,
-    source: &RemoteProjectionArchiveSource,
-) -> Result<(sorafs_manifest::ManifestV1, Vec<u8>), String> {
-    let manifest_url = source
-        .torii_base_url
-        .join(&format!(
-            "v1/sorafs/storage/manifest/{}",
-            source.manifest_digest_hex
-        ))
-        .map_err(|err| format!("failed to build remote manifest URL: {err}"))?;
-    let manifest_response = client
-        .get(manifest_url)
-        .send()
-        .await
-        .map_err(|err| format!("failed to fetch remote manifest metadata: {err}"))?;
-    let manifest_status = manifest_response.status();
-    let manifest_body = manifest_response
-        .bytes()
-        .await
-        .map_err(|err| format!("failed to read remote manifest metadata: {err}"))?;
-    if !manifest_status.is_success() {
-        let details = String::from_utf8_lossy(&manifest_body);
-        return Err(format!(
-            "remote manifest endpoint returned {manifest_status}: {}",
-            details.trim()
-        ));
-    }
-
-    let manifest_response =
-        norito::json::from_slice::<crate::sorafs::api::StorageManifestResponseDto>(&manifest_body)
-            .map_err(|err| format!("failed to decode remote manifest metadata response: {err}"))?;
-    if manifest_response.manifest_digest_hex != source.manifest_digest_hex {
-        return Err(format!(
-            "remote manifest digest mismatch: expected {}, found {}",
-            source.manifest_digest_hex, manifest_response.manifest_digest_hex
-        ));
-    }
-
-    let manifest_bytes = base64::engine::general_purpose::STANDARD
-        .decode(manifest_response.manifest_b64.as_bytes())
-        .map_err(|err| format!("failed to decode remote manifest payload: {err}"))?;
-    let manifest: sorafs_manifest::ManifestV1 = norito::decode_from_bytes(&manifest_bytes)
-        .map_err(|err| format!("failed to decode remote manifest bytes: {err}"))?;
-    let manifest_digest_hex = hex::encode(
-        manifest
-            .digest()
-            .map_err(|err| format!("failed to digest remote manifest: {err}"))?
-            .as_bytes(),
-    );
-    if manifest_digest_hex != source.manifest_digest_hex {
-        return Err(format!(
-            "decoded remote manifest digest mismatch: expected {}, found {manifest_digest_hex}",
-            source.manifest_digest_hex
-        ));
-    }
-    if manifest_response.content_length > usize::MAX as u64 {
-        return Err("remote payload exceeds host limits".to_string());
-    }
-
-    let fetch_body = norito::json::to_vec(&crate::sorafs::api::StorageFetchRequestDto {
-        manifest_id_hex: manifest_response.manifest_id_hex.clone(),
-        offset: 0,
-        length: manifest_response.content_length,
-    })
-    .map_err(|err| format!("failed to encode remote fetch request: {err}"))?;
-    let fetch_url = source
-        .torii_base_url
-        .join("v1/sorafs/storage/fetch")
-        .map_err(|err| format!("failed to build remote payload URL: {err}"))?;
-    let fetch_response = client
-        .post(fetch_url)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .body(fetch_body)
-        .send()
-        .await
-        .map_err(|err| format!("failed to fetch remote projection archive payload: {err}"))?;
-    let fetch_status = fetch_response.status();
-    let fetch_body = fetch_response.bytes().await.map_err(|err| {
-        format!("failed to read remote projection archive payload response: {err}")
-    })?;
-    if !fetch_status.is_success() {
-        let details = String::from_utf8_lossy(&fetch_body);
-        return Err(format!(
-            "remote payload endpoint returned {fetch_status}: {}",
-            details.trim()
-        ));
-    }
-
-    let fetch_response =
-        norito::json::from_slice::<crate::sorafs::api::StorageFetchResponseDto>(&fetch_body)
-            .map_err(|err| {
-                format!("failed to decode remote projection archive payload response: {err}")
-            })?;
-    let payload = base64::engine::general_purpose::STANDARD
-        .decode(fetch_response.data_b64.as_bytes())
-        .map_err(|err| {
-            format!("failed to decode remote projection archive payload bytes: {err}")
-        })?;
-    if payload.len() as u64 != manifest_response.content_length {
-        return Err(format!(
-            "remote payload length mismatch: expected {}, found {}",
-            manifest_response.content_length,
-            payload.len()
-        ));
-    }
-    let payload_digest_hex = hex::encode(blake3::hash(&payload).as_bytes());
-    if payload_digest_hex != manifest_response.payload_digest_hex {
-        return Err(format!(
-            "remote payload digest mismatch: expected {}, found {payload_digest_hex}",
-            manifest_response.payload_digest_hex
-        ));
-    }
-
-    Ok((manifest, payload))
 }
 
 // No route-level tests here to avoid heavy state setup; see filter unit tests for parser coverage.
@@ -74131,9 +73879,10 @@ pub fn handle_peers(
     online_peers: &OnlinePeersProvider,
     format: crate::utils::ResponseFormat,
 ) -> Response {
-    // Caution: this short `.get` done frequently might cause the writer part to block, thus
-    // blocking the P2P module
-    let data = online_peers.get();
+    // Keep the watch borrow short and the owned response bounded by the P2P
+    // connection ceiling. This also prevents a violated producer invariant
+    // from cloning every peer merely to build one diagnostic response.
+    let data = online_peers.bounded_response_snapshot();
     match format {
         crate::utils::ResponseFormat::Norito => crate::NoritoBody(data).into_response(),
         crate::utils::ResponseFormat::Json => JsonBody(data).into_response(),
@@ -74245,177 +73994,10 @@ pub async fn handle_status(
     }
 }
 
-#[cfg(feature = "telemetry")]
-fn status_value_by_path(status: &Status, tail: &str) -> Option<norito::json::Value> {
-    let mut segments = tail.split('/').filter(|s| !s.is_empty());
-    let field = segments.next()?;
-    match field {
-        "observed_at_ms" if segments.next().is_none() => Some(status.observed_at_ms.into()),
-        "peers" if segments.next().is_none() => Some(status.peers.into()),
-        "blocks" if segments.next().is_none() => Some(status.blocks.into()),
-        "blocks_non_empty" if segments.next().is_none() => Some(status.blocks_non_empty.into()),
-        "commit_time_ms" if segments.next().is_none() => Some(status.commit_time_ms.into()),
-        "txs_approved" if segments.next().is_none() => Some(status.txs_approved.into()),
-        "txs_rejected" if segments.next().is_none() => Some(status.txs_rejected.into()),
-        "last_rejection_at_ms" if segments.next().is_none() => {
-            Some(json_value(&status.last_rejection_at_ms))
-        }
-        "txs_rejected_recent_5m" if segments.next().is_none() => {
-            Some(status.txs_rejected_recent_5m.into())
-        }
-        "uptime" => {
-            let duration = status.uptime.0;
-            match segments.next() {
-                None => Some(crate::json_object(vec![
-                    ("secs", duration.as_secs()),
-                    ("nanos", u64::from(duration.subsec_nanos())),
-                ])),
-                Some("secs") if segments.next().is_none() => Some(duration.as_secs().into()),
-                Some("nanos") if segments.next().is_none() => {
-                    Some(u64::from(duration.subsec_nanos()).into())
-                }
-                _ => None,
-            }
-        }
-        "da_receipt_cursors" if segments.next().is_none() => Some(
-            status
-                .da_receipt_cursors
-                .iter()
-                .map(|cursor| {
-                    crate::json_object(vec![
-                        ("lane_id", json_value(&cursor.lane_id)),
-                        ("epoch", json_value(&cursor.epoch)),
-                        ("highest_sequence", json_value(&cursor.highest_sequence)),
-                    ])
-                })
-                .collect::<Vec<_>>()
-                .into(),
-        ),
-        "view_changes" if segments.next().is_none() => Some(status.view_changes.into()),
-        "queue_size" if segments.next().is_none() => Some(status.queue_size.into()),
-        "queue_queued" if segments.next().is_none() => Some(status.queue_queued.into()),
-        "queue_inflight" if segments.next().is_none() => Some(status.queue_inflight.into()),
-        "last_block_committed_at_ms" if segments.next().is_none() => {
-            Some(status.last_block_committed_at_ms.into())
-        }
-        "last_non_empty_block_committed_at_ms" if segments.next().is_none() => {
-            Some(status.last_non_empty_block_committed_at_ms.into())
-        }
-        "time_since_last_block_ms" if segments.next().is_none() => {
-            Some(status.time_since_last_block_ms.into())
-        }
-        "time_since_last_non_empty_block_ms" if segments.next().is_none() => {
-            Some(status.time_since_last_non_empty_block_ms.into())
-        }
-        "crypto" => match segments.next() {
-            None => norito::json::to_value(&status.crypto).ok(),
-            Some("sm_helpers_available") if segments.next().is_none() => {
-                Some(status.crypto.sm_helpers_available.into())
-            }
-            Some("sm_openssl_preview_enabled") if segments.next().is_none() => {
-                Some(status.crypto.sm_openssl_preview_enabled.into())
-            }
-            _ => None,
-        },
-        "offline" => {
-            let offline = status.offline.as_ref()?;
-            let value = norito::json::to_value(offline).ok()?;
-            json_value_by_segments(value, segments)
-        }
-        "governance" if segments.next().is_none() => {
-            norito::json::to_value(&status.governance).ok()
-        }
-        "dataspace_catalog" if segments.next().is_none() => {
-            norito::json::to_value(&status.dataspace_catalog).ok()
-        }
-        "nexus" => {
-            let nexus = status.nexus.as_ref()?;
-            match segments.next() {
-                None => norito::json::to_value(nexus).ok(),
-                Some("routing_policy") => {
-                    let routing = &nexus.routing_policy;
-                    match segments.next() {
-                        None => norito::json::to_value(routing).ok(),
-                        Some("default_lane") if segments.next().is_none() => {
-                            Some(routing.default_lane.into())
-                        }
-                        Some("default_dataspace") if segments.next().is_none() => {
-                            Some(routing.default_dataspace.into())
-                        }
-                        Some("rules") if segments.next().is_none() => {
-                            norito::json::to_value(&routing.rules).ok()
-                        }
-                        _ => None,
-                    }
-                }
-                _ => None,
-            }
-        }
-        "sorafs_micropayments" => match segments.next() {
-            None => norito::json::to_value(&status.sorafs_micropayments).ok(),
-            Some(provider_hex) => {
-                let sample = status
-                    .sorafs_micropayments
-                    .iter()
-                    .find(|entry| entry.provider_id_hex == provider_hex)?;
-                match segments.next() {
-                    None => norito::json::to_value(sample).ok(),
-                    Some("credits") => match segments.next() {
-                        None => norito::json::to_value(&sample.credits).ok(),
-                        Some("deterministic_charge") if segments.next().is_none() => {
-                            Some(json_value(&sample.credits.deterministic_charge))
-                        }
-                        Some("credit_generated") if segments.next().is_none() => {
-                            Some(json_value(&sample.credits.credit_generated))
-                        }
-                        Some("credit_applied") if segments.next().is_none() => {
-                            Some(json_value(&sample.credits.credit_applied))
-                        }
-                        Some("credit_carry") if segments.next().is_none() => {
-                            Some(json_value(&sample.credits.credit_carry))
-                        }
-                        Some("outstanding") if segments.next().is_none() => {
-                            Some(json_value(&sample.credits.outstanding))
-                        }
-                        _ => None,
-                    },
-                    Some("tickets") => match segments.next() {
-                        None => norito::json::to_value(&sample.tickets).ok(),
-                        Some("processed") if segments.next().is_none() => {
-                            Some(sample.tickets.processed.into())
-                        }
-                        Some("won") if segments.next().is_none() => Some(sample.tickets.won.into()),
-                        Some("duplicate") if segments.next().is_none() => {
-                            Some(sample.tickets.duplicate.into())
-                        }
-                        _ => None,
-                    },
-                    _ => None,
-                }
-            }
-        },
-        _ => None,
-    }
-}
+include!("routing/status_value_by_path.rs");
 
-#[cfg(feature = "telemetry")]
-#[allow(single_use_lifetimes)]
-fn json_value_by_segments<'a>(
-    mut value: norito::json::Value,
-    segments: impl Iterator<Item = &'a str>,
-) -> Option<norito::json::Value> {
-    for segment in segments {
-        value = match value {
-            norito::json::Value::Object(map) => map.get(segment)?.clone(),
-            norito::json::Value::Array(values) => {
-                let index = segment.parse::<usize>().ok()?;
-                values.get(index)?.clone()
-            }
-            _ => return None,
-        };
-    }
-    Some(value)
-}
+include!("routing/status_value_helpers.rs");
 
 // Textual inclusion keeps every routing test at its original module path.
+include!("tests/routing_account_filter_candidates.rs");
 include!("tests/routing.rs");

@@ -31,7 +31,7 @@ use iroha_data_model::{
         PrivacyProtocolIdV1, privacy_exact12_matrix_bytes_v1,
     },
 };
-use iroha_genesis::RawGenesisTransaction;
+use iroha_genesis::{RawGenesisTransaction, validate_genesis_manifest_json};
 use norito::json::{Map as JsonMap, Value as JsonValue};
 
 use super::{
@@ -1034,6 +1034,8 @@ fn expect_toml_string_v1(
 
 fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
     iroha_genesis::init_instruction_registry();
+    validate_genesis_manifest_json(bytes)
+        .wrap_err("Taira genesis template exceeds fixed resource bounds")?;
     let decoded_template: RawGenesisTransaction = norito::json::from_slice(bytes)
         .wrap_err("Taira genesis template cannot be decoded natively")?;
     if decoded_template.chain_id().as_str() != CHAIN_ID_V1
@@ -1060,6 +1062,7 @@ fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
             );
         }
     }
+    drop(decoded_template);
 
     let genesis: JsonValue =
         norito::json::from_slice(bytes).wrap_err("Taira genesis template is not strict JSON")?;
@@ -1136,6 +1139,8 @@ fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
         bail!("Taira genesis final transaction is not instruction-only");
     }
     let rendered = json_pretty_bytes_v1(&genesis, "Taira privacy release genesis")?;
+    validate_genesis_manifest_json(&rendered)
+        .wrap_err("Taira release genesis exceeds fixed resource bounds")?;
     if rendered != bytes {
         bail!("Taira release genesis changed while proving that privacy activation is absent");
     }
