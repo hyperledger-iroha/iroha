@@ -203,6 +203,22 @@ pub(super) fn production_authority(
     AuthenticatedEpisodeAuthority::from_verified_height_context(verified, capacity_geometry)
 }
 
+/// Build the smallest exact authority needed by focused recovered-WAL open
+/// tests. Production always uses [`production_authority`] and configured
+/// capacity geometry.
+#[cfg(test)]
+pub(super) fn recovered_wal_test_authority(
+    verified: &VerifiedHeightContext,
+) -> Option<AuthenticatedEpisodeAuthority> {
+    let geometry = CapacityGeometry::new([
+        (CapacityClass::Consensus, 1),
+        (CapacityClass::Effect, 1),
+        (CapacityClass::Serve, 1),
+        (CapacityClass::Producer, 1),
+    ]);
+    AuthenticatedEpisodeAuthority::from_verified_height_context(verified, geometry)
+}
+
 /// Typed height rollover snapshot carrying an opaque verified successor authority.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RolloverSnapshot {

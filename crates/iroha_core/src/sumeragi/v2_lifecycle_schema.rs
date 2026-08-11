@@ -2,6 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::{
+    replay_authority::LifecycleReplayAuthorityV1, work_registry::ReadyValidateCarrierSeal,
+};
+
 pub(super) const MAX_PHYSICAL_SLOTS_PER_RECORD: usize = 64;
 pub(super) const MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize = u16::MAX as usize + 1;
 
@@ -506,13 +510,13 @@ impl LifecycleStageKind {
     /// stage.
     pub(super) const fn remaining_stages(self) -> u64 {
         match self {
-            Self::FetchBody => 4,
-            Self::StoreBody => 3,
+            Self::FetchBody => 5,
+            Self::StoreBody => 4,
+            Self::ValidateBody => 3,
             Self::SignProposal
             | Self::SignPrepareVote
             | Self::SignCommitVote
             | Self::SignTimeoutVote
-            | Self::ValidateBody
             | Self::CertifiedServe => 2,
             Self::ApplyDecision
             | Self::BroadcastProposal
@@ -881,10 +885,53 @@ pub(crate) struct LifecycleRecord {
 /// Certified Serve uses a domain-separated six-field-key subject over the
 /// block subject and exact signed-request hash. Its variants retain that exact
 /// request receipt, the authorizing certificate digest, and the typed terminal
-/// payload-store receipt.
+/// payload-store receipt. Body-pipeline work retains the exact fsynced body
+/// frame identity separately from its consensus authority; restart must join
+/// both before recreating executable work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct DurableBodyFrameReference {
+    pub(super) context: LifecycleDigest,
+    pub(super) round: LifecycleRound,
+    pub(super) subject: LifecycleDigest,
+    pub(super) manifest: LifecycleDigest,
+    pub(super) frame: LifecycleDigest,
+}
+
+impl DurableBodyFrameReference {
+    /// Construct the complete body-store identity retained by a ledger row.
+    pub(super) const fn new(
+        context: LifecycleDigest,
+        round: LifecycleRound,
+        subject: LifecycleDigest,
+        manifest: LifecycleDigest,
+        frame: LifecycleDigest,
+    ) -> Self {
+        Self {
+            context,
+            round,
+            subject,
+            manifest,
+            frame,
+        }
+    }
+
+    /// Check that the reference names the body coordinates frozen in a key.
+    pub(super) fn matches_key(self, key: LifecycleKey) -> bool {
+        self.context == key.context
+            && Some(self.round) == key.proposal_round
+            && Some(self.subject) == key.subject
+            && matches!(
+                key.phase,
+                LifecyclePhase::Store | LifecyclePhase::Validate | LifecyclePhase::Apply
+            )
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DurablePayloadReference {
     None,
+    /// Exact canonical body-store frame required to reconstruct body work.
+    BodyFrame(DurableBodyFrameReference),
     CertifiedServePending {
         request: LifecycleDigest,
         certificate: LifecycleDigest,
@@ -939,12 +986,17 @@ impl DurablePayloadReference {
     }
 
     pub(super) const fn is_certified_serve(self) -> bool {
-        !matches!(self, Self::None)
+        matches!(
+            self,
+            Self::CertifiedServePending { .. }
+                | Self::CertifiedServeCompleted { .. }
+                | Self::CertifiedServeNegative { .. }
+        )
     }
 
     pub(super) const fn certificate(self) -> Option<LifecycleDigest> {
         match self {
-            Self::None => None,
+            Self::None | Self::BodyFrame(_) => None,
             Self::CertifiedServePending { certificate, .. }
             | Self::CertifiedServeCompleted { certificate, .. }
             | Self::CertifiedServeNegative { certificate, .. } => Some(certificate),
@@ -953,7 +1005,7 @@ impl DurablePayloadReference {
 
     pub(super) const fn request(self) -> Option<LifecycleDigest> {
         match self {
-            Self::None => None,
+            Self::None | Self::BodyFrame(_) => None,
             Self::CertifiedServePending { request, .. }
             | Self::CertifiedServeCompleted { request, .. }
             | Self::CertifiedServeNegative { request, .. } => Some(request),
@@ -963,6 +1015,7 @@ impl DurablePayloadReference {
     pub(super) fn same_admission_material(self, other: Self) -> bool {
         match (self, other) {
             (Self::None, Self::None) => true,
+            (Self::BodyFrame(left), Self::BodyFrame(right)) => left == right,
             (left, right) => match (
                 left.request(),
                 left.certificate(),
@@ -1030,28 +1083,192 @@ impl DurablePayloadReference {
                 Self::CertifiedServeNegative { outcome, .. },
                 Some(terminal),
             ) => outcome.terminal() == terminal,
-            (LifecycleWorkClass::Validate, Self::None, terminal) => {
+            (LifecycleWorkClass::Store | LifecycleWorkClass::Apply, Self::BodyFrame(_), _) => true,
+            (LifecycleWorkClass::Validate, Self::BodyFrame(_), terminal) => {
                 matches!(
                     terminal,
                     None | Some(TerminalOutcome::Advanced | TerminalOutcome::Cancelled)
                 )
             }
-            (class, Self::None, _) => class != LifecycleWorkClass::CertifiedServe,
+            (class, Self::None, _) => !matches!(
+                class,
+                LifecycleWorkClass::Store
+                    | LifecycleWorkClass::Validate
+                    | LifecycleWorkClass::Apply
+                    | LifecycleWorkClass::CertifiedServe
+            ),
             _ => false,
         }
     }
 }
 
+/// Exact restart-stable parent-to-child edge created by one atomic lifecycle cut.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DurableContinuationEdge {
+    /// A completed Fetch publishes its exact Store successor.
+    FetchToStore,
+    /// A completed Store publishes its exact Validate successor.
+    StoreToValidate,
+    /// Successful validation publishes its exact Apply successor.
+    ValidateToApply,
+    /// Rejected certified validation publishes one invalid-body report.
+    ValidateToInvalidBodyReport,
+    /// WAL-persisted validation publishes one Prepare-vote signing successor.
+    ValidateToSignPrepare,
+    /// WAL-persisted validation publishes one Commit-vote signing successor.
+    ValidateToSignCommit,
+}
+
+/// Typed durable continuation retained beside one lifecycle tombstone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DurableContinuation {
+    /// No durable continuation exists. Live and unrelated terminal rows use this.
+    None,
+    /// Validate completed durably without publishing a child lifecycle record.
+    AdvancedNoSuccessor,
+    /// One exact forward child was published atomically with the parent tombstone.
+    AdvancedSuccessor {
+        /// Closed semantic edge authenticated during restart.
+        edge: DurableContinuationEdge,
+        /// Immutable ordinal of the exact child record.
+        ordinal: u128,
+    },
+}
+
+impl DurableContinuation {
+    /// Construct one typed forward successor edge.
+    pub(super) const fn successor(edge: DurableContinuationEdge, ordinal: u128) -> Self {
+        Self::AdvancedSuccessor { edge, ordinal }
+    }
+
+    /// Return the exact edge and child ordinal, if this continuation has one.
+    pub(super) const fn successor_parts(self) -> Option<(DurableContinuationEdge, u128)> {
+        match self {
+            Self::AdvancedSuccessor { edge, ordinal } => Some((edge, ordinal)),
+            Self::None | Self::AdvancedNoSuccessor => None,
+        }
+    }
+
+    /// Return whether this continuation is canonical for one durable record.
+    pub(super) const fn matches_record(
+        self,
+        work_class: LifecycleWorkClass,
+        terminal: Option<TerminalOutcome>,
+        ordinal: u128,
+        high_water: u128,
+    ) -> bool {
+        match (work_class, terminal, self) {
+            (
+                LifecycleWorkClass::Fetch,
+                Some(TerminalOutcome::Advanced),
+                Self::AdvancedSuccessor {
+                    edge: DurableContinuationEdge::FetchToStore,
+                    ordinal: successor,
+                },
+            )
+            | (
+                LifecycleWorkClass::Store,
+                Some(TerminalOutcome::Advanced),
+                Self::AdvancedSuccessor {
+                    edge: DurableContinuationEdge::StoreToValidate,
+                    ordinal: successor,
+                },
+            ) => successor > ordinal && successor <= high_water,
+            (
+                LifecycleWorkClass::Validate,
+                Some(TerminalOutcome::Advanced),
+                Self::AdvancedNoSuccessor,
+            ) => true,
+            (
+                LifecycleWorkClass::Validate,
+                Some(TerminalOutcome::Advanced),
+                Self::AdvancedSuccessor {
+                    edge:
+                        DurableContinuationEdge::ValidateToApply
+                        | DurableContinuationEdge::ValidateToInvalidBodyReport
+                        | DurableContinuationEdge::ValidateToSignPrepare
+                        | DurableContinuationEdge::ValidateToSignCommit,
+                    ordinal: successor,
+                },
+            ) => successor > ordinal && successor <= high_water,
+            (
+                LifecycleWorkClass::Fetch
+                | LifecycleWorkClass::Store
+                | LifecycleWorkClass::Validate,
+                Some(TerminalOutcome::Advanced),
+                Self::None,
+            ) => false,
+            (_, _, Self::None) => true,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct DurableRecordMetadata {
     pub(super) reconstruction_source: LifecycleDigest,
     pub(super) payload: DurablePayloadReference,
+    /// Canonical inert replay envelope for this exact durable row.
+    pub(super) replay_authority: LifecycleReplayAuthorityV1,
+    /// Exact typed continuation created by an atomic terminal transition.
+    pub(super) continuation: DurableContinuation,
 }
 
 impl DurableRecordMetadata {
+    pub(super) fn from_candidate(candidate: &CandidateAdmission) -> Self {
+        Self {
+            reconstruction_source: candidate.reconstruction_source,
+            payload: candidate.payload,
+            replay_authority: candidate.replay_authority.clone(),
+            continuation: DurableContinuation::None,
+        }
+    }
+
+    pub(super) fn from_producer(producer: &ProducerTurnAdmission) -> Self {
+        Self {
+            reconstruction_source: producer.reconstruction_source,
+            payload: DurablePayloadReference::None,
+            replay_authority: producer.replay_authority.clone(),
+            continuation: DurableContinuation::None,
+        }
+    }
+
+    pub(super) fn from_recovered(recovered: &RecoveredLifecycleRecord) -> Self {
+        Self {
+            reconstruction_source: recovered.reconstruction_source,
+            payload: recovered.payload,
+            replay_authority: recovered.replay_authority.clone(),
+            continuation: recovered.continuation,
+        }
+    }
+
     pub(super) fn matches_admission(&self, candidate: &CandidateAdmission) -> bool {
         self.reconstruction_source == candidate.reconstruction_source
             && self.payload.same_admission_material(candidate.payload)
+            && if candidate.work_class == LifecycleWorkClass::CertifiedServe {
+                self.replay_authority
+                    .same_persisted_family(&candidate.replay_authority)
+            } else {
+                self.replay_authority == candidate.replay_authority
+            }
+    }
+
+    pub(super) fn terminalized_replay_authority(
+        &self,
+        context: LifecycleContext,
+        key: LifecycleKey,
+        work_class: LifecycleWorkClass,
+        stage: LifecycleStage,
+        payload: DurablePayloadReference,
+    ) -> Option<LifecycleReplayAuthorityV1> {
+        if work_class == LifecycleWorkClass::CertifiedServe {
+            return self
+                .replay_authority
+                .terminalized_certified_serve(context, key, stage, payload);
+        }
+        self.replay_authority
+            .structurally_matches_record(context, key, work_class, stage, payload)
+            .then_some(self.replay_authority.clone())
     }
 }
 
@@ -1070,6 +1287,7 @@ pub(crate) struct ProducerTurnAdmission {
     pub(super) key: LifecycleKey,
     pub(super) stage: LifecycleStage,
     pub(super) reconstruction_source: LifecycleDigest,
+    pub(super) replay_authority: LifecycleReplayAuthorityV1,
     pub(super) physical_geometry: PhysicalGeometry,
 }
 
@@ -1079,12 +1297,14 @@ impl ProducerTurnAdmission {
         key: LifecycleKey,
         stage: LifecycleStage,
         reconstruction_source: LifecycleDigest,
+        replay_authority: LifecycleReplayAuthorityV1,
         physical_geometry: PhysicalGeometry,
     ) -> Self {
         Self {
             key,
             stage,
             reconstruction_source,
+            replay_authority,
             physical_geometry,
         }
     }
@@ -1100,6 +1320,7 @@ pub(crate) struct CandidateAdmission {
     pub(super) initial_state: InitialLifecycleState,
     pub(super) reconstruction_source: LifecycleDigest,
     pub(super) payload: DurablePayloadReference,
+    pub(super) replay_authority: LifecycleReplayAuthorityV1,
     pub(super) physical_geometry: PhysicalGeometry,
     pub(super) producer_turn: Option<ProducerTurnAdmission>,
 }
@@ -1114,6 +1335,7 @@ impl CandidateAdmission {
         initial_state: InitialLifecycleState,
         reconstruction_source: LifecycleDigest,
         payload: DurablePayloadReference,
+        replay_authority: LifecycleReplayAuthorityV1,
         physical_geometry: PhysicalGeometry,
         producer_turn: Option<ProducerTurnAdmission>,
     ) -> Self {
@@ -1125,6 +1347,7 @@ impl CandidateAdmission {
             initial_state,
             reconstruction_source,
             payload,
+            replay_authority,
             physical_geometry,
             producer_turn,
         }
@@ -1136,6 +1359,34 @@ impl CandidateAdmission {
             producer.physical_geometry = producer.physical_geometry.canonicalized()?;
         }
         Ok(())
+    }
+
+    pub(super) fn replay_authority_is_exact(&self, context: LifecycleContext) -> bool {
+        let primary_is_exact = self.replay_authority.structurally_matches_record(
+            context,
+            self.key,
+            self.work_class,
+            self.stage,
+            self.payload,
+        );
+        match (self.work_class, self.producer_turn.as_ref()) {
+            (LifecycleWorkClass::CertifiedServe, Some(producer)) => {
+                primary_is_exact
+                    && serve_and_producer_keys_match(self.key, producer.key)
+                    && producer.reconstruction_source == self.reconstruction_source
+                    && self
+                        .replay_authority
+                        .same_persisted_family(&producer.replay_authority)
+                    && producer.replay_authority.structurally_matches_record(
+                        context,
+                        producer.key,
+                        LifecycleWorkClass::ProducerTurn,
+                        producer.stage,
+                        DurablePayloadReference::None,
+                    )
+            }
+            _ => primary_is_exact,
+        }
     }
 }
 
@@ -1150,6 +1401,7 @@ pub(super) struct CapacityAdmissionWait {
 
 /// Admission input distinguishing liveness candidates from ordinary effects.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(variant_size_differences, clippy::large_enum_variant)]
 pub(crate) enum AdmissionRequest {
     /// A lifecycle candidate subject to exact ownership and capacity checks.
     Candidate(CandidateAdmission),
@@ -1249,11 +1501,100 @@ impl ReadyEvent {
     }
 }
 
+/// Exact Validate carrier identity embedded in one complete Ready-row census.
+///
+/// This transient seal is absent from LifecycleLedgerV1. Its private fields
+/// bind the registry classification to the coordinator's current logical row;
+/// only the rejected form implies one extra Consensus output reservation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct AttestedReadyValidateDemand {
+    owner: OwnerId,
+    ordinal: u128,
+    key: LifecycleKey,
+    stage: LifecycleStage,
+    slot: PhysicalSlotId,
+    digest: LifecycleDigest,
+    capacity_class: Option<CapacityClass>,
+}
+
+impl AttestedReadyValidateDemand {
+    /// Bind one opaque registry carrier seal to its exact Validate row.
+    pub(super) fn from_registry_seal(
+        record: &LifecycleRecord,
+        seal: ReadyValidateCarrierSeal,
+    ) -> Option<Self> {
+        if record.work_class != LifecycleWorkClass::Validate
+            || record.key.phase() != LifecyclePhase::Validate
+            || record.stage.kind() != LifecycleStageKind::ValidateBody
+            || record.stage.predecessor_scope() != PredecessorScope::Independent
+            || record.physical_slots.len() != 1
+        {
+            return None;
+        }
+        let (&slot, &digest) = record.physical_slots.first_key_value()?;
+        if !seal.matches(record.owner, record.ordinal, slot, digest) {
+            return None;
+        }
+        Some(Self {
+            owner: record.owner,
+            ordinal: record.ordinal,
+            key: record.key,
+            stage: record.stage,
+            slot,
+            digest,
+            capacity_class: seal
+                .requires_consensus_capacity()
+                .then_some(CapacityClass::Consensus),
+        })
+    }
+
+    /// Mint a raw carrier classification only for focused scheduler tests.
+    ///
+    /// This deliberately permits a non-Validate row so the planner's
+    /// forbidden-attestation path can be exercised without widening the
+    /// production constructor.
+    #[cfg(test)]
+    fn for_test(record: &LifecycleRecord, rejected: bool) -> Option<Self> {
+        if record.physical_slots.len() != 1 {
+            return None;
+        }
+        let (&slot, &digest) = record.physical_slots.first_key_value()?;
+        Some(Self {
+            owner: record.owner,
+            ordinal: record.ordinal,
+            key: record.key,
+            stage: record.stage,
+            slot,
+            digest,
+            capacity_class: rejected.then_some(CapacityClass::Consensus),
+        })
+    }
+
+    fn matches_record(self, record: &LifecycleRecord) -> bool {
+        record.work_class == LifecycleWorkClass::Validate
+            && record.key.phase() == LifecyclePhase::Validate
+            && record.stage.kind() == LifecycleStageKind::ValidateBody
+            && record.stage.predecessor_scope() == PredecessorScope::Independent
+            && self.owner == record.owner
+            && self.ordinal == record.ordinal
+            && self.key == record.key
+            && self.stage == record.stage
+            && record.physical_slots.len() == 1
+            && record.physical_slots.get(&self.slot) == Some(&self.digest)
+    }
+
+    /// Return the sole extra output class demanded by this carrier, if any.
+    pub(super) const fn capacity_class(self) -> Option<CapacityClass> {
+        self.capacity_class
+    }
+}
+
 /// One identity-bound row of live runtime rank debts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SchedulerReadyInputs {
     owner: OwnerId,
     key: LifecycleKey,
+    validate_attestation: Option<AttestedReadyValidateDemand>,
     mode: u64,
     capacity: u64,
     selector: u64,
@@ -1263,22 +1604,45 @@ pub(crate) struct SchedulerReadyInputs {
 }
 
 impl SchedulerReadyInputs {
+    /// Join one exact coordinator row, optional sealed Validate carrier, and
+    /// the six authenticated runtime debts into a production scheduler row.
+    ///
+    /// Validate work requires the registry-derived attestation; every other
+    /// work class forbids one. Missing or foreign authority returns `None`.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn from_authenticated(
+        record: &LifecycleRecord,
+        validate_attestation: Option<AttestedReadyValidateDemand>,
+        live_debts: [u64; 6],
+    ) -> Option<Self> {
+        let [mode, capacity, selector, lane, source, runner] = live_debts;
+        let row = Self {
+            owner: record.owner,
+            key: record.key,
+            validate_attestation,
+            mode,
+            capacity,
+            selector,
+            lane,
+            source,
+            runner,
+        };
+        row.identity_matches(record.ordinal, record).then_some(row)
+    }
+
     /// Construct one test row without exposing a production rank mint.
     #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
-    pub(super) const fn new(
-        owner: OwnerId,
-        key: LifecycleKey,
-        mode: u64,
-        capacity: u64,
-        selector: u64,
-        lane: u64,
-        source: u64,
-        runner: u64,
+    pub(super) fn new(
+        record: &LifecycleRecord,
+        rejected_validate: Option<bool>,
+        live_debts: [u64; 6],
     ) -> Self {
+        let [mode, capacity, selector, lane, source, runner] = live_debts;
         Self {
-            owner,
-            key,
+            owner: record.owner,
+            key: record.key,
+            validate_attestation: rejected_validate
+                .and_then(|rejected| AttestedReadyValidateDemand::for_test(record, rejected)),
             mode,
             capacity,
             selector,
@@ -1288,9 +1652,43 @@ impl SchedulerReadyInputs {
         }
     }
 
+    /// Construct one deliberately foreign test identity around an otherwise
+    /// exact capacity attestation.
+    #[cfg(test)]
+    pub(super) fn with_identity_for_test(
+        record: &LifecycleRecord,
+        owner: OwnerId,
+        key: LifecycleKey,
+        rejected_validate: Option<bool>,
+        live_debts: [u64; 6],
+    ) -> Self {
+        let mut row = Self::new(record, rejected_validate, live_debts);
+        row.owner = owner;
+        row.key = key;
+        row
+    }
+
     /// Return whether this row names the coordinator's exact ready identity.
-    pub(super) fn identity_matches(&self, owner: OwnerId, key: LifecycleKey) -> bool {
-        self.owner == owner && self.key == key
+    pub(super) fn identity_matches(&self, ordinal: u128, record: &LifecycleRecord) -> bool {
+        ordinal == record.ordinal
+            && self.owner == record.owner
+            && self.key == record.key
+            && match (record.work_class, self.validate_attestation) {
+                (LifecycleWorkClass::Validate, Some(attestation)) => {
+                    attestation.matches_record(record)
+                }
+                (LifecycleWorkClass::Validate, None) => false,
+                (_, None) => true,
+                (_, Some(_)) => false,
+            }
+    }
+
+    /// Return the sealed extra capacity class needed before this row is claimed.
+    pub(super) const fn output_capacity_class(&self) -> Option<CapacityClass> {
+        match self.validate_attestation {
+            Some(attestation) => attestation.capacity_class(),
+            None => None,
+        }
     }
 
     /// Return the six live debts in their mandated rank order.
@@ -1307,8 +1705,9 @@ impl SchedulerReadyInputs {
 }
 
 /// Authenticated generation and ready-row snapshot supplied to one planning turn.
-// TODO: Add the move-only coordinator demand plus composite runtime attestation
-// factory before production selection is wired; the raw mint remains test-only.
+// TODO: Add the composite runtime attestation factory that joins every sealed
+// Validate demand with mode/capacity/selector/lane/source/runner observations;
+// the raw whole-snapshot mint remains test-only.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct SchedulerInputs {
     generations: BTreeMap<WaitSource, u64>,
@@ -1377,6 +1776,39 @@ pub(crate) struct TurnLease {
     pub(super) stage: LifecycleStage,
     pub(super) rank: SchedulerRank,
     pub(super) physical_slots: BTreeMap<PhysicalSlotId, LifecycleDigest>,
+    pub(super) output_reservation: Option<LeaseCapacityReservation>,
+}
+
+/// Transient output capacity held exclusively by one active lease.
+///
+/// This reservation is absent from durable lifecycle state. It prevents a
+/// rejected Validate from being claimed unless its one Consensus report slot
+/// is already protected from concurrent admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct LeaseCapacityReservation {
+    class: CapacityClass,
+    observed_generation: u64,
+}
+
+impl LeaseCapacityReservation {
+    /// Bind one capacity generation to the active lease which observed it.
+    pub(super) const fn new(class: CapacityClass, observed_generation: u64) -> Self {
+        Self {
+            class,
+            observed_generation,
+        }
+    }
+
+    /// Return the capacity class protected by this lease.
+    pub(super) const fn class(self) -> CapacityClass {
+        self.class
+    }
+
+    /// Project this reservation back to its exact generation fence.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) const fn wait_token(self) -> WaitToken {
+        WaitToken::new(WaitSource::Capacity(self.class), self.observed_generation)
+    }
 }
 
 impl TurnLease {
@@ -1418,6 +1850,11 @@ impl TurnLease {
     /// Borrow the coalesced physical work projections.
     pub(crate) const fn physical_slots(&self) -> &BTreeMap<PhysicalSlotId, LifecycleDigest> {
         &self.physical_slots
+    }
+
+    /// Return the exact extra output reservation bound to this lease, if any.
+    pub(super) const fn output_reservation(&self) -> Option<LeaseCapacityReservation> {
+        self.output_reservation
     }
 }
 
@@ -1489,6 +1926,8 @@ pub(crate) struct RecoveredLifecycleRecord {
     pub(super) terminal: Option<TerminalOutcome>,
     pub(super) reconstruction_source: LifecycleDigest,
     pub(super) payload: DurablePayloadReference,
+    pub(super) replay_authority: LifecycleReplayAuthorityV1,
+    pub(super) continuation: DurableContinuation,
     pub(super) physical_slot_universe: BTreeSet<PhysicalSlotId>,
 }
 
@@ -1504,6 +1943,8 @@ impl RecoveredLifecycleRecord {
         terminal: Option<TerminalOutcome>,
         reconstruction_source: LifecycleDigest,
         payload: DurablePayloadReference,
+        replay_authority: LifecycleReplayAuthorityV1,
+        continuation: DurableContinuation,
         physical_slot_universe: BTreeSet<PhysicalSlotId>,
     ) -> Self {
         Self {
@@ -1515,8 +1956,20 @@ impl RecoveredLifecycleRecord {
             terminal,
             reconstruction_source,
             payload,
+            replay_authority,
+            continuation,
             physical_slot_universe,
         }
+    }
+
+    pub(super) fn replay_authority_is_exact(&self, context: LifecycleContext) -> bool {
+        self.replay_authority.structurally_matches_record(
+            context,
+            self.key,
+            self.work_class,
+            self.stage,
+            self.payload,
+        )
     }
 }
 
@@ -1599,11 +2052,52 @@ pub(super) fn lower_enter_view_ordinals(
 
 #[cfg(test)]
 mod tests {
-    use super::{DurablePayloadReference, LifecycleWorkClass, TerminalOutcome};
+    use super::{
+        DurableBodyFrameReference, DurablePayloadReference, LifecycleDigest, LifecycleKey,
+        LifecyclePhase, LifecycleRound, LifecycleWorkClass, TerminalOutcome,
+    };
+
+    fn digest(byte: u8) -> LifecycleDigest {
+        LifecycleDigest::new([byte; 32])
+    }
 
     #[test]
-    fn durable_validate_accepts_only_live_advanced_or_cancelled_state() {
-        let payload = DurablePayloadReference::None;
+    fn durable_body_frame_is_not_misclassified_as_serve_material() {
+        let round = LifecycleRound::new(7, 3);
+        let key = LifecycleKey::new(
+            digest(1),
+            round,
+            Some(round),
+            Some(digest(2)),
+            LifecyclePhase::Store,
+            None,
+        );
+        let reference =
+            DurableBodyFrameReference::new(digest(1), round, digest(2), digest(3), digest(4));
+        let payload = DurablePayloadReference::BodyFrame(reference);
+        assert!(reference.matches_key(key));
+        assert!(!payload.is_certified_serve());
+        assert_eq!(payload.request(), None);
+        assert_eq!(payload.certificate(), None);
+        assert!(payload.same_admission_material(payload));
+        assert!(!payload.same_admission_material(DurablePayloadReference::None));
+        assert!(payload.matches_terminal(LifecycleWorkClass::Store, None));
+        assert!(payload.matches_terminal(LifecycleWorkClass::Apply, None));
+        assert!(!payload.matches_terminal(LifecycleWorkClass::Fetch, None));
+        assert!(!DurablePayloadReference::None.matches_terminal(LifecycleWorkClass::Store, None));
+        assert!(!DurablePayloadReference::None.matches_terminal(LifecycleWorkClass::Apply, None));
+    }
+
+    #[test]
+    fn durable_validate_requires_a_body_frame_and_only_live_advanced_or_cancelled_state() {
+        let round = LifecycleRound::new(7, 3);
+        let payload = DurablePayloadReference::BodyFrame(DurableBodyFrameReference::new(
+            digest(1),
+            round,
+            digest(2),
+            digest(3),
+            digest(4),
+        ));
         assert!(payload.matches_terminal(LifecycleWorkClass::Validate, None));
         assert!(payload.matches_terminal(
             LifecycleWorkClass::Validate,
@@ -1621,6 +2115,11 @@ mod tests {
             assert!(!payload.matches_terminal(LifecycleWorkClass::Validate, Some(terminal)));
         }
 
+        assert!(
+            !DurablePayloadReference::None.matches_terminal(LifecycleWorkClass::Validate, None)
+        );
+
+        let payload = DurablePayloadReference::None;
         assert!(payload.matches_terminal(
             LifecycleWorkClass::InvalidBodyReport,
             Some(TerminalOutcome::Rejected(7))

@@ -181,6 +181,7 @@ impl Error for WalCodecError {}
 pub struct RecoveredWalRecord {
     sequence: u64,
     payload: Vec<u8>,
+    frame_hash: [u8; SAFETY_WAL_HASH_LEN],
 }
 
 impl RecoveredWalRecord {
@@ -194,6 +195,12 @@ impl RecoveredWalRecord {
     #[must_use]
     pub fn payload(&self) -> &[u8] {
         &self.payload
+    }
+
+    /// Return the checksum of the exact complete frame accepted by recovery.
+    #[must_use]
+    pub const fn frame_hash(&self) -> [u8; SAFETY_WAL_HASH_LEN] {
+        self.frame_hash
     }
 }
 
@@ -450,7 +457,11 @@ pub fn recover_wal_file(
             });
         }
 
-        records.push(RecoveredWalRecord { sequence, payload });
+        records.push(RecoveredWalRecord {
+            sequence,
+            payload,
+            frame_hash: encoded_hash,
+        });
         previous_hash = encoded_hash;
         expected_sequence = expected_sequence
             .checked_add(1)
@@ -1747,6 +1758,14 @@ mod byte_lifecycle_tests {
                 (2, b"decision".as_slice()),
             ]
         );
+        assert_eq!(
+            recovered
+                .records()
+                .last()
+                .expect("three complete fixture frames")
+                .frame_hash(),
+            recovered.last_frame_hash()
+        );
         assert_eq!(&bytes[..SAFETY_WAL_FILE_MAGIC.len()], b"SUMV2WAL");
         assert_eq!(
             &bytes[SAFETY_WAL_FILE_HEADER_LEN
@@ -2017,6 +2036,7 @@ mod byte_lifecycle_tests {
         persisted.extend_from_slice(&io.bytes);
         let replayed = recover_wal_file(&persisted, IDENTITY, &test_hash).expect("replay append");
         assert_eq!(replayed.records()[0].payload(), b"prepare intent");
+        assert_eq!(replayed.records()[0].frame_hash(), receipt.frame_hash());
         assert_eq!(replayed.last_frame_hash(), receipt.frame_hash());
     }
 

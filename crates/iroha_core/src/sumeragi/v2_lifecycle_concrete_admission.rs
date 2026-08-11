@@ -4,18 +4,22 @@ use super::{
     AdmissionDecision, AdmissionRequest, CoordinatorFault, LifecycleCoordinator, LifecycleDigest,
     LifecyclePhase, LifecycleStageKind, LifecycleState, LifecycleWorkClass, PredecessorScope,
     TurnLease, TurnOutcome, WaitSource, WaitToken,
+    body_pipeline_transition::durable_validate_payload_is_exact,
     projection::{self, AdapterEffectAdmissionError},
-    schema::DurablePayloadReference,
+    schema::AttestedReadyValidateDemand,
     work_registry::{
-        ConcreteLifecycleWork, ConcreteLifecycleWorkRegistry, ConcreteWorkAddress,
-        DurableValidateCompletionAuthority, DurableValidateCompletionPublication,
-        DurableValidateCompletionPublicationError, DurableValidateDispatch,
-        DurableValidateExecutionError, ExecutedDurableValidateDispatch,
-        PublishedDurableValidateCompletion, RegistryError, RegistryPublicationError,
+        AuthenticatedRecoveredWalValidateLifecycleRepair, ConcreteLifecycleWork,
+        ConcreteLifecycleWorkRegistry, ConcreteWorkAddress, DurableValidateCompletionAuthority,
+        DurableValidateCompletionPublication, DurableValidateCompletionPublicationError,
+        DurableValidateDispatch, DurableValidateExecutionError, ExecutedDurableValidateDispatch,
+        OpenedRecoveredWalValidateLedger, PublishedDurableValidateCompletion,
+        ReadyValidateCarrierError, RecoveredWalParentFactoryError, RegistryError,
+        RegistryPublicationError, reconstruct_recovered_wal_validate_parent,
     },
 };
 use crate::sumeragi::{
-    v2::{AdapterEffect, VerifiedHeightContext},
+    v2::{AdapterEffect, RecoveredWalVoteSign, VerifiedHeightContext},
+    v2_body_store::V2BodyStore,
     v2_runtime::PendingRuntimeEffectBinding,
 };
 
@@ -33,6 +37,35 @@ impl LifecycleWorkRegistryHolder {
         Self {
             registry: ConcreteLifecycleWorkRegistry::default(),
         }
+    }
+
+    /// Reconstruct one storage-authenticated recovered Validate parent without a scheduler lease.
+    ///
+    /// The concrete registry never leaves this holder. Success returns only
+    /// the opaque opened ledger and authenticated repair, while every failure
+    /// retains or restores all WAL and body-marker authority internally.
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn reconstruct_recovered_wal_validate_parent<'registry, 'body>(
+        &'registry mut self,
+        verified: &VerifiedHeightContext,
+        body_store: &'body mut V2BodyStore,
+        ledger_root: &std::path::Path,
+        recovered: RecoveredWalVoteSign,
+    ) -> Result<
+        (
+            OpenedRecoveredWalValidateLedger,
+            AuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
+        ),
+        RecoveredWalParentFactoryError<'body>,
+    > {
+        reconstruct_recovered_wal_validate_parent(
+            &mut self.registry,
+            verified,
+            body_store,
+            ledger_root,
+            recovered,
+        )
     }
 
     /// Wrap a concrete registry for focused atomic-boundary tests.
@@ -71,6 +104,15 @@ pub(super) enum DurableValidateDispatchError {
     AliasedWaitSource,
     /// Pure blocked settlement changed more than the exact lease and source row.
     InvalidStagedTransition,
+}
+
+/// Closed failure while binding a Ready Validate carrier into scheduler input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReadyValidateDemandAttestationError {
+    /// The coordinator row or one of its reverse indexes is not exact and Ready.
+    InvalidCoordinatorIndex,
+    /// The process-local carrier no longer matches the coordinator address/digest.
+    Registry(ReadyValidateCarrierError),
 }
 
 /// Closed reason an effect/pending pair could not cross the atomic boundary.
@@ -166,6 +208,19 @@ impl LifecycleCoordinator {
                 return Err((DurableValidateDispatchError::Registry(error), lease));
             }
         };
+        if !self
+            .durable_records
+            .get(&lease.ordinal())
+            .is_some_and(|metadata| prepared.matches_durable_payload(metadata.payload))
+        {
+            drop(prepared);
+            return Err((
+                DurableValidateDispatchError::Registry(
+                    DurableValidateExecutionError::InvalidValidateShape,
+                ),
+                lease,
+            ));
+        }
         let source = prepared.durable_validation_wait_source();
         if !matches!(source, WaitSource::External(_)) {
             drop(prepared);
@@ -280,6 +335,112 @@ impl LifecycleCoordinator {
                 DurableValidateCompletionPublication::PublishedRejected(published)
             }
         })
+    }
+
+    /// Bind one exact Ready Validate carrier into a transient scheduler seal.
+    ///
+    /// The registry returns only a closed carrier classification. This method
+    /// joins it to the coordinator's complete row identity and physical digest
+    /// without exposing a caller-mintable demand bit or capacity class.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn attest_ready_validate_demand(
+        &self,
+        registry: &LifecycleWorkRegistryHolder,
+        ordinal: u128,
+    ) -> Result<AttestedReadyValidateDemand, ReadyValidateDemandAttestationError> {
+        let Some(record) = self.records.get(&ordinal) else {
+            return Err(ReadyValidateDemandAttestationError::InvalidCoordinatorIndex);
+        };
+        let readiness_index_is_exact = match record.state {
+            LifecycleState::Ready => self.ready_index.contains(&ordinal),
+            LifecycleState::Waiting(wait)
+                if matches!(
+                    wait.source(),
+                    WaitSource::External(_) | WaitSource::Recovery(_)
+                ) =>
+            {
+                !self.ready_index.contains(&ordinal)
+            }
+            LifecycleState::Waiting(_)
+            | LifecycleState::Claimed(_)
+            | LifecycleState::Terminal(_) => false,
+        };
+        if self.fault.is_some()
+            || self.active_lease.is_some()
+            || record.ordinal != ordinal
+            || record.work_class != LifecycleWorkClass::Validate
+            || record.key.phase() != LifecyclePhase::Validate
+            || record.stage.kind() != LifecycleStageKind::ValidateBody
+            || record.stage.predecessor_scope() != PredecessorScope::Independent
+            || record.physical_slots.len() != 1
+            || record.episode.slot_universe.len() != 1
+            || record.episode.consumed_slots != record.episode.slot_universe
+            || !record.episode.frozen_predecessors.is_empty()
+            || self.episode_authority.universe_for(record.key).as_ref()
+                != Some(&record.episode.universe)
+            || !self.episode_authority.admits_slots(
+                record.work_class.capacity_class(),
+                &record.episode.slot_universe,
+            )
+            || !readiness_index_is_exact
+            || self.key_index.get(&record.key) != Some(&ordinal)
+            || self.owner_index.get(&record.owner.causal_root()) != Some(&record.owner)
+            || self
+                .records
+                .values()
+                .filter(|candidate| candidate.ordinal == ordinal)
+                .count()
+                != 1
+            || self
+                .records
+                .values()
+                .filter(|candidate| candidate.key == record.key)
+                .count()
+                != 1
+            || self
+                .key_index
+                .values()
+                .filter(|candidate| **candidate == ordinal)
+                .count()
+                != 1
+            || self
+                .owner_index
+                .values()
+                .filter(|owner| **owner == record.owner)
+                .count()
+                != 1
+            || !self.durable_records.get(&ordinal).is_some_and(|metadata| {
+                metadata.reconstruction_source == record.owner.causal_root().digest()
+                    && durable_validate_payload_is_exact(record.key, metadata.payload)
+                    && metadata.continuation == super::schema::DurableContinuation::None
+            })
+        {
+            return Err(ReadyValidateDemandAttestationError::InvalidCoordinatorIndex);
+        }
+        let (&slot, &digest) = record
+            .physical_slots
+            .first_key_value()
+            .expect("one-slot Ready Validate shape checked above");
+        if !record.episode.slot_universe.contains(&slot)
+            || slot.capacity_class() != Some(record.work_class.capacity_class())
+        {
+            return Err(ReadyValidateDemandAttestationError::InvalidCoordinatorIndex);
+        }
+        let address = ConcreteWorkAddress::new(record.owner, ordinal, slot)
+            .ok_or(ReadyValidateDemandAttestationError::InvalidCoordinatorIndex)?;
+        let seal = registry
+            .registry
+            .classify_ready_validate_carrier(address, digest)
+            .map_err(ReadyValidateDemandAttestationError::Registry)?;
+        if !self
+            .durable_records
+            .get(&ordinal)
+            .is_some_and(|metadata| seal.matches_durable_payload(record.key, metadata.payload))
+        {
+            return Err(ReadyValidateDemandAttestationError::InvalidCoordinatorIndex);
+        }
+        AttestedReadyValidateDemand::from_registry_seal(record, seal)
+            .ok_or(ReadyValidateDemandAttestationError::InvalidCoordinatorIndex)
     }
 
     /// Atomically admit and register one exact adapter effect.
@@ -483,7 +644,8 @@ fn waiting_durable_validate_record_is_exact(
             .get(&record.ordinal)
             .is_some_and(|metadata| {
                 metadata.reconstruction_source == record.owner.causal_root().digest()
-                    && metadata.payload == DurablePayloadReference::None
+                    && durable_validate_payload_is_exact(record.key, metadata.payload)
+                    && authority.matches_durable_payload(metadata.payload)
             })
 }
 
@@ -606,7 +768,7 @@ fn claimed_durable_validate_record_is_exact(
             .get(&record.ordinal)
             .is_some_and(|metadata| {
                 metadata.reconstruction_source == record.owner.causal_root().digest()
-                    && metadata.payload == DurablePayloadReference::None
+                    && durable_validate_payload_is_exact(record.key, metadata.payload)
             })
 }
 
@@ -744,7 +906,9 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             let context = wire::HeightContext {
-                chain_id: "sumeragi-v2-concrete-admission-test".into(),
+                network_id: crate::sumeragi::synthetic_network_id(
+                    "sumeragi-v2-concrete-admission-test",
+                ),
                 protocol_version: wire::PROTOCOL_VERSION,
                 height: 7,
                 epoch: 1,
@@ -830,13 +994,13 @@ mod tests {
         fn pair(
             &self,
             effect: AdapterEffect,
-            legacy_ordinal: u128,
+            source_ordinal: u128,
         ) -> (AdapterEffect, PendingRuntimeEffectBinding) {
             let ownership = bind_adapter_effect_batch_ownership(
                 core::slice::from_ref(&effect),
                 vec![RuntimeEffectOwnership::fresh_for_test(
                     self.tag,
-                    legacy_ordinal,
+                    source_ordinal,
                 )],
             )
             .expect("bind exact concrete-admission fixture")
@@ -875,6 +1039,10 @@ mod tests {
                     reconstruction_source: coordinator.durable_records[&record.ordinal]
                         .reconstruction_source,
                     payload: coordinator.durable_records[&record.ordinal].payload,
+                    replay_authority: coordinator.durable_records[&record.ordinal]
+                        .replay_authority
+                        .clone(),
+                    continuation: coordinator.durable_records[&record.ordinal].continuation,
                     physical_slot_universe: record.episode.slot_universe.clone(),
                 })
                 .collect(),

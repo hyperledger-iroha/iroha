@@ -31,9 +31,53 @@ const FILE_HEADER_PREFIX_LEN: usize = FILE_MAGIC.len() + 2 + 2 + HASH_LEN + HASH
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RecoveredRecord {
     /// Monotonic record sequence starting at zero.
-    pub sequence: u64,
+    sequence: u64,
+    /// Hash of the exact complete frame accepted by WAL recovery.
+    frame_hash: [u8; HASH_LEN],
     /// Opaque Norito payload bytes supplied by the consensus adapter.
-    pub payload: Vec<u8>,
+    payload: Vec<u8>,
+}
+
+impl RecoveredRecord {
+    /// Return the physical frame sequence starting at zero.
+    pub(crate) const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    /// Return the verified hash of this exact complete frame.
+    pub(crate) const fn frame_hash(&self) -> [u8; HASH_LEN] {
+        self.frame_hash
+    }
+
+    /// Borrow the opaque canonical payload carried by this frame.
+    pub(crate) fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
+    /// Match an append acknowledgement to this exact retained frame.
+    pub(crate) const fn exactly_matches_receipt(&self, receipt: SafetyWalAppendReceipt) -> bool {
+        self.sequence == receipt.sequence && self.frame_hash == receipt.frame_hash
+    }
+}
+
+/// Exact frame identity acknowledged only after the safety WAL is synchronized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "a synchronized WAL append receipt must be checked against its reducer intent"]
+pub(crate) struct SafetyWalAppendReceipt {
+    sequence: u64,
+    frame_hash: [u8; HASH_LEN],
+}
+
+impl SafetyWalAppendReceipt {
+    /// Return the acknowledged physical frame sequence.
+    pub(crate) const fn sequence(self) -> u64 {
+        self.sequence
+    }
+
+    /// Return the acknowledged hash of the exact complete frame.
+    pub(crate) const fn frame_hash(self) -> [u8; HASH_LEN] {
+        self.frame_hash
+    }
 }
 
 /// Errors raised while opening, replaying, or appending the safety WAL.
@@ -210,6 +254,7 @@ impl SafetyWal {
                 .iter()
                 .map(|record| RecoveredRecord {
                     sequence: record.sequence(),
+                    frame_hash: record.frame_hash(),
                     payload: record.payload().to_vec(),
                 })
                 .collect(),
@@ -226,7 +271,10 @@ impl SafetyWal {
     ///
     /// A successful return is the durability acknowledgement used by the reducer. On any error,
     /// callers must fail stop and reopen the WAL before attempting another consensus action.
-    pub(crate) fn append(&mut self, payload: &[u8]) -> Result<u64, SafetyWalError> {
+    pub(crate) fn append(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<SafetyWalAppendReceipt, SafetyWalError> {
         let mut io = FileAppendIo {
             file: &mut self.file,
         };
@@ -234,12 +282,18 @@ impl SafetyWal {
             .append_state
             .append(payload, &frame_hash, &mut io)
             .map_err(|error| map_append_error(&self.path, error))?;
-        let sequence = receipt.sequence();
-        self.records.push(RecoveredRecord {
-            sequence,
+        let receipt = SafetyWalAppendReceipt {
+            sequence: receipt.sequence(),
+            frame_hash: receipt.frame_hash(),
+        };
+        let record = RecoveredRecord {
+            sequence: receipt.sequence,
+            frame_hash: receipt.frame_hash,
             payload: payload.to_vec(),
-        });
-        Ok(sequence)
+        };
+        debug_assert!(record.exactly_matches_receipt(receipt));
+        self.records.push(record);
+        Ok(receipt)
     }
 
     /// Retire a closed height's WAL after the caller has validated Kura's
@@ -402,11 +456,14 @@ mod tests {
     fn append_reopens_and_replays_hash_chained_records() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
-        {
+        let (prepare_receipt, commit_receipt) = {
             let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
-            assert_eq!(wal.append(b"prepare").expect("append Prepare"), 0);
-            assert_eq!(wal.append(b"commit").expect("append Commit"), 1);
-        }
+            let prepare = wal.append(b"prepare").expect("append Prepare");
+            let commit = wal.append(b"commit").expect("append Commit");
+            assert_eq!(prepare.sequence(), 0);
+            assert_eq!(commit.sequence(), 1);
+            (prepare, commit)
+        };
 
         let wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("reopen WAL");
         assert_eq!(
@@ -414,10 +471,12 @@ mod tests {
             [
                 RecoveredRecord {
                     sequence: 0,
+                    frame_hash: prepare_receipt.frame_hash(),
                     payload: b"prepare".to_vec(),
                 },
                 RecoveredRecord {
                     sequence: 1,
+                    frame_hash: commit_receipt.frame_hash(),
                     payload: b"commit".to_vec(),
                 },
             ]
@@ -430,7 +489,7 @@ mod tests {
         let path = dir.path().join("sumeragi-v2.wal");
         {
             let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
-            wal.append(b"durable").expect("append durable record");
+            let _receipt = wal.append(b"durable").expect("append durable record");
         }
         let good_len = fs::metadata(&path).expect("metadata").len();
         OpenOptions::new()
@@ -450,12 +509,15 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         let good_len;
+        let durable_receipt;
         {
             let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
-            wal.append(b"durable decision")
+            durable_receipt = wal
+                .append(b"durable decision")
                 .expect("append acknowledged decision");
             good_len = wal.file.metadata().expect("metadata").len();
-            wal.append(b"unacknowledged next intent")
+            let _unacknowledged_receipt = wal
+                .append(b"unacknowledged next intent")
                 .expect("append frame used to model partial write");
         }
         let partial_len = good_len
@@ -473,6 +535,7 @@ mod tests {
             wal.recovered_records(),
             [RecoveredRecord {
                 sequence: 0,
+                frame_hash: durable_receipt.frame_hash(),
                 payload: b"durable decision".to_vec(),
             }]
         );
@@ -485,7 +548,7 @@ mod tests {
         let path = dir.path().join("sumeragi-v2.wal");
         {
             let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
-            wal.append(b"prepare").expect("append record");
+            let _receipt = wal.append(b"prepare").expect("append record");
         }
         let mut bytes = fs::read(&path).expect("read WAL");
         let payload_offset = FILE_HEADER_LEN + FRAME_HEADER_LEN;
@@ -505,8 +568,8 @@ mod tests {
         let first_payload_len = b"prepare".len();
         {
             let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
-            wal.append(b"prepare").expect("append first record");
-            wal.append(b"decision").expect("append second record");
+            let _first_receipt = wal.append(b"prepare").expect("append first record");
+            let _second_receipt = wal.append(b"decision").expect("append second record");
         }
         let second_frame = FILE_HEADER_LEN + FRAME_HEADER_LEN + first_payload_len + HASH_LEN;
         let previous_hash_offset = second_frame + FRAME_MAGIC.len() + 8 + 4;
@@ -587,7 +650,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sumeragi-v2.wal");
         let mut wal = SafetyWal::open(&path, PROTOCOL, NETWORK_ID, KEY).expect("open WAL");
-        wal.append(b"decision").expect("append decision");
+        let _receipt = wal.append(b"decision").expect("append decision");
         let SafetyWal { path, file, .. } = wal;
         let retired_path = path.clone();
         remove_wal_file(path, file).expect("retire finalized WAL bytes");

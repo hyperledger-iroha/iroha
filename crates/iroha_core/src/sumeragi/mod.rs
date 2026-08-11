@@ -636,7 +636,7 @@ pub(crate) mod v2_block_sync;
 pub(crate) mod v2_body_store;
 pub(crate) mod v2_candidate;
 // TODO: Wire the staged Certified-Serve payload durability boundary into the
-// lifecycle coordinator and retire the legacy v5 Serve scheduling snapshot.
+// lifecycle coordinator and retire the superseded Serve scheduling snapshot.
 #[allow(dead_code)]
 pub(crate) mod v2_certified_serve_payload_store;
 pub(crate) mod v2_chunks;
