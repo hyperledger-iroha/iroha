@@ -118,10 +118,11 @@ Missing, non-software, locally signed, stale, tampered, wrong-key, wrong-deploym
 wrong-topology summaries block both foundational preparation and promotion.
 
 The production runner snapshots resilience as a separate replay input:
-topology summary + signed topology envelope + resilience + foundation + 17
-lane summaries equals 21 immutable inputs. It still emits `summary_file_count=17` and
-`recognized_summary_count=17`; the resilience attachment is neither passed
-through `--evidence` nor entered in the lane registry.
+topology summary + signed topology envelope + resilience + signed L1 lane
+evidence inventory + foundation + 17 lane summaries equals 22 immutable inputs.
+It still emits `summary_file_count=17` and `recognized_summary_count=17`; the
+resilience and signed-inventory attachments are neither passed through
+`--evidence` nor entered in the lane registry.
 
 ## Invocation
 

@@ -1,5 +1,6 @@
 [package]
 name = "kotodama_lang"
+autotests = false
 version.workspace = true
 edition = "2024"
 authors = ["Iroha Contributors"]
@@ -19,3 +20,7 @@ iroha_primitives = { path = "../iroha_primitives", default-features = false }
 ivm_abi = { path = "../ivm_abi" }
 norito = { path = "../norito", default-features = false, features = ["node-codec"] }
 strum = { workspace = true, features = ["derive"] }
+
+[[test]]
+name = "kotodama_integration"
+path = "tests/kotodama_integration.rs"

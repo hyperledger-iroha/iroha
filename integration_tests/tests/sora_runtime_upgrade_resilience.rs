@@ -1,7 +1,6 @@
 //! SORA runtime-upgrade governance resilience tests on 4-peer local networks.
 
-#[path = "common/sora_runtime_governance.rs"]
-mod sora_runtime_governance;
+use super::sora_parliament_lifecycle_smoke::sora_runtime_governance;
 
 use std::time::Duration;
 

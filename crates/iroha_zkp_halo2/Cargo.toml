@@ -18,27 +18,21 @@ norito = { workspace = true, default-features = false, features = ["base-codec"]
 iroha_schema = { workspace = true, optional = true }
 halo2curves = { workspace = true }
 hex = { workspace = true, features = ["alloc"] }
-rayon = { workspace = true }
+rayon = { workspace = true, optional = true }
 once_cell = { workspace = true }
 parking_lot = { workspace = true }
 poseidon-primitives = "0.2.0"
-bellpepper-core = "0.4.0"
-bellpepper = "0.4.0"
-ff = "0.13.1"
-vega-prover = { path = "../../vendor/vega-prover" }
 
 [dev-dependencies]
-bincode = "1.3.3"
 criterion = { workspace = true }
 hex-literal = { workspace = true }
-sha2 = "0.10.9"
 
 [features]
 default = []
 bench = []
 # Mirror Norito derive cfgs so the derive macro can see destination-crate features
 schema-structural = ["dep:iroha_schema", "norito/schema-structural"]
-parallel = []
+parallel = ["dep:rayon"]
 goldilocks_backend = []
 
 [[bench]]

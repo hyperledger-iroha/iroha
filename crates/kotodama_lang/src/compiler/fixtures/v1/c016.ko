@@ -1,0 +1,12 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  ledger::escrow::open_offer(
+    offer: Name::parse("deal"),
+    asset_definition: Name::parse("rose"),
+    amount: 10,
+  );
+}
+
+}

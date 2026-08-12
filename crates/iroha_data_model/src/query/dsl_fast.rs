@@ -1,7 +1,6 @@
-//! Lightweight/fast DSL used under the `fast_dsl` feature.
+//! Allocation-conscious DSL used by the canonical query representation.
 //!
-//! This mirrors the public surface of `query::dsl` so other modules can import
-//! the same names regardless of feature flags. Predicate payloads are captured
+//! This preserves the established `query::dsl` public surface. Predicate payloads are captured
 //! and evaluated via JSON when enabled; selector projections remain minimal.
 
 #[cfg(feature = "ids_projection")]
@@ -1845,7 +1844,7 @@ pub trait IntoSelector {
 pub trait IntoSelectorTuple {
     /// Element type accepted by the resulting tuple.
     type SelectingType;
-    /// Concrete selector tuple produced by the conversion.
+    /// Item type produced when the resulting tuple is applied.
     type SelectedTuple;
     /// Convert the receiver into a selector tuple.
     fn into_selector_tuple(self) -> SelectorTuple<Self::SelectingType>;
@@ -1853,7 +1852,7 @@ pub trait IntoSelectorTuple {
 
 impl<T> IntoSelectorTuple for SelectorTuple<T> {
     type SelectingType = T;
-    type SelectedTuple = Self;
+    type SelectedTuple = T;
     fn into_selector_tuple(self) -> SelectorTuple<Self::SelectingType> {
         self
     }

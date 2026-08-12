@@ -9650,11 +9650,12 @@ IndexedHistoricalCommitRequestPacketAdmissionReady(
        initialContext, target, server, request, packet)
   /\ packet =
        IndexedHistoricalTransport(initialContext)!
-         OldestDueSourcePacket(server, request.source)
+         OldestDueSourcePacket(
+           server, packet.authenticatedSource)
   /\ ENABLED
        <<IndexedHistoricalTransport(initialContext)!
            PostGstAdmitHiddenPacket(
-             server, request.source)>>_(
+             server, packet.authenticatedSource)>>_(
          IndexedHistoricalTransport(initialContext)!AsyncAllVars)
 
 IndexedHistoricalCommitRequestAdmissionOutcome(
@@ -9675,9 +9676,10 @@ THEOREM IndexedHistoricalCommitPacketAdmissionHasExactLifecycleOutcome ==
          initialContext, target, server, request, packet)
     /\ packet =
          IndexedHistoricalTransport(initialContext)!
-           OldestDueSourcePacket(server, request.source)
+           OldestDueSourcePacket(
+             server, packet.authenticatedSource)
     /\ IndexedAdmitPacketStep(
-         initialContext, server, request.source)
+         initialContext, server, packet.authenticatedSource)
     => IndexedHistoricalCommitRequestAdmissionOutcome(
          initialContext, target, server, request)'
 PROOF
@@ -9690,9 +9692,11 @@ PROOF
                       initialContext, target, server, request, packet)
                  /\ packet =
                       IndexedHistoricalTransport(initialContext)!
-                        OldestDueSourcePacket(server, request.source)
+                        OldestDueSourcePacket(
+                          server, packet.authenticatedSource)
                  /\ IndexedAdmitPacketStep(
-                      initialContext, server, request.source)
+                      initialContext, server,
+                      packet.authenticatedSource)
                  => IndexedHistoricalCommitRequestAdmissionOutcome(
                       initialContext, target, server, request)'
     BY IndexedFairProductStepsProjectExactOccurrences,
@@ -9966,7 +9970,7 @@ THEOREM IndexedHistoricalCommitAdmissionReadyEnablesProductOccurrence ==
     => ENABLED
          <<IndexedAdmitPacketStep(
              initialContext, server,
-             request.source)>>_IndexedChainVars
+             packet.authenticatedSource)>>_IndexedChainVars
 BY IndexedHistoricalTransportVariablesAreExact,
    IndexedPostGstContextHasJoinedProductInstance,
    IndexedFairActionsRemainEnabledInProduct,
@@ -9992,7 +9996,7 @@ THEOREM IndexedHistoricalCommitAdmissionProductOccurrenceCreatesOutcome ==
          initialContext, target, server, request, packet)
     /\ <<IndexedAdmitPacketStep(
            initialContext, server,
-           request.source)>>_IndexedChainVars
+           packet.authenticatedSource)>>_IndexedChainVars
     => IndexedHistoricalCommitRequestAdmissionOutcome(
          initialContext, target, server, request)'
 BY IndexedHistoricalCommitPacketAdmissionHasExactLifecycleOutcome, Isa
@@ -10006,7 +10010,7 @@ THEOREM IndexedHistoricalCommitAdmissionReadyHasProductFairness ==
          initialContext, target, server, request, packet)
     => WF_IndexedChainVars(
          IndexedAdmitPacketStep(
-           initialContext, server, request.source))
+           initialContext, server, packet.authenticatedSource))
 BY Isa
    DEF IndexedChainSpec, IndexedFairness,
        IndexedHistoricalCommitRequestPacketAdmissionReady,
@@ -10066,11 +10070,12 @@ IndexedHistoricalDecisionRequestPacketAdmissionReady(
        initialContext, node, qc, archive, request, packet)
   /\ packet =
        IndexedHistoricalTransport(initialContext)!
-         OldestDueSourcePacket(archive, request.source)
+         OldestDueSourcePacket(
+           archive, packet.authenticatedSource)
   /\ ENABLED
        <<IndexedHistoricalTransport(initialContext)!
            PostGstAdmitHiddenPacket(
-             archive, request.source)>>_(
+             archive, packet.authenticatedSource)>>_(
          IndexedHistoricalTransport(initialContext)!AsyncAllVars)
 
 IndexedHistoricalDecisionRequestAdmissionOutcome(
@@ -10091,9 +10096,10 @@ THEOREM IndexedHistoricalDecisionPacketAdmissionHasExactLifecycleOutcome ==
          initialContext, node, qc, archive, request, packet)
     /\ packet =
          IndexedHistoricalTransport(initialContext)!
-           OldestDueSourcePacket(archive, request.source)
+           OldestDueSourcePacket(
+             archive, packet.authenticatedSource)
     /\ IndexedAdmitPacketStep(
-         initialContext, archive, request.source)
+         initialContext, archive, packet.authenticatedSource)
     => IndexedHistoricalDecisionRequestAdmissionOutcome(
          initialContext, node, qc, archive, request)'
 PROOF
@@ -10105,9 +10111,11 @@ PROOF
                       initialContext, node, qc, archive, request, packet)
                  /\ packet =
                       IndexedHistoricalTransport(initialContext)!
-                        OldestDueSourcePacket(archive, request.source)
+                        OldestDueSourcePacket(
+                          archive, packet.authenticatedSource)
                  /\ IndexedAdmitPacketStep(
-                      initialContext, archive, request.source)
+                      initialContext, archive,
+                      packet.authenticatedSource)
                  => IndexedHistoricalDecisionRequestAdmissionOutcome(
                       initialContext, node, qc, archive, request)'
     BY IndexedFairProductStepsProjectExactOccurrences,
@@ -10384,7 +10392,7 @@ THEOREM IndexedHistoricalDecisionAdmissionReadyEnablesProductOccurrence ==
     => ENABLED
          <<IndexedAdmitPacketStep(
              initialContext, archive,
-             request.source)>>_IndexedChainVars
+             packet.authenticatedSource)>>_IndexedChainVars
 BY IndexedHistoricalTransportVariablesAreExact,
    IndexedPostGstContextHasJoinedProductInstance,
    IndexedFairActionsRemainEnabledInProduct,
@@ -10411,7 +10419,7 @@ THEOREM IndexedHistoricalDecisionAdmissionProductOccurrenceCreatesOutcome ==
          initialContext, node, qc, archive, request, packet)
     /\ <<IndexedAdmitPacketStep(
            initialContext, archive,
-           request.source)>>_IndexedChainVars
+           packet.authenticatedSource)>>_IndexedChainVars
     => IndexedHistoricalDecisionRequestAdmissionOutcome(
          initialContext, node, qc, archive, request)'
 BY IndexedHistoricalDecisionPacketAdmissionHasExactLifecycleOutcome, Isa
@@ -10425,7 +10433,7 @@ THEOREM IndexedHistoricalDecisionAdmissionReadyHasProductFairness ==
          initialContext, node, qc, archive, request, packet)
     => WF_IndexedChainVars(
          IndexedAdmitPacketStep(
-           initialContext, archive, request.source))
+           initialContext, archive, packet.authenticatedSource))
 BY Isa
    DEF IndexedChainSpec, IndexedFairness,
        IndexedHistoricalDecisionRequestPacketAdmissionReady,
@@ -10481,7 +10489,8 @@ of `PostGstRunHistoricalRecoveryNode(target)`.  For Decision responses the
 same historical runner consumes a recipient-local route-neutral claim.  The
 Decision head property below intentionally includes all three physical
 partitions: older outer-source packets, a distinct authenticated claim, and
-`TransportCompletionOwnerDebt(response)`.  The provider below descends those
+`TransportCompletionOwnerDebt(response, response.source)`.  The provider
+below descends those
 owners under the full historical runner/admission actions; it does not assume
 fairness of the fresh-admission or selected-drain intersection.
 ***************************************************************************)
@@ -10542,9 +10551,10 @@ THEOREM IndexedHistoricalCommitResponseAdmissionCreatesExactIngressOwner ==
          initialContext, target, server, request,
          qc, response, packet)
     /\ packet = IndexedHistoricalTransport(initialContext)!
-                  OldestDueSourcePacket(target, response.source)
+                  OldestDueSourcePacket(
+                    target, packet.authenticatedSource)
     /\ IndexedAdmitHistoricalRecoveryPacketStep(
-         initialContext, target, response.source)
+         initialContext, target, packet.authenticatedSource)
     => IndexedHistoricalTransport(initialContext)!
          HistoricalCommitResponseIngressOwned(
            target, server, request, qc, response)'
@@ -10558,9 +10568,10 @@ PROOF
                       qc, response, packet)
                  /\ packet = IndexedHistoricalTransport(initialContext)!
                                OldestDueSourcePacket(
-                                 target, response.source)
+                                 target, packet.authenticatedSource)
                  /\ IndexedAdmitHistoricalRecoveryPacketStep(
-                      initialContext, target, response.source)
+                      initialContext, target,
+                      packet.authenticatedSource)
                  => IndexedHistoricalTransport(initialContext)!
                       HistoricalCommitResponseIngressOwned(
                         target, server, request, qc, response)'
@@ -10681,7 +10692,8 @@ IndexedHistoricalDecisionResponsePhysicalCompletionResidual(
   /\ IndexedHistoricalDecisionResponsePacketResidual(
        initialContext, node, qc, archive, request, response, packet)
   /\ packet = IndexedHistoricalTransport(initialContext)!
-                OldestDueSourcePacket(node, response.source)
+                OldestDueSourcePacket(
+                  node, packet.authenticatedSource)
   /\ IndexedHistoricalTransport(initialContext)!
        CertifiedResponseFreshClaimGateAllows(response)
   /\ ~IndexedHistoricalTransport(initialContext)!
@@ -10729,9 +10741,10 @@ THEOREM IndexedHistoricalDecisionResponseAdmissionCreatesRouteNeutralClaim ==
          initialContext, node, qc, archive,
          request, response, packet)
     /\ packet = IndexedHistoricalTransport(initialContext)!
-                  OldestDueSourcePacket(node, response.source)
+                  OldestDueSourcePacket(
+                    node, packet.authenticatedSource)
     /\ IndexedAdmitHistoricalRecoveryPacketStep(
-         initialContext, node, response.source)
+         initialContext, node, packet.authenticatedSource)
     => IndexedHistoricalTransport(initialContext)!
          HistoricalDecisionRouteNeutralClaimIngressOwned(
            node, qc, response)'
@@ -10744,9 +10757,11 @@ PROOF
                       initialContext, node, qc, archive,
                       request, response, packet)
                  /\ packet = IndexedHistoricalTransport(initialContext)!
-                               OldestDueSourcePacket(node, response.source)
+                               OldestDueSourcePacket(
+                                 node, packet.authenticatedSource)
                  /\ IndexedAdmitHistoricalRecoveryPacketStep(
-                      initialContext, node, response.source)
+                      initialContext, node,
+                      packet.authenticatedSource)
                  => IndexedHistoricalTransport(initialContext)!
                       HistoricalDecisionRouteNeutralClaimIngressOwned(
                         node, qc, response)'

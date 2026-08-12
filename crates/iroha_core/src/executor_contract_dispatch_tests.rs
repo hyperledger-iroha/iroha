@@ -207,8 +207,8 @@ fn contract_entrypoint_permission_accepts_direct_and_role_grants() {
         contract_permission_context(
             ContractAddress::derive(
                 &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                    .parse()
+                    .expect("canonical test network id"),
                 &authority,
                 92,
                 DataSpaceId::UNIVERSAL,
@@ -627,10 +627,7 @@ fn native_find_accounts_request() -> QueryRequest {
         SelectorTuple::default(),
         norito::codec::Encode::encode(&FindAccounts),
     ));
-    #[cfg(feature = "fast_dsl")]
     let query = QueryWithParams::new(&query, QueryParams::default());
-    #[cfg(not(feature = "fast_dsl"))]
-    let query = QueryWithParams::new(query, QueryParams::default());
     QueryRequest::Start(query)
 }
 
@@ -646,10 +643,7 @@ fn native_find_permissions_request_with_payload(payload: Vec<u8>) -> QueryReques
         SelectorTuple::default(),
         payload,
     ));
-    #[cfg(feature = "fast_dsl")]
     let query = QueryWithParams::new(&query, QueryParams::default());
-    #[cfg(not(feature = "fast_dsl"))]
-    let query = QueryWithParams::new(query, QueryParams::default());
     QueryRequest::Start(query)
 }
 

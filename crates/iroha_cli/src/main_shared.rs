@@ -13123,9 +13123,9 @@ mod cli_integration_harness {
 
     use eyre::eyre;
     use iroha::crypto::KeyPair;
-    use iroha::data_model::query::runtime::AbiVersion;
     #[cfg(feature = "ids_projection")]
-    use iroha::data_model::query::{QueryItemKind, QueryWithFilter};
+    use iroha::data_model::query::QueryItemKind;
+    use iroha::data_model::query::runtime::AbiVersion;
     use iroha::data_model::{
         account::AccountId,
         asset::{Asset, AssetId},
@@ -13194,11 +13194,11 @@ mod cli_integration_harness {
     }
 
     #[cfg(feature = "ids_projection")]
-    fn build_query_with_params<T, F>(
+    fn build_query_with_params<T, Q, F>(
         predicate: iroha::data_model::query::dsl::CompoundPredicate<T>,
         selector: iroha::data_model::query::dsl::SelectorTuple<T>,
         params: iroha::data_model::query::parameters::QueryParams,
-        _builder: F,
+        builder: F,
     ) -> QueryWithParams
     where
         T: iroha::data_model::query::dsl::HasProjection<
@@ -13208,91 +13208,68 @@ mod cli_integration_harness {
                 AtomType = (),
             > + Send
             + Sync
+            + iroha::data_model::query::ItemKindTag
             + 'static,
-        F: FnOnce() -> Box<dyn iroha::data_model::query::Query<Item = T> + Send + Sync + 'static>,
+        Q: iroha::data_model::query::Query<Item = T> + norito::codec::Encode,
+        F: FnOnce() -> Q,
     {
-        let qwf = QueryWithFilter::new_with_query((), predicate, selector);
-        let qbox: iroha::data_model::query::QueryBox<
-            iroha::data_model::query::QueryOutputBatchBox,
-        > = qwf.into();
-        QueryWithParams::new(&qbox, params)
+        let query = builder();
+        QueryWithParams {
+            query: (),
+            query_payload: query.dyn_encode(),
+            item: query.query_item_kind(),
+            predicate_bytes: norito::codec::Encode::encode(&predicate),
+            selector_bytes: norito::codec::Encode::encode(&selector),
+            params,
+        }
     }
 
     #[cfg(feature = "ids_projection")]
     fn query_projects_domain_ids(query: &QueryWithParams) -> bool {
-        query
-            .query_box()
-            .and_then(
-                iroha::data_model::query::iter_query_inner::<iroha::data_model::domain::Domain>,
-            )
-            .is_some_and(|erased| erased.selector().is_ids_only())
-            || query
-                .fast_dsl_parts()
-                .is_some_and(|(item_kind, _, selector_bytes, _)| {
-                    if item_kind != QueryItemKind::Domain {
-                        return false;
-                    }
-                    let mut cursor = selector_bytes;
-                    let selector: iroha::data_model::query::dsl::SelectorTuple<
-                        iroha::data_model::domain::Domain,
-                    > = match Decode::decode(&mut cursor) {
-                        Ok(selector) => selector,
-                        Err(_) => return false,
-                    };
-                    selector.is_ids_only()
-                })
+        let (item_kind, _, selector_bytes, _) = query.parts();
+        if item_kind != QueryItemKind::Domain {
+            return false;
+        }
+        let mut cursor = selector_bytes;
+        let selector: iroha::data_model::query::dsl::SelectorTuple<
+            iroha::data_model::domain::Domain,
+        > = match Decode::decode(&mut cursor) {
+            Ok(selector) => selector,
+            Err(_) => return false,
+        };
+        selector.is_ids_only()
     }
 
     #[cfg(feature = "ids_projection")]
     fn query_projects_account_ids(query: &QueryWithParams) -> bool {
-        query
-            .query_box()
-            .and_then(
-                iroha::data_model::query::iter_query_inner::<iroha::data_model::account::Account>,
-            )
-            .is_some_and(|erased| erased.selector().is_ids_only())
-            || query
-                .fast_dsl_parts()
-                .is_some_and(|(item_kind, _, selector_bytes, _)| {
-                    if item_kind != QueryItemKind::Account {
-                        return false;
-                    }
-                    let mut cursor = selector_bytes;
-                    let selector: iroha::data_model::query::dsl::SelectorTuple<
-                        iroha::data_model::account::Account,
-                    > = match Decode::decode(&mut cursor) {
-                        Ok(selector) => selector,
-                        Err(_) => return false,
-                    };
-                    selector.is_ids_only()
-                })
+        let (item_kind, _, selector_bytes, _) = query.parts();
+        if item_kind != QueryItemKind::Account {
+            return false;
+        }
+        let mut cursor = selector_bytes;
+        let selector: iroha::data_model::query::dsl::SelectorTuple<
+            iroha::data_model::account::Account,
+        > = match Decode::decode(&mut cursor) {
+            Ok(selector) => selector,
+            Err(_) => return false,
+        };
+        selector.is_ids_only()
     }
 
     #[cfg(feature = "ids_projection")]
     fn query_projects_asset_definition_ids(query: &QueryWithParams) -> bool {
-        query
-            .query_box()
-            .and_then(
-                iroha::data_model::query::iter_query_inner::<
-                    iroha::data_model::asset::definition::AssetDefinition,
-                >,
-            )
-            .is_some_and(|erased| erased.selector().is_ids_only())
-            || query
-                .fast_dsl_parts()
-                .is_some_and(|(item_kind, _, selector_bytes, _)| {
-                    if item_kind != QueryItemKind::AssetDefinition {
-                        return false;
-                    }
-                    let mut cursor = selector_bytes;
-                    let selector: iroha::data_model::query::dsl::SelectorTuple<
-                        iroha::data_model::asset::definition::AssetDefinition,
-                    > = match Decode::decode(&mut cursor) {
-                        Ok(selector) => selector,
-                        Err(_) => return false,
-                    };
-                    selector.is_ids_only()
-                })
+        let (item_kind, _, selector_bytes, _) = query.parts();
+        if item_kind != QueryItemKind::AssetDefinition {
+            return false;
+        }
+        let mut cursor = selector_bytes;
+        let selector: iroha::data_model::query::dsl::SelectorTuple<
+            iroha::data_model::asset::definition::AssetDefinition,
+        > = match Decode::decode(&mut cursor) {
+            Ok(selector) => selector,
+            Err(_) => return false,
+        };
+        selector.is_ids_only()
     }
 
     // Cursor that carries the remaining items and fetch size
@@ -13815,7 +13792,7 @@ mod cli_integration_harness {
             CompoundPredicate::PASS,
             SelectorTuple::<Domain>::ids_only(),
             QueryParams::default(),
-            || Box::new(query::domain::prelude::FindDomains),
+            || query::domain::prelude::FindDomains,
         );
 
         let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
@@ -13848,7 +13825,7 @@ mod cli_integration_harness {
             CompoundPredicate::PASS,
             SelectorTuple::<Account>::ids_only(),
             QueryParams::default(),
-            || Box::new(query::account::prelude::FindAccounts),
+            || query::account::prelude::FindAccounts,
         );
 
         let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
@@ -13909,7 +13886,7 @@ mod cli_integration_harness {
             CompoundPredicate::PASS,
             SelectorTuple::<AssetDefinition>::ids_only(),
             QueryParams::default(),
-            || Box::new(query::asset::prelude::FindAssetsDefinitions),
+            || query::asset::prelude::FindAssetsDefinitions,
         );
 
         let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
@@ -13996,7 +13973,7 @@ mod cli_integration_harness {
             CompoundPredicate::PASS,
             SelectorTuple::<AssetDefinition>::ids_only(),
             params,
-            || Box::new(query::asset::prelude::FindAssetsDefinitions),
+            || query::asset::prelude::FindAssetsDefinitions,
         );
 
         let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
@@ -14057,7 +14034,7 @@ mod cli_integration_harness {
             CompoundPredicate::PASS,
             SelectorTuple::<Account>::ids_only(),
             params,
-            || Box::new(query::account::prelude::FindAccounts),
+            || query::account::prelude::FindAccounts,
         );
 
         let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
@@ -14109,7 +14086,7 @@ mod cli_integration_harness {
             CompoundPredicate::PASS,
             SelectorTuple::<Domain>::ids_only(),
             params,
-            || Box::new(query::domain::prelude::FindDomains),
+            || query::domain::prelude::FindDomains,
         );
 
         let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");

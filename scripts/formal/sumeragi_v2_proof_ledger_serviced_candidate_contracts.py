@@ -8,6 +8,7 @@ def _serviced_candidate_production_source_fidelity_errors(
     base = repo_root / "crates" / "iroha_core" / "src" / "sumeragi"
     paths = {
         "module": base / "mod.rs",
+        "safety_wal": base / "safety_wal.rs",
         "store": base / "serviced_candidate_store.rs",
         "adapter": base / "v2.rs",
         "runtime": base / "v2_runtime.rs",
@@ -16,6 +17,7 @@ def _serviced_candidate_production_source_fidelity_errors(
     }
     descriptions = {
         "module": "serviced-candidate module registration",
+        "safety_wal": "opened safety-WAL directory capability",
         "store": "V3/V4 serviced-candidate durable store",
         "adapter": "producer-continuation adapter ownership",
         "runtime": "producer-continuation serialized runtime",
@@ -415,6 +417,564 @@ def _serviced_candidate_production_source_fidelity_errors(
                 f"{paths[source_key]}:{item.line}: {description} must retain "
                 "the exact reviewed order"
             )
+
+    def require_item_monotone_order(
+        source_key: str,
+        items: dict[str, RustItem | None],
+        key: str,
+        sequences: tuple[str, ...],
+        description: str,
+    ) -> None:
+        item = items.get(key)
+        if item is None:
+            return
+        tokens = rust_code_tokens(item.body)
+        cursor = 0
+        for sequence in sequences:
+            sequence_tokens = rust_code_tokens(sequence)
+            positions = _token_sequence_positions(tokens, sequence_tokens)
+            position = next((found for found in positions if found >= cursor), None)
+            if position is None:
+                errors.append(
+                    f"{paths[source_key]}:{item.line}: {description} must retain "
+                    "the exact reviewed order"
+                )
+                return
+            cursor = position + len(sequence_tokens)
+
+    def select_item(
+        source_key: str,
+        item_name: str,
+        discriminator: str,
+        description: str,
+    ) -> RustItem | None:
+        discriminator_tokens = rust_code_tokens(discriminator)
+        items = [
+            item
+            for item in rust_function_items_from_structural(
+                sources[source_key], structural[source_key], item_name
+            )
+            if _token_sequence_count(
+                rust_code_tokens(item.source), discriminator_tokens
+            )
+            == 1
+        ]
+        if len(items) != 1:
+            errors.append(
+                f"{paths[source_key]}: require exactly one parsed {description} "
+                f"function named {item_name}; found {len(items)}"
+            )
+            return None
+        return items[0]
+
+    for wrapper_name in (
+        "SafetyWalServicedCandidateStoreAuthority",
+        "SafetyWalLeaderWireStoreAuthority",
+    ):
+        wrappers = rust_struct_items(sources["safety_wal"], wrapper_name)
+        if len(wrappers) != 1:
+            errors.append(
+                f"{paths['safety_wal']}: require exactly one move-only "
+                f"{wrapper_name}; found {len(wrappers)}"
+            )
+            continue
+        wrapper = wrappers[0]
+        _require_rust_token_sequence(
+            paths["safety_wal"],
+            wrapper,
+            "entry: BoundSafetyWalAdjacentEntry",
+            f"{wrapper_name} must seal the private fixed-entry owner",
+            errors,
+        )
+        wrapper_offset = sources["safety_wal"].find(wrapper.source)
+        attributes = _leading_rust_attributes(
+            sources["safety_wal"], structural["safety_wal"], wrapper_offset
+        )
+        if not any(attribute == "#[derive(Debug)]" for attribute in attributes) or any(
+            "Clone" in attribute or "Copy" in attribute for attribute in attributes
+        ):
+            errors.append(
+                f"{paths['safety_wal']}:{wrapper.line}: {wrapper_name} must "
+                "remain a distinct move-only capability"
+            )
+    for forbidden in (
+        "impl Clone for SafetyWalServicedCandidateStoreAuthority",
+        "impl Clone for SafetyWalLeaderWireStoreAuthority",
+        "impl Copy for SafetyWalServicedCandidateStoreAuthority",
+        "impl Copy for SafetyWalLeaderWireStoreAuthority",
+    ):
+        if _token_sequence_count(
+            rust_code_tokens(sources["safety_wal"]), rust_code_tokens(forbidden)
+        ):
+            errors.append(
+                f"{paths['safety_wal']}: safety-WAL sibling capability "
+                f"must remain move-only; found {forbidden}"
+            )
+
+    safety_items = {
+        "bind": select_item(
+            "safety_wal",
+            "bind",
+            "direct_lexical_directory_metadata(expected_path)",
+            "opened-directory binding",
+        ),
+        "verify_linked": select_item(
+            "safety_wal",
+            "verify_linked",
+            "open_canonical_directory_nofollow(&canonical_path)",
+            "opened-directory revalidation",
+        ),
+        "open_wal_leaf": select_item(
+            "safety_wal",
+            "open_wal_leaf",
+            "existing_identity",
+            "WAL-leaf open",
+        ),
+        "verify_leaf": select_item(
+            "safety_wal",
+            "verify_leaf",
+            "fs::symlink_metadata(self.expected_path.join(name))",
+            "non-Unix WAL-leaf revalidation",
+        ),
+        "safety_open": select_item(
+            "safety_wal",
+            "open",
+            "BoundSafetyWalDirectory::bind(&parent)",
+            "SafetyWal open",
+        ),
+        "adjacent_read": select_item(
+            "safety_wal",
+            "read_bounded",
+            "rustix::fs::statat(&self.directory.directory",
+            "bounded adjacent read",
+        ),
+        "adjacent_publish": select_item(
+            "safety_wal",
+            "publish_atomic",
+            "let frame_len = u64::try_from(frame.len())",
+            "bounded adjacent publication",
+        ),
+        "adjacent_retire": select_item(
+            "safety_wal",
+            "retire",
+            "rustix::fs::unlinkat(&self.directory.directory",
+            "bounded adjacent retirement",
+        ),
+        "append_write": select_item(
+            "safety_wal",
+            "write_all",
+            "self.directory.verify_leaf(self.file, self.wal_name)",
+            "bound WAL append write",
+        ),
+        "append_sync": select_item(
+            "safety_wal",
+            "sync_data",
+            "self.directory.verify_leaf(self.file, self.wal_name)",
+            "bound WAL append sync",
+        ),
+        "mint_serviced": select_item(
+            "safety_wal",
+            "mint_serviced_candidate_store_authority",
+            "serviced_candidate_authority_minted.swap(true, Ordering::AcqRel)",
+            "serviced-candidate authority mint",
+        ),
+        "mint_leader": select_item(
+            "safety_wal",
+            "mint_leader_wire_store_authority",
+            "leader_wire_authority_minted.swap(true, Ordering::AcqRel)",
+            "leader-wire authority mint",
+        ),
+    }
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "bind",
+        (
+            "direct_lexical_directory_metadata(expected_path)",
+            "fs::canonicalize(expected_path)",
+            "open_canonical_directory_nofollow(&canonical_path)",
+            "unix_file_identity(&lexical_metadata) != identity",
+        ),
+        "initial WAL-directory bind must reject a final symlink and join the opened identity",
+    )
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "verify_linked",
+        (
+            "direct_lexical_directory_metadata(&self.expected_path)",
+            "fs::canonicalize(&self.expected_path)",
+            "canonical_path != self.canonical_path",
+            "open_canonical_directory_nofollow(&canonical_path)",
+            "unix_file_identity(&linked_metadata) != self.identity",
+        ),
+        "every bound operation must rejoin the lexical final directory and retained identity",
+    )
+    for key, sequence, description in (
+        (
+            "bind",
+            """
+let metadata = fs::symlink_metadata(expected_path)?;
+if metadata.file_type().is_symlink() || !metadata.is_dir()
+""",
+            "non-Unix basic WAL bind must reject a symlinked immediate parent",
+        ),
+        (
+            "verify_linked",
+            """
+fs::symlink_metadata(&self.expected_path).and_then(|metadata| {
+    if !metadata.file_type().is_symlink() && metadata.is_dir()
+""",
+            "non-Unix basic WAL operations must revalidate a direct immediate parent",
+        ),
+        (
+            "verify_leaf",
+            """
+let linked = fs::symlink_metadata(self.expected_path.join(name))?;
+if !opened.is_file()
+    || linked.file_type().is_symlink()
+    || !linked.is_file()
+""",
+            "non-Unix basic WAL operations must reject a symlinked leaf before mutation",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["safety_wal"], safety_items[key], sequence, description, errors
+        )
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "open_wal_leaf",
+        (
+            "self.verify_linked()?",
+            "rustix::fs::statat(",
+            "Some((stat.st_dev as u64, stat.st_ino as u64))",
+            "rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL",
+            "rustix::fs::openat(",
+            "unix_file_identity(&opened) != expected_identity",
+            "self.verify_leaf(&file, name)?",
+            "self.verify_linked()?",
+        ),
+        "WAL leaf open must bind both existing and exclusive-create identities",
+    )
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "adjacent_read",
+        (
+            "self.directory.verify_linked()",
+            "rustix::fs::statat(",
+            "rustix::fs::openat(",
+            "let opened_before = file.metadata()",
+            "read_to_end(&mut bytes)",
+            "let opened_after = file.metadata()",
+            "let linked_after = rustix::fs::statat(",
+            "self.directory.verify_linked()",
+            "unix_metadata_revision_unchanged(&opened_before, &opened_after)",
+            "opened_after.len() != bytes_len",
+        ),
+        "adjacent recovery read must retain descriptor, revision, and exact length",
+    )
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "adjacent_publish",
+        (
+            "frame_len > maximum",
+            "self.directory.verify_linked()",
+            "self.remove_stale_temporary(&temporary, label)?",
+            "self.ensure_replaceable_target(label)?",
+            "rustix::fs::openat(",
+            "rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL",
+            "file.write_all(frame)?",
+            "file.sync_all()?",
+            "self.directory.verify_linked()?",
+            "synced.len() != frame_len",
+            "rustix::fs::renameat(",
+            "u64::try_from(promoted.st_size).unwrap_or(u64::MAX) != frame_len",
+            "self.directory.sync()?",
+            "let durable = rustix::fs::statat(",
+            "u64::try_from(durable.st_size).unwrap_or(u64::MAX) != frame_len",
+            "self.directory.verify_linked()",
+        ),
+        "adjacent publication must revalidate its promoted identity after directory sync",
+    )
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "adjacent_retire",
+        (
+            "self.directory.verify_linked()",
+            "rustix::fs::statat(",
+            "rustix::fs::openat(",
+            "file.sync_all()",
+            "self.directory.verify_linked()",
+            "let linked_after = rustix::fs::statat(",
+            "rustix::fs::unlinkat(",
+            "self.directory.sync()",
+        ),
+        "adjacent retirement must unlink and sync only the descriptor-bound entry",
+    )
+    for key, sequence, description in (
+        (
+            "append_write",
+            "self.directory.verify_leaf(self.file, self.wal_name)?; self.file.write_all(bytes)",
+            "WAL append must verify its bound leaf immediately before writing",
+        ),
+        (
+            "append_sync",
+            "self.file.sync_data()?; self.directory.verify_leaf(self.file, self.wal_name)",
+            "WAL append must verify its bound leaf after synchronization",
+        ),
+        (
+            "mint_serviced",
+            "self.verify_expected_binding(expected)?; if self.serviced_candidate_authority_minted.swap(true, Ordering::AcqRel)",
+            "serviced-candidate authority mint must be one-shot and path-bound",
+        ),
+        (
+            "mint_leader",
+            "self.verify_expected_binding(expected)?; if self.leader_wire_authority_minted.swap(true, Ordering::AcqRel)",
+            "leader-wire authority mint must be one-shot and path-bound",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["safety_wal"], safety_items[key], sequence, description, errors
+        )
+    for key, suffix, description in (
+        (
+            "mint_serviced",
+            'BoundSafetyWalAdjacentEntry::from_wal(Arc::clone(&self.directory), &self.path, ".serviced-candidates")',
+            "serviced-candidate mint must select only its fixed sibling entry",
+        ),
+        (
+            "mint_leader",
+            'BoundSafetyWalAdjacentEntry::from_wal(Arc::clone(&self.directory), &self.path, ".leader-wire-lifecycles")',
+            "leader-wire mint must select only its fixed sibling entry",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["safety_wal"], safety_items[key], suffix, description, errors
+        )
+    for key, description in (
+        (
+            "mint_serviced",
+            "non-Unix serviced-candidate authority mint must fail before creating an authority",
+        ),
+        (
+            "mint_leader",
+            "non-Unix leader-wire authority mint must fail before creating an authority",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["safety_wal"],
+            safety_items[key],
+            """
+#[cfg(not(all(unix, not(target_os = "espidf"))))]
+{
+    let _ = expected;
+    Err(SafetyWalError::UnsupportedStorageBinding {
+""",
+            description,
+            errors,
+        )
+    for key in ("adjacent_read", "adjacent_publish", "adjacent_retire"):
+        _require_rust_token_sequence(
+            paths["safety_wal"],
+            safety_items[key],
+            """
+#[cfg(not(all(unix, not(target_os = "espidf"))))]
+{
+""",
+            "non-Unix adjacent storage operation must remain an explicit fail-closed branch",
+            errors,
+        )
+        if "snapshot storage is unsupported on this platform" not in safety_items[key].source:
+            errors.append(
+                f"{paths['safety_wal']}:{safety_items[key].line}: non-Unix adjacent "
+                "storage operation cannot fall back to path I/O"
+            )
+    safety_open = safety_items["safety_open"]
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "safety_open",
+        (
+            "fs::create_dir_all(&parent)",
+            "BoundSafetyWalDirectory::bind(&parent)",
+            "directory.open_wal_leaf(&wal_name)",
+            "directory.verify_leaf(&file, &wal_name)",
+            "let read_metadata_before = file.metadata()",
+            "file.read_to_end(&mut bytes)",
+            "let read_metadata_after = file.metadata()",
+            "wal_metadata_revision_unchanged(&read_metadata_before, &read_metadata_after)",
+            "recover_wal_file(&bytes, identity, &frame_hash)",
+        ),
+        "SafetyWal recovery must bind before opening and bracket exact bytes with revisions",
+    )
+    for sequence, description in (
+        (
+            "wal_metadata_revision_unchanged(&read_metadata_before, &read_metadata_after) || read_metadata_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)",
+            "WAL recovery must reject revision or exact-length drift",
+        ),
+        (
+            "file.set_len(valid_prefix_len).and_then(|()| file.sync_data())",
+            "crash-tail truncation must synchronize before reopening append state",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["safety_wal"], safety_open, sequence, description, errors
+        )
+
+    for struct_name, storage_type in (
+        ("ServicedCandidateStore", "SafetyWalServicedCandidateStoreAuthority"),
+        ("LeaderWireLifecycleStoreGate", "SafetyWalLeaderWireStoreAuthority"),
+    ):
+        structs = rust_struct_items(sources["store"], struct_name)
+        if len(structs) != 1:
+            errors.append(
+                f"{paths['store']}: require exactly one sealed {struct_name}; "
+                f"found {len(structs)}"
+            )
+            continue
+        _require_rust_token_sequence(
+            paths["store"],
+            structs[0],
+            f"storage: {storage_type}",
+            f"{struct_name} must retain its typed safety-WAL sibling authority",
+            errors,
+        )
+
+    production_store_open = select_item(
+        "store",
+        "open_with_safety_wal_authority",
+        "storage: SafetyWalServicedCandidateStoreAuthority",
+        "production serviced-candidate open",
+    )
+    production_gate_open = select_item(
+        "store",
+        "open_with_safety_wal_authority",
+        "storage: SafetyWalLeaderWireStoreAuthority",
+        "production leader-wire gate open",
+    )
+    raw_store_open = select_item(
+        "store",
+        "open",
+        "SafetyWalServicedCandidateStoreAuthority::for_test_path",
+        "test-only raw serviced-candidate open",
+    )
+    raw_gate_open = select_item(
+        "store",
+        "open",
+        "SafetyWalLeaderWireStoreAuthority::for_test_path",
+        "test-only raw leader-wire gate open",
+    )
+    for item, description in (
+        (production_store_open, "production serviced-candidate open"),
+        (production_gate_open, "production leader-wire gate open"),
+    ):
+        if item is None:
+            continue
+        item_offset = sources["store"].find(item.source)
+        attributes = _leading_rust_attributes(
+            sources["store"], structural["store"], item_offset
+        )
+        if any("cfg(test)" in attribute for attribute in attributes):
+            errors.append(
+                f"{paths['store']}:{item.line}: {description} cannot be test-gated"
+            )
+        if _token_sequence_count(
+            rust_code_tokens(item.source), rust_code_tokens("safety_wal_path: &Path")
+        ):
+            errors.append(
+                f"{paths['store']}:{item.line}: {description} cannot accept a raw path"
+            )
+    for item, description in (
+        (raw_store_open, "raw serviced-candidate open"),
+        (raw_gate_open, "raw leader-wire gate open"),
+    ):
+        if item is None:
+            continue
+        item_offset = sources["store"].find(item.source)
+        attributes = _leading_rust_attributes(
+            sources["store"], structural["store"], item_offset
+        )
+        if "#[cfg(test)]" not in attributes:
+            errors.append(
+                f"{paths['store']}:{item.line}: {description} must remain test-only"
+            )
+    for item, sequence, description in (
+        (
+            production_store_open,
+            "Self::open_with_storage_and_capacities(storage, context_id, height, owner, record_capacity, record_capacity)",
+            "production serviced-candidate open must consume the typed storage authority",
+        ),
+        (
+            production_gate_open,
+            "Self::open_with_storage(storage, context_id, height, owner, roster, capacity, max_chunk_count, recovery_authority, producer_terminals, durable_bodies)",
+            "production leader-wire gate open must consume the typed storage authority",
+        ),
+    ):
+        _require_rust_token_sequence(paths["store"], item, sequence, description, errors)
+    _require_rust_token_sequence(
+        paths["store"],
+        store_items.get("store_load"),
+        "self.storage.read_bounded(self.max_frame_bytes)?",
+        "serviced-candidate recovery must read only through its retained authority",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        store_items.get("store_persist_with_producer_continuations"),
+        "self.storage.publish_atomic(&frame, self.max_frame_bytes)",
+        "serviced-candidate publication must use only its retained authority",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        store_items.get("leader_wire_load_and_reconcile"),
+        "self.storage.read_bounded(self.max_frame_bytes)?",
+        "leader-wire recovery must read only through its retained authority",
+        errors,
+    )
+    gate_persist = select_item(
+        "store",
+        "persist_locked",
+        "encode_leader_wire_frame(&snapshot, self.max_frame_bytes)",
+        "leader-wire gate publication",
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        gate_persist,
+        "self.storage.publish_atomic(&frame, self.max_frame_bytes)",
+        "leader-wire publication must use only its retained authority",
+        errors,
+    )
+    store_retire = select_item(
+        "store",
+        "retire",
+        "self.storage.retire(self.max_frame_bytes)",
+        "serviced-candidate store retirement",
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        store_retire,
+        "self.storage.retire(self.max_frame_bytes)",
+        "serviced-candidate retirement must use only its retained authority",
+        errors,
+    )
+
+    require_item_monotone_order(
+        "adapter",
+        adapter_items,
+        "open_with_aggregator_and_publication_with_capacity",
+        (
+            "let wal = SafetyWal::open(",
+            "wal.mint_serviced_candidate_store_authority(&wal_path)?",
+            "ServicedCandidateStore::open_with_safety_wal_authority(",
+            "let entries = wal.recovered_records()",
+        ),
+        "adapter recovery must bind SafetyWal before restoring serviced-candidate state",
+    )
 
     require_item_sequence(
         "store",
@@ -844,6 +1404,19 @@ ProducerParentReplaySource::VolatileBodyReconstruction => false,
         adapter_items,
         "open_with_aggregator_and_publication_with_capacity",
         """
+registry.decode_wal_entry(
+    record,
+    parent_verification.as_ref(),
+    &proofs_of_possession,
+)
+""",
+        "startup replay must decode the complete authenticated WAL record",
+    )
+    require_item_sequence(
+        "adapter",
+        adapter_items,
+        "open_with_aggregator_and_publication_with_capacity",
+        """
 let restored_producer_continuation_ordinal_high_watermark = restored_producer_continuations
     .values()
     .map(|record| record.identity().admission_ordinal())
@@ -912,7 +1485,7 @@ record.status() == ProducerContinuationStatus::Terminal
         (
             "let producer_reservation = self.reserve_selected_producer_continuation(producer_candidate)?",
             "self.ensure_serviced_candidate_capacity_before_step(&queued, serviced_candidate)",
-            "self.reducer.step(event)",
+            "self.step_reducer(event)",
             "self.record_serviced_candidate",
         ),
         "direct service must reserve and persist producer ownership before source retirement",
@@ -961,7 +1534,7 @@ let producer_continuation = self
         "drain_deferred_with_handoff_for_ordinals",
         (
             "self.ensure_serviced_candidate_capacity_before_step(&input.event, serviced_candidate)",
-            "self.reducer.step(event)",
+            "self.step_reducer(event)",
             "self.record_serviced_candidate",
             """
 self.deferred_producer_continuations
@@ -1185,7 +1758,7 @@ assert!(
         "drive_effects",
         (
             "let persisted = reducer::Event::Persisted { tag, id }",
-            "let continuation = match self.reducer.step(persisted.clone())",
+            "let continuation = match self.step_reducer(persisted.clone())",
             "self.prune_ingress_records()",
             "self.reclaim_serviced_candidates()?",
             "self.record_reducer_outcome",
@@ -1397,14 +1970,15 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
 """,
         "leader-wire completion must retain exact runtime ordinal and causal key",
     )
-    require_item_order(
+    require_item_monotone_order(
         "runner",
         runner_items,
         "run_inner",
         (
             "adapter.restored_producer_continuation_ordinal_high_watermark()",
             "lifecycle_ordinals.advance_past(high_watermark)",
-            "LeaderWireLifecycleStoreGate::open",
+            "adapter.mint_leader_wire_store_authority(&wal_path)?",
+            "LeaderWireLifecycleStoreGate::open_with_safety_wal_authority",
             "lifecycle_ordinals.advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())",
             "LeaderWireIngressBinding::bind",
             "SerializedV2Runtime::new_with_lifecycle_ordinals",
@@ -1417,13 +1991,15 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
         inventory: dict[str, str],
         long_tests: set[str] = set(),
         unix_tests: set[str] = set(),
-    ) -> None:
+        strict_unix_tests: set[str] = set(),
+    ) -> dict[str, RustItem]:
+        sealed: dict[str, RustItem] = {}
         test_module_offset = structural[source_key].find("mod tests")
         if test_module_offset < 0:
             errors.append(
                 f"{paths[source_key]}: serviced-candidate regression module is missing"
             )
-            return
+            return sealed
         for name, expected_sha256 in inventory.items():
             items = rust_function_items_from_structural(
                 sources[source_key], structural[source_key], name
@@ -1435,14 +2011,19 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
                 )
                 continue
             item = items[0]
+            sealed[name] = item
             item_offset = sources[source_key].find(item.source)
             expected = (
-                ("#[cfg(unix)]", "#[test]")
-                if name in unix_tests
+                ("#[cfg(all(unix, not(target_os = \"espidf\")))]", "#[test]")
+                if name in strict_unix_tests
                 else (
-                    ("#[test]", "#[allow(clippy::too_many_lines)]")
-                    if name in long_tests
-                    else ("#[test]",)
+                    ("#[cfg(unix)]", "#[test]")
+                    if name in unix_tests
+                    else (
+                        ("#[test]", "#[allow(clippy::too_many_lines)]")
+                        if name in long_tests
+                        else ("#[test]",)
+                    )
                 )
             )
             observed_attributes = _leading_rust_attributes(
@@ -1463,21 +2044,43 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
                 f"V4 serviced-candidate regression {name}",
                 errors,
             )
+        return sealed
 
+    seal_regressions(
+        "safety_wal",
+        _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256,
+        strict_unix_tests=set(
+            _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256
+        ),
+    )
     seal_regressions(
         "store",
         _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256,
         unix_tests={
             "snapshot_load_and_retire_never_follow_substituted_symlinks"
         },
+        strict_unix_tests={
+            "serviced_candidate_recovery_rejects_substituted_wal_directory",
+            "leader_wire_gate_rejects_substituted_wal_directory",
+        },
     )
-    seal_regressions(
+    adapter_regressions = seal_regressions(
         "adapter",
         _SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256,
         long_tests={
             "aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate",
             "serviced_candidate_reclaim_failure_fail_stops_then_replay_reclaims",
         },
+    )
+    _require_rust_token_sequence(
+        paths["adapter"],
+        adapter_regressions.get(
+            "post_wal_oversized_continuation_fails_closed_and_replays_exact_record"
+        ),
+        "assert_eq!(adapter.wal.recovered_records()[0].sequence(), 0);",
+        "the post-WAL oversized-continuation regression must inspect the "
+        "authenticated record sequence",
+        errors,
     )
     seal_regressions(
         "runtime",
@@ -1488,7 +2091,7 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
         _SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256,
     )
 
-    for source_key in ("store", "adapter", "runtime", "runner", "worker"):
+    for source_key in ("safety_wal", "store", "adapter", "runtime", "runner", "worker"):
         executable = structural[source_key]
         for forbidden in ("std::env", "var_os", "serde_json"):
             if forbidden in executable:
@@ -1498,3 +2101,782 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
                     f"{forbidden}"
                 )
     return errors
+
+
+def _effect_capacity_fetch_owner_source_fidelity_errors(
+    effects_path: Path,
+    source: str,
+    generic_executor_context: tuple[tuple[str, ...], ...],
+    errors: list[str],
+) -> None:
+    """Bind durable producer retirement and exact Fetch-owner admission."""
+
+    adapter_path = effects_path.with_name("v2.rs")
+    if not adapter_path.is_file() or adapter_path.is_symlink():
+        errors.append(
+            f"{adapter_path}: durable producer tombstone source must be a regular file"
+        )
+    else:
+        adapter_source = adapter_path.read_text(encoding="utf-8")
+        deferred_exact_owners = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "deferred_body_pipeline_completion_exact_owner_ordinals",
+            errors,
+        )
+        _require_rust_item_context(
+            adapter_path,
+            deferred_exact_owners,
+            (("impl", "SumeragiV2Adapter"),),
+            "Busy-deferred exact completion owner inventory",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            deferred_exact_owners,
+            """
+input.completion_evidence.as_ref() == Some(candidate)
+    && deferred_body_pipeline_completion_stage(input, tag, round, subject)
+        == Some(expected_stage)
+""",
+            "Busy-deferred owner inventory must require the exact stage and full completion evidence",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            deferred_exact_owners,
+            ".map(|input| input.admission_ordinal)",
+            "Busy-deferred owner inventory must return the runtime ownership-map key",
+            errors,
+        )
+        adapter_preflight = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "preflight_runtime_command_admission",
+            errors,
+        )
+        _require_rust_item_context(
+            adapter_path,
+            adapter_preflight,
+            (("impl", "SumeragiV2Adapter"),),
+            "durable producer-tombstone admission preflight",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            adapter_preflight,
+            """
+let serviced = self.serviced_candidates.contains_key(&key);
+let matching = self
+    .producer_continuations
+    .iter()
+    .filter(|(_, record)| record.identity().candidate() == key)
+    .collect::<Vec<_>>();
+""",
+            "terminal preflight must join the service marker to its exact producer record",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            adapter_preflight,
+            """
+let identity = record.identity();
+if serviced
+    || record.status() != ProducerContinuationStatus::Reserved
+    || !self
+        .restored_dormant_producer_continuations
+        .contains(address)
+    || self.durable_producer_continuations.get(address) != Some(record)
+{
+    return Preflight::CoalesceOwned {
+        causal_lifecycle_key: identity.causal_lifecycle_key(),
+        admission_ordinal: identity.admission_ordinal(),
+    };
+}
+""",
+            "live and terminal producer coalescence must return the immutable retained owner",
+            errors,
+        )
+
+        retire_restored_producer = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "retire_restored_producer_continuation",
+            errors,
+        )
+        _require_rust_item_context(
+            adapter_path,
+            retire_restored_producer,
+            (("impl", "SumeragiV2Adapter"),),
+            "persistent stage-7 producer-record retirement",
+            errors,
+        )
+        for sequence, description in (
+            (
+                """
+self.ensure_ingress()?;
+if admission_ordinal == 0
+    || producer_stage != ServicedCandidateStage::BodyAvailable as u8
+    || self.selected_producer_lifecycle.is_some()
+{
+    return Err(self.fail_serviced_candidate_store(
+        "restored producer retirement carried an invalid stage, ordinal, or active selection"
+            .to_owned(),
+    ));
+}
+""",
+                "persistent producer retirement must accept only an inactive nonzero stage-7 owner",
+            ),
+            (
+                """
+let matches = self
+    .producer_continuations
+    .iter()
+    .filter_map(|(address, record)| {
+        let identity = record.identity();
+        (identity.causal_lifecycle_key() == causal_lifecycle_key
+    && identity.admission_ordinal() == admission_ordinal
+    && identity.stage() == producer_stage)
+    .then_some((*address, record.clone()))
+    })
+    .collect::<Vec<_>>();
+""",
+                "persistent producer retirement must join the exact lifecycle key, ordinal, and stage",
+            ),
+            (
+                """
+let [(address, record)] = matches.as_slice() else {
+    return match matches.len() {
+        0 => Ok(false),
+        _ => Err(self.fail_serviced_candidate_store(
+            "restored producer retirement matched multiple bounded addresses".to_owned(),
+        )),
+    };
+};
+self.persist_restored_body_producer_retirement(*address, record)?;
+Ok(true)
+""",
+                "persistent producer retirement must select one exact record before delegating durable removal",
+            ),
+        ):
+            _require_rust_token_sequence(
+                adapter_path,
+                retire_restored_producer,
+                sequence,
+                description,
+                errors,
+            )
+
+        persist_restored_body_producer = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "persist_restored_body_producer_retirement",
+            errors,
+        )
+        _require_rust_item_context(
+            adapter_path,
+            persist_restored_body_producer,
+            (("impl", "SumeragiV2Adapter"),),
+            "shared persist-first stage-7 producer-record retirement",
+            errors,
+        )
+        for sequence, description in (
+            (
+                """
+if record.status() != ProducerContinuationStatus::Reserved
+    || record.source_class() != ProducerContinuationSourceClass::VolatileBody
+    || record.identity().address() != address
+    || record.identity().stage() != ServicedCandidateStage::BodyAvailable as u8
+    || self.durable_producer_continuations.get(&address) != Some(record)
+    || !self
+        .restored_dormant_producer_continuations
+        .contains(&address)
+    || self
+        .deferred_producer_continuations
+        .values()
+        .any(|reservation| reservation.address == address)
+    || self.pending_producer_handoffs.contains_key(&address)
+{
+    return Err(self.fail_serviced_candidate_store(
+        "restored producer retirement did not own one exact dormant durable record"
+            .to_owned(),
+    ));
+}
+""",
+                "persistent producer retirement must own one exact dormant durable stage-7 volatile-body record with no live alias",
+            ),
+            (
+                """
+let process_previous = self
+    .producer_continuations
+    .remove(&address)
+    .expect("matched process producer remains present");
+let durable_previous = self
+    .durable_producer_continuations
+    .remove(&address)
+    .expect("matched durable producer remains present");
+let dormant_removed = self
+    .restored_dormant_producer_continuations
+    .remove(&address);
+debug_assert!(dormant_removed);
+if let Err(reason) = self
+    .serviced_candidate_store
+    .persist_with_producer_continuations(
+        &self.durable_serviced_candidates,
+        &self.durable_producer_continuations,
+        self.serviced_candidates_decision_reclaimed,
+    )
+{
+    self.producer_continuations
+        .insert(address, process_previous);
+    self.durable_producer_continuations
+        .insert(address, durable_previous);
+    if dormant_removed {
+        self.restored_dormant_producer_continuations.insert(address);
+    }
+    return Err(self.fail_serviced_candidate_store(reason));
+}
+Ok(())
+""",
+                "stage-7 retirement must persist process/durable/dormant removal and roll all memory back on persistence failure",
+            ),
+        ):
+            _require_rust_token_sequence(
+                adapter_path,
+                persist_restored_body_producer,
+                sequence,
+                description,
+                errors,
+            )
+
+        persistent_retirement_helper = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "assert_restored_stage_seven_retirement_does_not_resurrect",
+            errors,
+        )
+        for sequence, description in (
+            (
+                """
+manifest: (marker != 0xBD).then_some(manifest.clone()),
+""",
+                "the restart regression must make BD the unique manifest-less restored Fetch case",
+            ),
+            (
+                """
+if !reserve_completion {
+    assert!(
+        runtime
+            .retire_restored_body_fetch_parent(&reconstructed_fetch, &fetch_ownership)
+            .expect("persist terminal restored fetch-parent retirement")
+    );
+    assert_eq!(runtime.remaining_completion_capacity(), capacity_before);
+    assert!(
+        !runtime
+            .driver()
+            .producer_continuations
+            .contains_key(&restored_address)
+            && !runtime
+                .driver()
+                .durable_producer_continuations
+                .contains_key(&restored_address)
+            && !runtime
+                .driver()
+                .restored_dormant_producer_continuations
+                .contains(&restored_address),
+        "terminal fetch cancellation must remove its dormant stage-7 parent"
+    );
+    drop(runtime.into_driver());
+    let (restarted_again, _startup) = SumeragiV2Adapter::open_with_aggregator(
+        directory.path().join("safety.wal"),
+        verified_genesis(context()),
+        Some(0),
+        reducer::Generation::new(3),
+        [0x11; 32],
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("reopen after terminal restored fetch cancellation");
+    assert!(restarted_again.producer_continuations.is_empty());
+    return;
+}
+""",
+                "pre-reservation restored Fetch cancellation must persist its dormant stage-7 parent before returning",
+            ),
+            (
+                """
+let retired = if materialize_before_retirement {
+    runtime
+        .commit_body_available(reservation)
+        .expect("materialize restored completion before pipeline retirement");
+    runtime
+        .retire_body_pipeline_completions(restarted_tag, round, body_subject)
+        .map(|retired| retired.body_available())
+} else {
+    runtime.retire_unpublished_body_available(restarted_tag, round, body_subject)
+};
+""",
+                "the restart regression must exercise unpublished and queued stage-7 retirement",
+            ),
+            (
+                """
+if let Some((path, bytes)) = sabotaged_snapshot {
+    assert!(
+        retired.is_err(),
+        "a failed durable release cannot publish volatile token retirement"
+    );
+    assert_eq!(
+        runtime.remaining_completion_capacity(),
+        capacity_before - 1,
+        "failed persistence retains the exact unpublished physical owner"
+    );
+    assert!(runtime.driver().fail_closed);
+    assert_eq!(
+        runtime
+            .driver()
+            .producer_continuations
+            .get(&restored_address),
+        runtime
+            .driver()
+            .durable_producer_continuations
+            .get(&restored_address),
+        "failed persistence restores both in-memory producer aliases"
+    );
+    assert!(
+        runtime
+            .driver()
+            .restored_dormant_producer_continuations
+            .contains(&restored_address)
+    );
+""",
+                "the injected persistence failure must retain the volatile token and restore every in-memory producer alias",
+            ),
+            (
+                """
+assert!(retired.expect("persist and retire the restored body completion"));
+assert_eq!(runtime.remaining_completion_capacity(), capacity_before);
+assert!(
+!runtime
+    .driver()
+    .producer_continuations
+    .contains_key(&restored_address)
+    && !runtime
+        .driver()
+        .durable_producer_continuations
+        .contains_key(&restored_address)
+    && !runtime
+        .driver()
+        .restored_dormant_producer_continuations
+        .contains(&restored_address),
+    "terminal runtime retirement must persistently release the restored producer"
+);
+""",
+                "reserved stage-7 retirement must observe process, durable, dormant, and capacity release before reopening",
+            ),
+            (
+                """
+drop(runtime.into_driver());
+let (restarted_again, _startup) = SumeragiV2Adapter::open_with_aggregator(
+    directory.path().join("safety.wal"),
+    verified_genesis(context()),
+    Some(0),
+    reducer::Generation::new(3),
+    [0x11; 32],
+    fingerprints(),
+    Box::new(TestAggregator),
+    deferred_admission_ordinals(),
+)
+.expect("reopen after terminal stage-7 retirement");
+assert!(
+    restarted_again.producer_continuations.is_empty()
+        && restarted_again.durable_producer_continuations.is_empty()
+        && restarted_again
+            .restored_dormant_producer_continuations
+            .is_empty(),
+""",
+                "the stage-7 retirement regression must perform a second restart from persisted state",
+            ),
+            (
+                """
+restarted_again.producer_continuations.is_empty()
+    && restarted_again.durable_producer_continuations.is_empty()
+    && restarted_again
+        .restored_dormant_producer_continuations
+        .is_empty()
+""",
+                "the second restart must prove that terminally retired stage-7 ownership cannot resurrect",
+            ),
+        ):
+            _require_rust_token_sequence(
+                adapter_path,
+                persistent_retirement_helper,
+                sequence,
+                description,
+                errors,
+            )
+        _require_rust_token_sequence(
+            adapter_path,
+            persistent_retirement_helper,
+            """
+!runtime
+    .driver()
+    .producer_continuations
+    .contains_key(&restored_address)
+    && !runtime
+        .driver()
+        .durable_producer_continuations
+        .contains_key(&restored_address)
+    && !runtime
+        .driver()
+        .restored_dormant_producer_continuations
+        .contains(&restored_address)
+""",
+            "the restart regression must observe both terminal-fetch and reserved-token process/durable/dormant removal cuts",
+            errors,
+            count=2,
+        )
+
+        persistent_retirement_regression = _require_rust_item(
+            adapter_path,
+            adapter_source,
+            "restored_body_available_terminal_retirement_is_persistent_before_token_release",
+            errors,
+        )
+        _require_rust_token_sequence(
+            adapter_path,
+            persistent_retirement_regression,
+            """
+assert_restored_stage_seven_retirement_does_not_resurrect(0xB8, true, false, false);
+assert_restored_stage_seven_retirement_does_not_resurrect(0xB9, true, true, false);
+assert_restored_stage_seven_retirement_does_not_resurrect(0xBA, true, false, true);
+assert_restored_stage_seven_retirement_does_not_resurrect(0xBB, false, false, false);
+assert_restored_stage_seven_retirement_does_not_resurrect(0xBD, false, false, false);
+""",
+            "the public regression must cover unpublished, materialized, failed, manifest-bound pre-reservation, and manifest-less pre-reservation stage-7 retirement",
+            errors,
+        )
+
+    drain = _require_rust_item(
+        effects_path,
+        source,
+        "drain_retained_effect_batch",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        drain,
+        generic_executor_context,
+        "certified-request retained-effect retry method",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        drain,
+        """
+let pending_work_producer = Self::pending_work_producer(&owned.effect);
+match self.consume_one(owned.effect, owned.ownership, services) {
+""",
+        "certified-request retry must classify and dispatch the exact retained owned effect",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        drain,
+        """
+Err(
+    EffectExecutorError::PendingWorkCapacity { .. }
+    | EffectExecutorError::CertifiedRequestCapacity { .. },
+) => {
+    debug_assert!(pending_work_producer.is_some());
+    break;
+}
+Err(error) => return Err(error),
+""",
+        "both retained-effect capacity errors must preserve the exact FIFO head before fail-closed fallback",
+        errors,
+    )
+    if drain is not None:
+        certified_capacity_count = _token_sequence_count(
+            rust_code_tokens(drain.source),
+            rust_code_tokens("EffectExecutorError::CertifiedRequestCapacity"),
+        )
+        if certified_capacity_count != 1:
+            errors.append(
+                f"{effects_path}:{drain.line}: retained-effect dispatch must "
+                "retry CertifiedRequestCapacity exactly once beside "
+                f"PendingWorkCapacity; found {certified_capacity_count} arm(s)"
+            )
+
+    begin_fetch = _require_rust_item(
+        effects_path,
+        source,
+        "begin_fetch",
+        errors,
+    )
+    _require_rust_item_context(
+        effects_path,
+        begin_fetch,
+        generic_executor_context,
+        "source-faithful certified-request capacity deferral method",
+        errors,
+        expected_attributes=("#[allow(clippy::too_many_arguments)]",),
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+} else if let Some(certificate) = certificate {
+    let plan = match self.plan_certified_fetch_request(
+        existing_id,
+        round,
+        subject,
+        certificate,
+        services,
+    ) {
+""",
+        "existing ordinary Fetch Q-capacity upgrade planning",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+let request_plan = if let Some(certificate) = certificate {
+    match self.plan_certified_fetch_request(
+        work.id,
+        round,
+        subject,
+        certificate,
+        services
+    ) {
+""",
+        "genuinely new Fetch Q-capacity request planning",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+Err(EffectExecutorError::CertifiedRequestCapacity { capacity }) => {
+    iroha_logger::debug!(
+        height = round.height,
+        view = round.view,
+        capacity,
+        "deferred certified Sumeragi v2 body-fetch authority upgrade at request capacity"
+    );
+    return Err(EffectExecutorError::CertifiedRequestCapacity { capacity });
+}
+Err(error) => return Err(error),
+""",
+        "an existing Fetch Q-capacity upgrade must retain and retry its exact lifecycle without partial authority installation",
+        errors,
+        count=2,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+Err(EffectExecutorError::CertifiedRequestCapacity { capacity }) => {
+    iroha_logger::debug!(
+        height = round.height,
+        view = round.view,
+        capacity,
+        "deferred certified Sumeragi v2 body fetch at request capacity"
+    );
+    return Err(EffectExecutorError::CertifiedRequestCapacity { capacity });
+}
+Err(error) => return Err(error),
+""",
+        "a new Fetch Q-capacity admission must retain and retry its exact lifecycle without partial authority installation",
+        errors,
+        count=2,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+let same_lifecycle = existing.task.ownership == ownership;
+if existing.task.tag != tag {
+    return Err(EffectExecutorError::Contract(
+        "conflicting retransmission for one body-fetch round/subject".to_owned(),
+    ));
+}
+if !same_lifecycle {
+    return Err(EffectExecutorError::Contract(
+        "body-fetch retry or authority upgrade changed its exact lifecycle owner"
+            .to_owned(),
+    ));
+}
+""",
+        "Fetch owner replacement must fail before request, refinement, or service planning",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+let merged_ownership = existing
+    .task
+    .ownership
+    .rebind_same_adapter_effect(&merged_effect)
+    .map_err(EffectExecutorError::Contract)?;
+let merged = BodyFetchTask {
+    id: existing_id,
+    tag,
+    round,
+    subject,
+    manifest: merged_manifest,
+    sources: merged_sources,
+    certified_request: merged_request,
+    ownership: merged_ownership,
+};
+""",
+        "coalesced Fetch retries must rebind the concrete effect while retaining the incumbent owner",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+if merged == existing.task {
+    services.enqueue_body_fetch(merged).map_err(service_error)?;
+    return Ok(());
+}
+services
+    .enqueue_body_fetch(merged.clone())
+    .map_err(service_error)?;
+""",
+        "same-owner Fetch retries and upgrades must reach the idempotent service seam after the early owner gate",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        begin_fetch,
+        """
+services
+    .enqueue_body_fetch(merged.clone())
+    .map_err(service_error)?;
+if let Some(plan) = request_plan {
+    self.commit_certified_fetch_request(plan);
+}
+self.commit_body_pipeline_owner(owner_plan);
+let pending = self
+    .pending_fetches
+    .get_mut(&existing_id)
+    .expect("serialized body-fetch owner remains present after admission");
+pending.task = merged;
+pending.request_hash = request_hash;
+return Ok(());
+""",
+        "a successful same-owner Fetch authority upgrade must atomically install P/Q state and drain its retry",
+        errors,
+    )
+    if begin_fetch is not None:
+        _require_rust_item_token_sha256(
+            effects_path,
+            begin_fetch,
+            _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256["begin_fetch"],
+            "idempotent exact Fetch admission lifecycle",
+            errors,
+        )
+        begin_fetch_tokens = rust_code_tokens(begin_fetch.source)
+        owner_barrier_tokens = rust_code_tokens("if !same_lifecycle")
+        request_plan_tokens = rust_code_tokens("self.plan_certified_fetch_request(")
+        refinement_tokens = rust_code_tokens(
+            "existing.task.ownership.rebind_same_adapter_effect(&merged_effect)"
+        )
+        barrier_tokens = rust_code_tokens("if merged == existing.task")
+        retry_enqueue_tokens = rust_code_tokens(
+            "services.enqueue_body_fetch(merged).map_err(service_error)?"
+        )
+        upgrade_enqueue_tokens = rust_code_tokens(
+            "services.enqueue_body_fetch(merged.clone()).map_err(service_error)?"
+        )
+        barrier_positions = [
+            index
+            for index in range(
+                len(begin_fetch_tokens) - len(barrier_tokens) + 1
+            )
+            if begin_fetch_tokens[index : index + len(barrier_tokens)]
+            == barrier_tokens
+        ]
+        retry_enqueue_positions = [
+            index
+            for index in range(
+                len(begin_fetch_tokens) - len(retry_enqueue_tokens) + 1
+            )
+            if begin_fetch_tokens[index : index + len(retry_enqueue_tokens)]
+            == retry_enqueue_tokens
+        ]
+        upgrade_enqueue_positions = [
+            index
+            for index in range(
+                len(begin_fetch_tokens) - len(upgrade_enqueue_tokens) + 1
+            )
+            if begin_fetch_tokens[index : index + len(upgrade_enqueue_tokens)]
+            == upgrade_enqueue_tokens
+        ]
+        owner_barrier_positions = [
+            index
+            for index in range(
+                len(begin_fetch_tokens) - len(owner_barrier_tokens) + 1
+            )
+            if begin_fetch_tokens[index : index + len(owner_barrier_tokens)]
+            == owner_barrier_tokens
+        ]
+        request_plan_positions = [
+            index
+            for index in range(
+                len(begin_fetch_tokens) - len(request_plan_tokens) + 1
+            )
+            if begin_fetch_tokens[index : index + len(request_plan_tokens)]
+            == request_plan_tokens
+        ]
+        refinement_positions = [
+            index
+            for index in range(
+                len(begin_fetch_tokens) - len(refinement_tokens) + 1
+            )
+            if begin_fetch_tokens[index : index + len(refinement_tokens)]
+            == refinement_tokens
+        ]
+        if not (
+            len(owner_barrier_positions) == 1
+            and len(request_plan_positions) == 2
+            and len(refinement_positions) == 1
+            and owner_barrier_positions[0] < min(request_plan_positions)
+            and owner_barrier_positions[0] < refinement_positions[0]
+        ):
+            errors.append(
+                f"{effects_path}:{begin_fetch.line}: begin_fetch must reject "
+                "one foreign incumbent owner before either request planner "
+                "and before candidate refinement evidence"
+            )
+        if not (
+            len(barrier_positions) == 1
+            and len(retry_enqueue_positions) == 1
+            and len(upgrade_enqueue_positions) == 1
+            and barrier_positions[0] < retry_enqueue_positions[0]
+            and retry_enqueue_positions[0] < upgrade_enqueue_positions[0]
+        ):
+            errors.append(
+                f"{effects_path}:{begin_fetch.line}: begin_fetch must keep one "
+                "merged == existing.task barrier, one same-owner retry "
+                "enqueue inside it, and one later same-owner authority-upgrade enqueue"
+            )
+        for forbidden_source in (
+            "self.retained_effect_batch",
+            "self.retain_effect_batch",
+        ):
+            retained_count = _token_sequence_count(
+                begin_fetch_tokens,
+                rust_code_tokens(forbidden_source),
+            )
+            if retained_count != 0:
+                errors.append(
+                    f"{effects_path}:{begin_fetch.line}: Q-capacity deferrals "
+                    "must not mutate the outer executor's exact retained FIFO "
+                    "owner inside begin_fetch; "
+                    f"found {retained_count} occurrence(s) of {forbidden_source}"
+                )

@@ -1,0 +1,16 @@
+
+seiyaku ReachableHints {
+  state int Counter;
+  state StateMap<int, int> DeadEntries;
+
+  hajimari() { Counter = 0; }
+
+  fn dead_lookup(int key) {
+    let _value = DeadEntries.get(key);
+    for (dead_key, dead_value) in DeadEntries.take(4) {
+      let _copy = dead_value;
+    }
+  }
+
+  view fn counter() -> int { return Counter; }
+}

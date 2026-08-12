@@ -1,0 +1,10 @@
+
+seiyaku NativeJson {
+  view fn payload(string label) -> Json {
+    json {
+      z: true,
+      amount: 1.25,
+      labels: json ["primary", label],
+    }
+  }
+}

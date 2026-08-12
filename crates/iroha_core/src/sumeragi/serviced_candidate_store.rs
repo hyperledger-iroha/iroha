@@ -11,10 +11,13 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{ErrorKind, Read, Write},
-    path::{Path, PathBuf},
     sync::{Arc, Mutex},
+};
+
+#[cfg(test)]
+use std::{
+    fs,
+    path::{Path, PathBuf},
 };
 
 use iroha_crypto::{Hash, HashOf};
@@ -24,6 +27,7 @@ use norito::codec::{Decode, DecodeAll, Encode};
 use super::{
     FairV2IngressLeaderWireIdentity, FairV2IngressLeaderWireSlot,
     FairV2IngressLeaderWireSourceClass, FairV2IngressLeaderWireToken,
+    safety_wal::{SafetyWalLeaderWireStoreAuthority, SafetyWalServicedCandidateStoreAuthority},
     v2_body_store::DurableBodyReceipt,
     v2_core::{
         CanonicalIdentityProjection, IDENTITY_DOMAIN_PROCESS_LOCAL,
@@ -1034,6 +1038,8 @@ impl LeaderWireLifecycleRuntimeReceipt {
 /// selector-dormant Dormant with its original ordinals.
 #[derive(Debug)]
 pub(crate) struct LeaderWireLifecycleStoreGate {
+    storage: SafetyWalLeaderWireStoreAuthority,
+    #[cfg(test)]
     path: PathBuf,
     context_id: wire::HeightContextId,
     height: wire::Height,
@@ -1048,6 +1054,8 @@ pub(crate) struct LeaderWireLifecycleStoreGate {
 /// Atomic per-height snapshot stored beside the safety WAL.
 #[derive(Debug)]
 pub(crate) struct ServicedCandidateStore {
+    storage: SafetyWalServicedCandidateStoreAuthority,
+    #[cfg(test)]
     path: PathBuf,
     context_id: wire::HeightContextId,
     height: wire::Height,
@@ -1056,206 +1064,6 @@ pub(crate) struct ServicedCandidateStore {
     producer_continuation_capacity: usize,
     producer_continuation_lifecycle_capacity: u64,
     max_frame_bytes: u64,
-}
-
-#[cfg(unix)]
-type SnapshotIdentity = (u64, u64);
-#[cfg(windows)]
-type SnapshotIdentity = (Option<u32>, Option<u64>);
-#[cfg(not(any(unix, windows)))]
-type SnapshotIdentity = ();
-
-#[cfg(unix)]
-type SnapshotRevision = (u64, i64, i64, i64, i64, u64, u32, u32, u32);
-#[cfg(windows)]
-type SnapshotRevision = (u64, u64, u64, u32, Option<u32>);
-#[cfg(not(any(unix, windows)))]
-type SnapshotRevision = ();
-
-#[cfg(unix)]
-fn snapshot_identity(metadata: &fs::Metadata) -> SnapshotIdentity {
-    use std::os::unix::fs::MetadataExt as _;
-
-    (metadata.dev(), metadata.ino())
-}
-
-#[cfg(windows)]
-fn snapshot_identity(metadata: &fs::Metadata) -> SnapshotIdentity {
-    use std::os::windows::fs::MetadataExt as _;
-
-    (metadata.volume_serial_number(), metadata.file_index())
-}
-
-#[cfg(not(any(unix, windows)))]
-fn snapshot_identity(_metadata: &fs::Metadata) -> SnapshotIdentity {}
-
-#[cfg(unix)]
-fn snapshot_revision(metadata: &fs::Metadata) -> SnapshotRevision {
-    use std::os::unix::fs::MetadataExt as _;
-
-    (
-        metadata.len(),
-        metadata.mtime(),
-        metadata.mtime_nsec(),
-        metadata.ctime(),
-        metadata.ctime_nsec(),
-        metadata.nlink(),
-        metadata.mode(),
-        metadata.uid(),
-        metadata.gid(),
-    )
-}
-
-#[cfg(windows)]
-fn snapshot_revision(metadata: &fs::Metadata) -> SnapshotRevision {
-    use std::os::windows::fs::MetadataExt as _;
-
-    (
-        metadata.file_size(),
-        metadata.creation_time(),
-        metadata.last_write_time(),
-        metadata.file_attributes(),
-        metadata.number_of_links(),
-    )
-}
-
-#[cfg(not(any(unix, windows)))]
-fn snapshot_revision(_metadata: &fs::Metadata) -> SnapshotRevision {}
-
-#[cfg(unix)]
-const fn snapshot_identity_available(_identity: SnapshotIdentity) -> bool {
-    true
-}
-
-#[cfg(windows)]
-const fn snapshot_identity_available(identity: SnapshotIdentity) -> bool {
-    identity.0.is_some() && identity.1.is_some()
-}
-
-#[cfg(not(any(unix, windows)))]
-const fn snapshot_identity_available(_identity: SnapshotIdentity) -> bool {
-    false
-}
-
-fn snapshot_is_single_link(metadata: &fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-
-        metadata.nlink() == 1
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt as _;
-
-        metadata.number_of_links() == Some(1)
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = metadata;
-        false
-    }
-}
-
-#[cfg(windows)]
-fn snapshot_is_reparse_point(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn snapshot_is_reparse_point(_metadata: &fs::Metadata) -> bool {
-    false
-}
-
-fn snapshot_metadata_is_safe(metadata: &fs::Metadata, max_frame_bytes: u64) -> bool {
-    let identity = snapshot_identity(metadata);
-    !metadata.file_type().is_symlink()
-        && !snapshot_is_reparse_point(metadata)
-        && metadata.is_file()
-        && snapshot_identity_available(identity)
-        && snapshot_is_single_link(metadata)
-        && metadata.len() <= max_frame_bytes
-}
-
-fn snapshot_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    let identity = snapshot_identity(left);
-    snapshot_identity_available(identity)
-        && identity == snapshot_identity(right)
-        && snapshot_revision(left) == snapshot_revision(right)
-}
-
-#[cfg(any(unix, windows))]
-fn open_snapshot_nofollow(path: &Path) -> std::io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-
-        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    options.open(path)
-}
-
-#[cfg(not(any(unix, windows)))]
-fn open_snapshot_nofollow(_path: &Path) -> std::io::Result<File> {
-    Err(std::io::Error::new(
-        ErrorKind::Unsupported,
-        "stable serviced-candidate file identities are unsupported on this platform",
-    ))
-}
-
-fn open_bound_snapshot(
-    path: &Path,
-    max_frame_bytes: u64,
-) -> Result<Option<(File, fs::Metadata)>, String> {
-    let path_before = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(format!(
-                "failed to inspect serviced-candidate snapshot {}: {error}",
-                path.display()
-            ));
-        }
-    };
-    if !snapshot_metadata_is_safe(&path_before, max_frame_bytes) {
-        return Err(format!(
-            "serviced-candidate snapshot {} is not a bounded direct single-link regular file",
-            path.display()
-        ));
-    }
-    let file = open_snapshot_nofollow(path).map_err(|error| {
-        format!(
-            "failed to open serviced-candidate snapshot {} without following links: {error}",
-            path.display()
-        )
-    })?;
-    let opened = file.metadata().map_err(|error| {
-        format!(
-            "failed to inspect opened serviced-candidate snapshot {}: {error}",
-            path.display()
-        )
-    })?;
-    if !snapshot_metadata_is_safe(&opened, max_frame_bytes)
-        || !snapshot_metadata_unchanged(&path_before, &opened)
-    {
-        return Err(format!(
-            "serviced-candidate snapshot {} changed identity while opening",
-            path.display()
-        ));
-    }
-    Ok(Some((file, opened)))
 }
 
 fn producer_continuations_are_valid(
@@ -1442,7 +1250,8 @@ impl LeaderWireLifecycleStoreGate {
             .ok_or_else(|| "leader-wire lifecycle capacity overflowed".to_owned())
     }
 
-    /// Open a context-bound leader-wire snapshot beside the safety WAL.
+    /// Open a context-bound leader-wire snapshot through the safety WAL's
+    /// one-shot adjacent-store authority.
     ///
     /// Existing active states are normalized to selector-dormant Dormant. A
     /// producer terminal supplied from the already-opened serviced-candidate
@@ -1457,8 +1266,65 @@ impl LeaderWireLifecycleStoreGate {
     /// noncanonical or corrupt framing, unmatched Terminal records, or an
     /// atomic publication failure.
     #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_with_safety_wal_authority(
+        storage: SafetyWalLeaderWireStoreAuthority,
+        context_id: wire::HeightContextId,
+        height: wire::Height,
+        owner: [u8; 32],
+        roster: BTreeSet<PeerId>,
+        capacity: usize,
+        max_chunk_count: u32,
+        recovery_authority: LeaderWireRecoveryAuthority,
+        producer_terminals: &[ProducerContinuationTerminalToken],
+        durable_bodies: &[DurableBodyReceipt],
+    ) -> Result<(Arc<Self>, LeaderWireLifecycleRestore), String> {
+        Self::open_with_storage(
+            storage,
+            context_id,
+            height,
+            owner,
+            roster,
+            capacity,
+            max_chunk_count,
+            recovery_authority,
+            producer_terminals,
+            durable_bodies,
+        )
+    }
+
+    /// Test-only raw-path adapter for the sealed production constructor.
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn open(
         safety_wal_path: &Path,
+        context_id: wire::HeightContextId,
+        height: wire::Height,
+        owner: [u8; 32],
+        roster: BTreeSet<PeerId>,
+        capacity: usize,
+        max_chunk_count: u32,
+        recovery_authority: LeaderWireRecoveryAuthority,
+        producer_terminals: &[ProducerContinuationTerminalToken],
+        durable_bodies: &[DurableBodyReceipt],
+    ) -> Result<(Arc<Self>, LeaderWireLifecycleRestore), String> {
+        let storage = SafetyWalLeaderWireStoreAuthority::for_test_path(safety_wal_path)?;
+        Self::open_with_storage(
+            storage,
+            context_id,
+            height,
+            owner,
+            roster,
+            capacity,
+            max_chunk_count,
+            recovery_authority,
+            producer_terminals,
+            durable_bodies,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn open_with_storage(
+        storage: SafetyWalLeaderWireStoreAuthority,
         context_id: wire::HeightContextId,
         height: wire::Height,
         owner: [u8; 32],
@@ -1481,12 +1347,6 @@ impl LeaderWireLifecycleStoreGate {
                 "leader-wire lifecycle capacity {capacity} does not match derived geometry {derived_capacity}"
             ));
         }
-        let mut file_name = safety_wal_path
-            .file_name()
-            .ok_or_else(|| "safety WAL path has no file name".to_owned())?
-            .to_os_string();
-        file_name.push(".leader-wire-lifecycles");
-        let path = safety_wal_path.with_file_name(file_name);
         let record_bytes = u64::try_from(capacity)
             .map_err(|_| "leader-wire lifecycle capacity is not representable".to_owned())?
             .checked_mul(LEADER_WIRE_RECORD_HEADROOM_BYTES)
@@ -1494,7 +1354,11 @@ impl LeaderWireLifecycleStoreGate {
         let max_frame_bytes = FIXED_FRAME_HEADROOM_BYTES
             .checked_add(record_bytes)
             .ok_or_else(|| "leader-wire lifecycle frame bound overflowed".to_owned())?;
+        #[cfg(test)]
+        let path = storage.path_for_test().to_path_buf();
         let gate = Arc::new(Self {
+            storage,
+            #[cfg(test)]
             path,
             context_id,
             height,
@@ -2037,45 +1901,9 @@ impl LeaderWireLifecycleStoreGate {
         producer_terminals: &[ProducerContinuationTerminalToken],
         durable_bodies: &[DurableBodyReceipt],
     ) -> Result<bool, String> {
-        let Some((mut file, opened_before)) =
-            open_bound_snapshot(&self.path, self.max_frame_bytes)?
-        else {
+        let Some(bytes) = self.storage.read_bounded(self.max_frame_bytes)? else {
             return Ok(false);
         };
-        let read_limit = self
-            .max_frame_bytes
-            .checked_add(1)
-            .ok_or_else(|| "leader-wire lifecycle read bound overflowed".to_owned())?;
-        let mut bytes = Vec::new();
-        Read::by_ref(&mut file)
-            .take(read_limit)
-            .read_to_end(&mut bytes)
-            .map_err(|error| {
-                format!(
-                    "failed to read leader-wire lifecycle snapshot {}: {error}",
-                    self.path.display()
-                )
-            })?;
-        let opened_after = file.metadata().map_err(|error| {
-            format!(
-                "failed to reinspect leader-wire lifecycle snapshot {}: {error}",
-                self.path.display()
-            )
-        })?;
-        let path_after = fs::symlink_metadata(&self.path).map_err(|error| {
-            format!(
-                "failed to reinspect leader-wire lifecycle path {}: {error}",
-                self.path.display()
-            )
-        })?;
-        if !snapshot_metadata_is_safe(&opened_after, self.max_frame_bytes)
-            || !snapshot_metadata_is_safe(&path_after, self.max_frame_bytes)
-            || !snapshot_metadata_unchanged(&opened_before, &opened_after)
-            || !snapshot_metadata_unchanged(&opened_before, &path_after)
-            || opened_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
-        {
-            return Err("leader-wire lifecycle snapshot changed while reading".to_owned());
-        }
         let decoded = decode_leader_wire_frame(&bytes, self.max_frame_bytes)?;
         if decoded.context_id != self.context_id
             || decoded.height != self.height
@@ -2304,18 +2132,41 @@ impl LeaderWireLifecycleStoreGate {
             records: state.records.values().cloned().collect(),
         };
         let frame = encode_leader_wire_frame(&snapshot, self.max_frame_bytes)?;
-        publish_atomic_frame(&self.path, &frame, "leader-wire lifecycle")
+        self.storage.publish_atomic(&frame, self.max_frame_bytes)
     }
 }
 
 impl ServicedCandidateStore {
-    /// Open the height-bound snapshot adjacent to `safety_wal_path`.
+    /// Open the height-bound snapshot through the safety WAL's one-shot
+    /// serviced-candidate authority.
     ///
     /// # Errors
     ///
     /// Returns an error when the derived geometry overflows or an existing
     /// snapshot is missing its canonical framing, checksum, ordering, or exact
     /// height-context binding.
+    pub(crate) fn open_with_safety_wal_authority(
+        storage: SafetyWalServicedCandidateStoreAuthority,
+        context_id: wire::HeightContextId,
+        height: wire::Height,
+        owner: [u8; 32],
+        lifecycle_capacity: usize,
+    ) -> Result<(Self, RestoredServicedCandidates), String> {
+        let record_capacity = lifecycle_capacity
+            .checked_mul(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE)
+            .ok_or_else(|| "serviced-candidate lifecycle-stage capacity overflowed".to_owned())?;
+        Self::open_with_storage_and_capacities(
+            storage,
+            context_id,
+            height,
+            owner,
+            record_capacity,
+            record_capacity,
+        )
+    }
+
+    /// Test-only raw-path adapter for the sealed production constructor.
+    #[cfg(test)]
     pub(crate) fn open(
         safety_wal_path: &Path,
         context_id: wire::HeightContextId,
@@ -2326,8 +2177,9 @@ impl ServicedCandidateStore {
         let record_capacity = lifecycle_capacity
             .checked_mul(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE)
             .ok_or_else(|| "serviced-candidate lifecycle-stage capacity overflowed".to_owned())?;
-        Self::open_with_capacities(
-            safety_wal_path,
+        let storage = SafetyWalServicedCandidateStoreAuthority::for_test_path(safety_wal_path)?;
+        Self::open_with_storage_and_capacities(
+            storage,
             context_id,
             height,
             owner,
@@ -2336,8 +2188,28 @@ impl ServicedCandidateStore {
         )
     }
 
+    #[cfg(test)]
     fn open_with_capacities(
         safety_wal_path: &Path,
+        context_id: wire::HeightContextId,
+        height: wire::Height,
+        owner: [u8; 32],
+        serviced_capacity: usize,
+        producer_continuation_capacity: usize,
+    ) -> Result<(Self, RestoredServicedCandidates), String> {
+        let storage = SafetyWalServicedCandidateStoreAuthority::for_test_path(safety_wal_path)?;
+        Self::open_with_storage_and_capacities(
+            storage,
+            context_id,
+            height,
+            owner,
+            serviced_capacity,
+            producer_continuation_capacity,
+        )
+    }
+
+    fn open_with_storage_and_capacities(
+        storage: SafetyWalServicedCandidateStoreAuthority,
         context_id: wire::HeightContextId,
         height: wire::Height,
         owner: [u8; 32],
@@ -2361,12 +2233,6 @@ impl ServicedCandidateStore {
         if producer_continuation_lifecycle_capacity == 0 {
             return Err("producer-continuation lifecycle capacity must be non-zero".to_owned());
         }
-        let mut file_name = safety_wal_path
-            .file_name()
-            .ok_or_else(|| "safety WAL path has no file name".to_owned())?
-            .to_os_string();
-        file_name.push(".serviced-candidates");
-        let path = safety_wal_path.with_file_name(file_name);
         let serviced_frame_bytes = u64::try_from(serviced_capacity)
             .map_err(|_| "serviced-candidate capacity is not representable".to_owned())?
             .checked_mul(RECORD_FRAME_HEADROOM_BYTES)
@@ -2379,7 +2245,11 @@ impl ServicedCandidateStore {
             .checked_add(serviced_frame_bytes)
             .and_then(|bytes| bytes.checked_add(producer_frame_bytes))
             .ok_or_else(|| "serviced-candidate frame bound overflowed".to_owned())?;
+        #[cfg(test)]
+        let path = storage.path_for_test().to_path_buf();
         let store = Self {
+            storage,
+            #[cfg(test)]
             path,
             context_id,
             height,
@@ -2394,55 +2264,15 @@ impl ServicedCandidateStore {
     }
 
     fn load(&self) -> Result<RestoredServicedCandidates, String> {
-        let Some((mut file, opened_before)) =
-            open_bound_snapshot(&self.path, self.max_frame_bytes)?
-        else {
+        let Some(bytes) = self.storage.read_bounded(self.max_frame_bytes)? else {
             return Ok(RestoredServicedCandidates {
                 records: BTreeMap::new(),
                 producer_continuations: BTreeMap::new(),
                 decision_reclaimed: false,
             });
         };
-        let read_limit = self
-            .max_frame_bytes
-            .checked_add(1)
-            .ok_or_else(|| "serviced-candidate read bound overflowed".to_owned())?;
-        let mut bytes =
-            Vec::with_capacity(usize::try_from(opened_before.len()).unwrap_or_default());
-        Read::by_ref(&mut file)
-            .take(read_limit)
-            .read_to_end(&mut bytes)
-            .map_err(|error| {
-                format!(
-                    "failed to read serviced-candidate snapshot {}: {error}",
-                    self.path.display()
-                )
-            })?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > self.max_frame_bytes {
             return Err("serviced-candidate snapshot grew beyond its read bound".to_owned());
-        }
-        let opened_after = file.metadata().map_err(|error| {
-            format!(
-                "failed to reinspect opened serviced-candidate snapshot {}: {error}",
-                self.path.display()
-            )
-        })?;
-        let path_after = fs::symlink_metadata(&self.path).map_err(|error| {
-            format!(
-                "failed to reinspect serviced-candidate snapshot {}: {error}",
-                self.path.display()
-            )
-        })?;
-        if !snapshot_metadata_is_safe(&opened_after, self.max_frame_bytes)
-            || !snapshot_metadata_is_safe(&path_after, self.max_frame_bytes)
-            || !snapshot_metadata_unchanged(&opened_before, &opened_after)
-            || !snapshot_metadata_unchanged(&opened_before, &path_after)
-            || opened_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
-        {
-            return Err(format!(
-                "serviced-candidate snapshot {} changed while reading",
-                self.path.display()
-            ));
         }
         let state = decode_frame(&bytes, self.max_frame_bytes)?;
         let expected_serviced_capacity = u64::try_from(self.serviced_capacity)
@@ -2686,7 +2516,7 @@ impl ServicedCandidateStore {
             producer_continuations: persisted_producer_continuations,
         };
         let frame = encode_frame_v4(&state, self.max_frame_bytes)?;
-        publish_atomic_frame(&self.path, &frame, "serviced-candidate")
+        self.storage.publish_atomic(&frame, self.max_frame_bytes)
     }
 
     /// Remove and directory-sync the finalized height's obsolete snapshot.
@@ -2696,57 +2526,7 @@ impl ServicedCandidateStore {
     /// Returns an error when the snapshot or its containing directory cannot
     /// be synchronized and retired.
     pub(crate) fn retire(self) -> Result<(), String> {
-        let Some((file, opened_before)) = open_bound_snapshot(&self.path, self.max_frame_bytes)?
-        else {
-            return Ok(());
-        };
-        file.sync_all().map_err(|error| {
-            format!(
-                "failed to sync serviced-candidate snapshot {} for retirement: {error}",
-                self.path.display()
-            )
-        })?;
-        let opened_after = file.metadata().map_err(|error| {
-            format!(
-                "failed to reinspect serviced-candidate snapshot {} for retirement: {error}",
-                self.path.display()
-            )
-        })?;
-        let path_after = fs::symlink_metadata(&self.path).map_err(|error| {
-            format!(
-                "failed to bind serviced-candidate snapshot {} for retirement: {error}",
-                self.path.display()
-            )
-        })?;
-        if !snapshot_metadata_is_safe(&opened_after, self.max_frame_bytes)
-            || !snapshot_metadata_is_safe(&path_after, self.max_frame_bytes)
-            || !snapshot_metadata_unchanged(&opened_before, &opened_after)
-            || !snapshot_metadata_unchanged(&opened_before, &path_after)
-        {
-            return Err(format!(
-                "serviced-candidate snapshot {} changed before retirement",
-                self.path.display()
-            ));
-        }
-        drop(file);
-        fs::remove_file(&self.path).map_err(|error| {
-            format!(
-                "failed to retire serviced-candidate snapshot {}: {error}",
-                self.path.display()
-            )
-        })?;
-        let parent = self
-            .path
-            .parent()
-            .ok_or_else(|| "serviced-candidate snapshot path has no parent".to_owned())?;
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| {
-                format!(
-                    "failed to sync retired serviced-candidate directory {}: {error}",
-                    parent.display()
-                )
-            })
+        self.storage.retire(self.max_frame_bytes)
     }
 
     /// Return the exact snapshot path for failure-injection tests.
@@ -2754,68 +2534,6 @@ impl ServicedCandidateStore {
     pub(crate) fn path_for_test(&self) -> &Path {
         &self.path
     }
-}
-
-fn temporary_path(path: &Path) -> Result<PathBuf, String> {
-    let mut name = path
-        .file_name()
-        .ok_or_else(|| "serviced-candidate snapshot path has no file name".to_owned())?
-        .to_os_string();
-    name.push(".tmp");
-    Ok(path.with_file_name(name))
-}
-
-fn publish_atomic_frame(path: &Path, frame: &[u8], label: &str) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("{label} snapshot path has no parent"))?;
-    fs::create_dir_all(parent).map_err(|error| {
-        format!(
-            "failed to create {label} snapshot directory {}: {error}",
-            parent.display()
-        )
-    })?;
-    let temporary = temporary_path(path)?;
-    if let Ok(metadata) = fs::symlink_metadata(&temporary) {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(format!(
-                "{label} temporary path {} is not a regular file",
-                temporary.display()
-            ));
-        }
-        fs::remove_file(&temporary).map_err(|error| {
-            format!(
-                "failed to remove stale {label} temporary file {}: {error}",
-                temporary.display()
-            )
-        })?;
-    }
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temporary)
-        .map_err(|error| {
-            format!(
-                "failed to create {label} temporary snapshot {}: {error}",
-                temporary.display()
-            )
-        })?;
-    let publication = file
-        .write_all(frame)
-        .and_then(|()| file.flush())
-        .and_then(|()| file.sync_all())
-        .and_then(|()| fs::rename(&temporary, path))
-        .and_then(|()| File::open(parent))
-        .and_then(|directory| directory.sync_all());
-    if let Err(error) = publication {
-        drop(file);
-        let _ = fs::remove_file(&temporary);
-        return Err(format!(
-            "failed to publish {label} snapshot {}: {error}",
-            path.display()
-        ));
-    }
-    Ok(())
 }
 
 fn encode_leader_wire_frame(
@@ -3464,6 +3182,79 @@ mod tests {
         assert_eq!(restored.records, records);
     }
 
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn serviced_candidate_recovery_rejects_substituted_wal_directory() {
+        use std::os::unix::fs::symlink;
+
+        const NETWORK: [u8; 32] = [0x41; 32];
+        const KEY: [u8; 32] = [0x42; 32];
+
+        let context = context();
+        let seed = TempDir::new().expect("seed directory");
+        let seed_wal = seed.path().join("wal").join("00000000000000000007.wal");
+        let seed_safety = super::super::safety_wal::SafetyWal::open(
+            &seed_wal,
+            wire::PROTOCOL_VERSION,
+            NETWORK,
+            KEY,
+        )
+        .expect("open seed safety WAL");
+        let seed_authority = seed_safety
+            .mint_serviced_candidate_store_authority(&seed_wal)
+            .expect("mint seed serviced-candidate authority");
+        let (seed_store, _) = ServicedCandidateStore::open_with_safety_wal_authority(
+            seed_authority,
+            context.id(),
+            context.height,
+            OWNER_A,
+            4,
+        )
+        .expect("open seed serviced-candidate store");
+        let recovered_key = key(&context, 2, 0x55);
+        seed_store
+            .persist(&BTreeMap::from([(recovered_key, 9)]), false)
+            .expect("publish seed recovered state");
+        let injected_frame = fs::read(seed_store.path_for_test()).expect("read seed frame");
+
+        let target = TempDir::new().expect("target directory");
+        let target_parent = target.path().join("wal");
+        let target_wal = target_parent.join("00000000000000000007.wal");
+        let target_safety = super::super::safety_wal::SafetyWal::open(
+            &target_wal,
+            wire::PROTOCOL_VERSION,
+            NETWORK,
+            KEY,
+        )
+        .expect("open target safety WAL");
+        let target_authority = target_safety
+            .mint_serviced_candidate_store_authority(&target_wal)
+            .expect("mint target serviced-candidate authority");
+        let retained = target.path().join("retained-wal");
+        let foreign = target.path().join("foreign-wal");
+        fs::rename(&target_parent, &retained).expect("move bound WAL directory");
+        fs::create_dir(&foreign).expect("create foreign WAL directory");
+        let adjacent_name = "00000000000000000007.wal.serviced-candidates";
+        fs::write(foreign.join(adjacent_name), &injected_frame).expect("inject foreign snapshot");
+        symlink(&foreign, &target_parent).expect("substitute WAL directory");
+
+        assert!(
+            ServicedCandidateStore::open_with_safety_wal_authority(
+                target_authority,
+                context.id(),
+                context.height,
+                OWNER_A,
+                4,
+            )
+            .is_err()
+        );
+        assert!(!retained.join(adjacent_name).exists());
+        assert_eq!(
+            fs::read(foreign.join(adjacent_name)).expect("foreign frame remains untouched"),
+            injected_frame
+        );
+    }
+
     #[test]
     fn v4_roundtrips_terminal_producer_continuations_and_v3_upgrades_canonically() {
         let directory = TempDir::new().expect("temporary directory");
@@ -3572,6 +3363,61 @@ mod tests {
             &upgraded[FRAME_MAGIC.len()..FRAME_MAGIC.len() + 2],
             &FORMAT_VERSION.to_le_bytes()
         );
+    }
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[test]
+    fn leader_wire_gate_rejects_substituted_wal_directory() {
+        use std::os::unix::fs::symlink;
+
+        let context = context();
+        let root = TempDir::new().expect("leader-wire target directory");
+        let parent = root.path().join("wal");
+        let wal_path = parent.join("00000000000000000007.wal");
+        let wal = super::super::safety_wal::SafetyWal::open(
+            &wal_path,
+            wire::PROTOCOL_VERSION,
+            [0x61; 32],
+            [0x62; 32],
+        )
+        .expect("open leader-wire safety WAL");
+        let storage = wal
+            .mint_leader_wire_store_authority(&wal_path)
+            .expect("mint leader-wire storage authority");
+        let retained = root.path().join("retained-wal");
+        let foreign = root.path().join("foreign-wal");
+        fs::rename(&parent, &retained).expect("move bound WAL directory");
+        fs::create_dir(&foreign).expect("create foreign WAL directory");
+        symlink(&foreign, &parent).expect("substitute WAL directory");
+        let roster = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        let capacity = LeaderWireLifecycleStoreGate::derived_capacity(
+            roster.len(),
+            context.da_layout.max_chunk_count,
+        )
+        .expect("derive leader-wire capacity");
+
+        assert!(
+            LeaderWireLifecycleStoreGate::open_with_safety_wal_authority(
+                storage,
+                context.id(),
+                context.height,
+                OWNER_A,
+                roster,
+                capacity,
+                context.da_layout.max_chunk_count,
+                leader_wire_recovery_authority(&context),
+                &[],
+                &[],
+            )
+            .is_err()
+        );
+        let adjacent = "00000000000000000007.wal.leader-wire-lifecycles";
+        assert!(!retained.join(adjacent).exists());
+        assert!(!foreign.join(adjacent).exists());
     }
 
     #[test]

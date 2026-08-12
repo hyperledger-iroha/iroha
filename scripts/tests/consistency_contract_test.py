@@ -48,11 +48,16 @@ def _run(tmp_path: Path, fake: Path, *args: str) -> subprocess.CompletedProcess[
 
 def test_schema_uses_active_advanced_command() -> None:
     source = CONSISTENCY_SCRIPT.read_text(encoding="utf-8")
+    hook = (REPO_ROOT / "hooks" / "pre-commit.sample").read_text(encoding="utf-8")
 
     assert 'cmd_schema="${bin_kagami[@]} advanced schema"' in source
     assert 'cmd_schema="${bin_kagami[@]} schema"' not in source
     assert 'do_check "$cmd_schema" "specs/references/schema.json"' in source
     assert "docs/source/references/schema.json" not in source
+    assert "bash scripts/tests/consistency.sh --update schema" in hook.splitlines()
+    assert "cargo run --bin kagami -- schema" not in hook
+    assert "> ./specs/references/schema.json" not in hook
+    assert "genesis_schema.json" not in hook
 
 
 def test_failed_generator_cannot_truncate_checked_in_schema(tmp_path: Path) -> None:

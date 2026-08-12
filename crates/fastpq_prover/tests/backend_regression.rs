@@ -17,8 +17,7 @@ use iroha_primitives::numeric::Quantity;
 use norito::core::to_bytes;
 use norito::to_bytes as norito_bytes;
 
-mod common;
-use common::fixture_update_requested;
+use crate::common::fixture_update_requested;
 
 fn v1_captured_fixture_batch(rows: usize) -> TransitionBatch {
     let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());

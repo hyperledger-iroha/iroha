@@ -1,0 +1,14 @@
+
+            fn f() -> int {
+                let invariant = 7;
+                var carried = 0;
+                var overwritten = 0;
+                for index in range(3) {
+                    carried = carried + index;
+                    overwritten = 99;
+                    let observed = invariant;
+                }
+                overwritten = 5;
+                return carried + overwritten + invariant;
+            }
+        

@@ -1,0 +1,4 @@
+
+seiyaku CompilerFixture {
+fn main() { ledger::nft::create_for_all_users(1); }
+}

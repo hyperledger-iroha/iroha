@@ -21,6 +21,7 @@ mod comm;
 mod kat_vectors;
 mod kgen;
 mod sign;
+mod table_assets;
 
 use zeroize::{Zeroize, Zeroizing};
 

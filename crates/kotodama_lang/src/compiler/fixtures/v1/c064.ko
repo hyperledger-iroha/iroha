@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  ledger::asset::batch::apply(Name::parse("not_batch"));
+}
+
+}

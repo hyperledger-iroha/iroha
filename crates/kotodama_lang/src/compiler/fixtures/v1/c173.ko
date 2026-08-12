@@ -1,0 +1,9 @@
+
+seiyaku Test {
+  state StateMap<quantity, int> Foo;
+
+  kotoage fn main()  authorize("Entry") {
+    Foo[7.00] = 2;
+    let _x = Foo.get(7);
+  }
+}

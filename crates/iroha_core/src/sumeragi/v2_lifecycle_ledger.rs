@@ -12,7 +12,7 @@ use std::{
 };
 
 use iroha_config::parameters::actual::SumeragiV2Config;
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::block::consensus_v2 as wire;
 use norito::codec::{Decode, DecodeAll, Encode};
 use thiserror::Error;
@@ -48,18 +48,23 @@ use super::{
         durable_continuation_payload_is_exact, durable_continuation_successor_is_exact,
         durable_validate_payload_is_exact,
     },
-    open::{AuthenticatedLifecycleRecoveryCut, LifecycleOpenError, LifecycleRecoveryAssemblyError},
+    open::{
+        AuthenticatedLifecycleRecoveryCut, CompleteTipServeRetirementReconciliationV1,
+        LifecycleOpenError, LifecycleRecoveryAssemblyError,
+    },
     projection,
 };
 use crate::sumeragi::{
     v2::{
         ProductionLifecycleAdapterStartupV1, ProductionRecoveredLifecycleOwnerAssemblyPermitV1,
-        RecoveredWalFrameIdentity, RecoveredWalVoteSign, VerifiedHeightContext,
+        RecoveredLifecycleOwnerKuraBindingV1, RecoveredWalFrameIdentity, RecoveredWalVoteSign,
+        VerifiedHeightContext,
     },
-    v2_body_store::{DurableBodyReceipt, V2BodyStore},
+    v2_body_store::{BlockSignaturePolicy, DurableBodyReceipt, V2BodyStore},
     v2_certified_serve_payload_store::{
-        AuthenticatedCertifiedServePayloadRecoveryCut, CertifiedServePayloadStoreError,
-        CertifiedServePayloadStoreV1,
+        AuthenticatedCertifiedServePayloadRecoveryCut, CertifiedServePayloadRecoveryError,
+        CertifiedServePayloadStoreError, CertifiedServePayloadStoreV1,
+        CertifiedServeTerminalPersistenceError,
     },
     v2_core::EventTag,
     v2_runtime::{PendingRuntimeEffectBinding, RecoveredWalCandidateProjectionPermit},
@@ -1123,6 +1128,518 @@ pub(super) struct LifecycleLedgerV1 {
     producer_debts: Vec<LifecycleProducerDebtV1>,
 }
 
+/// Move-only CompleteTip terminal-Apply join to the Kura-bound predecessor store.
+///
+/// This cut owns the full Kura CompleteTip evidence, the exact opened LedgerV1
+/// store handle, and the byte-equivalent frame. The store target is compared
+/// with the lifecycle root retained when the same `Kura` instance authenticated
+/// CompleteTip, so a copied frame at a caller-selected root cannot enter this
+/// cut. It still proves only the terminal recovered-Decision body chain: it does
+/// not publish the successor or claim that unrelated live rows, Serve payloads,
+/// leases, waits, debts, or capacity have been retired. The outer canonical
+/// predecessor-storage transaction supplies and discharges those remaining
+/// durable owners before it can mint successor activation.
+#[must_use = "the CompleteTip terminal-Apply store join must enter retirement or be dropped"]
+struct AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
+    complete_tip: crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
+    ledger_store: LifecycleLedgerStoreV1,
+    ledger: LifecycleLedgerV1,
+    apply_ordinal: u128,
+}
+
+/// Opaque failure while authenticating all canonical CompleteTip predecessor stores.
+#[derive(Debug, Error)]
+#[error("failed to authenticate canonical CompleteTip predecessor lifecycle storage")]
+pub(in crate::sumeragi) struct CompleteTipPredecessorStorageErrorV1 {
+    #[source]
+    kind: CompleteTipPredecessorStorageErrorKindV1,
+}
+
+#[derive(Debug, Error)]
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+enum CompleteTipPredecessorStorageErrorKindV1 {
+    #[error(transparent)]
+    Ledger(#[from] LifecycleLedgerError),
+    PayloadStore(#[from] CertifiedServePayloadStoreError),
+    #[error(transparent)]
+    PayloadRecovery(#[from] CertifiedServePayloadRecoveryError),
+    #[error(transparent)]
+    LifecycleOpen(#[from] LifecycleOpenError),
+    #[error(transparent)]
+    TerminalPersistence(#[from] CertifiedServeTerminalPersistenceError),
+}
+
+macro_rules! complete_tip_predecessor_storage_error_from {
+    ($source:ty, $variant:ident) => {
+        impl From<$source> for CompleteTipPredecessorStorageErrorV1 {
+            fn from(source: $source) -> Self {
+                Self {
+                    kind: CompleteTipPredecessorStorageErrorKindV1::$variant(source),
+                }
+            }
+        }
+    };
+}
+
+complete_tip_predecessor_storage_error_from!(LifecycleLedgerError, Ledger);
+complete_tip_predecessor_storage_error_from!(CertifiedServePayloadStoreError, PayloadStore);
+complete_tip_predecessor_storage_error_from!(CertifiedServePayloadRecoveryError, PayloadRecovery);
+complete_tip_predecessor_storage_error_from!(LifecycleOpenError, LifecycleOpen);
+complete_tip_predecessor_storage_error_from!(
+    CertifiedServeTerminalPersistenceError,
+    TerminalPersistence
+);
+
+/// Complete authenticated disk owners needed by CompleteTip retirement.
+///
+/// The cut retains the exact terminal predecessor ledger, the co-located Serve
+/// payload-store instance, and the complete retirement-authenticated Serve
+/// census. Completed response signatures remain bound to their manifest body
+/// hashes without reopening body bytes which normal finality may already have
+/// deleted. It exposes no path, raw frame, request, or activation parts and
+/// performs no retirement publication by itself.
+#[must_use = "the authenticated CompleteTip predecessor stores must enter retirement"]
+pub(in crate::sumeragi) struct AuthenticatedCompleteTipPredecessorStorageV1 {
+    terminal: AuthenticatedCompleteTipTerminalApplyStoreJoinV1,
+    successor: CanonicalCompleteTipSuccessorLedgerTargetV1,
+    payload_store: CertifiedServePayloadStoreV1,
+    serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+    retained_serve_payloads:
+        BTreeSet<crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadId>,
+}
+
+/// Complete durable proof that one canonical CompleteTip predecessor retired.
+///
+/// This token is minted only after the exact predecessor frame is fully
+/// terminal and debt-free, its canonical successor target has been initialized
+/// or authenticated as a later descendant, and both stores reload the frames
+/// retained here. It deliberately exposes neither path nor the underlying
+/// generic successor activation authority.
+#[must_use = "retired CompleteTip authority must be retained until the successor lifecycle owner consumes it"]
+pub(in crate::sumeragi) struct RetiredRecoveredCompleteTipActivationAuthorityV1 {
+    complete_tip: crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
+    predecessor_frame_identity: LifecycleDigest,
+    successor_frame_identity: LifecycleDigest,
+    retained_high_water: u128,
+    successor_store: LifecycleLedgerStoreV1,
+    successor_ledger: LifecycleLedgerV1,
+}
+
+impl std::fmt::Debug for RetiredRecoveredCompleteTipActivationAuthorityV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RetiredRecoveredCompleteTipActivationAuthorityV1")
+            .field("predecessor", &self.complete_tip.predecessor())
+            .field("retained_high_water", &self.retained_high_water)
+            .field(
+                "predecessor_frame_identity",
+                &self.predecessor_frame_identity,
+            )
+            .field("successor_frame_identity", &self.successor_frame_identity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
+    /// Return the exact durable predecessor named by this retirement.
+    pub(in crate::sumeragi) const fn predecessor(
+        &self,
+    ) -> crate::sumeragi::v2_recovery::DurableV2PredecessorIdentity {
+        self.complete_tip.predecessor()
+    }
+
+    /// Return the frozen successor context authenticated by CompleteTip.
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn successor_context_id(&self) -> wire::HeightContextId {
+        self.complete_tip.successor_context_id()
+    }
+
+    /// Return the ordinal floor inherited by the canonical successor ledger.
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn retained_high_water(&self) -> u128 {
+        self.retained_high_water
+    }
+
+    fn successor_descends_from_retirement(&self) -> bool {
+        self.successor_ledger.context() == self.successor_store.context
+            && self.successor_ledger.frame_identity() == self.successor_frame_identity
+            && if self.successor_ledger.records.is_empty() {
+                self.successor_ledger.producer_debts.is_empty()
+                    && self.successor_ledger.high_water == self.retained_high_water
+            } else {
+                self.successor_ledger.high_water >= self.retained_high_water
+                    && self.successor_ledger.records.iter().all(|record| {
+                        record.ordinal() > self.retained_high_water
+                            && record.owner().first_admission_ordinal() > self.retained_high_water
+                    })
+            }
+    }
+
+    fn exactly_matches_successor_owner(&self, owner: &mut ProductionLifecycleOwnerV1) -> bool {
+        let Some(successor_root) = self.successor_store.path.parent() else {
+            return false;
+        };
+        let Some(owner_store) = owner.coordinator.ledger_store.as_ref() else {
+            return false;
+        };
+        let Some(body_store) = owner.body_store.as_ref() else {
+            return false;
+        };
+        let Some(adapter_startup) = owner.adapter_startup.as_ref() else {
+            return false;
+        };
+        if owner.body_store_identity.is_some()
+            || owner.coordinator.fault.is_some()
+            || owner.coordinator.active_lease.is_some()
+            || !self
+                .complete_tip
+                .authorizes_successor_kura(owner.kura_binding.as_ref())
+            || !self.successor_descends_from_retirement()
+            || !self
+                .complete_tip
+                .authorizes_verified_successor(&owner.verified)
+            || !self.complete_tip.authorizes_successor_lifecycle_target(
+                successor_root,
+                self.successor_ledger.context(),
+            )
+            || !self
+                .complete_tip
+                .authorizes_successor_body_store(body_store, &owner.verified)
+            || !adapter_startup.authorizes_verified_context(&owner.verified)
+            || !owner
+                .payload_store
+                .matches_lifecycle_storage_root(successor_root, owner.verified.context())
+            || owner
+                .payload_store
+                .validate_authenticated_cut(&owner.serve_payloads)
+                .is_err()
+            || !super::open::authenticated_serve_payloads_match_ledger(
+                &self.successor_ledger,
+                &owner.serve_payloads,
+            )
+            || !owner_store.same_publication_target(&self.successor_store)
+            || self.successor_store.load().ok().as_ref() != Some(&self.successor_ledger)
+            || owner_store.load().ok().as_ref() != Some(&self.successor_ledger)
+            || LifecycleLedgerV1::from_coordinator(&owner.coordinator)
+                .ok()
+                .as_ref()
+                != Some(&self.successor_ledger)
+        {
+            return false;
+        }
+        let registry = owner.registry.registry_mut();
+        registry.exactly_covers_recovered_ready_work(&owner.coordinator)
+            || registry.exactly_covers_recovered_ready_work_and_wal_authority(&owner.coordinator)
+    }
+
+    /// Consume retirement and the exact unlaunched H+1 owner into one seal.
+    ///
+    /// The join reopens the retained Kura-derived LedgerV1 target, compares the
+    /// complete coordinator projection and concrete registry, and binds the
+    /// co-located Serve-payload owner plus canonical body-store owner. Failure
+    /// consumes both inputs and requires restart; no path or storage part is
+    /// returned.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::sumeragi) fn bind_successor_owner(
+        self,
+        mut owner: ProductionLifecycleOwnerV1,
+    ) -> Result<BoundRecoveredCompleteTipSuccessorOwnerV1, CompleteTipSuccessorOwnerBindErrorV1>
+    {
+        if !self.exactly_matches_successor_owner(&mut owner) {
+            return Err(CompleteTipSuccessorOwnerBindErrorV1);
+        }
+        Ok(BoundRecoveredCompleteTipSuccessorOwnerV1 {
+            owner,
+            retirement: self,
+        })
+    }
+}
+
+/// Fail-stop rejection of a CompleteTip/H+1 lifecycle-owner join.
+#[derive(Debug, Error)]
+#[error("retired CompleteTip authority does not match the exact canonical H+1 lifecycle owner")]
+#[must_use = "a failed H+1 owner join requires process restart"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct CompleteTipSuccessorOwnerBindErrorV1;
+
+/// Opaque exact join of retired CompleteTip authority and the unlaunched H+1 owner.
+///
+/// The sole launch method consumes this seal into the existing lifecycle
+/// launch transaction and retains retirement in another opaque wrapper. The
+/// runner cutover must retain that wrapper through clock/ingress arming and
+/// publish status only through a dedicated typed CompleteTip activation tail.
+/// No generic owner, adapter, store, frame, registry, or activation parts are
+/// exposed here.
+#[must_use = "the bound CompleteTip successor owner must remain sealed until launch"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct BoundRecoveredCompleteTipSuccessorOwnerV1 {
+    owner: ProductionLifecycleOwnerV1,
+    retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,
+}
+
+// COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_BEGIN
+impl BoundRecoveredCompleteTipSuccessorOwnerV1 {
+    /// Consume the exact H+1 owner into the generic launch transaction while
+    /// keeping its retired-H authority sealed for final runner activation.
+    ///
+    /// A failed launch consumes the complete join and requires restart. A
+    /// successful launch cannot be detached from its retirement authority or
+    /// used to publish the generic adapter status.
+    #[allow(dead_code, clippy::result_large_err)]
+    pub(in crate::sumeragi) fn launch(
+        self,
+        inputs: super::launch::ProductionLifecycleLaunchInputsV1,
+    ) -> Result<
+        LaunchedRecoveredCompleteTipSuccessorLifecycleV1,
+        super::launch::ProductionLifecycleLaunchErrorV1,
+    > {
+        let Self { owner, retirement } = self;
+        let launched = owner.launch(inputs)?;
+        Ok(LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
+            launched,
+            retirement,
+        })
+    }
+}
+
+/// Opaque running H+1 lifecycle stack joined to its retired-H authority.
+///
+/// TODO: The final runner activation must consume this complete wrapper while
+/// arming live clocks, opening authenticated ingress, activating the completion
+/// observer, and publishing the typed successor status atomically. Until that
+/// cut lands, neither the running stack nor retirement authority is exposed.
+#[must_use = "the launched CompleteTip successor must remain sealed until final activation"]
+#[allow(dead_code)]
+pub(in crate::sumeragi) struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
+    launched: super::launch::LaunchedProductionLifecycleV1,
+    retirement: RetiredRecoveredCompleteTipActivationAuthorityV1,
+}
+// COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_END
+
+#[cfg(test)]
+impl BoundRecoveredCompleteTipSuccessorOwnerV1 {
+    fn remains_exact_for_test(&mut self) -> bool {
+        self.retirement
+            .exactly_matches_successor_owner(&mut self.owner)
+    }
+}
+
+/// Private Kura-derived target for the empty CompleteTip successor ledger.
+struct CanonicalCompleteTipSuccessorLedgerTargetV1 {
+    root: PathBuf,
+    context: LifecycleContext,
+}
+
+impl CanonicalCompleteTipSuccessorLedgerTargetV1 {
+    /// Initialize the canonical successor or authenticate a later descendant.
+    ///
+    /// An untouched empty file advances to the predecessor's retained ordinal
+    /// high-water. A later nonempty successor is accepted read-only only when
+    /// every record and owner begins strictly above that floor; this proves the
+    /// frame descends from this rollover instead of a zero-based independent
+    /// lifecycle history.
+    fn open_initialized_or_descendant(
+        &self,
+        retained_high_water: u128,
+    ) -> Result<(LifecycleLedgerStoreV1, LifecycleLedgerV1), LifecycleLedgerError> {
+        let (store, current) = LifecycleLedgerStoreV1::open(&self.root, self.context)?;
+        let successor = if current.records.is_empty() {
+            if !current.producer_debts.is_empty()
+                || (current.high_water != 0 && current.high_water != retained_high_water)
+            {
+                return Err(LifecycleLedgerError::InvalidLedger(
+                    "empty CompleteTip successor has a foreign ordinal high-water".to_owned(),
+                ));
+            }
+            let initialized = LifecycleLedgerV1::new(
+                self.context,
+                retained_high_water,
+                Vec::new(),
+                BTreeMap::new(),
+            )?;
+            store.persist_exact_successor(&current, &initialized)?;
+            initialized
+        } else {
+            if current.high_water < retained_high_water
+                || current.records.iter().any(|record| {
+                    record.ordinal() <= retained_high_water
+                        || record.owner().first_admission_ordinal() <= retained_high_water
+                })
+            {
+                return Err(LifecycleLedgerError::InvalidLedger(
+                    "nonempty CompleteTip successor does not descend above the retained ordinal floor"
+                        .to_owned(),
+                ));
+            }
+            current
+        };
+        if store.load()? != successor {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "CompleteTip successor changed during canonical authentication".to_owned(),
+            ));
+        }
+        Ok((store, successor))
+    }
+}
+
+impl AuthenticatedCompleteTipPredecessorStorageV1 {
+    fn is_exact(&self) -> Result<bool, CompleteTipPredecessorStorageErrorV1> {
+        if !self.terminal.is_exact()?
+            || !self
+                .terminal
+                .complete_tip
+                .authorizes_successor_lifecycle_target(&self.successor.root, self.successor.context)
+        {
+            return Ok(false);
+        }
+        self.payload_store
+            .validate_authenticated_cut(&self.serve_payloads)?;
+        let retained = super::open::authenticate_complete_tip_serve_census(
+            &self.terminal.ledger,
+            &self.serve_payloads,
+        )?;
+        Ok(retained == self.retained_serve_payloads)
+    }
+
+    /// Retire the canonical predecessor and authenticate its successor target.
+    ///
+    /// The write order is intentionally one-way and crash-idempotent: first
+    /// prune/cancel the authenticated Serve payload cut, then publish the
+    /// fully terminal predecessor LedgerV1 frame, and only then initialize or
+    /// authenticate the canonical successor ledger. Any error consumes this
+    /// capability and aborts startup; retry begins by reopening the durable
+    /// state, where exact already-published predecessor and successor frames
+    /// stutter without rewrite.
+    pub(in crate::sumeragi) fn retire(
+        self,
+    ) -> Result<
+        RetiredRecoveredCompleteTipActivationAuthorityV1,
+        CompleteTipPredecessorStorageErrorV1,
+    > {
+        if !self.is_exact()? {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "CompleteTip predecessor stores changed before retirement".to_owned(),
+            )
+            .into());
+        }
+        let Self {
+            terminal,
+            successor,
+            mut payload_store,
+            serve_payloads,
+            retained_serve_payloads,
+        } = self;
+
+        let refreshed_serve_payloads =
+            payload_store.retire_authenticated_cut(serve_payloads, &retained_serve_payloads)?;
+        let serve_reconciliation = super::open::reconcile_complete_tip_serve_retirement(
+            &terminal.ledger,
+            refreshed_serve_payloads,
+        )?;
+        let retired = terminal
+            .ledger
+            .stage_complete_tip_all_row_retirement(serve_reconciliation)?;
+        if !retired
+            .authenticate_complete_tip_terminal_apply(&terminal.complete_tip)
+            .is_ok_and(|ordinal| ordinal == terminal.apply_ordinal)
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "CompleteTip all-row retirement changed its terminal Apply authority".to_owned(),
+            )
+            .into());
+        }
+        terminal
+            .ledger_store
+            .persist_exact_successor(&terminal.ledger, &retired)?;
+        if terminal.ledger_store.load()? != retired {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "retired CompleteTip predecessor changed after publication".to_owned(),
+            )
+            .into());
+        }
+
+        let (successor_store, successor_ledger) =
+            successor.open_initialized_or_descendant(retired.high_water())?;
+        let token = RetiredRecoveredCompleteTipActivationAuthorityV1 {
+            complete_tip: terminal.complete_tip,
+            predecessor_frame_identity: retired.frame_identity(),
+            successor_frame_identity: successor_ledger.frame_identity(),
+            retained_high_water: retired.high_water(),
+            successor_store,
+            successor_ledger,
+        };
+        Ok(token)
+    }
+}
+
+/// Consume CompleteTip while opening and authenticating every predecessor disk owner.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::sumeragi) fn open_complete_tip_predecessor_storage(
+    predecessor_root: &Path,
+    successor_root: &Path,
+    successor_context: LifecycleContext,
+    body_store_root: &Path,
+    verified_predecessor: VerifiedHeightContext,
+    signature_policy: BlockSignaturePolicy,
+    local_signer: &KeyPair,
+    complete_tip: crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
+) -> Result<AuthenticatedCompleteTipPredecessorStorageV1, CompleteTipPredecessorStorageErrorV1> {
+    if !complete_tip.authorizes_predecessor_storage_inputs(
+        predecessor_root,
+        successor_root,
+        successor_context,
+        body_store_root,
+        &verified_predecessor,
+        &signature_policy,
+    ) {
+        return Err(LifecycleLedgerError::InvalidLedger(
+            "CompleteTip predecessor storage inputs changed after Kura authentication".to_owned(),
+        )
+        .into());
+    }
+    let context = projection::lifecycle_context(verified_predecessor.context());
+    let (ledger_store, ledger) = LifecycleLedgerStoreV1::open(predecessor_root, context)?;
+    let terminal =
+        ledger.into_complete_tip_terminal_apply_store_join(ledger_store, complete_tip)?;
+    let (payload_store, recovered) =
+        CertifiedServePayloadStoreV1::open(predecessor_root, verified_predecessor.context())?;
+    let serve_payloads =
+        recovered.authenticate_for_complete_tip_retirement(&verified_predecessor, local_signer)?;
+    let retained_serve_payloads =
+        super::open::authenticate_complete_tip_serve_census(&terminal.ledger, &serve_payloads)?;
+    let cut = AuthenticatedCompleteTipPredecessorStorageV1 {
+        terminal,
+        successor: CanonicalCompleteTipSuccessorLedgerTargetV1 {
+            root: successor_root.to_path_buf(),
+            context: successor_context,
+        },
+        payload_store,
+        serve_payloads,
+        retained_serve_payloads,
+    };
+    if !cut.is_exact()? {
+        return Err(LifecycleLedgerError::InvalidLedger(
+            "CompleteTip predecessor stores changed during authentication".to_owned(),
+        )
+        .into());
+    }
+    Ok(cut)
+}
+
+impl AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
+    fn is_exact(&self) -> Result<bool, LifecycleLedgerError> {
+        if self.ledger_store.context != self.ledger.context() {
+            return Ok(false);
+        }
+        let opened = self.ledger_store.load()?;
+        Ok(opened == self.ledger
+            && self
+                .ledger
+                .authenticate_complete_tip_terminal_apply(&self.complete_tip)
+                .is_ok_and(|ordinal| ordinal == self.apply_ordinal))
+    }
+}
+
 /// Move-only storage recovery cut for every durable Ready-Fetch row.
 ///
 /// The exact opened LedgerV1 frame, height context, body-store instance, and
@@ -1215,6 +1732,27 @@ pub(in crate::sumeragi) struct ProductionRecoveredWalDecisionFetchStartupErrorV1
 }
 
 impl ProductionRecoveredWalDecisionFetchStartupErrorV1 {
+    const fn new(reason: &'static str) -> Self {
+        Self { reason }
+    }
+
+    /// Return the stable non-authorizing failure classification.
+    pub(in crate::sumeragi) const fn reason(&self) -> &'static str {
+        self.reason
+    }
+}
+
+/// Startup-fatal failure from exact recovered Decision-to-Apply publication.
+///
+/// The diagnostic exposes no adapter, WAL, body, ledger, registry, effect,
+/// pending-binding, candidate, or retry authority. Every failure requires a
+/// fresh process restart from the still-canonical durable stores.
+#[must_use = "failed recovered Decision Apply startup requires process restart"]
+pub(in crate::sumeragi) struct ProductionRecoveredDecisionApplyStartupErrorV1 {
+    reason: &'static str,
+}
+
+impl ProductionRecoveredDecisionApplyStartupErrorV1 {
     const fn new(reason: &'static str) -> Self {
         Self { reason }
     }
@@ -1329,7 +1867,7 @@ impl AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
                 ProductionLifecycleStartupErrorKindV1::RegistryInstall,
             ));
         }
-        let (recovery, fetches) =
+        let (mut recovery, fetches) =
             AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_durable_fetch_startup(
                 ledger,
                 serve_payloads,
@@ -1360,7 +1898,7 @@ impl AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
             )
         })?;
         let coordinator = prepared
-            .commit_with_registry(registry.registry_mut(), &mut payload_store, &recovery)
+            .commit_with_registry(registry.registry_mut(), &mut payload_store, &mut recovery)
             .map_err(|error| {
                 ProductionLifecycleStartupErrorV1::new(
                     ProductionLifecycleStartupErrorKindV1::CoordinatorOpen(error.into_error()),
@@ -1379,9 +1917,11 @@ impl AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
             coordinator,
             registry,
             payload_store,
+            serve_payloads: recovery.into_serve_payloads(),
             body_store: Some(body_store),
             body_store_identity: None,
-            adapter_startup,
+            kura_binding: None,
+            adapter_startup: Some(adapter_startup),
         })
     }
 
@@ -1441,6 +1981,36 @@ impl AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
 }
 
 impl ProductionLifecycleOwnerV1 {
+    /// Prove the exact recovered Decision four-row chain and sole live Apply.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn recovered_decision_apply_summary_for_test(
+        &mut self,
+    ) -> Option<(usize, u128)> {
+        if !self
+            .adapter_startup
+            .as_ref()
+            .is_some_and(ProductionLifecycleAdapterStartupV1::is_exact_for_test)
+            || !self
+                .registry
+                .registry_mut()
+                .exactly_covers_recovered_ready_work_and_wal_authority(&self.coordinator)
+        {
+            return None;
+        }
+        let ledger = LifecycleLedgerV1::from_coordinator(&self.coordinator).ok()?;
+        let apply = ledger.records().iter().find(|record| {
+            record.work_class() == Some(LifecycleWorkClass::Apply)
+                && record.terminal() == Some(None)
+        })?;
+        let owner = apply.owner();
+        let owner_records = ledger
+            .records()
+            .iter()
+            .filter(|record| record.owner() == owner)
+            .count();
+        (owner_records == 4).then_some((owner_records, apply.ordinal()))
+    }
+
     /// Open the exact no-WAL-vote storage branch without exposing ledger or
     /// recovery parts to the adapter startup caller.
     #[allow(clippy::too_many_arguments)]
@@ -1565,7 +2135,7 @@ impl ProductionLifecycleOwnerV1 {
                         "verified height cannot derive recovered control lifecycle authority",
                     )
                 })?;
-        let coordinator = installed
+        let (coordinator, recovery) = installed
             .open_with_exact_store_authority(authority, ledger_store, &mut payload_store, recovery)
             .map_err(|error| ProductionRecoveredWalControlStartupErrorV1::new(error.reason()))?;
         Ok(Self {
@@ -1573,9 +2143,11 @@ impl ProductionLifecycleOwnerV1 {
             coordinator,
             registry,
             payload_store,
+            serve_payloads: recovery.into_serve_payloads(),
             body_store: Some(body_store),
             body_store_identity: None,
-            adapter_startup,
+            kura_binding: None,
+            adapter_startup: Some(adapter_startup),
         })
     }
 
@@ -1687,7 +2259,7 @@ impl ProductionLifecycleOwnerV1 {
                 "verified height cannot derive recovered Decision Fetch lifecycle authority",
             )
         })?;
-        let coordinator = installed
+        let (coordinator, recovery) = installed
             .open_with_exact_store_authority(authority, ledger_store, &mut payload_store, recovery)
             .map_err(|error| {
                 ProductionRecoveredWalDecisionFetchStartupErrorV1::new(error.reason())
@@ -1697,9 +2269,116 @@ impl ProductionLifecycleOwnerV1 {
             coordinator,
             registry,
             payload_store,
+            serve_payloads: recovery.into_serve_payloads(),
             body_store: Some(body_store),
             body_store_identity: None,
-            adapter_startup,
+            kura_binding: None,
+            adapter_startup: Some(adapter_startup),
+        })
+    }
+
+    /// Publish or exactly coalesce one recovered Decision body fast-forward.
+    ///
+    /// The input is the sole closed result of the authenticated WAL Fetch,
+    /// same-store validated body, and private reducer Store→Validate→Apply
+    /// preview. The exact predecessor ledger remains on disk while the complete
+    /// four-row successor, Serve payloads, Ready-Fetch census, coordinator, and
+    /// dedicated Apply carrier are authenticated in memory. One exact-successor
+    /// fsync then precedes only infallible ownership moves.
+    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn open_recovered_decision_apply_startup(
+        verified: VerifiedHeightContext,
+        projection: crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
+        effects: Vec<crate::sumeragi::v2::AdapterEffect>,
+        ledger_root: &Path,
+        mut body_store: V2BodyStore,
+        config: &SumeragiV2Config,
+        reply_route_source_capacity: usize,
+        mut payload_store: CertifiedServePayloadStoreV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+    ) -> Result<Self, ProductionRecoveredDecisionApplyStartupErrorV1> {
+        if !projection.validates(&verified) || !effects.is_empty() {
+            return Err(ProductionRecoveredDecisionApplyStartupErrorV1::new(
+                "recovered Decision Apply projection retained inconsistent adapter state",
+            ));
+        }
+        let context = projection::lifecycle_context(verified.context());
+        let (ledger_store, predecessor) = LifecycleLedgerStoreV1::open(ledger_root, context)
+            .map_err(|_error| {
+                ProductionRecoveredDecisionApplyStartupErrorV1::new(
+                    "recovered Decision Apply LedgerV1 open failed",
+                )
+            })?;
+        let (successor, _apply_ordinal, _changed) = predecessor
+            .stage_recovered_decision_apply(&projection)
+            .map_err(|_error| {
+                ProductionRecoveredDecisionApplyStartupErrorV1::new(
+                    "recovered Decision Apply four-row durable lineage is not exact",
+                )
+            })?;
+        let fetches = successor
+            .authenticate_durable_certified_fetch_startup(&verified, &body_store)
+            .map_err(|_error| {
+                ProductionRecoveredDecisionApplyStartupErrorV1::new(
+                    "recovered Decision Apply Ready-Fetch census authentication failed",
+                )
+            })?;
+        let (recovery, fetches) = AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_recovered_decision_apply_and_durable_fetch_startup(
+            successor.clone(),
+            serve_payloads,
+            &mut body_store,
+            &projection,
+            fetches,
+        )
+        .map_err(|_error| {
+            ProductionRecoveredDecisionApplyStartupErrorV1::new(
+                "recovered Decision Apply storage census assembly failed",
+            )
+        })?;
+        let authority = authority::production_authority(
+            &verified,
+            config,
+            reply_route_source_capacity,
+        )
+        .ok_or_else(|| {
+            ProductionRecoveredDecisionApplyStartupErrorV1::new(
+                "verified height cannot derive recovered Decision Apply lifecycle authority",
+            )
+        })?;
+        let prepared = LifecycleCoordinator::prepare_with_authenticated_successor_store_borrowed(
+            authority,
+            ledger_store,
+            predecessor,
+            successor.clone(),
+            &payload_store,
+            &recovery,
+        )
+        .map_err(|_error| {
+            ProductionRecoveredDecisionApplyStartupErrorV1::new(
+                "recovered Decision Apply prospective coordinator open failed",
+            )
+        })?;
+        let mut registry = LifecycleWorkRegistryHolder::empty();
+        let (adapter_startup, mut installed) = registry
+            .registry_mut()
+            .install_recovered_decision_apply(&verified, &successor, projection, effects)
+            .map_err(|error| ProductionRecoveredDecisionApplyStartupErrorV1::new(error.reason()))?;
+        installed
+            .install_fetches(fetches)
+            .map_err(|error| ProductionRecoveredDecisionApplyStartupErrorV1::new(error.reason()))?;
+        let (coordinator, recovery) = installed
+            .open_with_prepared_successor(prepared, &mut payload_store, recovery)
+            .map_err(|error| ProductionRecoveredDecisionApplyStartupErrorV1::new(error.reason()))?;
+        Ok(Self {
+            verified,
+            coordinator,
+            registry,
+            payload_store,
+            serve_payloads: recovery.into_serve_payloads(),
+            body_store: Some(body_store),
+            body_store_identity: None,
+            kura_binding: None,
+            adapter_startup: Some(adapter_startup),
         })
     }
 
@@ -1719,6 +2398,7 @@ impl ProductionLifecycleOwnerV1 {
         let RecoveredWalProductionOwnerOpenV1 {
             coordinator,
             verified,
+            serve_payloads,
             registry_identity,
             body_store_identity,
             payload_store_identity,
@@ -1731,6 +2411,9 @@ impl ProductionLifecycleOwnerV1 {
             || !payload_store
                 .instance_identity()
                 .same_instance(&payload_store_identity)
+            || payload_store
+                .validate_authenticated_cut(&serve_payloads)
+                .is_err()
             || !registry
                 .registry_mut()
                 .instance_identity()
@@ -1753,9 +2436,11 @@ impl ProductionLifecycleOwnerV1 {
             coordinator,
             registry,
             payload_store,
+            serve_payloads,
             body_store: Some(body_store),
             body_store_identity: None,
-            adapter_startup,
+            kura_binding: None,
+            adapter_startup: Some(adapter_startup),
         })
     }
 }
@@ -1773,11 +2458,15 @@ impl ProductionLifecycleOwnerV1 {
             .body_store
             .as_ref()
             .expect("an unlaunched production owner retains its exact body store");
-        self.adapter_startup.is_exact_for_test() && {
-            let registry = self.registry.registry_mut();
-            registry.exactly_covers_recovered_ready_work(&self.coordinator)
-                || registry.exactly_covers_recovered_ready_work_and_wal_authority(&self.coordinator)
-        }
+        self.adapter_startup
+            .as_ref()
+            .is_some_and(ProductionLifecycleAdapterStartupV1::is_exact_for_test)
+            && {
+                let registry = self.registry.registry_mut();
+                registry.exactly_covers_recovered_ready_work(&self.coordinator)
+                    || registry
+                        .exactly_covers_recovered_ready_work_and_wal_authority(&self.coordinator)
+            }
     }
 
     /// Return the exact durable high-water/ordinal pair for the sole control row.
@@ -1881,6 +2570,63 @@ impl ProductionLifecycleOwnerV1 {
                     && matches!(record.state, LifecycleState::Terminal(_))
             })
             .count()
+    }
+}
+
+/// Narrow comparison surface used by the terminal recovered-Decision ledger oracle.
+///
+/// The production implementation delegates to the sealed WAL/body projection. Keeping the
+/// structural scan behind this private surface lets focused tests exercise terminal/live census
+/// behavior without manufacturing the projection's move-only adapter and runtime authorities.
+trait TerminalRecoveredDecisionApplyProjectionV1 {
+    fn belongs_to_context(&self, context: LifecycleContext) -> bool;
+
+    fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool;
+
+    fn exactly_matches_advanced_apply_parent(
+        &self,
+        fetch: &LifecycleLedgerRecordV1,
+        store_ordinal: u128,
+    ) -> bool;
+
+    fn exactly_matches_terminal_successor_records(
+        &self,
+        owner: OwnerId,
+        store: &LifecycleLedgerRecordV1,
+        validate: &LifecycleLedgerRecordV1,
+        apply: &LifecycleLedgerRecordV1,
+    ) -> bool;
+}
+
+impl TerminalRecoveredDecisionApplyProjectionV1
+    for crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1
+{
+    fn belongs_to_context(&self, context: LifecycleContext) -> bool {
+        self.fetch().belongs_to_context(context)
+    }
+
+    fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
+        self.fetch().names_record(record)
+    }
+
+    fn exactly_matches_advanced_apply_parent(
+        &self,
+        fetch: &LifecycleLedgerRecordV1,
+        store_ordinal: u128,
+    ) -> bool {
+        self.fetch()
+            .exactly_matches_advanced_apply_parent(fetch, store_ordinal)
+    }
+
+    fn exactly_matches_terminal_successor_records(
+        &self,
+        owner: OwnerId,
+        store: &LifecycleLedgerRecordV1,
+        validate: &LifecycleLedgerRecordV1,
+        apply: &LifecycleLedgerRecordV1,
+    ) -> bool {
+        self.lineage()
+            .exactly_matches_terminal_successor_records(owner, store, validate, apply)
     }
 }
 
@@ -2058,6 +2804,228 @@ impl LifecycleLedgerV1 {
     /// Borrow the canonical ordinal-ordered records.
     pub(super) fn records(&self) -> &[LifecycleLedgerRecordV1] {
         &self.records
+    }
+
+    /// Stage the exact all-row tombstone successor for CompleteTip retirement.
+    ///
+    /// Existing terminal rows remain byte-for-byte unchanged. Every live
+    /// Certified-Serve row must consume one payload-store-authenticated
+    /// terminal update together with its adjacent live ProducerTurn; an
+    /// already-terminal Serve with a live ProducerTurn must consume the
+    /// corresponding no-update coverage proof. Every other live row becomes a
+    /// `Cancelled` tombstone without changing its immutable admission or replay
+    /// material. No durable write occurs in this method.
+    fn stage_complete_tip_all_row_retirement(
+        &self,
+        mut serve_reconciliation: CompleteTipServeRetirementReconciliationV1,
+    ) -> Result<Self, LifecycleLedgerError> {
+        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        if !serve_reconciliation.authenticates_source(self) {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "CompleteTip Serve retirement belongs to another ledger frame".to_owned(),
+            ));
+        }
+
+        let mut consumed_producers = BTreeSet::new();
+        let mut retired_records = Vec::with_capacity(self.records.len());
+        for record in &self.records {
+            if consumed_producers.remove(&record.ordinal()) {
+                continue;
+            }
+            let work_class = record.work_class().ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "CompleteTip retirement encountered an undecodable work class".to_owned(),
+                )
+            })?;
+            let terminal = record.terminal().ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "CompleteTip retirement encountered an undecodable terminal state".to_owned(),
+                )
+            })?;
+
+            if work_class == LifecycleWorkClass::CertifiedServe {
+                let producer_ordinal = record.ordinal().checked_add(1).ok_or_else(|| {
+                    LifecycleLedgerError::InvalidLedger(
+                        "CompleteTip Serve producer ordinal exhausted".to_owned(),
+                    )
+                })?;
+                let producer = self
+                    .records
+                    .binary_search_by_key(&producer_ordinal, LifecycleLedgerRecordV1::ordinal)
+                    .ok()
+                    .and_then(|index| self.records.get(index))
+                    .ok_or_else(|| {
+                        LifecycleLedgerError::InvalidLedger(
+                            "CompleteTip Serve lost its adjacent ProducerTurn".to_owned(),
+                        )
+                    })?;
+                if producer.work_class() != Some(LifecycleWorkClass::ProducerTurn)
+                    || producer.owner() != record.owner()
+                    || producer.terminal().is_none()
+                {
+                    return Err(LifecycleLedgerError::InvalidLedger(
+                        "CompleteTip Serve/ProducerTurn pair changed before retirement".to_owned(),
+                    ));
+                }
+
+                match (
+                    terminal,
+                    producer.terminal().expect("producer terminal decoded"),
+                ) {
+                    (None, None) => {
+                        let update = serve_reconciliation
+                            .take_terminal_update_for_exact_pair(record, producer)
+                            .ok_or_else(|| {
+                                LifecycleLedgerError::InvalidLedger(
+                                    "live CompleteTip Serve has no exact terminal payload update"
+                                        .to_owned(),
+                                )
+                            })?;
+                        let (payload, outcome, serve_replay, producer_replay) = update
+                            .consume_for_exact_ledger_pair(record, producer)
+                            .ok_or_else(|| {
+                                LifecycleLedgerError::InvalidLedger(
+                                    "CompleteTip Serve terminal update changed before staging"
+                                        .to_owned(),
+                                )
+                            })?;
+                        retired_records.push(Self::terminalized_record(
+                            record,
+                            outcome,
+                            payload,
+                            serve_replay,
+                        )?);
+                        retired_records.push(Self::terminalized_record(
+                            producer,
+                            TerminalOutcome::Cancelled,
+                            producer.durable_payload().ok_or_else(|| {
+                                LifecycleLedgerError::InvalidLedger(
+                                    "CompleteTip ProducerTurn payload is undecodable".to_owned(),
+                                )
+                            })?,
+                            producer_replay,
+                        )?);
+                        consumed_producers.insert(producer_ordinal);
+                    }
+                    (Some(_), None) => {
+                        if !serve_reconciliation
+                            .take_terminal_serve_live_producer_coverage(record, producer)
+                        {
+                            return Err(LifecycleLedgerError::InvalidLedger(
+                                "terminal CompleteTip Serve has no exact live ProducerTurn coverage"
+                                    .to_owned(),
+                            ));
+                        }
+                        retired_records.push(record.clone());
+                        retired_records.push(Self::cancelled_record(producer)?);
+                        consumed_producers.insert(producer_ordinal);
+                    }
+                    (Some(_), Some(_)) => {
+                        retired_records.push(record.clone());
+                        retired_records.push(producer.clone());
+                        consumed_producers.insert(producer_ordinal);
+                    }
+                    (None, Some(_)) => {
+                        return Err(LifecycleLedgerError::InvalidLedger(
+                            "live CompleteTip Serve has an already-terminal ProducerTurn"
+                                .to_owned(),
+                        ));
+                    }
+                }
+                continue;
+            }
+
+            if work_class == LifecycleWorkClass::ProducerTurn {
+                return Err(LifecycleLedgerError::InvalidLedger(
+                    "CompleteTip ProducerTurn was not consumed by its exact Serve owner".to_owned(),
+                ));
+            }
+            retired_records.push(if terminal.is_some() {
+                record.clone()
+            } else {
+                Self::cancelled_record(record)?
+            });
+        }
+
+        if !consumed_producers.is_empty() || !serve_reconciliation.is_drained() {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "CompleteTip Serve retirement census was not consumed exactly once".to_owned(),
+            ));
+        }
+        let retired = Self::new(
+            self.context(),
+            self.high_water,
+            retired_records,
+            BTreeMap::new(),
+        )?;
+        if retired.high_water != self.high_water
+            || retired.records.len() != self.records.len()
+            || retired
+                .records
+                .iter()
+                .any(|record| record.terminal() == Some(None))
+            || !retired.producer_debts.is_empty()
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "CompleteTip all-row retirement did not reach the exact quiescent frame".to_owned(),
+            ));
+        }
+        Ok(retired)
+    }
+
+    fn cancelled_record(
+        record: &LifecycleLedgerRecordV1,
+    ) -> Result<LifecycleLedgerRecordV1, LifecycleLedgerError> {
+        let payload = record.durable_payload().ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "CompleteTip retirement encountered an undecodable payload".to_owned(),
+            )
+        })?;
+        Self::terminalized_record(
+            record,
+            TerminalOutcome::Cancelled,
+            payload,
+            record.replay_authority.clone(),
+        )
+    }
+
+    fn terminalized_record(
+        record: &LifecycleLedgerRecordV1,
+        outcome: TerminalOutcome,
+        payload: DurablePayloadReference,
+        replay_authority: LifecycleReplayAuthorityV1,
+    ) -> Result<LifecycleLedgerRecordV1, LifecycleLedgerError> {
+        if record.terminal() != Some(None)
+            || record.continuation() != Some(DurableContinuation::None)
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "CompleteTip retirement can terminalize only one live uncontinued row".to_owned(),
+            ));
+        }
+        LifecycleLedgerRecordV1::new(
+            record.key().ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "CompleteTip retirement encountered an undecodable key".to_owned(),
+                )
+            })?,
+            record.owner(),
+            record.ordinal(),
+            record.work_class().ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "CompleteTip retirement encountered an undecodable work class".to_owned(),
+                )
+            })?,
+            record.stage().ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "CompleteTip retirement encountered an undecodable stage".to_owned(),
+                )
+            })?,
+            Some(outcome),
+            record.reconstruction_source(),
+            payload,
+            replay_authority,
+            DurableContinuation::None,
+        )
     }
 
     /// Authenticate every live BodyFrame-backed Fetch against this exact frame.
@@ -2440,6 +3408,7 @@ impl LifecycleLedgerV1 {
         projection: &crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
     ) -> Result<(Self, u128, bool), LifecycleLedgerError> {
         self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        self.reject_terminal_recovered_decision_apply(projection)?;
         let fetch_projection = projection.fetch();
         let lineage = projection.lineage();
         if !fetch_projection.belongs_to_context(self.context()) {
@@ -2557,6 +3526,306 @@ impl LifecycleLedgerV1 {
             ));
         }
         Ok((self.clone(), apply_ordinal, false))
+    }
+
+    /// Authenticate an already terminal recovered Decision body chain.
+    ///
+    /// This oracle never feeds storage-only recovery: a terminal Apply must
+    /// not be reconstructed as Ready. It only seals the exact four-row
+    /// predecessor shape for the CompleteTip retirement transaction, whose
+    /// caller must additionally join the full Kura artifact and receipt.
+    pub(super) fn authenticate_terminal_recovered_decision_apply(
+        &self,
+        projection: &crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
+    ) -> Result<u128, LifecycleLedgerError> {
+        self.authenticate_terminal_recovered_decision_apply_projection(projection)
+    }
+
+    fn reject_terminal_recovered_decision_apply(
+        &self,
+        projection: &crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
+    ) -> Result<(), LifecycleLedgerError> {
+        if self
+            .authenticate_terminal_recovered_decision_apply(projection)
+            .is_ok()
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "terminal recovered Decision Apply requires CompleteTip retirement, not a live carrier"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn reject_terminal_recovered_decision_apply_projection(
+        &self,
+        projection: &impl TerminalRecoveredDecisionApplyProjectionV1,
+    ) -> Result<(), LifecycleLedgerError> {
+        if self
+            .authenticate_terminal_recovered_decision_apply_projection(projection)
+            .is_ok()
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "terminal recovered Decision Apply requires CompleteTip retirement, not a live carrier"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn authenticate_terminal_recovered_decision_apply_projection(
+        &self,
+        projection: &impl TerminalRecoveredDecisionApplyProjectionV1,
+    ) -> Result<u128, LifecycleLedgerError> {
+        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        if !projection.belongs_to_context(self.context()) {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "terminal recovered Decision Apply belongs to another lifecycle context".to_owned(),
+            ));
+        }
+        let matching = self
+            .records
+            .iter()
+            .filter(|record| projection.names_fetch_record(record))
+            .collect::<Vec<_>>();
+        let [fetch] = matching.as_slice() else {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "terminal recovered Decision Apply requires one exact Fetch parent".to_owned(),
+            ));
+        };
+        let Some((DurableContinuationEdge::FetchToStore, store_ordinal)) = fetch
+            .continuation()
+            .and_then(DurableContinuation::successor_parts)
+        else {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "terminal recovered Decision Fetch lost its Store continuation".to_owned(),
+            ));
+        };
+        let validate_ordinal = store_ordinal.checked_add(1).ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "terminal recovered Decision Validate ordinal exhausted".to_owned(),
+            )
+        })?;
+        let apply_ordinal = validate_ordinal.checked_add(1).ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "terminal recovered Decision Apply ordinal exhausted".to_owned(),
+            )
+        })?;
+        let record_at = |ordinal| {
+            self.records
+                .binary_search_by_key(&ordinal, LifecycleLedgerRecordV1::ordinal)
+                .ok()
+                .and_then(|index| self.records.get(index))
+        };
+        let (Some(store), Some(validate), Some(apply)) = (
+            record_at(store_ordinal),
+            record_at(validate_ordinal),
+            record_at(apply_ordinal),
+        ) else {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "terminal recovered Decision body chain is incomplete".to_owned(),
+            ));
+        };
+        let owner = fetch.owner();
+        if self
+            .records
+            .iter()
+            .filter(|record| record.owner() == owner)
+            .count()
+            != 4
+            || !projection.exactly_matches_advanced_apply_parent(fetch, store_ordinal)
+            || !projection.exactly_matches_terminal_successor_records(owner, store, validate, apply)
+            || apply_ordinal > self.high_water
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "terminal recovered Decision body chain changed exact durable semantics".to_owned(),
+            ));
+        }
+        Ok(apply_ordinal)
+    }
+
+    /// Join one terminal recovered-Decision Apply row to the complete
+    /// Kura-authenticated CompleteTip evidence retained for successor startup.
+    ///
+    /// This remains a predecessor-chain oracle, not retirement authority: it
+    /// neither censes nor retires unrelated live rows, leases, waits, debt,
+    /// capacity, Serve payloads, or either durable publication target. The
+    /// consuming retirement transaction proves those independently before it
+    /// mints the activation token.
+    pub(in crate::sumeragi) fn authenticate_complete_tip_terminal_apply(
+        &self,
+        complete_tip: &crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
+    ) -> Result<u128, LifecycleLedgerError> {
+        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        let predecessor = complete_tip.predecessor();
+        if self.context().height() != predecessor.height() {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "terminal CompleteTip lifecycle ledger belongs to another height".to_owned(),
+            ));
+        }
+        let mut terminal_applies = self.records.iter().filter(|record| {
+            record.work_class() == Some(LifecycleWorkClass::Apply)
+                && record.stage().is_some_and(|stage| {
+                    stage.kind() == LifecycleStageKind::ApplyDecision
+                        && stage.predecessor_scope() == PredecessorScope::Independent
+                })
+                && record.terminal() == Some(Some(TerminalOutcome::Advanced))
+                && record.continuation() == Some(DurableContinuation::None)
+                && complete_tip.authorizes_terminal_apply_replay(&record.replay_authority)
+        });
+        let apply = terminal_applies.next().ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "CompleteTip finality has no exact terminal Decision Apply row".to_owned(),
+            )
+        })?;
+        if terminal_applies.next().is_some() {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "CompleteTip finality names multiple terminal Decision Apply rows".to_owned(),
+            ));
+        }
+        let apply_ordinal = apply.ordinal();
+        let validate_ordinal = apply_ordinal.checked_sub(1).ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "terminal Decision Apply has no Validate predecessor".to_owned(),
+            )
+        })?;
+        let store_ordinal = validate_ordinal.checked_sub(1).ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "terminal Decision Apply has no Store predecessor".to_owned(),
+            )
+        })?;
+        let fetch_ordinal = store_ordinal.checked_sub(1).ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "terminal Decision Apply has no Fetch predecessor".to_owned(),
+            )
+        })?;
+        let record_at = |ordinal| {
+            self.records
+                .binary_search_by_key(&ordinal, LifecycleLedgerRecordV1::ordinal)
+                .ok()
+                .and_then(|index| self.records.get(index))
+        };
+        let (Some(fetch), Some(store), Some(validate)) = (
+            record_at(fetch_ordinal),
+            record_at(store_ordinal),
+            record_at(validate_ordinal),
+        ) else {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "terminal CompleteTip lifecycle body chain is incomplete".to_owned(),
+            ));
+        };
+        let owner = apply.owner();
+        if fetch.owner() != owner
+            || store.owner() != owner
+            || validate.owner() != owner
+            || owner.first_admission_ordinal() != fetch_ordinal
+            || [fetch, store, validate, apply]
+                .iter()
+                .any(|record| record.reconstruction_source() != owner.causal_root().digest())
+            || self
+                .records
+                .iter()
+                .filter(|record| record.owner() == owner)
+                .count()
+                != 4
+            || fetch.work_class() != Some(LifecycleWorkClass::Fetch)
+            || store.work_class() != Some(LifecycleWorkClass::Store)
+            || validate.work_class() != Some(LifecycleWorkClass::Validate)
+            || fetch.terminal() != Some(Some(TerminalOutcome::Advanced))
+            || store.terminal() != Some(Some(TerminalOutcome::Advanced))
+            || validate.terminal() != Some(Some(TerminalOutcome::Advanced))
+            || fetch.continuation()
+                != Some(DurableContinuation::successor(
+                    DurableContinuationEdge::FetchToStore,
+                    store_ordinal,
+                ))
+            || store.continuation()
+                != Some(DurableContinuation::successor(
+                    DurableContinuationEdge::StoreToValidate,
+                    validate_ordinal,
+                ))
+            || validate.continuation()
+                != Some(DurableContinuation::successor(
+                    DurableContinuationEdge::ValidateToApply,
+                    apply_ordinal,
+                ))
+            || recovered_decision_body_continuation_is_exact(
+                DurableContinuationEdge::FetchToStore,
+                &fetch.replay_authority,
+                fetch
+                    .durable_payload()
+                    .expect("validated ledger Fetch payload"),
+                &store.replay_authority,
+                store
+                    .durable_payload()
+                    .expect("validated ledger Store payload"),
+            ) != Some(true)
+            || recovered_decision_body_continuation_is_exact(
+                DurableContinuationEdge::StoreToValidate,
+                &store.replay_authority,
+                store
+                    .durable_payload()
+                    .expect("validated ledger Store payload"),
+                &validate.replay_authority,
+                validate
+                    .durable_payload()
+                    .expect("validated ledger Validate payload"),
+            ) != Some(true)
+            || recovered_decision_body_continuation_is_exact(
+                DurableContinuationEdge::ValidateToApply,
+                &validate.replay_authority,
+                validate
+                    .durable_payload()
+                    .expect("validated ledger Validate payload"),
+                &apply.replay_authority,
+                apply
+                    .durable_payload()
+                    .expect("validated ledger Apply payload"),
+            ) != Some(true)
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "terminal CompleteTip lifecycle body chain changed exact durable semantics"
+                    .to_owned(),
+            ));
+        }
+        Ok(apply_ordinal)
+    }
+
+    /// Consume the exact opened predecessor store, frame, and CompleteTip proof
+    /// into one non-decomposable authentication cut.
+    ///
+    /// The store is reloaded both before and after the terminal-chain join.
+    /// Every failure consumes all three inputs and requires startup to restart;
+    /// no caller can recover the CompleteTip activation or substitute a
+    /// detached same-byte frame for the retained opened store handle.
+    fn into_complete_tip_terminal_apply_store_join(
+        self,
+        ledger_store: LifecycleLedgerStoreV1,
+        complete_tip: crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
+    ) -> Result<AuthenticatedCompleteTipTerminalApplyStoreJoinV1, LifecycleLedgerError> {
+        if !ledger_store.is_authorized_complete_tip_predecessor_target(&complete_tip)
+            || ledger_store.context != self.context()
+            || ledger_store.load()? != self
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "CompleteTip predecessor store target or frame changed before authentication"
+                    .to_owned(),
+            ));
+        }
+        let apply_ordinal = self.authenticate_complete_tip_terminal_apply(&complete_tip)?;
+        let cut = AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
+            complete_tip,
+            ledger_store,
+            ledger: self,
+            apply_ordinal,
+        };
+        if !cut.is_exact()? {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "CompleteTip predecessor cut changed during authentication".to_owned(),
+            ));
+        }
+        Ok(cut)
     }
 
     /// Purely stage one adapter-authenticated WAL-ahead Validate-to-Sign repair.
@@ -3170,6 +4439,16 @@ pub(super) struct LifecycleLedgerStoreV1 {
 }
 
 impl LifecycleLedgerStoreV1 {
+    fn is_authorized_complete_tip_predecessor_target(
+        &self,
+        complete_tip: &crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
+    ) -> bool {
+        self.path.parent().is_some_and(|root| {
+            complete_tip.authorizes_predecessor_lifecycle_root(root)
+                && self.path == root.join(LEDGER_FILE)
+        })
+    }
+
     /// Compare the complete immutable publication target of two open handles.
     pub(super) fn same_publication_target(&self, other: &Self) -> bool {
         self.path == other.path
@@ -4032,7 +5311,8 @@ pub(crate) fn append_same_owner_foreign_terminal_for_test(
 }
 
 #[cfg(test)]
-mod tests {
+/// Ledger-local behavior and source-surface regressions.
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -4052,6 +5332,7 @@ mod tests {
             "LifecycleCoordinator",
             "LifecycleWorkRegistryHolder",
             "CertifiedServePayloadStoreV1",
+            "AuthenticatedCertifiedServePayloadRecoveryCut",
             "V2BodyStore",
             "ProductionLifecycleAdapterStartupV1",
         ] {
@@ -4060,7 +5341,8 @@ mod tests {
     }
 
     #[cfg(feature = "bls")]
-    mod durable_ready_fetch_recovery {
+    /// BLS-backed storage-recovery and CompleteTip retirement regressions.
+    pub(crate) mod durable_ready_fetch_recovery {
         use std::{collections::BTreeMap, fs, num::NonZeroU64, path::Path};
 
         use iroha_crypto::{Algorithm, KeyPair, Signature, SignatureOf};
@@ -4071,11 +5353,14 @@ mod tests {
         use tempfile::TempDir;
 
         use super::*;
-        use crate::sumeragi::{
-            v2_body_store::ValidatedBodyReceipt,
-            v2_core::{EventTag, Generation},
-            v2_transport::{
-                AuthenticatedCertifiedBodyRequest, authenticate_certified_body_request,
+        use crate::{
+            kura::Kura,
+            sumeragi::{
+                v2_body_store::ValidatedBodyReceipt,
+                v2_core::{EventTag, Generation},
+                v2_transport::{
+                    AuthenticatedCertifiedBodyRequest, authenticate_certified_body_request,
+                },
             },
         };
 
@@ -4826,6 +6111,1241 @@ mod tests {
                     .expect("open terminal Serve production owner");
                 (owner, request)
             }
+        }
+
+        /// Structural stand-in for the sealed adapter/WAL projection used only to exercise the
+        /// ledger oracle's census behavior. It deliberately authorizes no runtime operation.
+        struct TerminalDecisionProjectionFixture {
+            context: LifecycleContext,
+            fetch: LifecycleLedgerRecordV1,
+            store: LifecycleLedgerRecordV1,
+            validate: LifecycleLedgerRecordV1,
+            apply: LifecycleLedgerRecordV1,
+            subject: wire::BlockSubject,
+            certificate: wire::QuorumCertificate,
+        }
+
+        impl TerminalRecoveredDecisionApplyProjectionV1 for TerminalDecisionProjectionFixture {
+            fn belongs_to_context(&self, context: LifecycleContext) -> bool {
+                self.context == context
+            }
+
+            fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
+                record.key() == self.fetch.key()
+            }
+
+            fn exactly_matches_advanced_apply_parent(
+                &self,
+                fetch: &LifecycleLedgerRecordV1,
+                store_ordinal: u128,
+            ) -> bool {
+                fetch == &self.fetch && store_ordinal == self.store.ordinal()
+            }
+
+            fn exactly_matches_terminal_successor_records(
+                &self,
+                owner: OwnerId,
+                store: &LifecycleLedgerRecordV1,
+                validate: &LifecycleLedgerRecordV1,
+                apply: &LifecycleLedgerRecordV1,
+            ) -> bool {
+                owner == self.fetch.owner()
+                    && store == &self.store
+                    && validate == &self.validate
+                    && apply == &self.apply
+            }
+        }
+
+        fn terminal_decision_chain_fixture(
+            fixture: &RecoveryFixture,
+        ) -> (LifecycleLedgerV1, TerminalDecisionProjectionFixture) {
+            terminal_decision_chain_fixture_with_seed(fixture, 0xE1)
+        }
+
+        fn terminal_decision_chain_fixture_with_seed(
+            fixture: &RecoveryFixture,
+            seed: u8,
+        ) -> (LifecycleLedgerV1, TerminalDecisionProjectionFixture) {
+            let context = fixture.lifecycle_context();
+            let certified_sources = fixture
+                .verified
+                .context()
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect();
+            let ([fetch_case, store_case, validate_case, apply_case], subject, certificate) =
+                super::super::super::replay_authority::exact_recovered_decision_terminal_family_fixture(
+                    context,
+                    certified_sources,
+                    seed,
+                );
+            assert_eq!(fetch_case.payload, DurablePayloadReference::None);
+            let payload = store_case.payload;
+            assert_eq!(validate_case.payload, payload);
+            assert_eq!(apply_case.payload, payload);
+
+            let causal_root = CausalRoot::new(LifecycleDigest::new(
+                *Hash::new(b"terminal recovered Decision ledger fixture").as_ref(),
+            ));
+            let owner = OwnerId::new(causal_root, 1);
+            let fetch = LifecycleLedgerRecordV1::new(
+                fetch_case.key,
+                owner,
+                1,
+                fetch_case.work_class,
+                fetch_case.stage,
+                Some(TerminalOutcome::Advanced),
+                causal_root.digest(),
+                fetch_case.payload,
+                fetch_case.authority,
+                DurableContinuation::successor(DurableContinuationEdge::FetchToStore, 2),
+            )
+            .expect("construct terminal Decision Fetch parent");
+            let store = LifecycleLedgerRecordV1::new(
+                store_case.key,
+                owner,
+                2,
+                store_case.work_class,
+                store_case.stage,
+                Some(TerminalOutcome::Advanced),
+                causal_root.digest(),
+                store_case.payload,
+                store_case.authority,
+                DurableContinuation::successor(DurableContinuationEdge::StoreToValidate, 3),
+            )
+            .expect("construct terminal Decision Store row");
+            let validate = LifecycleLedgerRecordV1::new(
+                validate_case.key,
+                owner,
+                3,
+                validate_case.work_class,
+                validate_case.stage,
+                Some(TerminalOutcome::Advanced),
+                causal_root.digest(),
+                validate_case.payload,
+                validate_case.authority,
+                DurableContinuation::successor(DurableContinuationEdge::ValidateToApply, 4),
+            )
+            .expect("construct terminal Decision Validate row");
+            let apply = LifecycleLedgerRecordV1::new(
+                apply_case.key,
+                owner,
+                4,
+                apply_case.work_class,
+                apply_case.stage,
+                Some(TerminalOutcome::Advanced),
+                causal_root.digest(),
+                apply_case.payload,
+                apply_case.authority,
+                DurableContinuation::None,
+            )
+            .expect("construct terminal Decision Apply row");
+            let projection = TerminalDecisionProjectionFixture {
+                context,
+                fetch: fetch.clone(),
+                store: store.clone(),
+                validate: validate.clone(),
+                apply: apply.clone(),
+                subject,
+                certificate,
+            };
+            let ledger = LifecycleLedgerV1::new(
+                context,
+                4,
+                vec![fetch, store, validate, apply],
+                BTreeMap::new(),
+            )
+            .expect("construct exact terminal recovered Decision chain");
+            (ledger, projection)
+        }
+
+        fn complete_tip_for_terminal_decision(
+            fixture: &RecoveryFixture,
+            projection: &TerminalDecisionProjectionFixture,
+        ) -> crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority {
+            let artifact = wire::finality::V2FinalityArtifact::new(
+                fixture.verified.context().clone(),
+                projection.subject.clone(),
+                projection.certificate.clone(),
+                fixture.verified.proofs_of_possession().to_vec(),
+            );
+            let receipt = crate::kura::KuraV2CommitReceipt::for_test(&artifact);
+            let predecessor =
+                crate::sumeragi::v2_recovery::DurableV2PredecessorIdentity::authenticate(
+                    &artifact, &receipt,
+                )
+                .expect("terminal Decision finality and receipt authenticate");
+            let successor_context_id = wire::HeightContextId(iroha_crypto::HashOf::<
+                wire::HeightContext,
+            >::from_untyped_unchecked(
+                Hash::new(b"terminal Decision CompleteTip successor context"),
+            ));
+            let activation =
+                crate::sumeragi::v2_recovery::DurableSuccessorActivationAuthority::for_test(
+                    predecessor,
+                    successor_context_id,
+                );
+            crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority::authenticate_for_test(
+                artifact,
+                receipt,
+                successor_context_id,
+                activation,
+            )
+            .expect("retain exact terminal Decision CompleteTip authority")
+        }
+
+        fn complete_tip_for_terminal_decision_at(
+            fixture: &RecoveryFixture,
+            projection: &TerminalDecisionProjectionFixture,
+            predecessor_root: &Path,
+        ) -> crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority {
+            let artifact = wire::finality::V2FinalityArtifact::new(
+                fixture.verified.context().clone(),
+                projection.subject.clone(),
+                projection.certificate.clone(),
+                fixture.verified.proofs_of_possession().to_vec(),
+            );
+            let receipt = crate::kura::KuraV2CommitReceipt::for_test(&artifact);
+            let predecessor =
+                crate::sumeragi::v2_recovery::DurableV2PredecessorIdentity::authenticate(
+                    &artifact, &receipt,
+                )
+                .expect("terminal Decision finality and receipt authenticate");
+            let successor_context_id = wire::HeightContextId(iroha_crypto::HashOf::<
+                wire::HeightContext,
+            >::from_untyped_unchecked(
+                Hash::new(b"terminal Decision CompleteTip successor context"),
+            ));
+            let activation =
+                crate::sumeragi::v2_recovery::DurableSuccessorActivationAuthority::for_test(
+                    predecessor,
+                    successor_context_id,
+                );
+            crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority::authenticate_for_lifecycle_test(
+                artifact,
+                receipt,
+                successor_context_id,
+                activation,
+                predecessor_root,
+            )
+            .expect("retain root-bound terminal Decision CompleteTip authority")
+        }
+
+        fn complete_tip_for_terminal_decision_on_kura(
+            fixture: &RecoveryFixture,
+            projection: &TerminalDecisionProjectionFixture,
+            kura: &Kura,
+        ) -> crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority {
+            let artifact = wire::finality::V2FinalityArtifact::new(
+                fixture.verified.context().clone(),
+                projection.subject.clone(),
+                projection.certificate.clone(),
+                fixture.verified.proofs_of_possession().to_vec(),
+            );
+            let receipt = crate::kura::KuraV2CommitReceipt::for_test(&artifact);
+            let predecessor =
+                crate::sumeragi::v2_recovery::DurableV2PredecessorIdentity::authenticate(
+                    &artifact, &receipt,
+                )
+                .expect("terminal Decision finality and receipt authenticate");
+            let verified_successor = complete_tip_successor_fixture(fixture, projection);
+            let successor_context_id = verified_successor.context().id();
+            let activation =
+                crate::sumeragi::v2_recovery::DurableSuccessorActivationAuthority::for_test(
+                    predecessor,
+                    successor_context_id,
+                );
+            crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority::authenticate_for_canonical_lifecycle_test(
+                artifact,
+                receipt,
+                fixture.verified.clone(),
+                crate::sumeragi::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+                successor_context_id,
+                activation,
+                kura,
+            )
+            .expect("retain Kura-bound terminal Decision CompleteTip authority")
+        }
+
+        fn complete_tip_successor_fixture(
+            fixture: &RecoveryFixture,
+            projection: &TerminalDecisionProjectionFixture,
+        ) -> VerifiedHeightContext {
+            let mut context = fixture.verified.context().clone();
+            context.height = context
+                .height
+                .checked_add(1)
+                .expect("fixture successor height is representable");
+            context.parent_commit_qc = Some(projection.certificate.clone());
+            context.snapshot_bootstrap = None;
+            VerifiedHeightContext::successor_fixture_for_test(
+                context,
+                fixture.verified.proofs_of_possession().to_vec(),
+                fixture.verified.context().clone(),
+                fixture.verified.proofs_of_possession().to_vec(),
+            )
+        }
+
+        fn empty_successor_owner_for_complete_tip(
+            retirement: &RetiredRecoveredCompleteTipActivationAuthorityV1,
+            kura: &Kura,
+            verified: VerifiedHeightContext,
+            body_root: &Path,
+            payload_root: &Path,
+            ledger_store: LifecycleLedgerStoreV1,
+        ) -> ProductionLifecycleOwnerV1 {
+            assert!(retirement.successor_ledger.records().is_empty());
+            let body_store = V2BodyStore::open_lifecycle_fixture_for_test(
+                body_root,
+                verified.context().clone(),
+                BlockSignaturePolicy::RotatingLeader,
+            )
+            .expect("open fixture H+1 body owner");
+            let (payload_store, serve_payloads) =
+                CertifiedServePayloadStoreV1::open_lifecycle_fixture_for_test(
+                    payload_root,
+                    verified.context(),
+                )
+                .expect("open fixture H+1 Serve-payload owner");
+            let authority = authority::lifecycle_storage_owner_test_authority(&verified, 0, 0)
+                .expect("construct empty H+1 lifecycle authority");
+            let mut coordinator = LifecycleCoordinator::new_with_authority(
+                authority,
+                retirement.successor_ledger.high_water(),
+            );
+            coordinator.ledger_store = Some(ledger_store);
+            ProductionLifecycleOwnerV1 {
+                verified,
+                coordinator,
+                registry: LifecycleWorkRegistryHolder::empty(),
+                payload_store,
+                serve_payloads,
+                body_store: Some(body_store),
+                body_store_identity: None,
+                kura_binding: Some(RecoveredLifecycleOwnerKuraBindingV1::for_test(kura)),
+                adapter_startup: Some(ProductionLifecycleAdapterStartupV1::fixture_for_test()),
+            }
+        }
+
+        fn unrelated_live_record(
+            context: LifecycleContext,
+            owner: OwnerId,
+            ordinal: u128,
+            seed: u8,
+        ) -> LifecycleLedgerRecordV1 {
+            let case = super::super::super::replay_authority::tests::exact_record_fixture(
+                context,
+                LifecycleStageKind::SignPrepareVote,
+                seed,
+            );
+            LifecycleLedgerRecordV1::new(
+                case.key,
+                owner,
+                ordinal,
+                case.work_class,
+                case.stage,
+                None,
+                owner.causal_root().digest(),
+                case.payload,
+                case.authority,
+                DurableContinuation::None,
+            )
+            .expect("construct unrelated live lifecycle row")
+        }
+
+        #[test]
+        fn terminal_recovered_decision_oracle_accepts_the_exact_terminal_chain() {
+            let fixture = RecoveryFixture::new("terminal-decision-exact", 0x31);
+            let (ledger, projection) = terminal_decision_chain_fixture(&fixture);
+
+            assert_eq!(
+                ledger
+                    .authenticate_terminal_recovered_decision_apply_projection(&projection)
+                    .expect("authenticate exact terminal recovered Decision chain"),
+                4
+            );
+        }
+
+        #[test]
+        fn complete_tip_terminal_join_binds_the_full_finality_family() {
+            let fixture = RecoveryFixture::new("complete-tip-terminal-exact", 0x41);
+            let (ledger, projection) = terminal_decision_chain_fixture(&fixture);
+            let complete_tip = complete_tip_for_terminal_decision(&fixture, &projection);
+
+            assert_eq!(
+                ledger
+                    .authenticate_complete_tip_terminal_apply(&complete_tip)
+                    .expect("join exact CompleteTip finality to terminal Apply"),
+                4
+            );
+
+            let (foreign, _) = terminal_decision_chain_fixture_with_seed(&fixture, 0xE2);
+            assert!(
+                foreign
+                    .authenticate_complete_tip_terminal_apply(&complete_tip)
+                    .is_err(),
+                "another canonical Decision certificate cannot enter the CompleteTip join"
+            );
+        }
+
+        #[test]
+        fn complete_tip_terminal_join_rejects_foreign_apply_reconstruction_source() {
+            let fixture = RecoveryFixture::new("complete-tip-terminal-source", 0x43);
+            let (ledger, projection) = terminal_decision_chain_fixture(&fixture);
+            let complete_tip = complete_tip_for_terminal_decision(&fixture, &projection);
+            let mut records = ledger.records.clone();
+            records[3].reconstruction_source = [0xFA; 32];
+            let foreign_source = LifecycleLedgerV1::new(
+                ledger.context(),
+                ledger.high_water(),
+                records,
+                BTreeMap::new(),
+            )
+            .expect("terminal Apply source drift remains structurally decodable");
+
+            assert!(
+                foreign_source
+                    .authenticate_complete_tip_terminal_apply(&complete_tip)
+                    .is_err(),
+                "terminal Apply must retain the exact body-family reconstruction owner"
+            );
+        }
+
+        #[test]
+        fn complete_tip_terminal_apply_store_join_consumes_the_exact_opened_frame() {
+            let fixture = RecoveryFixture::new("complete-tip-predecessor-cut", 0x45);
+            let (ledger, projection) = terminal_decision_chain_fixture(&fixture);
+            let kura = Kura::blank_kura_for_testing();
+            let predecessor_root = kura
+                .sumeragi_v2_storage_root()
+                .join("lifecycle-v1")
+                .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+            let complete_tip =
+                complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref());
+            let (store, empty) =
+                LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+                    .expect("open canonical CompleteTip predecessor store");
+            assert!(empty.records().is_empty());
+            store
+                .persist(&ledger)
+                .expect("persist terminal CompleteTip predecessor");
+
+            assert!(
+                complete_tip
+                    .into_canonical_predecessor_storage(&fixture.keys[0])
+                    .and_then(|cut| cut.is_exact())
+                    .is_ok_and(|exact| exact),
+                "the capability must open its exact ledger, body, and Serve-payload owners"
+            );
+        }
+
+        #[test]
+        fn complete_tip_all_row_retirement_is_exact_and_restart_idempotent() {
+            let fixture = RecoveryFixture::new("complete-tip-all-row-retirement", 0x46);
+            let (terminal_chain, projection) = terminal_decision_chain_fixture(&fixture);
+            let foreign_owner = OwnerId::new(CausalRoot::new(LifecycleDigest::new([0x46; 32])), 5);
+            let mut records = terminal_chain.records.clone();
+            records.push(unrelated_live_record(
+                terminal_chain.context(),
+                foreign_owner,
+                5,
+                0xE5,
+            ));
+            let predecessor =
+                LifecycleLedgerV1::new(terminal_chain.context(), 5, records, BTreeMap::new())
+                    .expect("construct CompleteTip predecessor with unrelated live work");
+            let kura = Kura::blank_kura_for_testing();
+            let predecessor_root = kura
+                .sumeragi_v2_storage_root()
+                .join("lifecycle-v1")
+                .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+            let (predecessor_store, empty) =
+                LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+                    .expect("open canonical all-row predecessor store");
+            assert!(empty.records().is_empty());
+            predecessor_store
+                .persist(&predecessor)
+                .expect("persist all-row CompleteTip predecessor");
+
+            let complete_tip =
+                complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref());
+            let retired = complete_tip
+                .into_canonical_predecessor_storage(&fixture.keys[0])
+                .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+                .expect("retire every predecessor row and initialize successor");
+            assert_eq!(retired.retained_high_water(), 5);
+            let reopened_predecessor = predecessor_store
+                .load()
+                .expect("reload retired predecessor frame");
+            assert!(reopened_predecessor.producer_debts().is_empty());
+            assert!(
+                reopened_predecessor
+                    .records()
+                    .iter()
+                    .all(|record| record.terminal().is_some_and(|terminal| terminal.is_some()))
+            );
+            assert_eq!(
+                reopened_predecessor.records()[4].terminal(),
+                Some(Some(TerminalOutcome::Cancelled))
+            );
+            assert_eq!(
+                reopened_predecessor.records()[..4],
+                terminal_chain.records()[..4],
+                "the exact CompleteTip Decision tombstones remain byte-identical"
+            );
+            assert_eq!(
+                retired.predecessor_frame_identity,
+                reopened_predecessor.frame_identity()
+            );
+
+            let successor_context_id = retired.successor_context_id();
+            let mut successor_context_bytes = [0_u8; 32];
+            successor_context_bytes.copy_from_slice(successor_context_id.0.as_ref());
+            let successor_context = LifecycleContext::new(
+                LifecycleDigest::new(successor_context_bytes),
+                fixture.lifecycle_context().height() + 1,
+            );
+            let successor_root = kura
+                .sumeragi_v2_storage_root()
+                .join("lifecycle-v1")
+                .join(hex::encode(successor_context_id.0.as_ref()));
+            let (successor_store, initialized_successor) =
+                LifecycleLedgerStoreV1::open(&successor_root, successor_context)
+                    .expect("reopen initialized CompleteTip successor");
+            assert!(initialized_successor.records().is_empty());
+            assert!(initialized_successor.producer_debts().is_empty());
+            assert_eq!(initialized_successor.high_water(), 5);
+            assert_eq!(
+                retired.successor_frame_identity,
+                initialized_successor.frame_identity()
+            );
+
+            let descendant_owner =
+                OwnerId::new(CausalRoot::new(LifecycleDigest::new([0x47; 32])), 6);
+            let descendant = LifecycleLedgerV1::new(
+                successor_context,
+                6,
+                vec![unrelated_live_record(
+                    successor_context,
+                    descendant_owner,
+                    6,
+                    0xE6,
+                )],
+                BTreeMap::new(),
+            )
+            .expect("construct later exact successor descendant");
+            successor_store
+                .persist_exact_successor(&initialized_successor, &descendant)
+                .expect("publish later successor work above retained high-water");
+
+            let retired_body_root = kura.sumeragi_v2_storage_root().join("bodies");
+            std::fs::create_dir_all(&retired_body_root)
+                .expect("materialize the obsolete predecessor body-owner root");
+            std::fs::remove_dir_all(&retired_body_root)
+                .expect("remove obsolete predecessor body owner after retirement");
+            std::fs::write(
+                &retired_body_root,
+                b"retired body owner is no longer opened",
+            )
+            .expect("make any accidental predecessor body-store reopen fail");
+
+            let repeated =
+                complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+                    .into_canonical_predecessor_storage(&fixture.keys[0])
+                    .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+                    .expect("exact retirement restart must stutter");
+            assert_eq!(
+                repeated.predecessor_frame_identity,
+                retired.predecessor_frame_identity
+            );
+            assert_eq!(
+                repeated.successor_frame_identity,
+                descendant.frame_identity(),
+                "restart must preserve a valid later successor without reopening obsolete predecessor bodies"
+            );
+            assert_eq!(repeated.predecessor(), retired.predecessor());
+            assert_eq!(repeated.successor_context_id(), successor_context_id);
+        }
+
+        #[test]
+        /// Prove retirement binds only the exact unlaunched H+1 owner.
+        pub(crate) fn complete_tip_retirement_binds_only_the_exact_unlaunched_successor_owner() {
+            let fixture = RecoveryFixture::new("complete-tip-successor-owner-bind", 0x49);
+            let (predecessor, projection) = terminal_decision_chain_fixture(&fixture);
+            let verified_successor = complete_tip_successor_fixture(&fixture, &projection);
+            let kura = Kura::blank_kura_for_testing();
+            let predecessor_root = kura
+                .sumeragi_v2_storage_root()
+                .join("lifecycle-v1")
+                .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+            let (predecessor_store, empty) =
+                LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+                    .expect("open canonical owner-binding predecessor");
+            assert!(empty.records().is_empty());
+            predecessor_store
+                .persist(&predecessor)
+                .expect("persist owner-binding predecessor");
+            let retire = || {
+                complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+                    .into_canonical_predecessor_storage(&fixture.keys[0])
+                    .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+                    .expect("retire predecessor and authenticate exact H+1 target")
+            };
+            let body_root = kura.sumeragi_v2_storage_root().join("bodies");
+
+            let retirement = retire();
+            let foreign_root = TempDir::new().expect("foreign successor root");
+            let (foreign_store, foreign_empty) = LifecycleLedgerStoreV1::open(
+                foreign_root.path(),
+                retirement.successor_ledger.context(),
+            )
+            .expect("open copied H+1 ledger target");
+            assert!(foreign_empty.records().is_empty());
+            foreign_store
+                .persist(&retirement.successor_ledger)
+                .expect("copy exact H+1 bytes to foreign target");
+            let foreign_owner = empty_successor_owner_for_complete_tip(
+                &retirement,
+                kura.as_ref(),
+                verified_successor.clone(),
+                &body_root,
+                foreign_root.path(),
+                foreign_store,
+            );
+            assert!(
+                retirement.bind_successor_owner(foreign_owner).is_err(),
+                "byte-identical H+1 state at another publication target must fail closed"
+            );
+
+            let retirement = retire();
+            let foreign_payload_root = TempDir::new().expect("foreign H+1 payload root");
+            let foreign_payload_owner = empty_successor_owner_for_complete_tip(
+                &retirement,
+                kura.as_ref(),
+                verified_successor.clone(),
+                &body_root,
+                foreign_payload_root.path(),
+                retirement.successor_store.clone(),
+            );
+            assert!(
+                retirement
+                    .bind_successor_owner(foreign_payload_owner)
+                    .is_err(),
+                "the exact ledger cannot authorize a separately rooted Serve-payload owner"
+            );
+
+            let retirement = retire();
+            let successor_root = retirement
+                .successor_store
+                .path
+                .parent()
+                .expect("canonical H+1 ledger has a parent root")
+                .to_path_buf();
+            let foreign_body_root = TempDir::new().expect("foreign H+1 body root");
+            let foreign_body_owner = empty_successor_owner_for_complete_tip(
+                &retirement,
+                kura.as_ref(),
+                verified_successor.clone(),
+                foreign_body_root.path(),
+                &successor_root,
+                retirement.successor_store.clone(),
+            );
+            assert!(
+                retirement.bind_successor_owner(foreign_body_owner).is_err(),
+                "the exact ledger cannot authorize a separately rooted body owner"
+            );
+
+            let retirement = retire();
+            let successor_root = retirement
+                .successor_store
+                .path
+                .parent()
+                .expect("canonical H+1 ledger has a parent root")
+                .to_path_buf();
+            let foreign_kura = Kura::blank_kura_for_testing();
+            let foreign_kura_owner = empty_successor_owner_for_complete_tip(
+                &retirement,
+                foreign_kura.as_ref(),
+                verified_successor.clone(),
+                &body_root,
+                &successor_root,
+                retirement.successor_store.clone(),
+            );
+            assert!(
+                retirement.bind_successor_owner(foreign_kura_owner).is_err(),
+                "canonical H+1 storage cannot launch against another live Kura instance"
+            );
+
+            let retirement = retire();
+            let successor_root = retirement
+                .successor_store
+                .path
+                .parent()
+                .expect("canonical H+1 ledger has a parent root")
+                .to_path_buf();
+            let exact_owner = empty_successor_owner_for_complete_tip(
+                &retirement,
+                kura.as_ref(),
+                verified_successor,
+                &body_root,
+                &successor_root,
+                retirement.successor_store.clone(),
+            );
+            let mut bound = retirement
+                .bind_successor_owner(exact_owner)
+                .expect("bind exact canonical unlaunched H+1 owner");
+            assert!(bound.remains_exact_for_test());
+
+            let old = bound.retirement.successor_ledger.clone();
+            let next_ordinal = old
+                .high_water()
+                .checked_add(1)
+                .expect("fixture H+1 ordinal remains representable");
+            let owner = OwnerId::new(
+                CausalRoot::new(LifecycleDigest::new([0x4A; 32])),
+                next_ordinal,
+            );
+            let drifted = LifecycleLedgerV1::new(
+                old.context(),
+                next_ordinal,
+                vec![unrelated_live_record(
+                    old.context(),
+                    owner,
+                    next_ordinal,
+                    0xEA,
+                )],
+                BTreeMap::new(),
+            )
+            .expect("construct post-bind H+1 storage drift");
+            bound
+                .retirement
+                .successor_store
+                .persist_exact_successor(&old, &drifted)
+                .expect("publish test-only H+1 drift");
+            assert!(
+                !bound.remains_exact_for_test(),
+                "the bound owner must detect canonical H+1 drift before launch"
+            );
+        }
+
+        #[test]
+        fn complete_tip_all_row_retirement_consumes_pending_serve_terminal_update() {
+            let fixture = RecoveryFixture::new("complete-tip-serve-retirement", 0x4C);
+            let (terminal_chain, projection) = terminal_decision_chain_fixture(&fixture);
+            let kura = Kura::blank_kura_for_testing();
+            let predecessor_root = kura
+                .sumeragi_v2_storage_root()
+                .join("lifecycle-v1")
+                .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+            let body_root = kura.sumeragi_v2_storage_root().join("bodies");
+            let body_store = V2BodyStore::open(&body_root, fixture.verified.context().clone())
+                .expect("open canonical CompleteTip body store");
+            let request = fixture.authenticated_serve_request(0, 0x4C, 0);
+            let (mut payload_store, recovered) =
+                CertifiedServePayloadStoreV1::open(&predecessor_root, fixture.verified.context())
+                    .expect("open canonical CompleteTip Serve payload store");
+            assert!(recovered.is_empty());
+            let pending = payload_store
+                .persist_pending_with_verified_retention(
+                    &fixture.verified,
+                    &fixture.keys[0],
+                    &request,
+                )
+                .expect("persist retained CompleteTip Serve payload");
+            let authority =
+                authority::lifecycle_storage_owner_test_authority(&fixture.verified, 1, 1)
+                    .expect("construct CompleteTip Serve lifecycle authority");
+            let mut coordinator = LifecycleCoordinator::new_with_authority(authority, 4);
+            assert!(matches!(
+                coordinator
+                    .admit_certified_serve(&fixture.verified, &request, pending)
+                    .expect("project retained CompleteTip Serve request"),
+                super::super::super::AdmissionDecision::Admitted { ordinal: 5, .. }
+            ));
+            let serve_ledger = LifecycleLedgerV1::from_coordinator(&coordinator)
+                .expect("project live CompleteTip Serve pair");
+            assert_eq!(serve_ledger.records().len(), 2);
+            assert_eq!(
+                serve_ledger.producer_debts(),
+                &[LifecycleProducerDebtV1::new(5, 6)]
+            );
+
+            let mut records = terminal_chain.records.clone();
+            records.extend_from_slice(serve_ledger.records());
+            let predecessor = LifecycleLedgerV1::new(
+                terminal_chain.context(),
+                6,
+                records,
+                BTreeMap::from([(5, 6)]),
+            )
+            .expect("join terminal Decision chain with live Serve pair");
+            let (predecessor_store, empty) =
+                LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+                    .expect("open canonical Serve predecessor ledger");
+            assert!(empty.records().is_empty());
+            predecessor_store
+                .persist(&predecessor)
+                .expect("persist live Serve predecessor ledger");
+            drop(payload_store);
+            drop(body_store);
+
+            complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+                .into_canonical_predecessor_storage(&fixture.keys[0])
+                .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+                .expect("retire exact Pending Serve and its ProducerTurn");
+
+            let retired = predecessor_store
+                .load()
+                .expect("reload Serve-retired predecessor ledger");
+            assert!(retired.producer_debts().is_empty());
+            assert_eq!(
+                retired.records()[4].terminal(),
+                Some(Some(TerminalOutcome::Cancelled))
+            );
+            assert_eq!(
+                retired.records()[5].terminal(),
+                Some(Some(TerminalOutcome::Cancelled))
+            );
+            let reopened_body = V2BodyStore::open(&body_root, fixture.verified.context().clone())
+                .expect("reopen canonical CompleteTip body store");
+            let (reopened_payload_store, recovered) =
+                CertifiedServePayloadStoreV1::open(&predecessor_root, fixture.verified.context())
+                    .expect("reopen retired CompleteTip Serve payload store");
+            let authenticated = recovered
+                .authenticate(&fixture.verified, &fixture.keys[0], &reopened_body)
+                .expect("authenticate retired CompleteTip Serve payload cut");
+            reopened_payload_store
+                .validate_authenticated_cut(&authenticated)
+                .expect("retired Serve payload cut remains exact");
+            assert!(authenticated.iter().all(|payload| matches!(
+                payload.state(),
+                crate::sumeragi::v2_certified_serve_payload_store::AuthenticatedRecoveredCertifiedServePayloadState::Negative(
+                    crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadNegativeOutcome::Cancelled,
+                )
+            )));
+        }
+
+        #[test]
+        /// Prove CompleteTip retirement survives normal predecessor-body cleanup.
+        pub(crate) fn complete_tip_retirement_survives_completed_serve_body_cleanup_with_live_work()
+        {
+            let fixture = RecoveryFixture::new("complete-tip-completed-serve-cleanup", 0x50);
+            let (terminal_chain, projection) = terminal_decision_chain_fixture(&fixture);
+            let kura = Kura::blank_kura_for_testing();
+            let predecessor_root = kura
+                .sumeragi_v2_storage_root()
+                .join("lifecycle-v1")
+                .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+            let body_root = kura.sumeragi_v2_storage_root().join("bodies");
+            let mut body_store = V2BodyStore::open(&body_root, fixture.verified.context().clone())
+                .expect("open canonical CompleteTip body store");
+            let (request, durable_body, response) =
+                fixture.completed_serve_exchange(&mut body_store, 0, 0x50, 3);
+            let (mut payload_store, recovered) =
+                CertifiedServePayloadStoreV1::open(&predecessor_root, fixture.verified.context())
+                    .expect("open canonical CompleteTip Serve payload store");
+            assert!(recovered.is_empty());
+            let pending = payload_store
+                .persist_pending_with_verified_retention(
+                    &fixture.verified,
+                    &fixture.keys[0],
+                    &request,
+                )
+                .expect("persist retained Completed-Serve request");
+
+            let authority =
+                authority::lifecycle_storage_owner_test_authority(&fixture.verified, 1, 1)
+                    .expect("construct Completed-Serve lifecycle authority");
+            let mut coordinator = LifecycleCoordinator::new_with_authority(authority, 4);
+            assert!(matches!(
+                coordinator
+                    .admit_certified_serve(&fixture.verified, &request, pending)
+                    .expect("project retained Completed-Serve request"),
+                super::super::super::AdmissionDecision::Admitted { ordinal: 5, .. }
+            ));
+            let pending_serve_ledger = LifecycleLedgerV1::from_coordinator(&coordinator)
+                .expect("project the pre-completion Serve pair");
+            let ready = coordinator.ready_index.iter().map(|ordinal| {
+                let record = &coordinator.records[ordinal];
+                (
+                    *ordinal,
+                    super::super::super::SchedulerReadyInputs::new(record, None, [0; 6]),
+                )
+            });
+            let TurnPlan::Execute(lease) = coordinator.plan_turn(
+                super::super::super::SchedulerInputs::new([], ready)
+                    .expect("Completed Serve is the sole Ready row"),
+            ) else {
+                panic!("Completed Serve must own the selected turn")
+            };
+            let completed = payload_store
+                .persist_completed_with_exact_body(&request, &durable_body, &body_store, &response)
+                .expect("persist exact Completed-Serve tombstone");
+            let serve_ordinal = lease.ordinal();
+            let producer_ordinal = coordinator.producer_debts[&serve_ordinal];
+            let terminal = CertifiedServeTerminalReplayAuthorityPairV1::from_completed_receipt(
+                coordinator.active_context,
+                &coordinator.records[&serve_ordinal],
+                &coordinator.durable_records[&serve_ordinal],
+                &coordinator.records[&producer_ordinal],
+                &coordinator.durable_records[&producer_ordinal],
+                completed,
+            )
+            .expect("close exact Completed-Serve replay family");
+            coordinator.reduce_settle_turn(
+                lease,
+                TurnOutcome::Terminal(terminal.terminal_outcome()),
+                Some(terminal),
+            );
+            assert_eq!(coordinator.fault(), None);
+            let serve_ledger = LifecycleLedgerV1::from_coordinator(&coordinator)
+                .expect("project terminal Serve with live ProducerTurn");
+            assert_eq!(serve_ledger.records().len(), 2);
+            let response_digest =
+                LifecycleDigest::new((*iroha_crypto::HashOf::new(&response).as_ref()).into());
+            assert_eq!(
+                serve_ledger.records()[0].terminal(),
+                Some(Some(TerminalOutcome::Completed(Some(response_digest))))
+            );
+            assert_eq!(serve_ledger.records()[1].terminal(), Some(None));
+
+            let unrelated_owner =
+                OwnerId::new(CausalRoot::new(LifecycleDigest::new([0x51; 32])), 7);
+            let mut records = terminal_chain.records.clone();
+            records.extend_from_slice(serve_ledger.records());
+            records.push(unrelated_live_record(
+                terminal_chain.context(),
+                unrelated_owner,
+                7,
+                0xF0,
+            ));
+            let predecessor = LifecycleLedgerV1::new(
+                terminal_chain.context(),
+                7,
+                records,
+                BTreeMap::from([(serve_ordinal, producer_ordinal)]),
+            )
+            .expect("join terminal Decision, Completed Serve, and unrelated live work");
+            let (predecessor_store, empty) =
+                LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+                    .expect("open canonical Completed-Serve predecessor ledger");
+            assert!(empty.records().is_empty());
+            predecessor_store
+                .persist(&predecessor)
+                .expect("persist Completed-Serve predecessor ledger");
+            drop(payload_store);
+            drop(body_store);
+            std::fs::remove_dir_all(&body_root)
+                .expect("simulate normal post-finality predecessor body cleanup");
+
+            {
+                let (_bodyless_payload_store, recovered) = CertifiedServePayloadStoreV1::open(
+                    &predecessor_root,
+                    fixture.verified.context(),
+                )
+                .expect("reopen Completed metadata after body cleanup");
+                let bodyless = recovered
+                    .authenticate_for_complete_tip_retirement(&fixture.verified, &fixture.keys[0])
+                    .expect("authenticate retirement-only Completed metadata");
+                assert!(
+                    super::super::open::authenticate_complete_tip_serve_census(
+                        &pending_serve_ledger,
+                        &bodyless,
+                    )
+                    .is_err(),
+                    "bodyless metadata must not promote a Pending Serve ledger row"
+                );
+            }
+
+            complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+                .into_canonical_predecessor_storage(&fixture.keys[0])
+                .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+                .expect("retire Completed Serve after body cleanup");
+
+            let retired = predecessor_store
+                .load()
+                .expect("reload Completed-Serve retired predecessor");
+            assert!(retired.producer_debts().is_empty());
+            assert!(
+                retired
+                    .records()
+                    .iter()
+                    .all(|record| { record.terminal().is_some_and(|terminal| terminal.is_some()) })
+            );
+            assert_eq!(retired.records()[4], serve_ledger.records()[0]);
+            assert_eq!(
+                retired.records()[5].terminal(),
+                Some(Some(TerminalOutcome::Cancelled))
+            );
+            assert_eq!(
+                retired.records()[6].terminal(),
+                Some(Some(TerminalOutcome::Cancelled))
+            );
+            assert!(!body_root.exists());
+            let (reopened_payload_store, recovered) =
+                CertifiedServePayloadStoreV1::open(&predecessor_root, fixture.verified.context())
+                    .expect("reopen body-independent retired Serve payload store");
+            let authenticated = recovered
+                .authenticate_for_complete_tip_retirement(&fixture.verified, &fixture.keys[0])
+                .expect("reauthenticate Completed metadata without body bytes");
+            reopened_payload_store
+                .validate_authenticated_cut(&authenticated)
+                .expect("retired Completed payload cut remains exact");
+            assert_eq!(authenticated.len(), 1);
+        }
+
+        #[test]
+        fn complete_tip_terminal_apply_store_join_detects_later_same_store_drift() {
+            let fixture = RecoveryFixture::new("complete-tip-predecessor-later-drift", 0x47);
+            let (ledger, projection) = terminal_decision_chain_fixture(&fixture);
+            let directory = TempDir::new().expect("temporary later-drift predecessor ledger");
+            let complete_tip =
+                complete_tip_for_terminal_decision_at(&fixture, &projection, directory.path());
+            let (store, empty) =
+                LifecycleLedgerStoreV1::open(directory.path(), fixture.lifecycle_context())
+                    .expect("open later-drift predecessor store");
+            store
+                .persist(&ledger)
+                .expect("persist terminal CompleteTip predecessor");
+            let same_store_writer = store.clone();
+            let cut = ledger
+                .into_complete_tip_terminal_apply_store_join(store, complete_tip)
+                .expect("authenticate exact predecessor before drift");
+            same_store_writer
+                .persist(&empty)
+                .expect("replace predecessor after cut authentication");
+
+            assert!(
+                !cut.is_exact().expect("reload retained predecessor store"),
+                "the retained cut must detect later writes through another handle"
+            );
+        }
+
+        #[test]
+        fn complete_tip_terminal_apply_store_join_is_not_an_all_row_retirement() {
+            let fixture = RecoveryFixture::new("complete-tip-predecessor-chain-local", 0x48);
+            let (ledger, projection) = terminal_decision_chain_fixture(&fixture);
+            let foreign_owner = OwnerId::new(CausalRoot::new(LifecycleDigest::new([0x48; 32])), 5);
+            let mut records = ledger.records.clone();
+            records.push(unrelated_live_record(
+                ledger.context(),
+                foreign_owner,
+                5,
+                0xE4,
+            ));
+            let chain_local = LifecycleLedgerV1::new(ledger.context(), 5, records, BTreeMap::new())
+                .expect("construct predecessor with unrelated live work");
+            let directory = TempDir::new().expect("temporary chain-local predecessor ledger");
+            let complete_tip =
+                complete_tip_for_terminal_decision_at(&fixture, &projection, directory.path());
+            let (store, empty) =
+                LifecycleLedgerStoreV1::open(directory.path(), fixture.lifecycle_context())
+                    .expect("open chain-local predecessor store");
+            assert!(empty.records().is_empty());
+            store
+                .persist(&chain_local)
+                .expect("persist chain-local predecessor");
+
+            assert!(
+                chain_local
+                    .into_complete_tip_terminal_apply_store_join(store, complete_tip)
+                    .is_ok(),
+                "this prerequisite must not masquerade as exhaustive retirement"
+            );
+        }
+
+        #[test]
+        fn complete_tip_terminal_apply_store_join_rejects_store_drift() {
+            let fixture = RecoveryFixture::new("complete-tip-predecessor-drift", 0x49);
+            let (ledger, projection) = terminal_decision_chain_fixture(&fixture);
+            let directory = TempDir::new().expect("temporary drifted predecessor ledger");
+            let complete_tip =
+                complete_tip_for_terminal_decision_at(&fixture, &projection, directory.path());
+            let (store, empty) =
+                LifecycleLedgerStoreV1::open(directory.path(), fixture.lifecycle_context())
+                    .expect("open drifted CompleteTip predecessor store");
+            store
+                .persist(&ledger)
+                .expect("persist terminal CompleteTip predecessor");
+            store
+                .persist(&empty)
+                .expect("replace predecessor before cut authentication");
+
+            assert!(
+                ledger
+                    .into_complete_tip_terminal_apply_store_join(store, complete_tip)
+                    .is_err(),
+                "a changed attached frame cannot mint predecessor authority"
+            );
+        }
+
+        #[test]
+        fn complete_tip_terminal_apply_store_join_rejects_an_identical_foreign_target() {
+            let fixture = RecoveryFixture::new("complete-tip-predecessor-foreign-target", 0x4A);
+            let (ledger, projection) = terminal_decision_chain_fixture(&fixture);
+            let canonical_kura = Kura::blank_kura_for_testing();
+            let foreign_kura = Kura::blank_kura_for_testing();
+            let complete_tip = complete_tip_for_terminal_decision_on_kura(
+                &fixture,
+                &projection,
+                canonical_kura.as_ref(),
+            );
+            let foreign_root = foreign_kura
+                .sumeragi_v2_storage_root()
+                .join("lifecycle-v1")
+                .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+            let (foreign_store, empty) =
+                LifecycleLedgerStoreV1::open(&foreign_root, fixture.lifecycle_context())
+                    .expect("open foreign predecessor store");
+            assert!(empty.records().is_empty());
+            foreign_store
+                .persist(&ledger)
+                .expect("copy exact terminal predecessor frame to foreign root");
+
+            assert!(
+                ledger
+                    .into_complete_tip_terminal_apply_store_join(foreign_store, complete_tip)
+                    .is_err(),
+                "byte-identical ledger data cannot substitute for the Kura-bound target"
+            );
+        }
+
+        #[test]
+        fn complete_tip_successor_target_initializes_and_accepts_an_exact_descendant() {
+            let context = LifecycleContext::new(LifecycleDigest::new([0xA1; 32]), 2);
+            let directory = TempDir::new().expect("temporary CompleteTip successor target");
+            let target = CanonicalCompleteTipSuccessorLedgerTargetV1 {
+                root: directory.path().join("successor"),
+                context,
+            };
+            let (store, initialized) = target
+                .open_initialized_or_descendant(4)
+                .expect("initialize successor at predecessor high-water");
+            assert_eq!(initialized.high_water(), 4);
+            assert!(initialized.records().is_empty());
+
+            let owner = OwnerId::new(CausalRoot::new(LifecycleDigest::new([0xA2; 32])), 5);
+            let descendant = LifecycleLedgerV1::new(
+                context,
+                5,
+                vec![unrelated_live_record(context, owner, 5, 0xA3)],
+                BTreeMap::new(),
+            )
+            .expect("construct exact successor descendant");
+            store
+                .persist_exact_successor(&initialized, &descendant)
+                .expect("publish descendant above retained ordinal floor");
+
+            let (_, reopened) = target
+                .open_initialized_or_descendant(4)
+                .expect("preserve a valid nonempty descendant without rewriting it");
+            assert_eq!(reopened, descendant);
+        }
+
+        #[test]
+        fn complete_tip_successor_target_rejects_a_foreign_ordinal_floor() {
+            let context = LifecycleContext::new(LifecycleDigest::new([0xB1; 32]), 2);
+            let directory = TempDir::new().expect("temporary foreign-floor successor target");
+            let target = CanonicalCompleteTipSuccessorLedgerTargetV1 {
+                root: directory.path().join("successor"),
+                context,
+            };
+            let (store, empty) = LifecycleLedgerStoreV1::open(&target.root, context)
+                .expect("open foreign-floor successor");
+            let owner = OwnerId::new(CausalRoot::new(LifecycleDigest::new([0xB2; 32])), 4);
+            let foreign = LifecycleLedgerV1::new(
+                context,
+                4,
+                vec![unrelated_live_record(context, owner, 4, 0xB3)],
+                BTreeMap::new(),
+            )
+            .expect("construct independently zero-based successor frame");
+            store
+                .persist_exact_successor(&empty, &foreign)
+                .expect("persist foreign successor fixture");
+
+            assert!(target.open_initialized_or_descendant(4).is_err());
+        }
+
+        #[test]
+        fn terminal_recovered_decision_oracle_rejects_a_live_apply() {
+            let fixture = RecoveryFixture::new("terminal-decision-live-apply", 0x35);
+            let (ledger, projection) = terminal_decision_chain_fixture(&fixture);
+            let mut records = ledger.records.clone();
+            records[3].terminal = None;
+            let live = LifecycleLedgerV1::new(
+                ledger.context(),
+                ledger.high_water(),
+                records,
+                BTreeMap::new(),
+            )
+            .expect("construct otherwise exact chain with a live Apply");
+
+            assert!(
+                live.authenticate_terminal_recovered_decision_apply_projection(&projection)
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn terminal_recovered_decision_oracle_rejects_extra_same_owner_history() {
+            let fixture = RecoveryFixture::new("terminal-decision-same-owner", 0x39);
+            let (ledger, projection) = terminal_decision_chain_fixture(&fixture);
+            let owner = projection.fetch.owner();
+            let mut records = ledger.records.clone();
+            records.push(unrelated_live_record(ledger.context(), owner, 5, 0xE2));
+            let with_extra_owner_history =
+                LifecycleLedgerV1::new(ledger.context(), 5, records, BTreeMap::new())
+                    .expect("construct terminal chain with foreign same-owner history");
+
+            assert!(
+                with_extra_owner_history
+                    .authenticate_terminal_recovered_decision_apply_projection(&projection)
+                    .is_err()
+            );
+        }
+
+        #[test]
+        fn terminal_recovered_decision_oracle_is_chain_local_and_allows_a_foreign_live_row() {
+            let fixture = RecoveryFixture::new("terminal-decision-chain-local", 0x3D);
+            let (ledger, projection) = terminal_decision_chain_fixture(&fixture);
+            let foreign_root = CausalRoot::new(LifecycleDigest::new(
+                *Hash::new(b"foreign live row outside terminal Decision chain").as_ref(),
+            ));
+            let foreign_owner = OwnerId::new(foreign_root, 5);
+            let mut records = ledger.records.clone();
+            records.push(unrelated_live_record(
+                ledger.context(),
+                foreign_owner,
+                5,
+                0xE3,
+            ));
+            let with_foreign_live =
+                LifecycleLedgerV1::new(ledger.context(), 5, records, BTreeMap::new())
+                    .expect("construct terminal chain beside one foreign live row");
+
+            assert_eq!(
+                with_foreign_live
+                    .authenticate_terminal_recovered_decision_apply_projection(&projection)
+                    .expect("the terminal oracle is intentionally limited to one owner chain"),
+                4
+            );
+        }
+
+        #[test]
+        fn recovered_decision_stage_guard_routes_terminal_chain_to_complete_tip_retirement() {
+            let fixture = RecoveryFixture::new("terminal-decision-stage-guard", 0x41);
+            let (ledger, projection) = terminal_decision_chain_fixture(&fixture);
+
+            let error = ledger
+                .reject_terminal_recovered_decision_apply_projection(&projection)
+                .expect_err("terminal Apply cannot re-enter live recovered staging");
+            assert!(matches!(
+                error,
+                LifecycleLedgerError::InvalidLedger(reason)
+                    if reason == "terminal recovered Decision Apply requires CompleteTip retirement, not a live carrier"
+            ));
         }
 
         fn admit_and_claim_serve(

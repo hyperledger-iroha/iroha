@@ -1,0 +1,10 @@
+
+seiyaku RoundedQuantity {
+    view fn calculate(quantity value, decimal divisor, int scale) -> quantity {
+        return value.div_round(
+            divisor: divisor,
+            scale: scale,
+            mode: Rounding::nearest_even,
+        );
+    }
+}

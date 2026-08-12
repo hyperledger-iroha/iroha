@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  ledger::role::create(Name::parse("auditor"), Name::parse("read_blocks"));
+}
+
+}

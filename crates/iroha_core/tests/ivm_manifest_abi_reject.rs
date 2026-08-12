@@ -249,13 +249,9 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     let code_hash = manifest
         .code_hash
         .expect("verified contract manifest must bind its artifact hash");
-    let contract_address = ContractAddress::derive(
-        &network_id,
-        &account_id,
-        1,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("derive manifest admission contract address");
+    let contract_address =
+        ContractAddress::derive(&network_id, &account_id, 1, DataSpaceId::UNIVERSAL)
+            .expect("derive manifest admission contract address");
     let policy = ivm::SyscallPolicy::AbiV1;
     let correct_abi = ivm::syscalls::compute_abi_hash(policy);
 
@@ -429,13 +425,9 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     let code_hash = manifest
         .code_hash
         .expect("verified contract manifest must bind its artifact hash");
-    let contract_address = ContractAddress::derive(
-        &network_id,
-        &account_id,
-        2,
-        DataSpaceId::UNIVERSAL,
-    )
-    .expect("derive manifest admission contract address");
+    let contract_address =
+        ContractAddress::derive(&network_id, &account_id, 2, DataSpaceId::UNIVERSAL)
+            .expect("derive manifest admission contract address");
     let abi_current = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
 
     // Block 1: grant permission and register manifest with v1 abi_hash

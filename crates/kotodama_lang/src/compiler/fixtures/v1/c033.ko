@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main(AccountId account) {
+  ledger::nft::mint(Name::parse("bad"), account);
+}
+
+}

@@ -229,14 +229,39 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path("crates/iroha_core/src/sumeragi/v2.rs"): (
         Path("tests/v2_adapter_activation_context.rs"),
+        Path("tests/v2_adapter_04_wal_recovery.rs"),
+        Path("tests/v2_adapter_04b_lifecycle_startup.rs"),
+        Path("tests/v2_adapter_05_direct_lifecycle.rs"),
         Path("tests/v2_adapter_01_replay_and_registry.rs"),
         Path("tests/v2_adapter_02_view_and_lock_progress.rs"),
         Path("tests/v2_adapter_03_tc_and_terminal_ingress.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"): (
+        Path("tests/v2_lifecycle_coordinator_explorer_cases.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs"): (
+        Path("v2_lifecycle_replay_authority_payload_projection.rs"),
+        Path("tests/v2_lifecycle_replay_authority_fixtures.rs"),
+        Path("tests/v2_lifecycle_replay_authority_cases.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"): (
+        Path("v2_lifecycle_work_registry_validate_recovery.rs"),
+        Path("tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs"),
+        Path("tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs"),
+        Path("tests/v2_lifecycle_work_registry_durable_store_and_validate_cases.rs"),
+        Path("tests/v2_lifecycle_work_registry_exact_registry_cases.rs"),
+        Path("tests/v2_lifecycle_work_registry_recovery_surface_cases.rs"),
+        Path("tests/v2_lifecycle_work_registry_replay_evidence_cases.rs"),
+    ),
+    Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"): (
+        Path("tests/v2_runtime_unsealed_01b_lifecycle_bounds.rs"),
+        Path("tests/v2_runtime_unsealed_02_owner_retirement_and_fairness.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_worker.rs"): (
         Path("v2_worker/exact_output_rollover_claim.rs"),
         Path("v2_worker/kura_replica_advert_refresh.rs"),
         Path("v2_worker/current_lane_output_rollover_claim.rs"),
+        Path("tests/v2_worker_equivocation_and_selected_serve_fixture.rs"),
         Path("tests/v2_worker_reply_route_cases.rs"),
         Path("tests/v2_worker_backpressure_cases.rs"),
         Path("v2_worker/applied_height_handoff_tests.rs"),
@@ -263,6 +288,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path("crates/iroha_core/src/sumeragi/v2_apply.rs"): (
         Path("v2_apply/autonomous_recovery_types.rs"),
+        Path("v2_apply/historical_autonomous_recovery.rs"),
         Path("v2_apply/reconciliation_authority.rs"),
         Path("v2_apply/committed_carrier_cleanup.rs"),
         Path("v2_apply/error_recovery.rs"),
@@ -287,6 +313,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path("tests/v2_core_terminal_transactionality.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_effects.rs"): (
+        Path("tests/v2_effects_03_locked_body_and_sidecar.rs"),
         Path("tests/v2_effects_kura_tip_replay.rs"),
         Path("tests/v2_effects_01_view_churn_and_runtime_steps.rs"),
         Path("tests/v2_effects_02_admission_handoffs.rs"),
@@ -1437,6 +1464,7 @@ def copy_timeout_vote_window_fixture(tmp_path: Path, module) -> Path:
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(module.ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(tmp_path)
     return tmp_path / relatives[0]
 
 
@@ -1688,7 +1716,25 @@ def test_timeout_vote_semantic_capacity_regressions_cannot_be_deleted(
     """Capacity, adjacent, full-lane, and cross-view regressions stay exact."""
 
     module = load_checker()
-    rust_path = copy_timeout_vote_window_fixture(tmp_path, module)
+    copy_timeout_vote_window_fixture(tmp_path, module)
+    externalized = {
+        "capacity_bypass_records_follow_current_lock_and_timeout_view": (
+            "crates/iroha_core/src/sumeragi/tests/"
+            "v2_adapter_02_view_and_lock_progress.rs"
+        ),
+        "certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote": (
+            "crates/iroha_core/src/sumeragi/tests/"
+            "v2_adapter_03_tc_and_terminal_ingress.rs"
+        ),
+        "busy_deferred_source_identity_coalesces_across_consumer_view_change": (
+            "crates/iroha_core/src/sumeragi/tests/"
+            "v2_adapter_03_tc_and_terminal_ingress.rs"
+        ),
+    }
+    rust_path = tmp_path / externalized.get(
+        test_name,
+        "crates/iroha_core/src/sumeragi/v2.rs",
+    )
     mutate_rust_item_source(
         module,
         rust_path,
@@ -1703,6 +1749,157 @@ def test_timeout_vote_semantic_capacity_regressions_cannot_be_deleted(
 
     assert any(
         f"named {test_name}; found 0" in error for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    (
+        "relative",
+        "test_name",
+        "old",
+        "new",
+        "digest_map_name",
+        "expected_error",
+    ),
+    (
+        (
+            "crates/iroha_core/src/sumeragi/tests/"
+            "v2_adapter_02_view_and_lock_progress.rs",
+            "capacity_bypass_records_follow_current_lock_and_timeout_view",
+            "roster_len * 3",
+            "roster_len * 2",
+            "_TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256",
+            "exactly one lock plus current and adjacent TimeoutVote rosters",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/tests/"
+            "v2_adapter_03_tc_and_terminal_ingress.rs",
+            "certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote",
+            "assert_eq!(adapter.current_tag().view(), current_round.view + 1);",
+            "assert_eq!(adapter.current_tag().view(), current_round.view);",
+            "_TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256",
+            "advance the hung signer exactly one view",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/tests/"
+            "v2_adapter_03_tc_and_terminal_ingress.rs",
+            "busy_deferred_source_identity_coalesces_across_consumer_view_change",
+            "assert_eq!(retagged_candidate.0, original_candidate.0);",
+            "assert_ne!(retagged_candidate.0, original_candidate.0);",
+            "_SERVICED_CANDIDATE_REGRESSION_TEST_SHA256",
+            "retain source identity while advancing only its consumer episode",
+        ),
+    ),
+)
+def test_externalized_timeout_capacity_semantics_survive_digest_refresh(
+    tmp_path: Path,
+    relative: str,
+    test_name: str,
+    old: str,
+    new: str,
+    digest_map_name: str,
+    expected_error: str,
+) -> None:
+    """Externalized adapter regressions remain semantic, not digest-only, seals."""
+
+    module = load_checker()
+    copy_timeout_vote_window_fixture(tmp_path, module)
+    rust_path = tmp_path / relative
+    mutate_rust_item_source(module, rust_path, test_name, old, new)
+    item = module.rust_items(
+        rust_path.read_text(encoding="utf-8"), test_name
+    )[0]
+    getattr(module, digest_map_name)[test_name] = module._rust_item_token_sha256(
+        item
+    )
+
+    errors = module._timeout_vote_semantic_capacity_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(expected_error in error for error in errors), errors
+
+
+def test_replayed_proposal_owner_semantics_survive_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """The externalized replay-owner regression remains a semantic seal."""
+
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2Core.tla",
+        "SumeragiV2InductiveProofs.tla",
+    )
+    for relative in (
+        Path("crates/iroha_core/src/sumeragi/v2_core/wal.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_candidate.rs"),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+    replay_path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_02.rs"
+    )
+    test_name = (
+        "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner"
+    )
+    mutate_rust_item_source(
+        module,
+        replay_path,
+        test_name,
+        'let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);',
+        "let foreign_lock = directive(Some(subject), None);",
+    )
+    item = module.rust_items(
+        replay_path.read_text(encoding="utf-8"), test_name
+    )[0]
+    module._LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256[test_name] = (
+        module._rust_item_token_sha256(item)
+    )
+
+    errors = module._locked_body_reproposal_source_fidelity_errors(
+        formal_dir, tmp_path
+    )
+
+    assert any(
+        "the replay-owner regression must reject foreign subjects, mismatched rounds, and decided lifecycles"
+        in error
+        for error in errors
+    ), errors
+
+
+def test_frontier_preflight_semantics_survive_item_digest_refresh(
+    tmp_path: Path,
+) -> None:
+    """Refreshing the preflight seal cannot move EnterView away from the head."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    effects_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_effects.rs"
+    item_name = "preflight_effect_batch_frontier"
+    mutate_rust_item_source(
+        module,
+        effects_path,
+        item_name,
+        "!matches!(effects.first(), Some(AdapterEffect::EnterView { .. }))",
+        "!matches!(effects.last(), Some(AdapterEffect::EnterView { .. }))",
+    )
+    item = module.rust_items(
+        effects_path.read_text(encoding="utf-8"), item_name
+    )[0]
+    module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256[item_name] = (
+        module._rust_item_token_sha256(item)
+    )
+
+    errors = module._effect_capacity_production_source_fidelity_errors(tmp_path)
+
+    assert any(
+        "frontier preflight must require the unique EnterView at the batch head"
+        in error
+        for error in errors
     ), errors
 
 
@@ -2161,11 +2358,13 @@ def test_merge_runtime_config_v6_rejects_each_projection_field_substitution(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
-            "let mut adapter = Self {",
+            "let adapter = Self {",
             "merge_sidecars,\n"
+            "            predecessor_sidecar_requesters: None,\n"
             "            exact_output_handoff_owner,\n"
             "            authenticated_merge_qcs:",
             "merge_sidecars,\n"
+            "            predecessor_sidecar_requesters: None,\n"
             "            authenticated_merge_qcs:",
             "adapter hands the exact rehydrated sidecar transport into the live production field",
         ),
@@ -4238,3 +4437,59 @@ def test_serve_scheduler_ordinal_release_contract_rejects_current_weakening(
     assert any(
         f"{prefix}{symbol} must equal only" in error for error in errors
     ), errors
+
+
+def _assert_commit_import_release_or_stale_artifact(
+    tmp_path: Path, artifact_name: str
+) -> None:
+    module = load_checker()
+    repo_root, formal_dir = copy_commit_import_provenance_mutation_fixture(
+        tmp_path, module
+    )
+    path = repo_root / artifact_name if "/" in artifact_name else formal_dir / artifact_name
+    release_mutations = {
+        "SumeragiV2AsyncNetwork.tla": (
+            "DirectCommitQcCandidateHasExactImportLineage",
+            "    /\\ item.envelope.qc.context = context\n",
+            "    /\\ TRUE\n",
+        ),
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
+            "IndexedChainSpecClosesHistoricalCertificateLocalImportCandidateEntry",
+            "  IndexedChainSpec\n"
+            "    => IndexedHistoricalCertificateLocalImportCandidateEntryProperty\n",
+            "  IndexedChainSpec\n    => TRUE\n",
+        ),
+    }
+    release_mutation = release_mutations.get(artifact_name)
+    if release_mutation is None:
+        path.write_text(
+            path.read_text(encoding="utf-8") + "\n\\* stale import provenance\n",
+            encoding="utf-8",
+        )
+    else:
+        symbol, old, new = release_mutation
+        source = path.read_text(encoding="utf-8")
+        path.write_text(
+            mutate_tla_theorem(source, symbol, old, new), encoding="utf-8"
+        )
+        module.COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256[path.name] = (
+            hashlib.sha256(path.read_bytes()).hexdigest()
+        )
+
+    errors = module._commit_import_provenance_mutation_source_fidelity_errors(
+        formal_dir, repo_root
+    )
+    if release_mutation is None:
+        assert any(
+            str(path) in error
+            and (
+                "must match exact reviewed SHA-256" in error
+                or "must match frozen SHA-256" in error
+            )
+            for error in errors
+        ), errors
+    else:
+        assert any(
+            f"Commit-import release theorem {symbol} must state only" in error
+            for error in errors
+        ), errors

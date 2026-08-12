@@ -1,0 +1,9 @@
+
+            fn widen(Option<int> value) -> Option<(int, int)> {
+                let payload = match value {
+                    Option::some(payload) => payload,
+                    Option::none => { return Option::none; },
+                };
+                Option::some((payload, payload))
+            }
+        

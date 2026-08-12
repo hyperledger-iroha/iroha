@@ -270,3 +270,310 @@ def _prebuilt_directory(path: Path, name: str) -> Path:
             "with exact mode 0500"
         )
     return path
+
+
+def _corridor_legs() -> list[tuple[str, str, int, str]]:
+    legs = [
+        (
+            leg_id,
+            "cargo-focus",
+            count,
+            _g_unit_leg_command(array_name, package, cargo_target),
+        )
+        for array_name, leg_id, package, count, cargo_target in _G_UNIT_GROUPS
+    ]
+    legs.extend(
+        (
+            (
+                leg_id,
+                "cargo-module",
+                count,
+                _production_module_command(module),
+            )
+            for leg_id, module, count in _PRODUCTION_MODULES
+        )
+    )
+    legs.append(
+        (
+            "status-rust",
+            "cargo-exact",
+            1,
+            "cargo test --locked --offline -p iroha_data_model --lib "
+            f"{_DATA_STATUS_TEST} -- --test-threads=1",
+        )
+    )
+    legs.append(
+        (
+            "lane-certificate-rust",
+            "cargo-exact",
+            1,
+            "cargo test --locked --offline -p iroha_data_model --lib "
+            f"{_DATA_LANE_CERTIFICATE_TEST} -- --exact --test-threads=1",
+        )
+    )
+    legs.extend(
+        (
+            (
+                "source-sealed-workspace-build",
+                "command",
+                0,
+                "cargo +1.93.1 build -j1 --locked --offline --workspace",
+            ),
+            (
+                "source-sealed-workspace-tests",
+                "command",
+                0,
+                "cargo +1.93.1 test -j1 --locked --offline --workspace",
+            ),
+            (
+                "source-sealed-irohad-tests",
+                "command",
+                0,
+                "cargo +1.93.1 test -j1 --locked --offline -p irohad "
+                "--bin irohad --features test-network-message-control",
+            ),
+            (
+                "source-sealed-workspace-clippy",
+                "command",
+                0,
+                "cargo +1.93.1 clippy -j1 --locked --offline --workspace "
+                "--all-targets -- -D warnings",
+            ),
+            (
+                "source-sealed-workspace-format",
+                "command",
+                0,
+                "cargo +1.93.1 fmt --all -- --check",
+            ),
+            (
+                "source-sealed-legacy-codec-guard",
+                "command",
+                0,
+                "bash scripts/check_no_legacy_codec.sh",
+            ),
+        )
+    )
+    legs.extend(
+        (
+            f"taira-contract-{index}",
+            "cargo-exact",
+            1,
+            "cargo test --locked --offline -p integration_tests "
+            "--test consensus_and_da "
+            f"{test} -- --exact --test-threads=1",
+        )
+        for index, test in enumerate(_TAIRA_CONTRACT_TESTS)
+    )
+    legs.append(
+        (
+            "cross-sdk-rust",
+            "cargo-exact",
+            2,
+            "cargo test --locked --offline -p iroha_data_model --test "
+            "iroha_data_model_group_02 sumeragi_v2_cross_sdk_fixtures:: "
+            "-- --test-threads=1",
+        )
+    )
+    legs.append(
+        (
+            "native-amx-rust-fixture-check",
+            "command",
+            0,
+            "cargo run --locked --offline -p iroha_data_model --bin "
+            "sumeragi_v2_wire_fixtures -- --check",
+        )
+    )
+    legs.extend(
+        (
+            f"native-amx-grouped-{surface}",
+            "native-amx-sdk",
+            count,
+            f"bash {_NATIVE_AMX_GROUPED_PARITY_HARNESS} {surface}",
+        )
+        for surface, count in _NATIVE_AMX_GROUPED_PARITY_SUITES
+    )
+    legs.append(
+        (
+            "sumeragi-diagnostics-rust",
+            "cargo-exact",
+            len(_RUST_SDK_DIAGNOSTICS_TESTS),
+            "cargo test --locked --offline -p iroha --lib "
+            "client::tests::get_sumeragi_ -- --test-threads=1",
+        )
+    )
+    legs.extend(
+        (
+            f"sumeragi-diagnostics-{surface}",
+            "sdk-diagnostics",
+            count,
+            f"bash {_SUMERAGI_SDK_DIAGNOSTICS_HARNESS} {surface}",
+        )
+        for surface, count in _SUMERAGI_SDK_DIAGNOSTICS_SUITES
+    )
+    legs.extend(
+        (
+            (
+                "preflight-source-seal",
+                "pytest",
+                30,
+                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
+                "-q -p no:cacheprovider pytests/scripts/workspace_source_manifest_test.py "
+                "pytests/scripts/seal_workspace_source_test.py",
+            ),
+            (
+                "preflight-seed-launcher",
+                "pytest",
+                14,
+                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
+                "-q -p no:cacheprovider "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_preserves_prior_invocation_evidence "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_release_profile_uses_32_seeds_per_scenario "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_rejects_zero_test_and_preserves_evidence "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_rejects_ambiguous_test_summary "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_preserves_cargo_failure_through_tee "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_rejects_bundle_tampering_before_completion "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_rejects_symlinked_marker_temp_without_completion "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_marker_durability_failure_is_not_terminal "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_rejects_parent_source_manifest_mismatch "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_rejects_source_drift_before_completion "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_rejects_concurrent_writer_without_clobbering "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_refuses_uninspected_stale_lock "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_rejects_unsafe_retained_localnet_entries",
+            ),
+            (
+                "preflight-chaos-launcher",
+                "pytest",
+                5,
+                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
+                "-q -p no:cacheprovider pytests/scripts/sumeragi_v2_chaos_release_test.py",
+            ),
+            (
+                "preflight-release-identity",
+                "pytest",
+                68,
+                "SUMERAGI_V2_TEST_RELOCATABLE_SSH_KEYGEN_BIN="
+                "$IROHA_RELEASE_SSH_KEYGEN_BIN PYTHONDONTWRITEBYTECODE=1 "
+                "PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider "
+                "pytests/scripts/sumeragi_v2_release_identity_signature_test.py",
+            ),
+            (
+                "preflight-release-bootstrap",
+                "pytest",
+                257,
+                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
+                "-q -p no:cacheprovider "
+                "pytests/scripts/sumeragi_v2_release_bootstrap_test.py "
+                "pytests/scripts/sumeragi_v2_release_bootstrap_cancellation_test.py",
+            ),
+            (
+                "preflight-release-bootstrap-validator",
+                "pytest",
+                37,
+                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
+                "-q -p no:cacheprovider "
+                "pytests/scripts/sumeragi_v2_release_bootstrap_validator_test.py",
+            ),
+            (
+                "preflight-release-receipt",
+                "pytest",
+                363,
+                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
+                "-q -p no:cacheprovider "
+                "pytests/scripts/sumeragi_v2_release_receipt_test.py "
+                "pytests/scripts/sumeragi_v2_release_receipt_components_test.py "
+                "pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py "
+                "pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py "
+                "pytests/scripts/sumeragi_v2_release_process_policy_test.py",
+            ),
+            (
+                "preflight-multilane-scaling",
+                "pytest",
+                52,
+                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
+                "-q -p no:cacheprovider "
+                "scripts/tests/validate_multilane_scaling_evidence_test.py "
+                "scripts/tests/run_multilane_scaling_gate_test.py",
+            ),
+            (
+                "preflight-proof-fidelity",
+                "pytest",
+                5291,
+                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
+                "-q -p no:cacheprovider "
+                "pytests/scripts/sumeragi_v2_proof_ledger_test.py "
+                "pytests/scripts/sumeragi_v2_verus_evidence_test.py "
+                "pytests/scripts/sumeragi_v2_tlc_trace_normalizer_test.py "
+                "pytests/scripts/sumeragi_v2_reviewed_rust_source_test.py "
+                "pytests/scripts/sumeragi_v2_multilane_native_merge_manifest_test.py "
+                "pytests/scripts/sumeragi_v2_multilane_passive_recovery_contract_test.py "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_composed_contract_rejects_legacy_layout_only_claim "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_composed_contract_rejects_state_order_weakening "
+                "pytests/scripts/sumeragi_v2_multilane_models_terminal_tail_test.py::"
+                "test_inflight_composed_contract_rejects_snapshot_nonstutter_mapping "
+                "pytests/scripts/sumeragi_v2_multilane_models_terminal_tail_test.py::"
+                "test_inflight_composed_contract_rejects_missing_direct_release_action "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_layout_contract_rejects_action_inventory_weakening "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_composed_contract_rejects_per_key_prefix_skip_weakening "
+                "pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::"
+                "test_inflight_composed_contract_rejects_tla_snapshot_nonstutter_mapping "
+                "pytests/scripts/sumeragi_v2_multilane_models_tail_test.py::"
+                "test_inflight_composed_contract_rejects_verus_snapshot_stutter_proof_removal "
+                "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
+                "test_inflight_layout_contract_rejects_membership_only_lane_authorship "
+                + _WIRE_RELEASE_INVARIANT_PYTEST_NODES,
+            ),
+            (
+                "preflight-formal-launcher",
+                "pytest",
+                26,
+                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
+                "-q -p no:cacheprovider pytests/scripts/sumeragi_v2_formal_release_test.py",
+            ),
+            (
+                "preflight-taira-soak",
+                "pytest",
+                43,
+                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
+                "-q -p no:cacheprovider "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_pins_complete_profile_and_runs_exactly_one_test "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_rejects_zero_test_inventory "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_rejects_zero_test_execution_output "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_rejects_bundle_tampering_before_completion "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_rejects_symlinked_marker_temp_without_completion "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_marker_durability_failure_is_not_terminal "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_rejects_profile_override_arguments_before_cargo "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_rejects_a_concurrent_source_bound_soak "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_does_not_promote_provisional_evidence_when_validation_fails "
+                "pytests/scripts/taira_v2_soak_evidence_test.py",
+            ),
+        )
+    )
+    return legs

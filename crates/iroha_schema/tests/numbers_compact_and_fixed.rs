@@ -1,7 +1,8 @@
 //! Schema metadata test verifying compact vs fixed integer encodings.
 
-use std::any::TypeId;
+mod common;
 
+use common::{assert_schema, entry};
 use iroha_schema::prelude::*;
 use norito::{Decode, Encode};
 
@@ -25,148 +26,21 @@ struct Foo {
 }
 
 #[test]
-#[expect(clippy::too_many_lines)]
 fn compact() {
-    use std::collections::BTreeMap;
-
-    use IntMode::*;
-    use Metadata::*;
-
-    let expected = vec![
-        (
-            TypeId::of::<iroha_schema::Compact<u128>>(),
-            MetaMapEntry {
-                type_id: "Compact<u128>".to_owned(),
-                type_name: "Compact<u128>".to_owned(),
-                metadata: Int(Compact),
-            },
-        ),
-        (
-            TypeId::of::<iroha_schema::Compact<u16>>(),
-            MetaMapEntry {
-                type_id: "Compact<u16>".to_owned(),
-                type_name: "Compact<u16>".to_owned(),
-                metadata: Int(Compact),
-            },
-        ),
-        (
-            TypeId::of::<iroha_schema::Compact<u32>>(),
-            MetaMapEntry {
-                type_id: "Compact<u32>".to_owned(),
-                type_name: "Compact<u32>".to_owned(),
-                metadata: Int(Compact),
-            },
-        ),
-        (
-            TypeId::of::<iroha_schema::Compact<u64>>(),
-            MetaMapEntry {
-                type_id: "Compact<u64>".to_owned(),
-                type_name: "Compact<u64>".to_owned(),
-                metadata: Int(Compact),
-            },
-        ),
-        (
-            TypeId::of::<iroha_schema::Compact<u8>>(),
-            MetaMapEntry {
-                type_id: "Compact<u8>".to_owned(),
-                type_name: "Compact<u8>".to_owned(),
-                metadata: Int(Compact),
-            },
-        ),
-        (
-            TypeId::of::<Foo>(),
-            MetaMapEntry {
-                type_id: "Foo".to_owned(),
-                type_name: "Foo".to_owned(),
-                metadata: Struct(NamedFieldsMeta {
-                    declarations: vec![
-                        Declaration {
-                            name: "u8_compact".to_owned(),
-                            ty: TypeId::of::<iroha_schema::Compact<u8>>(),
-                        },
-                        Declaration {
-                            name: "u8_fixed".to_owned(),
-                            ty: TypeId::of::<u8>(),
-                        },
-                        Declaration {
-                            name: "u16_compact".to_owned(),
-                            ty: TypeId::of::<iroha_schema::Compact<u16>>(),
-                        },
-                        Declaration {
-                            name: "u16_fixed".to_owned(),
-                            ty: TypeId::of::<u16>(),
-                        },
-                        Declaration {
-                            name: "u32_compact".to_owned(),
-                            ty: TypeId::of::<iroha_schema::Compact<u32>>(),
-                        },
-                        Declaration {
-                            name: "u32_fixed".to_owned(),
-                            ty: TypeId::of::<u32>(),
-                        },
-                        Declaration {
-                            name: "u64_compact".to_owned(),
-                            ty: TypeId::of::<iroha_schema::Compact<u64>>(),
-                        },
-                        Declaration {
-                            name: "u64_fixed".to_owned(),
-                            ty: TypeId::of::<u64>(),
-                        },
-                        Declaration {
-                            name: "u128_compact".to_owned(),
-                            ty: TypeId::of::<iroha_schema::Compact<u128>>(),
-                        },
-                        Declaration {
-                            name: "u128_fixed".to_owned(),
-                            ty: TypeId::of::<u128>(),
-                        },
-                    ],
-                }),
-            },
-        ),
-        (
-            TypeId::of::<u128>(),
-            MetaMapEntry {
-                type_id: "u128".to_owned(),
-                type_name: "u128".to_owned(),
-                metadata: Int(FixedWidth),
-            },
-        ),
-        (
-            TypeId::of::<u16>(),
-            MetaMapEntry {
-                type_id: "u16".to_owned(),
-                type_name: "u16".to_owned(),
-                metadata: Int(FixedWidth),
-            },
-        ),
-        (
-            TypeId::of::<u32>(),
-            MetaMapEntry {
-                type_id: "u32".to_owned(),
-                type_name: "u32".to_owned(),
-                metadata: Int(FixedWidth),
-            },
-        ),
-        (
-            TypeId::of::<u64>(),
-            MetaMapEntry {
-                type_id: "u64".to_owned(),
-                type_name: "u64".to_owned(),
-                metadata: Int(FixedWidth),
-            },
-        ),
-        (
-            TypeId::of::<u8>(),
-            MetaMapEntry {
-                type_id: "u8".to_owned(),
-                type_name: "u8".to_owned(),
-                metadata: Int(FixedWidth),
-            },
-        ),
-    ]
-    .into_iter()
-    .collect::<BTreeMap<_, _>>();
-
-    assert_eq!(Foo::schema(), expected);
+    assert_schema::<Foo>(
+        "compact_fixed.compact",
+        &[
+            entry::<Compact<u128>>("Compact<u128>"),
+            entry::<Compact<u16>>("Compact<u16>"),
+            entry::<Compact<u32>>("Compact<u32>"),
+            entry::<Compact<u64>>("Compact<u64>"),
+            entry::<Compact<u8>>("Compact<u8>"),
+            entry::<Foo>("Foo"),
+            entry::<u128>("u128"),
+            entry::<u16>("u16"),
+            entry::<u32>("u32"),
+            entry::<u64>("u64"),
+            entry::<u8>("u8"),
+        ],
+    );
 }

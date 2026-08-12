@@ -3309,7 +3309,9 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
         'executable == "cargo"',
         'executable == "rustc"',
         'executable == "rustfmt"',
-        'pinned_arguments=(-j1 "$@")',
+        'pinned_arguments=("$@")',
+        'pinned_arguments=("$subcommand" -j1)',
+        'pinned_arguments+=("$@")',
         'command cargo +1.93.1 "${pinned_arguments[@]}"',
     ):
         if policy.count(token) != 1:
@@ -3426,7 +3428,7 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
             )
 
     lock_copy = harness.find('cp -- "$HARNESS_LOCK" Cargo.lock')
-    case_start = harness.find('case "$1" in')
+    case_start = harness.find('case "$1" in', lock_copy)
     unit_start = harness.find("  --unit)", case_start)
     fast_network_start = harness.find("  --fast-network)", unit_start)
     if not (0 <= lock_copy < case_start < unit_start < fast_network_start):
@@ -3596,7 +3598,6 @@ def _production_liveness_release_inventory_guard_errors(
         "sumeragi::serviced_candidate_store::tests",
         "sumeragi::v2_effects::tests",
         "sumeragi::v2::tests",
-        "sumeragi::v2_core::network_simulation",
         "sumeragi::v2_runtime::tests",
         "merge_sidecar::tests",
         "state::tests",

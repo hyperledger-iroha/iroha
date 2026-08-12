@@ -33,8 +33,8 @@ Flags:
 
 | Surface | Enforcement | Notes |
 |---------|-------------|-------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | Parses the JSON, reconstructs canonical payloads, and checks canonical I105 plus canonical-hex conversions + structured errors. |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Validates server-side codecs so Torii refuses malformed i105 payloads deterministically. |
+| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | Canonical Rust host verifier: parses strict I105, re-encodes the default prefix, validates domain syntax and multisig material, and checks canonical-hex conversions plus structured errors. |
+| Torii routes | `crates/iroha_torii/tests/address_parsing.rs` | Exercises actual Axum/Torii account path and query consumers, accepted I105, malformed/public-key/Local-8 rejection, and invalid-address metrics. |
 | JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Mirrors V1 fixtures (i105/half-width) and asserts Norito-style error codes for every negative case. |
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Exercises i105 decoding, multisig payloads, and error surfacing on Apple platforms. |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | Ensures Kotlin/Java bindings stay aligned with the canonical fixture. |

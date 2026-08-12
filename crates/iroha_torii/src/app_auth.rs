@@ -55,7 +55,7 @@ use iroha_data_model::{
     NetworkId, ValidationFail,
     account::{AccountController, AccountId, rekey::AccountAlias},
     query::{
-        ErasedIterQuery, Query, QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
+        ItemKindTag, Query, QueryRequest, QueryWithParams,
         dsl::{CompoundPredicate, HasProjection, PredicateMarker, SelectorMarker, SelectorTuple},
         error::{FindError, QueryExecutionFail},
         parameters::QueryParams,
@@ -759,21 +759,25 @@ pub fn validate_iter_query_for_authority<Q>(
 ) -> Result<(), crate::Error>
 where
     Q: Query + 'static,
-    Q::Item:
-        HasProjection<PredicateMarker> + HasProjection<SelectorMarker, AtomType = ()> + Send + Sync,
+    Q::Item: HasProjection<PredicateMarker>
+        + HasProjection<SelectorMarker, AtomType = ()>
+        + ItemKindTag
+        + Send
+        + Sync,
     Q: norito::codec::Encode,
 {
     use iroha_core::smartcontracts::isi::query::{
         QueryLimits, validate_fresh_query_for_client_world_parts,
     };
 
-    let payload = norito::codec::Encode::encode(&query);
-    let qbox: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<Q::Item>::new(
-        CompoundPredicate::PASS,
-        SelectorTuple::default(),
-        payload,
-    ));
-    let iter = QueryWithParams::new(&qbox, QueryParams::default());
+    let iter = QueryWithParams {
+        query: (),
+        query_payload: norito::codec::Encode::encode(&query),
+        item: query.query_item_kind(),
+        predicate_bytes: norito::codec::Encode::encode(&CompoundPredicate::<Q::Item>::PASS),
+        selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<Q::Item>::default()),
+        params: QueryParams::default(),
+    };
     let request = QueryRequest::Start(iter);
     let limits = QueryLimits::new(crate::routing::app_query_limits().max_fetch_size);
     let world = state.world_view();
@@ -1552,6 +1556,17 @@ mod tests {
             .expect("app auth fixture key advertises a valid algorithm");
 
         assert_eq!(actual, Algorithm::default());
+    }
+
+    #[test]
+    fn iterable_validation_preserves_escrow_seller_discriminant() {
+        let state = minimal_state_with_account(&ALICE_ID);
+        let query = iroha_data_model::query::escrow::prelude::FindAssetEscrowsBySeller {
+            seller: ALICE_ID.clone(),
+        };
+
+        validate_iter_query_for_authority(&state, &ALICE_ID, query)
+            .expect("the seller-specific tag must retain same-account query authorization");
     }
 
     #[test]

@@ -277,28 +277,6 @@ impl AuthenticatedRecoveredWalControlProjection {
             && record.replay_matches_candidate(&self.candidate)
     }
 
-    /// Compare the exact terminal Fetch parent of the recovered body chain.
-    pub(super) fn exactly_matches_advanced_apply_parent(
-        &self,
-        record: &super::ledger::LifecycleLedgerRecordV1,
-        store_ordinal: u128,
-    ) -> bool {
-        self.names_record(record)
-            && record.owner().causal_root() == self.candidate.causal_root
-            && record.owner().first_admission_ordinal() == record.ordinal()
-            && record.work_class() == Some(LifecycleWorkClass::Fetch)
-            && record.stage() == Some(self.candidate.stage)
-            && record.terminal() == Some(Some(super::TerminalOutcome::Advanced))
-            && record.reconstruction_source() == self.candidate.reconstruction_source
-            && record.durable_payload() == Some(DurablePayloadReference::None)
-            && record.continuation()
-                == Some(super::schema::DurableContinuation::successor(
-                    DurableContinuationEdge::FetchToStore,
-                    store_ordinal,
-                ))
-            && record.replay_matches_candidate(&self.candidate)
-    }
-
     /// Prove one opened ledger contains this exact standalone row once.
     pub(super) fn exactly_matches_ledger_at(
         &self,
@@ -627,6 +605,28 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             && record.reconstruction_source() == self.candidate.reconstruction_source
             && record.durable_payload() == Some(DurablePayloadReference::None)
             && record.continuation() == Some(super::schema::DurableContinuation::None)
+            && record.replay_matches_candidate(&self.candidate)
+    }
+
+    /// Compare the exact terminal Fetch parent of the recovered body chain.
+    pub(super) fn exactly_matches_advanced_apply_parent(
+        &self,
+        record: &super::ledger::LifecycleLedgerRecordV1,
+        store_ordinal: u128,
+    ) -> bool {
+        self.names_record(record)
+            && record.owner().causal_root() == self.candidate.causal_root
+            && record.owner().first_admission_ordinal() == record.ordinal()
+            && record.work_class() == Some(LifecycleWorkClass::Fetch)
+            && record.stage() == Some(self.candidate.stage)
+            && record.terminal() == Some(Some(super::TerminalOutcome::Advanced))
+            && record.reconstruction_source() == self.candidate.reconstruction_source
+            && record.durable_payload() == Some(DurablePayloadReference::None)
+            && record.continuation()
+                == Some(super::schema::DurableContinuation::successor(
+                    DurableContinuationEdge::FetchToStore,
+                    store_ordinal,
+                ))
             && record.replay_matches_candidate(&self.candidate)
     }
 

@@ -48,6 +48,16 @@ DEFAULT_EXCLUDED_PREFIXES = (
 
 
 @dataclass(frozen=True)
+class AggregateRustBudget:
+    """Repository-wide first-party Rust line budget."""
+
+    baseline: int
+    ceiling: int
+    ratchet_ceiling: int
+    working_target: int | None
+
+
+@dataclass(frozen=True)
 class Budget:
     """Checked-in source budget configuration."""
 
@@ -55,6 +65,7 @@ class Budget:
     test_limit: int
     excluded_prefixes: tuple[str, ...]
     exceptions: dict[str, int]
+    aggregate_rust: AggregateRustBudget | None = None
 
 
 @dataclass(frozen=True)
@@ -158,11 +169,60 @@ def load_budget(path: Path) -> Budget:
             raw_limit, f"exceptions.{normalized}"
         )
 
+    raw_aggregate = payload.get("aggregate_rust")
+    if not isinstance(raw_aggregate, dict):
+        raise ValueError(
+            "aggregate_rust must be a JSON object; the repository-wide "
+            "Rust reduction contract is mandatory"
+        )
+    baseline = parse_non_negative_int(
+        raw_aggregate.get("baseline"), "aggregate_rust.baseline"
+    )
+    ceiling = parse_non_negative_int(
+        raw_aggregate.get("ceiling"), "aggregate_rust.ceiling"
+    )
+    ratchet_ceiling = parse_non_negative_int(
+        raw_aggregate.get("ratchet_ceiling", ceiling),
+        "aggregate_rust.ratchet_ceiling",
+    )
+    raw_working_target = raw_aggregate.get("working_target")
+    working_target = (
+        None
+        if raw_working_target is None
+        else parse_non_negative_int(
+            raw_working_target, "aggregate_rust.working_target"
+        )
+    )
+    if baseline == 0 or ceiling == 0:
+        raise ValueError("aggregate_rust baseline and ceiling must be greater than zero")
+    if ceiling > baseline:
+        raise ValueError("aggregate_rust.ceiling must not exceed its baseline")
+    if ceiling * 10 > baseline * 9:
+        raise ValueError(
+            "aggregate_rust.ceiling must require at least a 10% reduction "
+            "from its baseline"
+        )
+    if ratchet_ceiling < ceiling:
+        raise ValueError(
+            "aggregate_rust.ratchet_ceiling must not be below its ceiling"
+        )
+    if working_target is not None and working_target > ceiling:
+        raise ValueError(
+            "aggregate_rust.working_target must not exceed its ceiling"
+        )
+    aggregate_rust = AggregateRustBudget(
+        baseline=baseline,
+        ceiling=ceiling,
+        ratchet_ceiling=ratchet_ceiling,
+        working_target=working_target,
+    )
+
     return Budget(
         production_limit=production_limit,
         test_limit=test_limit,
         excluded_prefixes=excluded_prefixes,
         exceptions=exceptions,
+        aggregate_rust=aggregate_rust,
     )
 
 
@@ -291,6 +351,18 @@ def evaluate(counts: dict[str, int], budget: Budget) -> list[Finding]:
 
     for path in sorted(set(budget.exceptions) - set(counts)):
         findings.append(Finding(path, "stale exception for a missing or excluded source"))
+    if budget.aggregate_rust is not None:
+        rust_lines = sum(
+            lines for path, lines in counts.items() if path.endswith(".rs")
+        )
+        if rust_lines > budget.aggregate_rust.ratchet_ceiling:
+            findings.append(
+                Finding(
+                    "<aggregate Rust>",
+                    f"{rust_lines} lines exceeds the aggregate ratchet "
+                    f"{budget.aggregate_rust.ratchet_ceiling}",
+                )
+            )
     return findings
 
 
@@ -300,6 +372,7 @@ def baseline_payload(
     production_limit: int,
     test_limit: int,
     excluded_prefixes: tuple[str, ...],
+    aggregate_rust: AggregateRustBudget | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic exact baseline for currently oversized sources."""
     provisional = Budget(
@@ -307,13 +380,14 @@ def baseline_payload(
         test_limit=test_limit,
         excluded_prefixes=excluded_prefixes,
         exceptions={},
+        aggregate_rust=aggregate_rust,
     )
     exceptions = {
         path: lines
         for path, lines in sorted(counts.items())
         if lines > limit_for(path, provisional)
     }
-    return {
+    payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "limits": {
             "production": production_limit,
@@ -322,6 +396,17 @@ def baseline_payload(
         "excluded_prefixes": list(excluded_prefixes),
         "exceptions": exceptions,
     }
+    if aggregate_rust is not None:
+        payload["aggregate_rust"] = {
+            "baseline": aggregate_rust.baseline,
+            "ceiling": aggregate_rust.ceiling,
+            "ratchet_ceiling": aggregate_rust.ratchet_ceiling,
+        }
+        if aggregate_rust.working_target is not None:
+            payload["aggregate_rust"]["working_target"] = (
+                aggregate_rust.working_target
+            )
+    return payload
 
 
 def write_json(payload: dict[str, Any], target: Path) -> None:
@@ -348,11 +433,17 @@ def main() -> int:
             production_limit = DEFAULT_PRODUCTION_LIMIT
             test_limit = DEFAULT_TEST_LIMIT
             excluded_prefixes = DEFAULT_EXCLUDED_PREFIXES
-            if baseline_path.exists():
-                current = load_budget(baseline_path)
-                production_limit = current.production_limit
-                test_limit = current.test_limit
-                excluded_prefixes = current.excluded_prefixes
+            aggregate_rust = None
+            if not baseline_path.exists():
+                raise ValueError(
+                    "refusing to create an unreviewed source budget without "
+                    "the mandatory aggregate_rust provenance contract"
+                )
+            current = load_budget(baseline_path)
+            production_limit = current.production_limit
+            test_limit = current.test_limit
+            excluded_prefixes = current.excluded_prefixes
+            aggregate_rust = current.aggregate_rust
             counts = collect_counts(
                 root,
                 tracked_paths(root),
@@ -364,6 +455,7 @@ def main() -> int:
                     production_limit=production_limit,
                     test_limit=test_limit,
                     excluded_prefixes=excluded_prefixes,
+                    aggregate_rust=aggregate_rust,
                 ),
                 baseline_path,
             )
@@ -390,19 +482,52 @@ def main() -> int:
         "exception_files": len(budget.exceptions),
         "production_limit": budget.production_limit,
         "test_limit": budget.test_limit,
+        "rust_lines": sum(
+            lines for path, lines in counts.items() if path.endswith(".rs")
+        ),
         "findings": [
             {"path": finding.path, "message": finding.message}
             for finding in findings
         ],
     }
+    if budget.aggregate_rust is not None:
+        rust_lines = report["rust_lines"]
+        assert isinstance(rust_lines, int)
+        report["aggregate_rust"] = {
+            "baseline": budget.aggregate_rust.baseline,
+            "ceiling": budget.aggregate_rust.ceiling,
+            "ratchet_ceiling": budget.aggregate_rust.ratchet_ceiling,
+            "working_target": budget.aggregate_rust.working_target,
+            "reduction_from_baseline": budget.aggregate_rust.baseline - rust_lines,
+            "objective_met": rust_lines <= budget.aggregate_rust.ceiling,
+            "gap_to_ceiling": max(0, rust_lines - budget.aggregate_rust.ceiling),
+            "headroom_to_ratchet": budget.aggregate_rust.ratchet_ceiling - rust_lines,
+            "gap_to_working_target": (
+                None
+                if budget.aggregate_rust.working_target is None
+                else rust_lines - budget.aggregate_rust.working_target
+            ),
+        }
     human_stream = (
         sys.stderr if args.json_out is not None and args.json_out == Path("-") else sys.stdout
     )
     print(
         f"source_file_budget: checked={len(counts)} "
-        f"exceptions={len(budget.exceptions)} findings={len(findings)}",
+        f"exceptions={len(budget.exceptions)} rust_lines={report['rust_lines']} "
+        f"findings={len(findings)}",
         file=human_stream,
     )
+    if budget.aggregate_rust is not None:
+        aggregate_report = report["aggregate_rust"]
+        print(
+            "aggregate_rust: "
+            f"baseline={aggregate_report['baseline']} "
+            f"goal={aggregate_report['ceiling']} "
+            f"ratchet={aggregate_report['ratchet_ceiling']} "
+            f"objective_met={str(aggregate_report['objective_met']).lower()} "
+            f"gap={aggregate_report['gap_to_ceiling']}",
+            file=human_stream,
+        )
     for finding in findings:
         print(f"ERROR: {finding.path}: {finding.message}", file=human_stream)
 

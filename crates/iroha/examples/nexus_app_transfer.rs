@@ -124,9 +124,9 @@ fn demo_wallet_key_pair() -> Result<KeyPair, iroha::crypto::Error> {
 }
 
 fn demo_network_id() -> NetworkId {
-    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([
-        0xA5; 32
-    ])))
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([0xA5; 32]),
+    ))
 }
 
 fn main() -> Result<(), Box<dyn Error>> {

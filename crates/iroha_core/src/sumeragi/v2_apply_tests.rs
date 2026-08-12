@@ -183,9 +183,10 @@ pub(super) fn snapshot_mismatch_context(staged: &[u8], committed: &[u8]) -> Stri
     )
 }
 
-/// Compatibility shim kept inside the test module only for older focused
-/// fixtures which deliberately exercise the single-process no-network
-/// boundary. Production callers must handle the typed recovery plan.
+/// Execute the current typed reconciliation plan in focused no-network tests.
+///
+/// Production callers retain and handle every non-ready planning outcome;
+/// this helper deliberately maps those outcomes to their exact test errors.
 fn reconcile_lane_reservation_ownership(
     state: &State,
     queue: &Queue,

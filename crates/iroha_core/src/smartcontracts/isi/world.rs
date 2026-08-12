@@ -36010,11 +36010,12 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("exact request replay is idempotent");
 
-            let foreign_network = iroha_data_model::NetworkId::from_genesis_hash(
-                iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+            let foreign_network =
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
                     Hash::new(b"same-label-foreign-retention-genesis"),
-                ),
-            );
+                ));
             let foreign = ReputationFinalizedArchiveRetentionRequestV1::try_new(
                 foreign_network,
                 2,

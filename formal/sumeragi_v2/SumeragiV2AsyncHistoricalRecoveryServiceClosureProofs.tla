@@ -865,11 +865,15 @@ HistoricalDiscoveryPacketServeDebtFairAction(packet) ==
 HistoricalDiscoveryPacketDependencyRank(packet) ==
   LET recipient == packet.item.envelope.recipient
   IN <<OlderDueNonOverdueShadowDebt(packet),
-       <<FreshIngressCapacityOwnerDebt(packet.item),
-         <<TimeoutVoteByteOwnerDebt(packet.item),
-           <<TransportCompletionOwnerDebt(packet.item),
+       <<FreshIngressCapacityOwnerDebt(
+            packet.item, packet.authenticatedSource),
+         <<TimeoutVoteByteOwnerDebt(
+              packet.item, packet.authenticatedSource),
+           <<TransportCompletionOwnerDebt(
+                packet.item, packet.authenticatedSource),
              <<BoundedTransportServiceRank(
-                  packet.item.envelope.recipient, packet.item.source),
+                  packet.item.envelope.recipient,
+                  packet.authenticatedSource),
                <<ResetAwareIngressReachRank(recipient),
                  <<ReadyRunAuxRank(recipient),
                    <<Stage4CapacityRank(recipient),

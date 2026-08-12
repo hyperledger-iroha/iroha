@@ -8,8 +8,6 @@ use iroha_ffi::{
     slice::{OutBoxedSlice, RefSlice},
 };
 
-iroha_ffi::def_ffi_fns! { dealloc }
-
 /// Transparent wrapper over `u64` with a phantom parameter.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, FfiType)]
 #[ffi_type(unsafe{robust})]

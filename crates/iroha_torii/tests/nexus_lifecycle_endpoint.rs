@@ -14,16 +14,16 @@ use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{
     EventsSender,
-    kiso::KisoHandle,
     kura::Kura,
     query::store::LiveQueryStore,
     queue::{ConfigLaneRouter, Queue, QueueLimits},
     state::State,
 };
 use iroha_data_model::nexus::{LaneId, LaneLifecycleStatusV1};
-use iroha_torii::Torii;
 use iroha_torii_shared::uri::NEXUS_LANE_LIFECYCLE;
-use tower::ServiceExt as _;
+
+#[path = "fixtures.rs"]
+mod fixtures;
 
 struct NexusHarness {
     app: Router,
@@ -42,7 +42,6 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
         cfg.torii.require_api_token = true;
         cfg.torii.api_tokens = vec![api_token.to_owned()];
     }
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let world = iroha_core::prelude::World::with(
         Vec::new(),
@@ -75,47 +74,18 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
         queue.reconfigure_nexus(&state.nexus_snapshot(), &view, None);
     }
 
-    let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    #[cfg(feature = "telemetry")]
-    let torii = {
-        let telemetry = iroha_core::telemetry::Telemetry::new(
-            Arc::new(iroha_telemetry::metrics::Metrics::default()),
-            false,
-        );
-        Torii::new(
-            iroha_data_model::ChainId::from("test-chain"),
-            iroha_torii::test_utils::signed_query_network_id(),
-            kiso,
-            cfg.torii.clone(),
-            Arc::clone(&queue),
-            events_sender,
-            LiveQueryStore::start_test(),
-            kura,
-            Arc::clone(&state),
-            da_receipt_signer,
-            iroha_torii::OnlinePeersProvider::new(peers_rx),
-            telemetry,
-            false,
-        )
-    };
-    #[cfg(not(feature = "telemetry"))]
-    let torii = Torii::new(
+    let torii = fixtures::ToriiHarness::new_without_telemetry(
+        &cfg,
         iroha_data_model::ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
-        kiso,
-        cfg.torii.clone(),
-        Arc::clone(&queue),
+        &kura,
+        &state,
+        &queue,
         events_sender,
-        LiveQueryStore::start_test(),
-        kura,
-        Arc::clone(&state),
-        da_receipt_signer,
-        iroha_torii::OnlinePeersProvider::new(peers_rx),
     );
 
     NexusHarness {
-        app: torii.api_router_for_tests(),
+        app: torii.router(),
         queue,
         state,
     }
@@ -134,18 +104,16 @@ async fn response_bytes(response: Response) -> Vec<u8> {
 #[tokio::test]
 async fn lifecycle_get_returns_valid_exact_json_status() {
     let harness = build_app();
-    let response = harness
-        .app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(NEXUS_LANE_LIFECYCLE)
-                .header("accept", "application/json")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
+    let response = fixtures::request(
+        &harness.app,
+        Request::builder()
+            .uri(NEXUS_LANE_LIFECYCLE)
+            .header("accept", "application/json")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await
+    .expect("response");
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response
@@ -166,18 +134,16 @@ async fn lifecycle_get_returns_valid_exact_json_status() {
 #[tokio::test]
 async fn lifecycle_get_returns_valid_exact_norito_status() {
     let harness = build_app();
-    let response = harness
-        .app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(NEXUS_LANE_LIFECYCLE)
-                .header("accept", "application/x-norito")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
+    let response = fixtures::request(
+        &harness.app,
+        Request::builder()
+            .uri(NEXUS_LANE_LIFECYCLE)
+            .header("accept", "application/x-norito")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await
+    .expect("response");
     assert_eq!(response.status(), StatusCode::OK);
     let status =
         norito::decode_from_bytes::<LaneLifecycleStatusV1>(&response_bytes(response).await)
@@ -198,28 +164,24 @@ async fn lifecycle_get_honors_api_token_access_policy() {
         if let Some(token) = supplied_token {
             request = request.header("x-api-token", token);
         }
-        let response = harness
-            .app
-            .clone()
-            .oneshot(request.body(Body::empty()).expect("request"))
-            .await
-            .expect("response");
+        let response =
+            fixtures::request(&harness.app, request.body(Body::empty()).expect("request"))
+                .await
+                .expect("response");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
-    let response = harness
-        .app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(NEXUS_LANE_LIFECYCLE)
-                .header("accept", "application/json")
-                .header("x-api-token", "lifecycle-status-token")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
+    let response = fixtures::request(
+        &harness.app,
+        Request::builder()
+            .uri(NEXUS_LANE_LIFECYCLE)
+            .header("accept", "application/json")
+            .header("x-api-token", "lifecycle-status-token")
+            .body(Body::empty())
+            .expect("request"),
+    )
+    .await
+    .expect("response");
     assert_eq!(response.status(), StatusCode::OK);
 }
 
@@ -238,20 +200,18 @@ async fn lifecycle_post_and_normalization_variants_are_unregistered_without_muta
         ("/v1/nexus//lifecycle", StatusCode::BAD_REQUEST),
         ("/v1/nexus/lifecycle%2Farbitrary", StatusCode::BAD_REQUEST),
     ] {
-        let response = harness
-            .app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(path)
-                    .header("accept", "application/json")
-                    .header("content-type", "application/json")
-                    .body(Body::from(body))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
+        let response = fixtures::request(
+            &harness.app,
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("accept", "application/json")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
         assert_eq!(response.status(), expected_status, "POST {path}");
         if path == NEXUS_LANE_LIFECYCLE {
             let allow = response

@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main(AccountId account, NftId nft) {
+  ledger::nft::transfer(source: account, nft: nft, destination: Name::parse("bad"));
+}
+
+}

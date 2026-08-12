@@ -453,18 +453,35 @@ impl RecoveredCertifiedServePayload<'_> {
     }
 }
 
-/// Fully reauthenticated response reconstructed from the payload and body
-/// stores during startup.
+/// Fully authenticated terminal response metadata.
+///
+/// Ordinary startup additionally reloads and hashes the canonical body. The
+/// CompleteTip retirement-only path verifies the same request/manifest/body-
+/// hash/certified-retainer responder signature but deliberately retains no
+/// executable body.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use]
 pub(crate) struct AuthenticatedRecoveredCertifiedServeResponse {
-    response: wire::CertifiedBodyResponse,
+    response_hash: HashOf<wire::CertifiedBodyResponse>,
+    manifest: wire::PayloadManifest,
+    responder: wire::ValidatorIndex,
+    signature: Vec<u8>,
+    body_revalidated: bool,
 }
 
 impl AuthenticatedRecoveredCertifiedServeResponse {
-    /// Borrow the exact reconstructed and signature-verified response.
-    pub(crate) const fn response(&self) -> &wire::CertifiedBodyResponse {
-        &self.response
+    /// Hash of the exact response whose signed metadata was authenticated.
+    pub(crate) const fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
+        self.response_hash
+    }
+
+    /// Whether this authentication independently reloaded the canonical body.
+    ///
+    /// Retirement-only metadata authentication deliberately returns false. A
+    /// caller may compare that metadata with an already-terminal exact ledger
+    /// family, but must not use it to promote a Pending ledger row.
+    pub(crate) const fn permits_payload_store_ahead_terminal_rebind(&self) -> bool {
+        self.body_revalidated
     }
 }
 
@@ -473,8 +490,8 @@ impl AuthenticatedRecoveredCertifiedServeResponse {
 pub(crate) enum AuthenticatedRecoveredCertifiedServePayloadState {
     /// The exact request remains pending physical execution.
     Pending,
-    /// A complete response was reconstructed from independently durable body
-    /// bytes and reauthenticated.
+    /// Complete signed response metadata was reauthenticated; ordinary startup
+    /// also reconstructed the independently durable body bytes.
     Completed(AuthenticatedRecoveredCertifiedServeResponse),
     /// A typed local terminal outcome was durably recorded after admission.
     Negative(CertifiedServePayloadNegativeOutcome),
@@ -530,12 +547,11 @@ impl AuthenticatedRecoveredCertifiedServePayload {
                 PersistedCertifiedServePayloadStateV1::Pending
             }
             AuthenticatedRecoveredCertifiedServePayloadState::Completed(completed) => {
-                let response = completed.response();
                 PersistedCertifiedServePayloadStateV1::Completed {
-                    response_hash: HashOf::new(response),
-                    manifest: response.manifest.clone(),
-                    responder: response.responder,
-                    signature: response.signature.clone(),
+                    response_hash: completed.response_hash,
+                    manifest: completed.manifest.clone(),
+                    responder: completed.responder,
+                    signature: completed.signature.clone(),
                 }
             }
             AuthenticatedRecoveredCertifiedServePayloadState::Negative(outcome) => {
@@ -600,6 +616,10 @@ impl AuthenticatedCertifiedServePayloadRecoveryCut {
         &self,
     ) -> impl ExactSizeIterator<Item = &AuthenticatedRecoveredCertifiedServePayload> {
         self.payloads.values()
+    }
+
+    fn retain_owned(&mut self, retained: &BTreeSet<CertifiedServePayloadId>) {
+        self.payloads.retain(|id, _| retained.contains(id));
     }
 }
 
@@ -678,6 +698,35 @@ impl CertifiedServePayloadRecoveryCut {
         if !body_store.matches_context(context) {
             return Err(CertifiedServePayloadRecoveryError::ForeignBodyStore);
         }
+        self.authenticate_inner(verified, local_signer, Some(body_store))
+    }
+
+    /// Authenticate the retirement-only payload census without reopening body bytes.
+    ///
+    /// Completed metadata is still bound to the exact request, manifest body
+    /// hash, certified-retainer responder signature, canonical payload frame,
+    /// and durable response hash. This cut is suitable only for terminal
+    /// ledger reconciliation; it cannot reconstruct or serve a response body.
+    pub(in crate::sumeragi) fn authenticate_for_complete_tip_retirement(
+        self,
+        verified: &VerifiedHeightContext,
+        local_signer: &KeyPair,
+    ) -> Result<AuthenticatedCertifiedServePayloadRecoveryCut, CertifiedServePayloadRecoveryError>
+    {
+        self.authenticate_inner(verified, local_signer, None)
+    }
+
+    fn authenticate_inner(
+        self,
+        verified: &VerifiedHeightContext,
+        local_signer: &KeyPair,
+        body_store: Option<&V2BodyStore>,
+    ) -> Result<AuthenticatedCertifiedServePayloadRecoveryCut, CertifiedServePayloadRecoveryError>
+    {
+        let context = verified.context();
+        if self.context_id != context.id() || self.height != context.height {
+            return Err(CertifiedServePayloadRecoveryError::ForeignContext);
+        }
         if self.payloads.is_empty() {
             return Ok(AuthenticatedCertifiedServePayloadRecoveryCut {
                 context_id: self.context_id,
@@ -732,45 +781,88 @@ impl CertifiedServePayloadRecoveryCut {
                         .ok_or(CertifiedServePayloadRecoveryError::InvalidResponse(
                             "persisted responder is outside the frozen roster".to_owned(),
                         ))?;
-                    let responder_peer = &context.roster[responder_index].validator;
-                    let (stored_manifest, receipt) = body_store
-                        .recovered(request.request().round, request.request().subject)
-                        .map_err(|error| {
-                            CertifiedServePayloadRecoveryError::InvalidBody(error.to_string())
-                        })?
-                        .ok_or(CertifiedServePayloadRecoveryError::MissingBody)?;
-                    if stored_manifest != manifest {
-                        return Err(CertifiedServePayloadRecoveryError::ManifestMismatch);
+                    if request
+                        .request()
+                        .certificate
+                        .signers
+                        .binary_search(&persisted_responder)
+                        .is_err()
+                    {
+                        return Err(CertifiedServePayloadRecoveryError::InvalidResponse(
+                            "persisted response signer lost certified local retention authority"
+                                .to_owned(),
+                        ));
                     }
-                    let body = body_store.load_canonical_wire(&receipt).map_err(|error| {
-                        CertifiedServePayloadRecoveryError::InvalidBody(error.to_string())
+                    let responder_peer = &context.roster[responder_index].validator;
+                    manifest.validate(context).map_err(|error| {
+                        CertifiedServePayloadRecoveryError::InvalidResponse(error.to_string())
                     })?;
-                    let response = wire::CertifiedBodyResponse {
+                    if manifest.round != request.request().round
+                        || manifest.subject != request.request().subject
+                        || signature.is_empty()
+                        || signature.len() > wire::MAX_CONSENSUS_SIGNATURE_BYTES
+                    {
+                        return Err(CertifiedServePayloadRecoveryError::InvalidResponse(
+                            "persisted response metadata changed its request binding".to_owned(),
+                        ));
+                    }
+                    let signed_payload = wire::CertifiedBodyResponseSignaturePayload {
+                        protocol_version: wire::PROTOCOL_VERSION,
                         request_hash: request.request_hash(),
-                        manifest,
-                        body,
+                        manifest: manifest.clone(),
+                        body_hash: manifest.subject.payload_hash,
                         responder: persisted_responder,
-                        signature,
                     };
-                    response
-                        .validate_against(context, request.request(), responder_peer)
-                        .map_err(|error| {
-                            CertifiedServePayloadRecoveryError::InvalidResponse(error.to_string())
-                        })?;
-                    let response_signature = Signature::try_from_bytes(&response.signature)
-                        .map_err(|error| {
+                    let mut preimage = b"iroha:sumeragi:v2:certified-body-response".to_vec();
+                    preimage.extend_from_slice(&signed_payload.encode());
+                    let response_signature =
+                        Signature::try_from_bytes(&signature).map_err(|error| {
                             CertifiedServePayloadRecoveryError::InvalidResponse(error.to_string())
                         })?;
                     response_signature
-                        .verify(responder_peer.public_key(), &response.signature_preimage())
+                        .verify(responder_peer.public_key(), &preimage)
                         .map_err(|error| {
                             CertifiedServePayloadRecoveryError::InvalidResponse(error.to_string())
                         })?;
-                    if HashOf::new(&response) != response_hash {
-                        return Err(CertifiedServePayloadRecoveryError::ResponseHashMismatch);
+                    if let Some(body_store) = body_store {
+                        let (stored_manifest, receipt) = body_store
+                            .recovered(request.request().round, request.request().subject)
+                            .map_err(|error| {
+                                CertifiedServePayloadRecoveryError::InvalidBody(error.to_string())
+                            })?
+                            .ok_or(CertifiedServePayloadRecoveryError::MissingBody)?;
+                        if stored_manifest != manifest {
+                            return Err(CertifiedServePayloadRecoveryError::ManifestMismatch);
+                        }
+                        let body = body_store.load_canonical_wire(&receipt).map_err(|error| {
+                            CertifiedServePayloadRecoveryError::InvalidBody(error.to_string())
+                        })?;
+                        let response = wire::CertifiedBodyResponse {
+                            request_hash: request.request_hash(),
+                            manifest: manifest.clone(),
+                            body,
+                            responder: persisted_responder,
+                            signature: signature.clone(),
+                        };
+                        response
+                            .validate_against(context, request.request(), responder_peer)
+                            .map_err(|error| {
+                                CertifiedServePayloadRecoveryError::InvalidResponse(
+                                    error.to_string(),
+                                )
+                            })?;
+                        if HashOf::new(&response) != response_hash {
+                            return Err(CertifiedServePayloadRecoveryError::ResponseHashMismatch);
+                        }
                     }
                     AuthenticatedRecoveredCertifiedServePayloadState::Completed(
-                        AuthenticatedRecoveredCertifiedServeResponse { response },
+                        AuthenticatedRecoveredCertifiedServeResponse {
+                            response_hash,
+                            manifest,
+                            responder: persisted_responder,
+                            signature,
+                            body_revalidated: body_store.is_some(),
+                        },
                     )
                 }
             };
@@ -856,6 +948,9 @@ pub(crate) enum CertifiedServePayloadStoreError {
     /// A directory entry is a symlink or another non-regular file.
     #[error("Certified-Serve payload entry is not a regular file: {}", .0.display())]
     NonRegularEntry(PathBuf),
+    /// The retained store directory was replaced by a symlink or non-directory.
+    #[error("Certified-Serve payload store target is not the retained directory: {}", .0.display())]
+    InvalidStoreDirectory(PathBuf),
     /// A framed payload is malformed, non-canonical, or corrupt.
     #[error("invalid Certified-Serve payload frame {}: {reason}", path.display())]
     InvalidFrame {
@@ -952,15 +1047,18 @@ pub(super) enum CertifiedServePayloadRetentionError {
 
 /// Terminal-write classification preserving whether the canonical payload
 /// path may already contain the new tombstone.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub(super) enum CertifiedServeTerminalPersistenceError {
     /// Caller-supplied request/body/response material was rejected before the
     /// retained payload frame was opened or changed.
+    #[error("Certified-Serve terminal input was rejected: {0}")]
     InputRejected(CertifiedServePayloadStoreError),
     /// The retained payload/body-store authority was missing, corrupt, or in
     /// conflict before this attempt changed the final payload path.
+    #[error("Certified-Serve terminal store invariant failed: {0}")]
     StoreInvariant(CertifiedServePayloadStoreError),
     /// Rename completed but the containing-directory fsync did not.
+    #[error("Certified-Serve terminal publication is durability-ambiguous: {0}")]
     PublicationAmbiguous(CertifiedServePayloadStoreError),
 }
 
@@ -1046,6 +1144,17 @@ impl CertifiedServePayloadStoreV1 {
         CertifiedServePayloadStoreInstanceIdentity(Arc::clone(&self.identity))
     }
 
+    /// Compare this opened payload owner with one sealed lifecycle root.
+    ///
+    /// This fixed oracle exposes neither the root nor the indexed requests.
+    pub(in crate::sumeragi) fn matches_lifecycle_storage_root(
+        &self,
+        root: &Path,
+        context: &wire::HeightContext,
+    ) -> bool {
+        &self.context == context && self.directory == root.join(STORE_DIRECTORY)
+    }
+
     /// Open one immutable height store and return its move-only recovery cut.
     ///
     /// Regular interrupted temporary files are discarded before the cut is
@@ -1061,6 +1170,39 @@ impl CertifiedServePayloadStoreV1 {
         context: &wire::HeightContext,
     ) -> Result<(Self, CertifiedServePayloadRecoveryCut), CertifiedServePayloadStoreError> {
         Self::open_with_max_entries(root, context, MAX_CERTIFIED_SERVE_PAYLOADS_PER_HEIGHT)
+    }
+
+    /// Open an empty payload owner for a structural lifecycle fixture.
+    ///
+    /// Production must use [`Self::open`]. This skips wire-context validation
+    /// only because closed replay-authority fixtures intentionally use
+    /// non-cryptographic parent certificates.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn open_lifecycle_fixture_for_test(
+        root: &Path,
+        context: &wire::HeightContext,
+    ) -> Result<
+        (Self, AuthenticatedCertifiedServePayloadRecoveryCut),
+        CertifiedServePayloadStoreError,
+    > {
+        let directory = root.join(STORE_DIRECTORY);
+        ensure_durable_directory(&directory)?;
+        Ok((
+            Self {
+                identity: Arc::new(CertifiedServePayloadStoreInstanceIdentityMarker),
+                directory,
+                context: context.clone(),
+                max_entries: MAX_CERTIFIED_SERVE_PAYLOADS_PER_HEIGHT,
+                max_entry_bytes: derive_max_entry_bytes(context)?,
+                indexed: BTreeSet::new(),
+                fail_next_publish_directory_sync: false,
+            },
+            AuthenticatedCertifiedServePayloadRecoveryCut {
+                context_id: context.id(),
+                height: context.height,
+                payloads: BTreeMap::new(),
+            },
+        ))
     }
 
     fn open_with_max_entries(
@@ -1402,7 +1544,7 @@ impl CertifiedServePayloadStoreV1 {
     /// snapshot from deleting newly published work.
     pub(super) fn prune_authenticated_orphans(
         &mut self,
-        authenticated: &AuthenticatedCertifiedServePayloadRecoveryCut,
+        authenticated: &mut AuthenticatedCertifiedServePayloadRecoveryCut,
         retained: &BTreeSet<CertifiedServePayloadId>,
     ) -> Result<(), CertifiedServePayloadStoreError> {
         self.validate_authenticated_cut(authenticated)?;
@@ -1440,11 +1582,79 @@ impl CertifiedServePayloadStoreV1 {
                 debug_assert!(removed, "authenticated orphan remained indexed");
             }
         }
-        Ok(())
+        authenticated.retain_owned(retained);
+        self.validate_authenticated_cut(authenticated)
+    }
+
+    fn reload_payload_census_strict(
+        &self,
+    ) -> Result<
+        BTreeMap<CertifiedServePayloadId, PersistedCertifiedServePayloadV1>,
+        CertifiedServePayloadStoreError,
+    > {
+        let directory_metadata = fs::symlink_metadata(&self.directory)
+            .map_err(|source| io_error("inspect directory", &self.directory, source))?;
+        if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
+            return Err(CertifiedServePayloadStoreError::InvalidStoreDirectory(
+                self.directory.clone(),
+            ));
+        }
+        let traversal_capacity = self.max_entries.checked_mul(2).ok_or(
+            CertifiedServePayloadStoreError::InvalidGeometry(
+                "directory traversal capacity overflowed",
+            ),
+        )?;
+        let entries = fs::read_dir(&self.directory)
+            .map_err(|source| io_error("read directory", &self.directory, source))?;
+        let mut payloads = BTreeMap::new();
+        let mut traversed = 0_usize;
+        for entry in entries {
+            let entry = entry
+                .map_err(|source| io_error("read directory entry", &self.directory, source))?;
+            traversed = traversed.checked_add(1).ok_or(
+                CertifiedServePayloadStoreError::DirectoryCapacityExceeded {
+                    capacity: traversal_capacity,
+                },
+            )?;
+            if traversed > traversal_capacity {
+                return Err(CertifiedServePayloadStoreError::DirectoryCapacityExceeded {
+                    capacity: traversal_capacity,
+                });
+            }
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)
+                .map_err(|source| io_error("inspect entry", &path, source))?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(CertifiedServePayloadStoreError::NonRegularEntry(path));
+            }
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                return Err(CertifiedServePayloadStoreError::UnexpectedEntry(path));
+            };
+            if !has_canonical_hash_name(name, FILE_SUFFIX) {
+                return Err(CertifiedServePayloadStoreError::UnexpectedEntry(path));
+            }
+            if payloads.len() >= self.max_entries {
+                return Err(CertifiedServePayloadStoreError::PayloadCapacityExceeded {
+                    capacity: self.max_entries,
+                });
+            }
+            let payload = self.load_path(&path, metadata.len())?;
+            if self.path_for(payload.id()) != path {
+                return Err(CertifiedServePayloadStoreError::RequestHashFilenameMismatch(path));
+            }
+            if payloads.insert(payload.id(), payload).is_some() {
+                return Err(CertifiedServePayloadStoreError::DuplicateRequestHash);
+            }
+        }
+        Ok(payloads)
     }
 
     /// Verify that a post-authentication startup cut still covers the complete
-    /// open store byte-for-byte.
+    /// durable directory byte-for-byte.
+    ///
+    /// Validation rescans the bounded canonical directory instead of trusting
+    /// the index captured at open, so a second writer cannot add an otherwise
+    /// valid payload behind the retained owner and escape the exact census.
     pub(super) fn validate_authenticated_cut(
         &self,
         authenticated: &AuthenticatedCertifiedServePayloadRecoveryCut,
@@ -1458,11 +1668,15 @@ impl CertifiedServePayloadStoreV1 {
             .iter()
             .map(AuthenticatedRecoveredCertifiedServePayload::id)
             .collect::<BTreeSet<_>>();
-        if cut_ids != self.indexed {
+        let observed = self.reload_payload_census_strict()?;
+        let observed_ids = observed.keys().copied().collect::<BTreeSet<_>>();
+        if observed_ids != self.indexed || cut_ids != observed_ids {
             return Err(CertifiedServePayloadStoreError::AuthenticatedRecoveryCutMismatch);
         }
         for recovered in authenticated.iter() {
-            let payload = self.load_id(recovered.id())?;
+            let payload = observed
+                .get(&recovered.id())
+                .ok_or(CertifiedServePayloadStoreError::AuthenticatedRecoveryCutMismatch)?;
             if !recovered.exactly_matches_persisted_payload()
                 || payload.payload_hash() != recovered.payload_hash()
             {
@@ -1470,6 +1684,79 @@ impl CertifiedServePayloadStoreV1 {
             }
         }
         Ok(())
+    }
+
+    /// Retire every retained Pending payload and return the exact refreshed cut.
+    ///
+    /// The complete pre-mutation cut is revalidated first. Unowned payloads
+    /// may be removed only when they are Pending, then every retained Pending
+    /// frame is durably replaced by `Cancelled` in canonical request-hash
+    /// order. Each in-memory entry advances only through the receipt returned
+    /// by that exact write, so callers never fabricate authenticated terminal
+    /// payload state after mutation.
+    pub(super) fn retire_authenticated_cut(
+        &mut self,
+        mut authenticated: AuthenticatedCertifiedServePayloadRecoveryCut,
+        retained: &BTreeSet<CertifiedServePayloadId>,
+    ) -> Result<AuthenticatedCertifiedServePayloadRecoveryCut, CertifiedServeTerminalPersistenceError>
+    {
+        self.validate_authenticated_cut(&authenticated)
+            .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant)?;
+        self.prune_authenticated_orphans(&mut authenticated, retained)
+            .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant)?;
+
+        let pending = authenticated
+            .iter()
+            .filter(|payload| {
+                matches!(
+                    payload.state(),
+                    AuthenticatedRecoveredCertifiedServePayloadState::Pending
+                )
+            })
+            .map(AuthenticatedRecoveredCertifiedServePayload::id)
+            .collect::<Vec<_>>();
+        for id in pending {
+            let request = authenticated
+                .get(id)
+                .expect("pending id came from the authenticated cut")
+                .request()
+                .clone();
+            let expected_certificate = authenticated
+                .get(id)
+                .expect("pending id came from the authenticated cut")
+                .certificate_hash();
+            let receipt = self.persist_negative_for_authenticated_request(
+                &request,
+                CertifiedServePayloadNegativeOutcome::Cancelled,
+            )?;
+            if receipt.id() != id
+                || receipt.certificate_hash() != expected_certificate
+                || receipt.outcome() != CertifiedServePayloadNegativeOutcome::Cancelled
+            {
+                return Err(CertifiedServeTerminalPersistenceError::StoreInvariant(
+                    CertifiedServePayloadStoreError::AuthenticatedRecoveryCutMismatch,
+                ));
+            }
+            let refreshed = authenticated
+                .payloads
+                .get_mut(&id)
+                .expect("pending id remains in the retained cut");
+            if !matches!(
+                refreshed.state,
+                AuthenticatedRecoveredCertifiedServePayloadState::Pending
+            ) {
+                return Err(CertifiedServeTerminalPersistenceError::StoreInvariant(
+                    CertifiedServePayloadStoreError::AuthenticatedRecoveryCutMismatch,
+                ));
+            }
+            refreshed.state = AuthenticatedRecoveredCertifiedServePayloadState::Negative(
+                CertifiedServePayloadNegativeOutcome::Cancelled,
+            );
+            refreshed.payload_hash = receipt.payload_hash();
+        }
+        self.validate_authenticated_cut(&authenticated)
+            .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant)?;
+        Ok(authenticated)
     }
 
     /// Test-only convenience for synthetic responses that have no canonical
@@ -2845,6 +3132,119 @@ mod tests {
 
     #[cfg(feature = "bls")]
     #[test]
+    fn retirement_refreshes_retained_pending_and_prunes_only_pending_orphans() {
+        let temporary = TempDir::new().expect("temporary retirement payload store");
+        let (verified, keys) = verified_bls_context_and_keys();
+        let retained_request = bls_request(&verified, &keys, true);
+        let orphan_round = wire::ConsensusRound {
+            view: 1,
+            ..retained_request.request().round
+        };
+        let orphan_subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"orphan CompleteTip Serve request",
+            )),
+            payload_hash: Hash::new(b"orphan CompleteTip Serve body"),
+        };
+        let orphan_request =
+            bls_request_for_subject(&verified, &keys, true, orphan_round, orphan_subject);
+        let (mut store, _) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), verified.context())
+                .expect("open retirement payload store");
+        let retained = store
+            .persist_pending_with_verified_retention(&verified, &keys[0], &retained_request)
+            .expect("persist retained pending Serve");
+        let orphan = store
+            .persist_pending_with_verified_retention(&verified, &keys[0], &orphan_request)
+            .expect("persist orphan pending Serve");
+        drop(store);
+
+        let body_store = V2BodyStore::open(temporary.path(), verified.context().clone())
+            .expect("open empty exact body store");
+        let (mut store, recovery) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), verified.context())
+                .expect("reopen retirement payload store");
+        let authenticated = recovery
+            .authenticate(&verified, &keys[0], &body_store)
+            .expect("authenticate both pending payloads");
+        let retained_ids = BTreeSet::from([retained.id()]);
+        let retired = store
+            .retire_authenticated_cut(authenticated, &retained_ids)
+            .expect("prune the orphan and cancel the retained payload");
+
+        assert_eq!(retired.len(), 1);
+        assert!(matches!(
+            retired
+                .get(retained.id())
+                .expect("retained payload remains authenticated")
+                .state(),
+            AuthenticatedRecoveredCertifiedServePayloadState::Negative(
+                CertifiedServePayloadNegativeOutcome::Cancelled
+            )
+        ));
+        assert!(retired.get(orphan.id()).is_none());
+        store
+            .validate_authenticated_cut(&retired)
+            .expect("refreshed cut exactly covers the post-retirement store");
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn authenticated_cut_rejects_a_later_valid_payload_from_a_second_store_owner() {
+        let temporary = TempDir::new().expect("temporary exact-census payload store");
+        let (verified, keys) = verified_bls_context_and_keys();
+        let request = bls_request(&verified, &keys, true);
+        let (first_owner, recovery) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), verified.context())
+                .expect("open first exact-census payload owner");
+        let body_store = V2BodyStore::open(temporary.path(), verified.context().clone())
+            .expect("open exact body store");
+        let authenticated = recovery
+            .authenticate(&verified, &keys[0], &body_store)
+            .expect("authenticate the original empty payload census");
+        assert!(authenticated.is_empty());
+
+        let (mut second_owner, second_recovery) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), verified.context())
+                .expect("open second payload owner at the same directory");
+        assert!(second_recovery.is_empty());
+        second_owner
+            .persist_pending_with_verified_retention(&verified, &keys[0], &request)
+            .expect("publish a valid payload behind the first owner's index");
+
+        assert!(matches!(
+            first_owner.validate_authenticated_cut(&authenticated),
+            Err(CertifiedServePayloadStoreError::AuthenticatedRecoveryCutMismatch)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authenticated_cut_rejects_store_directory_symlink_replacement() {
+        let temporary = TempDir::new().expect("temporary symlink-drift payload store");
+        let (context, _) = context_and_keys();
+        let (owner, authenticated) = CertifiedServePayloadStoreV1::open_lifecycle_fixture_for_test(
+            temporary.path(),
+            &context,
+        )
+        .expect("open retained payload directory");
+        let canonical = temporary.path().join(STORE_DIRECTORY);
+        let displaced = temporary.path().join("displaced-payload-store");
+        let replacement = temporary.path().join("replacement-payload-store");
+        fs::rename(&canonical, &displaced).expect("displace retained payload directory");
+        fs::create_dir(&replacement).expect("create redirected payload directory");
+        std::os::unix::fs::symlink(&replacement, &canonical)
+            .expect("replace retained payload directory with a symlink");
+
+        assert!(matches!(
+            owner.validate_authenticated_cut(&authenticated),
+            Err(CertifiedServePayloadStoreError::InvalidStoreDirectory(path)) if path == canonical
+        ));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
     fn recovery_cut_derives_local_retention_from_the_actual_consensus_key() {
         let temporary = TempDir::new().expect("temporary directory");
         let (verified, keys) = verified_bls_context_and_keys();
@@ -3013,8 +3413,105 @@ mod tests {
         };
         assert_eq!(recovered.local_retainer(), 0);
         assert!(recovered.exactly_matches_persisted_payload());
-        assert_eq!(completed.response(), &response);
-        assert_eq!(HashOf::new(completed.response()), HashOf::new(&response));
+        assert_eq!(completed.response_hash(), HashOf::new(&response));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn complete_tip_retirement_authenticates_completed_metadata_after_body_cleanup() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let (verified, keys) = verified_bls_context_and_keys();
+        let (body, manifest) = canonical_body_and_manifest(verified.context(), &keys, 0);
+        let request =
+            bls_request_for_subject(&verified, &keys, true, manifest.round, manifest.subject);
+        let mut body_store = V2BodyStore::open(temporary.path(), verified.context().clone())
+            .expect("open exact body store");
+        let durable_body = body_store
+            .store(manifest.clone(), body.clone())
+            .expect("persist canonical response body");
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), verified.context())
+                .expect("open payload store");
+        let pending = payload_store
+            .persist_pending_with_verified_retention(&verified, &keys[0], &request)
+            .expect("persist verified locally retained request");
+        let response = signed_certified_response(&request, manifest, body, 1, &keys);
+        payload_store
+            .persist_completed_with_exact_body(&request, &durable_body, &body_store, &response)
+            .expect("persist completed response");
+        drop(payload_store);
+        drop(body_store);
+
+        let body_directory = temporary
+            .path()
+            .join(hex::encode(verified.context().id().0.as_ref()));
+        fs::remove_dir_all(body_directory).expect("simulate normal post-finality body cleanup");
+        let (_payload_store, recovery) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), verified.context())
+                .expect("reopen payload store after body cleanup");
+        let authenticated = recovery
+            .authenticate_for_complete_tip_retirement(&verified, &keys[0])
+            .expect("retirement authenticates signed terminal metadata without body bytes");
+        let completed = authenticated
+            .get(pending.id())
+            .expect("completed payload remains in retirement census");
+        let AuthenticatedRecoveredCertifiedServePayloadState::Completed(completed) =
+            completed.state()
+        else {
+            panic!("completed payload must remain terminal");
+        };
+        assert_eq!(completed.response_hash(), HashOf::new(&response));
+        assert!(
+            authenticated
+                .get(pending.id())
+                .expect("completed payload remains present")
+                .exactly_matches_persisted_payload()
+        );
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn retirement_rejects_completed_metadata_from_a_noncertified_responder() {
+        let (verified, keys) = verified_bls_context_and_keys();
+        let (body, manifest) = canonical_body_and_manifest(verified.context(), &keys, 0);
+        let request =
+            bls_request_for_subject(&verified, &keys, true, manifest.round, manifest.subject);
+        let responder = 3;
+        assert!(
+            request
+                .request()
+                .certificate
+                .signers
+                .binary_search(&responder)
+                .is_err(),
+            "fixture responder must be in the roster but outside the certified signer set"
+        );
+        let response =
+            signed_certified_response(&request, manifest.clone(), body, responder, &keys);
+        let persisted = PersistedCertifiedServePayloadV1 {
+            format_version: FORMAT_VERSION,
+            context_id: verified.context().id(),
+            height: verified.context().height,
+            request_hash: request.request_hash(),
+            request: request.request().clone(),
+            state: PersistedCertifiedServePayloadStateV1::Completed {
+                response_hash: HashOf::new(&response),
+                manifest,
+                responder,
+                signature: response.signature,
+            },
+        };
+        let recovery = CertifiedServePayloadRecoveryCut {
+            context_id: verified.context().id(),
+            height: verified.context().height,
+            payloads: BTreeMap::from([(persisted.id(), persisted)]),
+        };
+
+        assert!(matches!(
+            recovery.authenticate_for_complete_tip_retirement(&verified, &keys[0]),
+            Err(CertifiedServePayloadRecoveryError::InvalidResponse(message))
+                if message.contains("lost certified local retention authority")
+        ));
     }
 
     #[cfg(feature = "bls")]

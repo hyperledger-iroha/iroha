@@ -34,7 +34,7 @@ BY AdmitHiddenPacketPreservesIngressCapacityType
 THEOREM AdmitFirstRelayedTransportCompletionPreservesIngressCapacityType ==
   \A recipient \in ValidatorIds, source \in AsyncIngressSources:
     LET item == OldestDueSourcePacket(recipient, source).item
-        resourceSource == IngressResourceSource(item)
+        resourceSource == IngressResourceSourceVia(item, source)
     IN /\ AsyncTypeInvariant
        /\ IngressLaneDepth(recipient, resourceSource) = 0
        /\ DueSourcePackets(recipient, source) # {}
@@ -599,15 +599,16 @@ PROOF
 
 (***************************************************************************
 Proof-only potential for a single ingress source.  The global reservation
-count is the sum of the four finite protected-source sets.  Progress,
-TimeoutVote, and the shared Chunk/CertifiedResponse TransportCompletion owner
-are pairwise distinct.  Splitting out one source lets removal reason locally:
-deleting one queued item decreases used depth by one and can add at most one
-reservation for that same source.
+count is the sum of the five finite protected-source sets.  Ordinary Progress,
+certified-fence escape, TimeoutVote, and the shared Chunk/CertifiedResponse
+TransportCompletion owner are pairwise distinct.  Splitting out one source
+lets removal reason locally: deleting one queued item decreases used depth by
+one and can add at most one reservation for that same source.
 ***************************************************************************)
 IngressItemIsNonTimeoutProgress(item) ==
   /\ IngressAdmissionClass(item) = "Progress"
   /\ item.kind # "TimeoutVote"
+  /\ ~AsyncCertifiedFenceEscapeItem(item)
 
 IngressItemIsTimeoutVote(item) == item.kind = "TimeoutVote"
 
@@ -627,41 +628,69 @@ IngressSequenceHasTransportCompletion(sequence) ==
     IngressItemIsTransportCompletion(queued)
 
 IngressSourceProtectionPotential(source, sequence) ==
-  IF source \notin ValidatorIds
-  THEN (IF Len(sequence) = 0 THEN 1 ELSE 0)
-         + (IF ~IngressSequenceHasTransportCompletion(sequence)
-            THEN 1 ELSE 0)
-         + (IF /\ Len(sequence) = 1
-                  /\ IngressSequenceHasTransportCompletion(sequence)
-            THEN 1 ELSE 0)
-  ELSE (IF Len(sequence) = 0
-             \/ ~IngressSequenceHasNonTimeoutProgress(sequence)
-        THEN 1 ELSE 0)
-         + (IF ~IngressSequenceHasTimeoutVote(sequence)
-            THEN 1 ELSE 0)
-         + (IF ~IngressSequenceHasTransportCompletion(sequence)
-            THEN 1 ELSE 0)
-         + (IF \/ Len(sequence) = 0
-                  \/ /\ Len(sequence) = 1
-                        /\ (IngressSequenceHasNonTimeoutProgress(sequence)
-                              \/ IngressSequenceHasTimeoutVote(sequence)
-                              \/ IngressSequenceHasTransportCompletion(sequence))
-                  \/ /\ Len(sequence) = 2
-                        /\ \/ /\ IngressSequenceHasNonTimeoutProgress(sequence)
-                                   /\ IngressSequenceHasTimeoutVote(sequence)
-                           \/ /\ IngressSequenceHasNonTimeoutProgress(sequence)
-                                   /\ IngressSequenceHasTransportCompletion(sequence)
-                           \/ /\ IngressSequenceHasTimeoutVote(sequence)
-                                   /\ IngressSequenceHasTransportCompletion(sequence)
-                  \/ /\ Len(sequence) = 3
-                        /\ IngressSequenceHasNonTimeoutProgress(sequence)
-                        /\ IngressSequenceHasTimeoutVote(sequence)
-                        /\ IngressSequenceHasTransportCompletion(sequence)
-            THEN 1 ELSE 0)
+  LET hasCertifiedFenceEscape ==
+        \E queued \in SequenceSet(sequence):
+          AsyncCertifiedFenceEscapeItem(queued)
+  IN IF source \notin ValidatorIds
+     THEN (IF Len(sequence) = 0 THEN 1 ELSE 0)
+            + (IF ~IngressSequenceHasTransportCompletion(sequence)
+               THEN 1 ELSE 0)
+            + (IF /\ Len(sequence) = 1
+                     /\ IngressSequenceHasTransportCompletion(sequence)
+               THEN 1 ELSE 0)
+     ELSE (IF Len(sequence) = 0
+                \/ ~IngressSequenceHasNonTimeoutProgress(sequence)
+           THEN 1 ELSE 0)
+            + (IF ~hasCertifiedFenceEscape THEN 1 ELSE 0)
+            + (IF ~IngressSequenceHasTimeoutVote(sequence)
+               THEN 1 ELSE 0)
+            + (IF ~IngressSequenceHasTransportCompletion(sequence)
+               THEN 1 ELSE 0)
+            + (IF \/ Len(sequence) = 0
+                     \/ /\ Len(sequence) = 1
+                           /\ (IngressSequenceHasNonTimeoutProgress(sequence)
+                                 \/ hasCertifiedFenceEscape
+                                 \/ IngressSequenceHasTimeoutVote(sequence)
+                                 \/ IngressSequenceHasTransportCompletion(sequence))
+                     \/ /\ Len(sequence) = 2
+                           /\ \/ /\ IngressSequenceHasNonTimeoutProgress(sequence)
+                                      /\ hasCertifiedFenceEscape
+                              \/ /\ IngressSequenceHasNonTimeoutProgress(sequence)
+                                      /\ IngressSequenceHasTimeoutVote(sequence)
+                              \/ /\ IngressSequenceHasNonTimeoutProgress(sequence)
+                                      /\ IngressSequenceHasTransportCompletion(sequence)
+                              \/ /\ hasCertifiedFenceEscape
+                                      /\ IngressSequenceHasTimeoutVote(sequence)
+                              \/ /\ hasCertifiedFenceEscape
+                                      /\ IngressSequenceHasTransportCompletion(sequence)
+                              \/ /\ IngressSequenceHasTimeoutVote(sequence)
+                                      /\ IngressSequenceHasTransportCompletion(sequence)
+                     \/ /\ Len(sequence) = 3
+                           /\ \/ /\ IngressSequenceHasNonTimeoutProgress(sequence)
+                                      /\ hasCertifiedFenceEscape
+                                      /\ IngressSequenceHasTimeoutVote(sequence)
+                              \/ /\ IngressSequenceHasNonTimeoutProgress(sequence)
+                                      /\ hasCertifiedFenceEscape
+                                      /\ IngressSequenceHasTransportCompletion(sequence)
+                              \/ /\ IngressSequenceHasNonTimeoutProgress(sequence)
+                                      /\ IngressSequenceHasTimeoutVote(sequence)
+                                      /\ IngressSequenceHasTransportCompletion(sequence)
+                              \/ /\ hasCertifiedFenceEscape
+                                      /\ IngressSequenceHasTimeoutVote(sequence)
+                                      /\ IngressSequenceHasTransportCompletion(sequence)
+                     \/ /\ Len(sequence) = 4
+                           /\ IngressSequenceHasNonTimeoutProgress(sequence)
+                           /\ hasCertifiedFenceEscape
+                           /\ IngressSequenceHasTimeoutVote(sequence)
+                           /\ IngressSequenceHasTransportCompletion(sequence)
+               THEN 1 ELSE 0)
 
 IngressProtectedSlotCountWithoutSourceFor(lanes, recipient, source) ==
   Cardinality(
     IngressProtectedSourcesFor(lanes, recipient) \ {source})
+    + Cardinality(
+        IngressCertifiedFenceEscapeProtectedSourcesFor(
+          lanes, recipient) \ {source})
     + Cardinality(
         IngressTimeoutVoteProtectedSourcesFor(
           lanes, recipient) \ {source})
@@ -755,6 +784,11 @@ PROOF
       BY Isa
          DEF IngressTimeoutVoteProtectedSourcesFor,
              AsyncIngressSources
+    <2>4f. IngressCertifiedFenceEscapeProtectedSourcesFor(
+                lanes, recipient) \subseteq AsyncIngressSources
+      BY Isa
+         DEF IngressCertifiedFenceEscapeProtectedSourcesFor,
+             AsyncIngressSources
     <2>4c. IngressTransportCompletionProtectedSourcesFor(lanes, recipient)
                 \subseteq AsyncIngressSources
       BY Isa
@@ -765,9 +799,12 @@ PROOF
            /\ IsFiniteSet(
                 IngressTimeoutVoteProtectedSourcesFor(lanes, recipient))
            /\ IsFiniteSet(
+                IngressCertifiedFenceEscapeProtectedSourcesFor(
+                  lanes, recipient))
+           /\ IsFiniteSet(
                 IngressTransportCompletionProtectedSourcesFor(
                   lanes, recipient))
-      BY <2>1, <2>3, <2>4, <2>4c, FS_Subset
+      BY <2>1, <2>3, <2>4, <2>4f, <2>4c, FS_Subset
     <2>6. /\ IngressProtectedSourcesFor(lanes, recipient) \ {source}
                   \subseteq
                 IngressProtectedSourcesFor(lanes, recipient)
@@ -775,6 +812,11 @@ PROOF
                 lanes, recipient) \ {source}
                   \subseteq
                 IngressTimeoutVoteProtectedSourcesFor(lanes, recipient)
+           /\ IngressCertifiedFenceEscapeProtectedSourcesFor(
+                lanes, recipient) \ {source}
+                  \subseteq
+                IngressCertifiedFenceEscapeProtectedSourcesFor(
+                  lanes, recipient)
            /\ IngressContinuationProtectedSourcesFor(
                 lanes, recipient) \ {source}
                   \subseteq
@@ -793,6 +835,9 @@ PROOF
                   IngressTimeoutVoteProtectedSourcesFor(
                     lanes, recipient) \ {source})
            /\ IsFiniteSet(
+                  IngressCertifiedFenceEscapeProtectedSourcesFor(
+                    lanes, recipient) \ {source})
+           /\ IsFiniteSet(
                   IngressContinuationProtectedSourcesFor(
                     lanes, recipient) \ {source})
            /\ IsFiniteSet(
@@ -801,6 +846,9 @@ PROOF
       BY <2>2, <2>5, <2>6, FS_Subset
     <2>8. /\ Cardinality(
                   IngressProtectedSourcesFor(
+                    lanes, recipient) \ {source}) \in Nat
+           /\ Cardinality(
+                  IngressCertifiedFenceEscapeProtectedSourcesFor(
                     lanes, recipient) \ {source}) \in Nat
            /\ Cardinality(
                   IngressTimeoutVoteProtectedSourcesFor(
@@ -826,8 +874,13 @@ THEOREM IngressClassPresenceAfterExactRemoval ==
     /\ before \in Seq(Range(before))
     /\ selected \in 1..Len(before)
     => LET after == SequenceWithoutIndex(before, selected)
+           hasCertifiedFenceEscape(sequence) ==
+             \E queued \in SequenceSet(sequence):
+               AsyncCertifiedFenceEscapeItem(queued)
        IN /\ (IngressSequenceHasNonTimeoutProgress(after)
                  => IngressSequenceHasNonTimeoutProgress(before))
+          /\ (hasCertifiedFenceEscape(after)
+                => hasCertifiedFenceEscape(before))
           /\ (IngressSequenceHasTimeoutVote(after)
                  => IngressSequenceHasTimeoutVote(before))
           /\ (IngressSequenceHasTransportCompletion(after)
@@ -835,6 +888,9 @@ THEOREM IngressClassPresenceAfterExactRemoval ==
           /\ (~IngressItemIsNonTimeoutProgress(before[selected])
                  => (IngressSequenceHasNonTimeoutProgress(before)
                        => IngressSequenceHasNonTimeoutProgress(after)))
+          /\ (~AsyncCertifiedFenceEscapeItem(before[selected])
+                => (hasCertifiedFenceEscape(before)
+                      => hasCertifiedFenceEscape(after)))
           /\ (~IngressItemIsTimeoutVote(before[selected])
                  => (IngressSequenceHasTimeoutVote(before)
                        => IngressSequenceHasTimeoutVote(after)))
@@ -844,16 +900,27 @@ THEOREM IngressClassPresenceAfterExactRemoval ==
           /\ ~(IngressItemIsNonTimeoutProgress(before[selected])
                  /\ IngressItemIsTimeoutVote(before[selected]))
           /\ ~(IngressItemIsNonTimeoutProgress(before[selected])
+                 /\ AsyncCertifiedFenceEscapeItem(before[selected]))
+          /\ ~(IngressItemIsNonTimeoutProgress(before[selected])
                  /\ IngressItemIsTransportCompletion(before[selected]))
           /\ ~(IngressItemIsTimeoutVote(before[selected])
+                 /\ IngressItemIsTransportCompletion(before[selected]))
+          /\ ~(AsyncCertifiedFenceEscapeItem(before[selected])
+                 /\ IngressItemIsTimeoutVote(before[selected]))
+          /\ ~(AsyncCertifiedFenceEscapeItem(before[selected])
                  /\ IngressItemIsTransportCompletion(before[selected]))
 PROOF
   <1>1. ASSUME NEW before, NEW selected,
                 before \in Seq(Range(before)),
                 selected \in 1..Len(before)
          PROVE LET after == SequenceWithoutIndex(before, selected)
+                   hasCertifiedFenceEscape(sequence) ==
+                     \E queued \in SequenceSet(sequence):
+                       AsyncCertifiedFenceEscapeItem(queued)
                IN /\ (IngressSequenceHasNonTimeoutProgress(after)
                          => IngressSequenceHasNonTimeoutProgress(before))
+                  /\ (hasCertifiedFenceEscape(after)
+                        => hasCertifiedFenceEscape(before))
                   /\ (IngressSequenceHasTimeoutVote(after)
                          => IngressSequenceHasTimeoutVote(before))
                   /\ (IngressSequenceHasTransportCompletion(after)
@@ -861,6 +928,9 @@ PROOF
                   /\ (~IngressItemIsNonTimeoutProgress(before[selected])
                          => (IngressSequenceHasNonTimeoutProgress(before)
                                => IngressSequenceHasNonTimeoutProgress(after)))
+                  /\ (~AsyncCertifiedFenceEscapeItem(before[selected])
+                        => (hasCertifiedFenceEscape(before)
+                              => hasCertifiedFenceEscape(after)))
                   /\ (~IngressItemIsTimeoutVote(before[selected])
                          => (IngressSequenceHasTimeoutVote(before)
                                => IngressSequenceHasTimeoutVote(after)))
@@ -870,10 +940,19 @@ PROOF
                   /\ ~(IngressItemIsNonTimeoutProgress(before[selected])
                          /\ IngressItemIsTimeoutVote(before[selected]))
                   /\ ~(IngressItemIsNonTimeoutProgress(before[selected])
+                         /\ AsyncCertifiedFenceEscapeItem(before[selected]))
+                  /\ ~(IngressItemIsNonTimeoutProgress(before[selected])
                          /\ IngressItemIsTransportCompletion(before[selected]))
                   /\ ~(IngressItemIsTimeoutVote(before[selected])
                          /\ IngressItemIsTransportCompletion(before[selected]))
+                  /\ ~(AsyncCertifiedFenceEscapeItem(before[selected])
+                         /\ IngressItemIsTimeoutVote(before[selected]))
+                  /\ ~(AsyncCertifiedFenceEscapeItem(before[selected])
+                         /\ IngressItemIsTransportCompletion(before[selected]))
     <2> DEFINE After == SequenceWithoutIndex(before, selected)
+    <2> DEFINE HasCertifiedFenceEscape(sequence) ==
+           \E queued \in SequenceSet(sequence):
+             AsyncCertifiedFenceEscapeItem(queued)
     <2>1. SequenceSet(After) \subseteq SequenceSet(before)
       BY <1>1, IngressSequenceWithoutIndexFacts, RangeEquality
          DEF After, SequenceSet
@@ -884,6 +963,9 @@ PROOF
              => IngressSequenceHasNonTimeoutProgress(before)
       BY <2>1, Isa
          DEF IngressSequenceHasNonTimeoutProgress
+    <2>3f. HasCertifiedFenceEscape(After)
+               => HasCertifiedFenceEscape(before)
+      BY <2>1, Isa DEF HasCertifiedFenceEscape
     <2>4. IngressSequenceHasTimeoutVote(After)
              => IngressSequenceHasTimeoutVote(before)
       BY <2>1, Isa DEF IngressSequenceHasTimeoutVote
@@ -905,6 +987,21 @@ PROOF
           BY <2>2, <4>1, <4>2
         <4> QED BY <4>1, <4>3
              DEF IngressSequenceHasNonTimeoutProgress
+      <3> QED BY <3>1
+    <2>5f. ~AsyncCertifiedFenceEscapeItem(before[selected])
+                => (HasCertifiedFenceEscape(before)
+                      => HasCertifiedFenceEscape(After))
+      <3>1. ASSUME ~AsyncCertifiedFenceEscapeItem(before[selected]),
+                    HasCertifiedFenceEscape(before)
+             PROVE HasCertifiedFenceEscape(After)
+        <4>1. PICK queued \in SequenceSet(before):
+                 AsyncCertifiedFenceEscapeItem(queued)
+          BY <3>1 DEF HasCertifiedFenceEscape
+        <4>2. queued # before[selected]
+          BY <3>1, <4>1
+        <4>3. queued \in SequenceSet(After)
+          BY <2>2, <4>1, <4>2
+        <4> QED BY <4>1, <4>3 DEF HasCertifiedFenceEscape
       <3> QED BY <3>1
     <2>6. ~IngressItemIsTimeoutVote(before[selected])
              => (IngressSequenceHasTimeoutVote(before)
@@ -941,15 +1038,25 @@ PROOF
     <2>7. /\ ~(IngressItemIsNonTimeoutProgress(before[selected])
                /\ IngressItemIsTimeoutVote(before[selected]))
            /\ ~(IngressItemIsNonTimeoutProgress(before[selected])
+                /\ AsyncCertifiedFenceEscapeItem(before[selected]))
+           /\ ~(IngressItemIsNonTimeoutProgress(before[selected])
                 /\ IngressItemIsTransportCompletion(before[selected]))
            /\ ~(IngressItemIsTimeoutVote(before[selected])
+                /\ IngressItemIsTransportCompletion(before[selected]))
+           /\ ~(AsyncCertifiedFenceEscapeItem(before[selected])
+                /\ IngressItemIsTimeoutVote(before[selected]))
+           /\ ~(AsyncCertifiedFenceEscapeItem(before[selected])
                 /\ IngressItemIsTransportCompletion(before[selected]))
       BY DEF IngressItemIsNonTimeoutProgress,
              IngressItemIsTimeoutVote,
              IngressItemIsTransportCompletion,
+             AsyncCertifiedFenceEscapeItem,
+             AsyncCertifiedFenceEscapeKinds,
              IngressUsesPhysicalCompletionOwner,
              IngressAdmissionClass, IngressTransportCompletionKinds
-    <2> QED BY <2>3, <2>4, <2>4c, <2>5, <2>6, <2>6c, <2>7 DEF After
+    <2> QED BY <2>3, <2>3f, <2>4, <2>4c,
+         <2>5, <2>5f, <2>6, <2>6c, <2>7
+         DEF After, HasCertifiedFenceEscape
   <1> QED BY <1>1
 
 THEOREM OneRemovalIncreasesSourceProtectionByAtMostOne ==
@@ -967,6 +1074,9 @@ PROOF
                IN IngressSourceProtectionPotential(source, after)
                     <= IngressSourceProtectionPotential(source, before) + 1
     <2> DEFINE After == SequenceWithoutIndex(before, selected)
+    <2> DEFINE HasCertifiedFenceEscape(sequence) ==
+           \E queued \in SequenceSet(sequence):
+             AsyncCertifiedFenceEscapeItem(queued)
     <2>1. /\ Len(before) \in Nat
            /\ Len(After) \in Nat
            /\ Len(After) + 1 = Len(before)
@@ -974,6 +1084,8 @@ PROOF
       BY <1>1, IngressSequenceWithoutIndexFacts, LenProperties, SMT DEF After
     <2>2. /\ (IngressSequenceHasNonTimeoutProgress(After)
                  => IngressSequenceHasNonTimeoutProgress(before))
+           /\ (HasCertifiedFenceEscape(After)
+                 => HasCertifiedFenceEscape(before))
            /\ (IngressSequenceHasTimeoutVote(After)
                  => IngressSequenceHasTimeoutVote(before))
            /\ (IngressSequenceHasTransportCompletion(After)
@@ -981,6 +1093,9 @@ PROOF
            /\ (~IngressItemIsNonTimeoutProgress(before[selected])
                  => (IngressSequenceHasNonTimeoutProgress(before)
                        => IngressSequenceHasNonTimeoutProgress(After)))
+           /\ (~AsyncCertifiedFenceEscapeItem(before[selected])
+                 => (HasCertifiedFenceEscape(before)
+                       => HasCertifiedFenceEscape(After)))
            /\ (~IngressItemIsTimeoutVote(before[selected])
                  => (IngressSequenceHasTimeoutVote(before)
                        => IngressSequenceHasTimeoutVote(After)))
@@ -990,10 +1105,17 @@ PROOF
            /\ ~(IngressItemIsNonTimeoutProgress(before[selected])
                  /\ IngressItemIsTimeoutVote(before[selected]))
            /\ ~(IngressItemIsNonTimeoutProgress(before[selected])
+                 /\ AsyncCertifiedFenceEscapeItem(before[selected]))
+           /\ ~(IngressItemIsNonTimeoutProgress(before[selected])
                  /\ IngressItemIsTransportCompletion(before[selected]))
            /\ ~(IngressItemIsTimeoutVote(before[selected])
                  /\ IngressItemIsTransportCompletion(before[selected]))
-      BY <1>1, IngressClassPresenceAfterExactRemoval DEF After
+           /\ ~(AsyncCertifiedFenceEscapeItem(before[selected])
+                 /\ IngressItemIsTimeoutVote(before[selected]))
+           /\ ~(AsyncCertifiedFenceEscapeItem(before[selected])
+                 /\ IngressItemIsTransportCompletion(before[selected]))
+      BY <1>1, IngressClassPresenceAfterExactRemoval
+         DEF After, HasCertifiedFenceEscape
     <2>3. CASE source \notin ValidatorIds
       <3>1. CASE Len(before) = 1
         BY <1>1, <2>1, <2>3, <3>1, SMT
@@ -1017,17 +1139,21 @@ PROOF
       <3>4. CASE Len(before) = 4
         BY <2>1, <2>2, <2>4, <3>4, SMT
            DEF IngressSourceProtectionPotential
-      <3>5. CASE Len(before) > 4
+      <3>5. CASE Len(before) = 5
         BY <2>1, <2>2, <2>4, <3>5, SMT
            DEF IngressSourceProtectionPotential
-      <3>6. \/ Len(before) = 1
+      <3>6. CASE Len(before) > 5
+        BY <2>1, <2>2, <2>4, <3>6, SMT
+           DEF IngressSourceProtectionPotential
+      <3>7. \/ Len(before) = 1
              \/ Len(before) = 2
              \/ Len(before) = 3
              \/ Len(before) = 4
-             \/ Len(before) > 4
+             \/ Len(before) = 5
+             \/ Len(before) > 5
         BY <2>1, SMT
-      <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5, <3>6
-    <2> QED BY <2>3, <2>4 DEF After
+      <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5, <3>6, <3>7
+    <2> QED BY <2>3, <2>4 DEF After, HasCertifiedFenceEscape
   <1> QED BY <1>1
 
 THEOREM IngressProtectedSlotCountDecomposesAtSource ==
@@ -1070,6 +1196,9 @@ PROOF
     <2>3t. IngressTimeoutVoteProtectedSourcesFor(lanes, recipient)
                 \subseteq ValidatorIds
       BY Isa DEF IngressTimeoutVoteProtectedSourcesFor
+    <2>3f. IngressCertifiedFenceEscapeProtectedSourcesFor(
+                lanes, recipient) \subseteq ValidatorIds
+      BY Isa DEF IngressCertifiedFenceEscapeProtectedSourcesFor
     <2>3c. IngressTransportCompletionProtectedSourcesFor(lanes, recipient)
                 \subseteq AsyncIngressSources
       BY Isa DEF IngressTransportCompletionProtectedSourcesFor
@@ -1085,6 +1214,13 @@ PROOF
                    IngressTimeoutVoteProtectedSourcesFor(
                      lanes, recipient)) \in Nat
       BY <2>1, <2>3t, FS_Subset, FS_CardinalityType
+    <2>4f. /\ IsFiniteSet(
+                   IngressCertifiedFenceEscapeProtectedSourcesFor(
+                     lanes, recipient))
+            /\ Cardinality(
+                   IngressCertifiedFenceEscapeProtectedSourcesFor(
+                     lanes, recipient)) \in Nat
+      BY <2>1, <2>3f, FS_Subset, FS_CardinalityType
     <2>4c. /\ IsFiniteSet(
                    IngressTransportCompletionProtectedSourcesFor(
                      lanes, recipient))
@@ -1120,6 +1256,17 @@ PROOF
                        lanes, recipient)
                 THEN 1 ELSE 0
       BY <2>4t, FS_RemoveElement, FS_CardinalityType, SMT
+    <2>6f. Cardinality(
+              IngressCertifiedFenceEscapeProtectedSourcesFor(
+                lanes, recipient)) =
+            Cardinality(
+              IngressCertifiedFenceEscapeProtectedSourcesFor(
+                lanes, recipient) \ {source})
+              + IF source \in
+                     IngressCertifiedFenceEscapeProtectedSourcesFor(
+                       lanes, recipient)
+                THEN 1 ELSE 0
+      BY <2>4f, FS_RemoveElement, FS_CardinalityType, SMT
     <2>6c. Cardinality(
               IngressTransportCompletionProtectedSourcesFor(
                 lanes, recipient)) =
@@ -1135,6 +1282,10 @@ PROOF
              source, lanes[recipient][source]) =
            (IF source \in IngressProtectedSourcesFor(lanes, recipient)
             THEN 1 ELSE 0)
+             + (IF source \in
+                      IngressCertifiedFenceEscapeProtectedSourcesFor(
+                        lanes, recipient)
+                THEN 1 ELSE 0)
              + (IF source \in
                       IngressTimeoutVoteProtectedSourcesFor(
                         lanes, recipient)
@@ -1155,16 +1306,25 @@ PROOF
              IngressItemIsNonTimeoutProgress,
              IngressItemIsTimeoutVote,
              IngressItemIsTransportCompletion,
+             AsyncCertifiedFenceEscapeItem,
+             AsyncCertifiedFenceEscapeKinds,
              IngressUsesPhysicalCompletionOwner,
              IngressProtectedSourcesFor,
+             IngressCertifiedFenceEscapeProtectedSourcesFor,
              IngressTimeoutVoteProtectedSourcesFor,
              IngressTransportCompletionProtectedSourcesFor,
              IngressContinuationProtectedSourcesFor,
+             IngressProtectedClassesPresentIn,
+             IngressProtectedClassNames,
              IngressLaneHasNonTimeoutProgressIn,
+             IngressLaneHasCertifiedFenceEscapeIn,
              IngressLaneHasTimeoutVoteIn,
              IngressLaneHasTransportCompletionIn
     <2>8. Cardinality(
              IngressProtectedSourcesFor(lanes, recipient))
+             + Cardinality(
+                 IngressCertifiedFenceEscapeProtectedSourcesFor(
+                   lanes, recipient))
              + Cardinality(
                  IngressTimeoutVoteProtectedSourcesFor(
                    lanes, recipient))
@@ -1179,6 +1339,13 @@ PROOF
               + (IF source \in
                        IngressProtectedSourcesFor(lanes, recipient)
                  THEN 1 ELSE 0))
+             + (Cardinality(
+                  IngressCertifiedFenceEscapeProtectedSourcesFor(
+                    lanes, recipient) \ {source})
+                  + (IF source \in
+                           IngressCertifiedFenceEscapeProtectedSourcesFor(
+                             lanes, recipient)
+                     THEN 1 ELSE 0))
              + (Cardinality(
                   IngressTimeoutVoteProtectedSourcesFor(
                     lanes, recipient) \ {source})
@@ -1200,9 +1367,12 @@ PROOF
                            IngressContinuationProtectedSourcesFor(
                              lanes, recipient)
                      THEN 1 ELSE 0))
-      BY <2>5, <2>6, <2>6t, <2>6c
+      BY <2>5, <2>6, <2>6f, <2>6t, <2>6c
     <2>9. /\ Cardinality(
                   IngressProtectedSourcesFor(
+                    lanes, recipient) \ {source}) \in Nat
+           /\ Cardinality(
+                  IngressCertifiedFenceEscapeProtectedSourcesFor(
                     lanes, recipient) \ {source}) \in Nat
            /\ Cardinality(
                   IngressTimeoutVoteProtectedSourcesFor(
@@ -1215,6 +1385,10 @@ PROOF
                     lanes, recipient) \ {source}) \in Nat
            /\ (IF source \in
                     IngressProtectedSourcesFor(lanes, recipient)
+               THEN 1 ELSE 0) \in Nat
+           /\ (IF source \in
+                    IngressCertifiedFenceEscapeProtectedSourcesFor(
+                      lanes, recipient)
                THEN 1 ELSE 0) \in Nat
            /\ (IF source \in
                     IngressTimeoutVoteProtectedSourcesFor(
@@ -1240,6 +1414,11 @@ PROOF
                 lanes, recipient) \ {source} \subseteq
               IngressTimeoutVoteProtectedSourcesFor(lanes, recipient)
         BY Isa
+      <3>2f. IngressCertifiedFenceEscapeProtectedSourcesFor(
+                lanes, recipient) \ {source} \subseteq
+              IngressCertifiedFenceEscapeProtectedSourcesFor(
+                lanes, recipient)
+        BY Isa
       <3>2c. IngressTransportCompletionProtectedSourcesFor(
                 lanes, recipient) \ {source} \subseteq
               IngressTransportCompletionProtectedSourcesFor(
@@ -1247,6 +1426,9 @@ PROOF
         BY Isa
       <3>3. /\ IsFiniteSet(
                     IngressProtectedSourcesFor(
+                      lanes, recipient) \ {source})
+             /\ IsFiniteSet(
+                    IngressCertifiedFenceEscapeProtectedSourcesFor(
                       lanes, recipient) \ {source})
              /\ IsFiniteSet(
                     IngressTimeoutVoteProtectedSourcesFor(
@@ -1257,14 +1439,21 @@ PROOF
              /\ IsFiniteSet(
                     IngressContinuationProtectedSourcesFor(
                       lanes, recipient) \ {source})
-        BY <2>2, <2>4, <2>4t, <2>4c,
-           <3>1, <3>2, <3>2t, <3>2c, FS_Subset
+        BY <2>2, <2>4, <2>4f, <2>4t, <2>4c,
+           <3>1, <3>2, <3>2f, <3>2t, <3>2c, FS_Subset
       <3> QED BY <3>3, FS_CardinalityType, SMT
     <2>10. (Cardinality(
                IngressProtectedSourcesFor(lanes, recipient) \ {source})
                + (IF source \in
                         IngressProtectedSourcesFor(lanes, recipient)
                   THEN 1 ELSE 0))
+              + (Cardinality(
+                   IngressCertifiedFenceEscapeProtectedSourcesFor(
+                     lanes, recipient) \ {source})
+                   + (IF source \in
+                            IngressCertifiedFenceEscapeProtectedSourcesFor(
+                              lanes, recipient)
+                      THEN 1 ELSE 0))
               + (Cardinality(
                    IngressTimeoutVoteProtectedSourcesFor(
                      lanes, recipient) \ {source})
@@ -1289,6 +1478,9 @@ PROOF
             (Cardinality(
                IngressProtectedSourcesFor(lanes, recipient) \ {source})
                + Cardinality(
+                   IngressCertifiedFenceEscapeProtectedSourcesFor(
+                     lanes, recipient) \ {source})
+               + Cardinality(
                    IngressTimeoutVoteProtectedSourcesFor(
                      lanes, recipient) \ {source})
                + Cardinality(
@@ -1299,6 +1491,10 @@ PROOF
                      lanes, recipient) \ {source}))
               + ((IF source \in
                          IngressProtectedSourcesFor(lanes, recipient)
+                    THEN 1 ELSE 0)
+                 + (IF source \in
+                          IngressCertifiedFenceEscapeProtectedSourcesFor(
+                            lanes, recipient)
                     THEN 1 ELSE 0)
                  + (IF source \in
                           IngressTimeoutVoteProtectedSourcesFor(
@@ -1316,6 +1512,9 @@ PROOF
     <2>11. (Cardinality(
                IngressProtectedSourcesFor(lanes, recipient) \ {source})
                + Cardinality(
+                   IngressCertifiedFenceEscapeProtectedSourcesFor(
+                     lanes, recipient) \ {source})
+               + Cardinality(
                    IngressTimeoutVoteProtectedSourcesFor(
                      lanes, recipient) \ {source})
                + Cardinality(
@@ -1326,6 +1525,10 @@ PROOF
                      lanes, recipient) \ {source}))
               + ((IF source \in
                          IngressProtectedSourcesFor(lanes, recipient)
+                    THEN 1 ELSE 0)
+                 + (IF source \in
+                          IngressCertifiedFenceEscapeProtectedSourcesFor(
+                            lanes, recipient)
                     THEN 1 ELSE 0)
                  + (IF source \in
                           IngressTimeoutVoteProtectedSourcesFor(
@@ -1420,6 +1623,7 @@ PROOF
           <5> QED BY <4>1, <5>1, Isa
                DEF IngressContinuationProtectedSourcesFor,
                    IngressLaneHasNonTimeoutProgressIn,
+                   IngressLaneHasCertifiedFenceEscapeIn,
                    IngressLaneHasTimeoutVoteIn,
                    IngressLaneHasTransportCompletionIn, SequenceSet
         <4>2. CASE candidate \notin AsyncIngressSources \ {source}
@@ -1463,6 +1667,37 @@ PROOF
            IngressTimeoutVoteProtectedSourcesFor(
              beforeLanes, recipient) \ {source}
       BY <2>6, Isa
+    <2>7f. \A candidate:
+              candidate \in
+                IngressCertifiedFenceEscapeProtectedSourcesFor(
+                  afterLanes, recipient) \ {source}
+              <=> candidate \in
+                IngressCertifiedFenceEscapeProtectedSourcesFor(
+                  beforeLanes, recipient) \ {source}
+      <3>1. ASSUME NEW candidate
+             PROVE candidate \in
+                     IngressCertifiedFenceEscapeProtectedSourcesFor(
+                       afterLanes, recipient) \ {source}
+                   <=> candidate \in
+                     IngressCertifiedFenceEscapeProtectedSourcesFor(
+                       beforeLanes, recipient) \ {source}
+        <4>1. CASE candidate \in AsyncIngressSources \ {source}
+          <5>1. afterLanes[recipient][candidate] =
+                   beforeLanes[recipient][candidate]
+            BY <1>1, <4>1
+          <5> QED BY <4>1, <5>1, Isa
+               DEF IngressCertifiedFenceEscapeProtectedSourcesFor,
+                   IngressLaneHasCertifiedFenceEscapeIn, SequenceSet
+        <4>2. CASE candidate \notin AsyncIngressSources \ {source}
+          BY <2>3, <4>2, Isa
+             DEF IngressCertifiedFenceEscapeProtectedSourcesFor
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2>7g. IngressCertifiedFenceEscapeProtectedSourcesFor(
+              afterLanes, recipient) \ {source} =
+            IngressCertifiedFenceEscapeProtectedSourcesFor(
+              beforeLanes, recipient) \ {source}
+      BY <2>7f, Isa
     <2>8. \A candidate:
              candidate \in
                IngressTransportCompletionProtectedSourcesFor(
@@ -1494,7 +1729,7 @@ PROOF
            IngressTransportCompletionProtectedSourcesFor(
              beforeLanes, recipient) \ {source}
       BY <2>8, Isa
-    <2> QED BY <2>2, <2>5, <2>7, <2>9
+    <2> QED BY <2>2, <2>5, <2>7, <2>7g, <2>9
          DEF IngressProtectedSlotCountWithoutSourceFor
   <1> QED BY <1>1
 
@@ -2403,10 +2638,12 @@ PROOF
           BY <4>1, Isa
              DEF IngressProtectedSlotCountFor,
                  IngressProtectedSourcesFor,
+                 IngressCertifiedFenceEscapeProtectedSourcesFor,
                  IngressTimeoutVoteProtectedSourcesFor,
                  IngressTransportCompletionProtectedSourcesFor,
                  IngressContinuationProtectedSourcesFor,
                  IngressLaneHasNonTimeoutProgressIn,
+                 IngressLaneHasCertifiedFenceEscapeIn,
                  IngressLaneHasTimeoutVoteIn,
                  IngressLaneHasTransportCompletionIn,
                  SequenceSet
@@ -3200,10 +3437,10 @@ THEOREM SelectedIngressItemHasLaneOwnership ==
          => /\ IngressLane(
                    node, asyncIngressReady[node][index])[laneIndex]
                    .envelope.recipient = node
-             /\ IngressResourceSource(
+             /\ AsyncIngressItemSourceBinding(
                   IngressLane(
-                    node, asyncIngressReady[node][index])[laneIndex]) =
-                  asyncIngressReady[node][index]
+                    node, asyncIngressReady[node][index])[laneIndex],
+                  asyncIngressReady[node][index])
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 NEW index \in 1..Len(asyncIngressReady[node]),
@@ -3214,10 +3451,10 @@ PROOF
          PROVE /\ IngressLane(
                         node, asyncIngressReady[node][index])[laneIndex]
                         .envelope.recipient = node
-               /\ IngressResourceSource(
+               /\ AsyncIngressItemSourceBinding(
                     IngressLane(
-                      node, asyncIngressReady[node][index])[laneIndex]) =
-                    asyncIngressReady[node][index]
+                      node, asyncIngressReady[node][index])[laneIndex],
+                    asyncIngressReady[node][index])
     <2>1. asyncIngressReady[node][index]
                \in SequenceSet(asyncIngressReady[node])
       BY <1>1, RangeEquality
@@ -3234,11 +3471,11 @@ PROOF
                      node, asyncIngressReady[node][index])[
                        candidateLaneIndex]
                      .envelope.recipient = node
-                /\ IngressResourceSource(
+                /\ AsyncIngressItemSourceBinding(
                      IngressLane(
                        node, asyncIngressReady[node][index])[
-                         candidateLaneIndex]) =
-                     asyncIngressReady[node][index]
+                         candidateLaneIndex],
+                     asyncIngressReady[node][index])
       BY <1>1, <2>1
          DEF AsyncIngressTypeInvariant,
              AsyncIngressTopologyTypeInvariant,

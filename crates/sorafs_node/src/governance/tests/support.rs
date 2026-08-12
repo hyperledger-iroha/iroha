@@ -632,21 +632,68 @@ fn only_published_source_paths(root: &Path, payload_kind: &str) -> (PathBuf, Pat
 fn runtime_dag_decode_allocation_budget_is_scaled_and_absolutely_capped() {
     assert_eq!(
         runtime_dag_decode_allocation_limit(1),
-        GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1
+        GOVERNANCE_RUNTIME_DAG_DECODE_MIN_ALLOCATED_BYTES_V1
     );
-    let cap_input = GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1
+    let last_scaled_input = (GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1 - 1)
         / GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1;
     assert_eq!(
-        runtime_dag_decode_allocation_limit(cap_input),
-        GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1
+        runtime_dag_decode_allocation_limit(last_scaled_input),
+        last_scaled_input * GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1
     );
+    let first_capped_input = last_scaled_input.saturating_add(1);
     assert_eq!(
-        runtime_dag_decode_allocation_limit(cap_input.saturating_add(1)),
+        runtime_dag_decode_allocation_limit(first_capped_input),
         GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1
     );
     assert_eq!(
         runtime_dag_decode_allocation_limit(usize::MAX),
         GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1
+    );
+}
+
+#[test]
+fn runtime_dag_decode_allocation_floor_admits_one_composite_state_but_rejects_two() {
+    let state = FencedPrivacyStateV1 {
+        version: GOVERNANCE_FENCED_PRIVACY_STATE_VERSION_V1,
+        pending: None,
+        publication_cache: None,
+        authoritative_head_sync: None,
+    };
+    let bytes = encode_governance_two_slot_value_v1(&state, "empty fenced privacy state")
+        .expect("encode production empty fenced privacy state");
+    assert_eq!(bytes.len(), 48, "production empty-state canonical width");
+    assert_eq!(
+        runtime_dag_decode_allocation_limit(bytes.len()),
+        GOVERNANCE_RUNTIME_DAG_DECODE_MIN_ALLOCATED_BYTES_V1
+    );
+    let decoded: FencedPrivacyStateV1 =
+        decode_canonical_runtime_dag(&bytes, "empty fenced privacy state")
+            .expect("decode production empty fenced privacy state");
+    assert_eq!(decoded, state);
+
+    let composite = (state.clone(), state);
+    let composite_bytes =
+        encode_governance_two_slot_value_v1(&composite, "two empty fenced privacy states")
+            .expect("encode two empty fenced privacy states");
+    assert!(
+        composite_bytes.len()
+            <= GOVERNANCE_RUNTIME_DAG_DECODE_MIN_ALLOCATED_BYTES_V1
+                / GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1,
+        "negative fixture must remain inside the bounded allocation-floor interval"
+    );
+    assert_eq!(
+        runtime_dag_decode_allocation_limit(composite_bytes.len()),
+        GOVERNANCE_RUNTIME_DAG_DECODE_MIN_ALLOCATED_BYTES_V1
+    );
+    let error = decode_canonical_runtime_dag::<(FencedPrivacyStateV1, FencedPrivacyStateV1)>(
+        &composite_bytes,
+        "two empty fenced privacy states",
+    )
+    .expect_err("two composite records must exceed the bounded allocation floor");
+    let message = error.to_string();
+    assert!(
+        message.contains("cumulative allocation") && message.contains("exceeds decode limit 2048"),
+        "unexpected allocation-floor diagnostic: {error}"
     );
 }
 

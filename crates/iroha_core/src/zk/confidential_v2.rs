@@ -4192,7 +4192,6 @@ fn confidential_subtree_root_v3(
     if height == 0 {
         return confidential_commitment_leaf_v3(commitments[start], start);
     }
-
     let half_width = 1_usize << (height - 1);
     let left = confidential_subtree_root_v3(commitments, start, height - 1, empty_roots)?;
     let right =
@@ -4208,27 +4207,44 @@ pub fn compute_confidential_root_v3(commitments: &[[u8; 32]]) -> Result<[u8; 32]
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn append_confidential_tree_leaf_v3(
+    mut position: usize,
+    mut node: Scalar,
+    frontier: &mut [Option<Scalar>; CONFIDENTIAL_TREE_DEPTH_V2],
+    empty_roots: &[Scalar; CONFIDENTIAL_TREE_DEPTH_V2 + 1],
+) -> Result<Scalar, String> {
+    let mut frontier_carry_resolved = false;
+    for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
+        if !frontier_carry_resolved && position & 1 == 0 {
+            frontier[level] = Some(node);
+            frontier_carry_resolved = true;
+            node = merkle_parent_v3(node, empty_roots[level]);
+        } else if let Some(left) = frontier[level] {
+            if !frontier_carry_resolved {
+                frontier[level] = None;
+            }
+            node = merkle_parent_v3(left, node);
+        } else if !frontier_carry_resolved {
+            return Err(format!(
+                "missing confidential tree frontier at level {level}"
+            ));
+        } else {
+            node = merkle_parent_v3(node, empty_roots[level]);
+        }
+        position >>= 1;
+    }
+    Ok(node)
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn compute_confidential_prefix_roots_v3(commitments: &[[u8; 32]]) -> Result<Vec<[u8; 32]>, String> {
     validate_confidential_tree_len_v3(commitments)?;
     let empty_roots = confidential_empty_subtree_roots_v3();
     let mut frontier = [None; CONFIDENTIAL_TREE_DEPTH_V2];
     let mut roots = Vec::with_capacity(commitments.len());
-
     for (leaf_index, commitment) in commitments.iter().copied().enumerate() {
-        let mut node = confidential_commitment_leaf_v3(commitment, leaf_index)?;
-        let mut index = leaf_index;
-        for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
-            if index & 1 == 0 {
-                frontier[level] = Some(node);
-                node = merkle_parent_v3(node, empty_roots[level]);
-            } else {
-                let left = frontier[level].take().ok_or_else(|| {
-                    format!("missing confidential tree frontier at level {level}")
-                })?;
-                node = merkle_parent_v3(left, node);
-            }
-            index >>= 1;
-        }
+        let node = confidential_commitment_leaf_v3(commitment, leaf_index)?;
+        let node = append_confidential_tree_leaf_v3(leaf_index, node, &mut frontier, &empty_roots)?;
         roots.push(scalar_to_repr_bytes(node));
     }
     Ok(roots)
@@ -4261,7 +4277,6 @@ impl ConfidentialTreeProjectionV2 {
             .map(|(index, commitment)| confidential_commitment_leaf_v3(commitment, index))
             .collect::<Result<Vec<_>, _>>()?;
         let mut layers = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
-
         for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
             let mut parents = Vec::with_capacity(nodes.len().div_ceil(2));
             for pair in nodes.chunks(2) {
@@ -4272,7 +4287,6 @@ impl ConfidentialTreeProjectionV2 {
             layers.push(nodes);
             nodes = parents;
         }
-
         let root = nodes
             .first()
             .copied()
@@ -4381,7 +4395,6 @@ pub fn validate_confidential_tree_frontier_v2(
             "persisted confidential current root is not a canonical Pasta scalar".to_owned(),
         );
     }
-
     for (level, slot) in frontier.iter().enumerate() {
         let should_be_populated = (commitment_count >> level) & 1 == 1;
         if slot.is_some() != should_be_populated {
@@ -4395,13 +4408,11 @@ pub fn validate_confidential_tree_frontier_v2(
             ));
         }
     }
-
     if commitment_count == CONFIDENTIAL_TREE_CAPACITY_V2 {
         // The final append consumes every lower slot. Full recovery validation
         // compares this separately persisted root with a rebuilt projection.
         return Ok(());
     }
-
     let empty_roots = confidential_empty_subtree_roots_v3();
     let mut node = empty_roots[0];
     for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
@@ -4440,7 +4451,6 @@ pub fn append_confidential_tree_frontier_v2(
         ));
     }
     validate_confidential_tree_frontier_v2(commitment_count, &frontier, persisted_root)?;
-
     let leaves = commitments
         .iter()
         .copied()
@@ -4456,31 +4466,22 @@ pub fn append_confidential_tree_frontier_v2(
             appended_roots: Vec::new(),
         });
     }
-
     let empty_roots = confidential_empty_subtree_roots_v3();
     let mut frontier_scalars = frontier.map(|slot| slot.and_then(scalar_from_repr));
     let mut appended_roots = Vec::with_capacity(leaves.len());
-    for (offset, mut node) in leaves.into_iter().enumerate() {
-        let mut position = commitment_count + offset;
-        for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
-            #[cfg(test)]
-            CONFIDENTIAL_FRONTIER_APPEND_PARENT_HASH_CALLS_V2.with(|calls| {
-                calls.set(calls.get().saturating_add(1));
-            });
-            if position & 1 == 0 {
-                frontier_scalars[level] = Some(node);
-                node = merkle_parent_v3(node, empty_roots[level]);
-            } else {
-                let left = frontier_scalars[level].take().ok_or_else(|| {
-                    format!("missing confidential tree frontier at level {level}")
-                })?;
-                node = merkle_parent_v3(left, node);
-            }
-            position >>= 1;
-        }
+    for (offset, node) in leaves.into_iter().enumerate() {
+        let node = append_confidential_tree_leaf_v3(
+            commitment_count + offset,
+            node,
+            &mut frontier_scalars,
+            &empty_roots,
+        )?;
+        #[cfg(test)]
+        CONFIDENTIAL_FRONTIER_APPEND_PARENT_HASH_CALLS_V2.with(|calls| {
+            calls.set(calls.get().saturating_add(CONFIDENTIAL_TREE_DEPTH_V2));
+        });
         appended_roots.push(scalar_to_repr_bytes(node));
     }
-
     Ok(ConfidentialTreeAppendV2 {
         frontier: frontier_scalars.map(|slot| slot.map(scalar_to_repr_bytes)),
         current_root: appended_roots.last().copied().unwrap_or(persisted_root),
@@ -4553,7 +4554,6 @@ fn confidential_sparse_fixture_subtree_root_v3(
             confidential_commitment_leaf_v3(commitment, start)
         });
     }
-
     let half_width = 1_usize << (height - 1);
     let left =
         confidential_sparse_fixture_subtree_root_v3(commitments, start, height - 1, empty_roots)?;

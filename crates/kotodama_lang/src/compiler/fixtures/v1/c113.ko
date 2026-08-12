@@ -1,0 +1,6 @@
+
+seiyaku CompilerFixture {
+fn apply(AccountId account, AssetDefinitionId asset) {
+  ledger::asset::set_holding_limit(account: account, asset_definition: asset, limit: true);
+}
+}

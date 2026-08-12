@@ -1435,7 +1435,7 @@ pub(super) fn recovered_certified_serve_projection(
             None,
         ),
         AuthenticatedRecoveredCertifiedServePayloadState::Completed(completed) => {
-            let response = digest_from_bytes(HashOf::new(completed.response()).as_ref());
+            let response = digest_from_bytes(completed.response_hash().as_ref());
             (
                 DurablePayloadReference::CertifiedServeCompleted {
                     request,

@@ -38,9 +38,8 @@ pub mod payloads {
     }
 
     /// Context for trigger entrypoint
-    #[derive(Encode, Decode)]
+    #[derive(Debug, Clone, Encode, Decode)]
     #[norito(decode_from_slice)]
-    #[cfg_attr(not(feature = "fast_dsl"), derive(Debug, Clone))]
     pub struct TriggerContext {
         /// Id of this trigger
         pub id: TriggerId,
@@ -705,7 +704,9 @@ mod contract_address_tests {
     use crate::{block::BlockHeader, id::ChainId};
 
     fn network_id(seed: &[u8]) -> NetworkId {
-        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(seed)))
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            seed,
+        )))
     }
 
     fn cross_sdk_network_id() -> NetworkId {
@@ -778,23 +779,15 @@ mod contract_address_tests {
         );
         assert_eq!(first_deployment.0, second_deployment.0);
         assert_ne!(first_deployment.1, second_deployment.1);
-        let first = ContractAddress::derive(
-            &first_deployment.1,
-            &authority,
-            0,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("first-network address");
+        let first =
+            ContractAddress::derive(&first_deployment.1, &authority, 0, DataSpaceId::UNIVERSAL)
+                .expect("first-network address");
         let next_nonce =
             ContractAddress::derive(&first_deployment.1, &authority, 1, DataSpaceId::UNIVERSAL)
                 .expect("nonce+1 address");
-        let second = ContractAddress::derive(
-            &second_deployment.1,
-            &authority,
-            0,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("second-network address");
+        let second =
+            ContractAddress::derive(&second_deployment.1, &authority, 0, DataSpaceId::UNIVERSAL)
+                .expect("second-network address");
 
         assert_ne!(first, next_nonce);
         assert_ne!(first, second);

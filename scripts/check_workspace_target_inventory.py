@@ -125,7 +125,7 @@ def check_metadata(metadata: dict[str, Any]) -> list[str]:
     if len(declared) != EXPECTED_DECLARED_BIN_COUNT:
         errors.append(
             f"declared binary count {len(declared)} differs from the expected "
-            f"{EXPECTED_DECLARED_BIN_COUNT} after retiring five obsolete aliases and "
+            f"{EXPECTED_DECLARED_BIN_COUNT} after retiring obsolete aliases and "
             "adding the three reviewed first-release targets "
             f"(pre-refactor baseline: {BASELINE_DECLARED_BIN_COUNT})"
         )

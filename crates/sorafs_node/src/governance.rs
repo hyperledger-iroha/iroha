@@ -235,8 +235,9 @@ const GOVERNANCE_RUNTIME_DAG_SOURCE_PAYLOAD_MAX_BYTES: usize =
 pub(crate) const GOVERNANCE_RUNTIME_DAG_ENTRY_HARD_CAP_V1: usize = 131_072;
 const GOVERNANCE_RUNTIME_DAG_TOTAL_BYTES_HARD_CAP_V1: u64 = 1024 * 1024 * 1024;
 const GOVERNANCE_RUNTIME_DAG_MAX_FUTURE_SKEW_SECS_V1: u64 = 60;
-// Nested qualification histories currently decode at just over 18x their
-// canonical byte length; retain bounded headroom below the independent cap.
+// Nested qualification histories need 20x variable headroom; small composite
+// records need a 2 KiB floor for their 1,696 bytes of fixed decode overhead.
+const GOVERNANCE_RUNTIME_DAG_DECODE_MIN_ALLOCATED_BYTES_V1: usize = 2 * 1024;
 const GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1: usize = 20;
 const GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1: usize = 512 * 1024 * 1024;
 const GOVERNANCE_RUNTIME_DAG_DECODE_MAX_TOTAL_ELEMENTS_V1: usize = 4_000_000;
@@ -3079,7 +3080,6 @@ impl FilesystemGovernancePublisher {
         previous_store.assert_qualification()?;
         next_signer.assert_qualification()?;
         next_store.assert_qualification()?;
-
         let previous_binding = runtime_dag_provider_binding(&previous_signer, &previous_store);
         let next_binding = runtime_dag_provider_binding(&next_signer, &next_store);
         if previous_binding == next_binding {
@@ -3087,7 +3087,6 @@ impl FilesystemGovernancePublisher {
             self.runtime_dag_checkpoint_store = Some(next_store);
             return Ok(());
         }
-
         if let Some((history, _)) =
             read_runtime_dag_qualification_history(&self.root, &self.root_guard, None)?
         {
@@ -3470,6 +3469,7 @@ impl FilesystemGovernancePublisher {
         labels: JsonMap,
     ) -> Result<(PathBuf, PathBuf), GovernancePublishError> {
         reject_governance_publication_recovery_quarantine(&self.root_guard)?;
+        reject_legacy_governance_publication_authorities(&self.root, &self.root_guard)?;
         validate_governance_car_source_lengths(encoded.len(), json_bytes.len())?;
         let digest_hex = blake3::hash(encoded).to_hex().to_string();
         let json_blake3 = blake3::hash(json_bytes).to_hex().to_string();
@@ -3488,7 +3488,6 @@ impl FilesystemGovernancePublisher {
         )?;
         let encoded_path = resolve_index_path(&self.root, &encoded_relative)?;
         let json_path = resolve_index_path(&self.root, &json_relative)?;
-
         let (mut publication_state, publication_snapshot) =
             read_governance_publication_state(&self.publication_state_store)?;
         let publish_index = match publication_state.remove("publish_index") {
@@ -9899,6 +9898,7 @@ where
 fn runtime_dag_decode_allocation_limit(input_bytes: usize) -> usize {
     input_bytes
         .saturating_mul(GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1)
+        .max(GOVERNANCE_RUNTIME_DAG_DECODE_MIN_ALLOCATED_BYTES_V1)
         .min(GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1)
 }
 
@@ -10588,7 +10588,7 @@ fn parse_runtime_dag_qualification_archive_name(name: &str) -> Option<(u64, [u8;
 fn runtime_dag_qualification_archive_temp_inventory(
     directory: &governance_rooted_fs::RootedDirectory,
     next_generation: u64,
-) -> Result<Vec<(OsString, usize)>, GovernancePublishError> {
+) -> Result<(Vec<(OsString, usize)>, bool), GovernancePublishError> {
     let canonical_entries = usize::try_from(
         GOVERNANCE_RUNTIME_DAG_QUALIFICATION_ARCHIVE_CHAIN_MAX_V1.saturating_mul(2),
     )
@@ -10604,8 +10604,10 @@ fn runtime_dag_qualification_archive_temp_inventory(
                 "governance runtime DAG qualification archive recovery bound overflowed",
             )
         })?;
+    let entries = directory.child_names_bounded(inventory_limit)?;
+    let directory_was_empty = entries.is_empty();
     let mut temporaries = Vec::new();
-    for name in directory.child_names_bounded(inventory_limit)? {
+    for name in entries {
         let name_utf8 = name.to_str().ok_or_else(|| {
             GovernancePublishError::other(
                 "governance runtime DAG qualification archive name is not UTF-8",
@@ -10645,7 +10647,7 @@ fn runtime_dag_qualification_archive_temp_inventory(
             "governance runtime DAG qualification archive temporaries exceed the recovery quarantine bound",
         ));
     }
-    Ok(temporaries)
+    Ok((temporaries, directory_was_empty))
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -10669,16 +10671,13 @@ fn isolate_runtime_dag_qualification_archive_temps(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.into()),
     };
-    let temporaries =
+    let (temporaries, directory_was_empty) =
         runtime_dag_qualification_archive_temp_inventory(&directory, next_generation)?;
     if temporaries.is_empty() {
-        match root_guard
-            .rooted_directory()
-            .remove_empty_directory_binding(directory)
-        {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => {}
-            Err(error) => return Err(error.into()),
+        if directory_was_empty {
+            root_guard
+                .rooted_directory()
+                .remove_empty_directory_binding(directory)?;
         }
         root_guard.revalidate()?;
         return Ok(());
@@ -10721,7 +10720,7 @@ fn isolate_runtime_dag_qualification_archive_temps(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.into()),
     };
-    let temporaries =
+    let (temporaries, _) =
         runtime_dag_qualification_archive_temp_inventory(&directory, next_generation)?;
     for (name, _) in temporaries {
         let target = name
@@ -15668,7 +15667,7 @@ impl FilesystemGovernancePublisher {
 fn test_submission_provenance(
     origin: crate::GovernanceSubmissionOriginV1,
 ) -> GovernanceSubmissionProvenanceV1 {
-    let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &[0xA5; 32])
+    let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &[0xA7; 32])
         .expect("fixed test publisher key must be valid");
     GovernanceSubmissionProvenanceV1::new(AccountId::new(public_key), origin)
 }

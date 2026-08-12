@@ -1656,12 +1656,17 @@ impl SchedulerReadyInputs {
     /// Join one exact coordinator row, optional sealed Validate carrier, and
     /// the six authenticated runtime debts into a production scheduler row.
     ///
-    /// Validate work requires the registry-derived attestation; every other
-    /// work class forbids one. Missing or foreign authority returns `None`.
+    /// Validate work requires its registry-derived completion attestation;
+    /// recovered Decision Apply requires its closed worker-dispatch
+    /// attestation. Every other work class forbids either authority. Missing,
+    /// foreign, or mixed authority returns `None`.
     pub(super) fn from_authenticated(
         _factory: &AuthenticatedSchedulerInputsFactory,
         record: &LifecycleRecord,
         validate_attestation: Option<AttestedReadyValidateDemand>,
+        recovered_apply_attestation: Option<
+            super::work_registry::ReadyRecoveredDecisionApplyAttestation,
+        >,
         live_debts: [u64; 6],
     ) -> Option<Self> {
         let [mode, capacity, selector, lane, source, runner] = live_debts;
@@ -1676,7 +1681,17 @@ impl SchedulerReadyInputs {
             source,
             runner,
         };
-        row.identity_matches(record.ordinal, record).then_some(row)
+        let carrier_matches = match record.work_class {
+            LifecycleWorkClass::Validate => recovered_apply_attestation.is_none(),
+            LifecycleWorkClass::Apply => {
+                validate_attestation.is_none()
+                    && recovered_apply_attestation
+                        .as_ref()
+                        .is_some_and(|attestation| attestation.matches_ready_record(record))
+            }
+            _ => validate_attestation.is_none() && recovered_apply_attestation.is_none(),
+        };
+        (carrier_matches && row.identity_matches(record.ordinal, record)).then_some(row)
     }
 
     /// Construct one test row without exposing a production rank mint.

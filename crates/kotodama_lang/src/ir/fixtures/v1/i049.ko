@@ -1,0 +1,10 @@
+
+            seiyaku C {
+                state int counter;
+                hajimari() { counter = 0; }
+                fn main() -> int {
+                    counter = 7;
+                    return counter;
+                }
+            }
+        

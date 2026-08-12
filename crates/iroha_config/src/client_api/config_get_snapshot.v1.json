@@ -1,0 +1,126 @@
+{
+  "public_key": "ed0120CD347EC5DCB5DBBFC032A62C1BB14377E3D40623E6BB76CBF4D41208DE0CEFD0",
+  "logger": {
+    "level": "TRACE",
+    "filter": null
+  },
+  "network": {
+    "chain_discriminant": 753,
+    "block_gossip_size": 10,
+    "block_gossip_period_ms": 5000,
+    "peer_gossip_period_ms": 1000,
+    "trust_decay_half_life_ms": 300000,
+    "trust_penalty_bad_gossip": 5,
+    "trust_penalty_unknown_peer": 3,
+    "trust_min_score": -20,
+    "trust_gossip": true,
+    "relay_ttl": 8,
+    "transaction_gossip_size": 512,
+    "transaction_gossip_period_ms": 1000,
+    "transaction_gossip_resend_ticks": 3,
+    "soranet_handshake": {
+      "descriptor_commit_hex": "76d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f",
+      "client_capabilities_hex": "0101000201010102000201010104000284050202000200047f100004deadbeef7f110004cafebabe",
+      "relay_capabilities_hex": "0101000201010102000201010103002076d0f4f511391e6548e6f9c80f30ed61c4cbbb98b5ecec922d8af67233f21f1f01040002840502010001010202000200047f12000412345678",
+      "kem_id": 1,
+      "sig_id": 1,
+      "resume_hash_hex": null,
+      "pow": {
+        "required": true,
+        "difficulty": 6,
+        "max_future_skew_secs": 300,
+        "min_ticket_ttl_secs": 30,
+        "ticket_ttl_secs": 60,
+        "puzzle": {
+          "memory_kib": 65536,
+          "time_cost": 2,
+          "lanes": 1
+        }
+      }
+    },
+    "soranet_privacy": {
+      "bucket_secs": 60,
+      "min_handshakes": 12,
+      "flush_delay_buckets": 1,
+      "force_flush_buckets": 6,
+      "max_completed_buckets": 120,
+      "max_share_lag_buckets": 12,
+      "expected_shares": 2,
+      "event_buffer_capacity": 4096
+    },
+    "soranet_vpn": {
+      "enabled": false,
+      "cell_size_bytes": 1024,
+      "flow_label_bits": 24,
+      "cover_to_data_per_mille": 250,
+      "max_cover_burst": 3,
+      "heartbeat_ms": 500,
+      "jitter_ms": 10,
+      "padding_budget_ms": 15,
+      "guard_refresh_secs": 3600,
+      "lease_secs": 600,
+      "dns_push_interval_secs": 90,
+      "exit_class": "standard",
+      "meter_family": "soranet.vpn.standard",
+      "operator_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+      "lease_fee": "0.001",
+      "settlement_grace_secs": 60,
+      "route_pushes": [
+        "0.0.0.0/0",
+        "::/0"
+      ],
+      "excluded_routes": [],
+      "dns_servers": [
+        "1.1.1.1"
+      ]
+    },
+    "lane_profile": "core",
+    "require_sm_handshake_match": true,
+    "require_sm_openssl_preview_match": true
+  },
+  "queue": {
+    "capacity": 656565,
+    "max_retained_bytes": 123456789
+  },
+  "consensus": {
+    "protocol_version": 4,
+    "role": "validator"
+  },
+  "confidential_gas": {
+    "proof_base": 777777,
+    "per_public_input": 3333,
+    "per_proof_byte": 42,
+    "per_nullifier": 123,
+    "per_commitment": 321
+  },
+  "transport": {
+    "norito_rpc": {
+      "enabled": true,
+      "stage": "ga",
+      "require_mtls": true,
+      "canary_allowlist_size": 2
+    },
+    "streaming": {
+      "soranet": {
+        "enabled": true,
+        "stream_tag": "norito-stream",
+        "exit_multiaddr": "/dns/torii/udp/9443/quic",
+        "padding_budget_ms": 25,
+        "access_kind": "authenticated",
+        "gar_category": "stream.norito.authenticated",
+        "channel_salt": "iroha.soranet.channel.seed.v1",
+        "provision_spool_dir": "./storage/streaming/soranet_routes",
+        "provision_window_segments": 4,
+        "provision_queue_capacity": 256
+      }
+    }
+  },
+  "nexus": {
+    "axt": {
+      "slot_length_ms": 10,
+      "max_clock_skew_ms": 5,
+      "proof_cache_ttl_slots": 4,
+      "replay_retention_slots": 256
+    }
+  }
+}

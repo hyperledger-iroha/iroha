@@ -1,0 +1,4 @@
+
+seiyaku AxtLiteralValidation {
+    kotoage fn run() authorize("AxtLiteralValidation") {}
+}

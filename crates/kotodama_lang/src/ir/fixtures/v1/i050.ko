@@ -1,0 +1,8 @@
+
+            seiyaku C {
+                struct Pair { int count; bool ready }
+                state StateMap<int, Pair> values;
+                hajimari() {}
+                fn main() { let _missing = values.get(7); }
+            }
+        

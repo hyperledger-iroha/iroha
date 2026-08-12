@@ -1,0 +1,12 @@
+
+            fn f() -> int {
+                let invariant = 10;
+                var carried = 0;
+                for index in range(4) {
+                    if index == 2 { break; }
+                    carried = carried + 1;
+                    if index == 1 { continue; }
+                }
+                return carried + invariant;
+            }
+        

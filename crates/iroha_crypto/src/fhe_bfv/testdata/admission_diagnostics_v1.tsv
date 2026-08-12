@@ -1,0 +1,175 @@
+iroha-bfv-diagnostics-v1
+0	S	canonical v1 bytes	D	runtime context retained in Rust
+1	S	canonical v1 bytes	D	runtime context retained in Rust
+2	S	canonical v1 bytes	D	runtime context retained in Rust
+3	S	Norito-encoded BFV proof input material	D	runtime context retained in Rust
+4	S	Norito-encoded BFV proof input material	D	runtime context retained in Rust
+5	S	Norito-encoded BFV proof input material	D	runtime context retained in Rust
+6	N		S	exact public-key proof input digest must hash self-describing material
+7	N		S	caller-bound exact public-key proof input byte digesting must match the typed digest
+8	N		S	caller-bound exact public-key proof input byte digest helper must return decoded material
+9	N		S	caller-bound exact public-key proof input byte digest helper must return the admitted digest
+10	N		S	caller-bound exact public-key proof input admission must return decoded material
+11	N		S	exact public-key/proof-input byte admission must return decoded key and material
+12	N		S	exact public-key/proof-input byte digest admission must return decoded key, material, and digest
+13	N		S	exact public-key/proof-input byte digest admission must return decoded key, material, public-key digest, and proof-input digest
+14	S	canonical v1 bytes	S	caller-bound exact public-key proof input admission must reject compressed framing
+15	S	canonical v1 bytes	S	caller-bound exact public-key proof input byte digesting must reject compressed framing
+16	S	canonical v1 bytes	S	caller-bound exact public-key proof input byte digest helper must reject compressed framing
+17	S	public key b	S	caller-bound exact public-key proof input admission must reject malformed caller keys before proof-input framing
+18	S	public key b	S	caller-bound exact public-key proof input byte digesting must reject malformed caller keys before proof-input framing
+19	S	public key b	S	caller-bound exact public-key proof input byte digest helper must reject malformed caller keys before proof-input framing
+20	S	Norito-encoded BFV proof input material	S	caller-bound exact public-key proof input admission must reject non-Norito bytes
+21	S	Norito-encoded BFV proof input material	S	caller-bound exact public-key proof input byte digesting must reject non-Norito bytes
+22	S	Norito-encoded BFV proof input material	S	caller-bound exact public-key proof input byte digest helper must reject non-Norito bytes
+23	S	public key mismatch	S	caller-bound exact public-key proof input admission must reject key substitution
+24	S	public key mismatch	S	caller-bound exact public-key proof input byte digesting must reject key substitution
+25	S	public key mismatch	S	caller-bound exact public-key proof input byte digest helper must reject key substitution
+26	S	canonical v1 bytes	S	exact public-key/proof-input byte admission must reject compressed key framing
+27	S	canonical v1 bytes	S	exact public-key/proof-input byte digest admission must reject compressed key framing
+28	S	canonical v1 bytes	S	exact public-key/proof-input byte all-digest admission must reject compressed key framing
+29	S	canonical v1 bytes	S	exact public-key/proof-input byte admission must reject compressed proof-input framing
+30	S	canonical v1 bytes	S	exact public-key/proof-input byte digest admission must reject compressed proof-input framing
+31	S	canonical v1 bytes	S	exact public-key/proof-input byte all-digest admission must reject compressed proof-input framing
+32	S	seeded BFV encryption residual bound	S	caller-bound exact public-key proof input admission must reject insufficient residual capacity before proof-input framing
+33	S	seeded BFV encryption residual bound	S	caller-bound exact public-key proof input byte digesting must reject insufficient residual capacity before proof-input framing
+34	S	seeded BFV encryption residual bound	S	caller-bound exact public-key proof input byte digest helper must reject insufficient residual capacity before proof-input framing
+35	S	seeded BFV encryption residual bound	S	exact public-key/proof-input byte admission must reject insufficient residual capacity before proof-input framing
+36	S	seeded BFV encryption residual bound	S	exact public-key/proof-input byte digest admission must reject insufficient residual capacity before proof-input framing
+37	S	seeded BFV encryption residual bound	S	exact public-key/proof-input byte all-digest admission must reject insufficient residual capacity before proof-input framing
+38	S	seeded BFV encryption residual bound	S	exact public-key/proof-input byte admission must reject insufficient residual capacity before public-key or proof-input framing
+39	S	seeded BFV encryption residual bound	S	exact public-key/proof-input byte digest admission must reject insufficient residual capacity before public-key or proof-input framing
+40	S	seeded BFV encryption residual bound	S	exact public-key/proof-input byte all-digest admission must reject insufficient residual capacity before public-key or proof-input framing
+41	N		S	bounded public-key proof input digest must hash self-describing material
+42	N		S	caller-bound bounded public-key proof input byte digesting must match the typed digest
+43	N		S	caller-bound bounded public-key proof input byte digest helper must return decoded material
+44	N		S	caller-bound bounded public-key proof input byte digest helper must return the admitted digest
+45	N		S	caller-bound bounded public-key proof input admission must return decoded material
+46	N		S	bounded public-key/proof-input byte admission must return decoded key and material
+47	N		S	bounded public-key/proof-input byte digest admission must return decoded key, material, and digest
+48	N		S	bounded public-key/proof-input byte digest admission must return decoded key, material, public-key digest, and proof-input digest
+49	S	canonical v1 bytes	S	caller-bound bounded public-key proof input admission must reject compressed framing
+50	S	canonical v1 bytes	S	caller-bound bounded public-key proof input byte digesting must reject compressed framing
+51	S	canonical v1 bytes	S	caller-bound bounded public-key proof input byte digest helper must reject compressed framing
+52	S	public key b	S	caller-bound bounded public-key proof input admission must reject malformed caller keys before proof-input framing
+53	S	public key b	S	caller-bound bounded public-key proof input byte digesting must reject malformed caller keys before proof-input framing
+54	S	public key b	S	caller-bound bounded public-key proof input byte digest helper must reject malformed caller keys before proof-input framing
+55	S	Norito-encoded BFV proof input material	S	caller-bound bounded public-key proof input admission must reject non-Norito bytes
+56	S	Norito-encoded BFV proof input material	S	caller-bound bounded public-key proof input byte digesting must reject non-Norito bytes
+57	S	Norito-encoded BFV proof input material	S	caller-bound bounded public-key proof input byte digest helper must reject non-Norito bytes
+58	S	canonical v1 bytes	S	bounded public-key/proof-input byte admission must reject compressed key framing
+59	S	canonical v1 bytes	S	bounded public-key/proof-input byte digest admission must reject compressed key framing
+60	S	canonical v1 bytes	S	bounded public-key/proof-input byte all-digest admission must reject compressed key framing
+61	S	canonical v1 bytes	S	bounded public-key/proof-input byte admission must reject compressed proof-input framing
+62	S	canonical v1 bytes	S	bounded public-key/proof-input byte digest admission must reject compressed proof-input framing
+63	S	canonical v1 bytes	S	bounded public-key/proof-input byte all-digest admission must reject compressed proof-input framing
+64	S	fresh encryption noise bound	S	caller-bound bounded public-key proof input admission must reject insufficient noise capacity before proof-input framing
+65	S	fresh encryption noise bound	S	caller-bound bounded public-key proof input byte digesting must reject insufficient noise capacity before proof-input framing
+66	S	fresh encryption noise bound	S	caller-bound bounded public-key proof input byte digest helper must reject insufficient noise capacity before proof-input framing
+67	S	fresh encryption noise bound	S	bounded public-key/proof-input byte admission must reject insufficient noise capacity before proof-input framing
+68	S	fresh encryption noise bound	S	bounded public-key/proof-input byte digest admission must reject insufficient noise capacity before proof-input framing
+69	S	fresh encryption noise bound	S	bounded public-key/proof-input byte all-digest admission must reject insufficient noise capacity before proof-input framing
+70	S	fresh encryption noise bound	S	bounded public-key/proof-input byte admission must reject insufficient noise capacity before public-key or proof-input framing
+71	S	fresh encryption noise bound	S	bounded public-key/proof-input byte digest admission must reject insufficient noise capacity before public-key or proof-input framing
+72	S	fresh encryption noise bound	S	bounded public-key/proof-input byte all-digest admission must reject insufficient noise capacity before public-key or proof-input framing
+73	S	public key mismatch	S	caller-bound bounded public-key proof input admission must reject key substitution
+74	S	public key mismatch	S	caller-bound bounded public-key proof input byte digesting must reject key substitution
+75	S	public key mismatch	S	caller-bound bounded public-key proof input byte digest helper must reject key substitution
+76	S	public key mismatch	S	bounded public-key/proof-input byte admission must reject decoded key substitution
+77	S	public key mismatch	S	bounded public-key/proof-input byte digest admission must reject decoded key substitution
+78	S	public key mismatch	S	bounded public-key/proof-input byte all-digest admission must reject decoded key substitution
+79	N		S	exact ciphertext proof input digest must hash self-describing material
+80	N		S	caller-bound exact ciphertext proof input admission must return decoded material
+81	N		S	caller-bound exact ciphertext proof input byte digesting must match the typed digest
+82	N		S	caller-bound exact ciphertext proof input byte digest helper must return decoded material
+83	N		S	caller-bound exact ciphertext proof input byte digest helper must return the admitted digest
+84	N		S	exact ciphertext/proof-input byte admission must return decoded key, ciphertext, and material
+85	N		S	exact ciphertext/proof-input byte digest admission must return decoded key, ciphertext, material, and digest
+86	N		S	exact ciphertext/proof-input byte digest admission must return decoded key, ciphertext, material, key digest, ciphertext digest, and proof-input digest
+87	S	declared bound mismatch	S	caller-bound exact ciphertext proof input admission must reject bound substitution
+88	S	declared bound mismatch	S	caller-bound exact ciphertext proof input byte digesting must reject bound substitution
+89	S	declared bound mismatch	S	caller-bound exact ciphertext proof input byte digest helper must reject bound substitution
+90	S	declared bound mismatch	S	exact ciphertext/proof-input byte all-digest admission must reject bound substitution
+91	S	canonical v1 bytes	S	exact ciphertext/proof-input byte all-digest admission must reject compressed key framing
+92	S	canonical v1 bytes	S	exact ciphertext/proof-input byte admission must reject compressed ciphertext framing
+93	S	canonical v1 bytes	S	exact ciphertext/proof-input byte digest admission must reject compressed ciphertext framing
+94	S	canonical v1 bytes	S	exact ciphertext/proof-input byte all-digest admission must reject compressed ciphertext framing
+95	S	caller-declared bound	S	exact ciphertext/proof-input byte admission must reject oversized declared bounds before ciphertext framing
+96	S	caller-declared bound	S	exact ciphertext/proof-input byte digest admission must reject oversized declared bounds before ciphertext framing
+97	S	caller-declared bound	S	exact ciphertext/proof-input byte all-digest admission must reject oversized declared bounds before ciphertext framing
+98	S	caller-declared bound	S	exact ciphertext/proof-input byte admission must reject oversized declared bounds before public-key or ciphertext framing
+99	S	caller-declared bound	S	exact ciphertext/proof-input byte digest admission must reject oversized declared bounds before public-key or ciphertext framing
+100	S	caller-declared bound	S	exact ciphertext/proof-input byte all-digest admission must reject oversized declared bounds before public-key or ciphertext framing
+101	S	caller-declared bound	S	caller-bound exact ciphertext proof input admission must reject oversized declared bounds before proof-input framing
+102	S	caller-declared bound	S	caller-bound exact ciphertext proof input byte digesting must reject oversized declared bounds before proof-input framing
+103	S	caller-declared bound	S	caller-bound exact ciphertext proof input byte digest helper must reject oversized declared bounds before proof-input framing
+104	S	ciphertext c0	S	caller-bound exact ciphertext proof input admission must reject malformed caller ciphertexts before proof-input framing
+105	S	ciphertext c0	S	caller-bound exact ciphertext proof input byte digesting must reject malformed caller ciphertexts before proof-input framing
+106	S	ciphertext c0	S	caller-bound exact ciphertext proof input byte digest helper must reject malformed caller ciphertexts before proof-input framing
+107	S	canonical v1 bytes	S	exact ciphertext/proof-input byte admission must reject compressed proof-input framing
+108	S	canonical v1 bytes	S	caller-bound exact ciphertext proof input byte digesting must reject compressed framing
+109	S	canonical v1 bytes	S	caller-bound exact ciphertext proof input byte digest helper must reject compressed framing
+110	S	canonical v1 bytes	S	exact ciphertext/proof-input byte digest admission must reject compressed proof-input framing
+111	S	canonical v1 bytes	S	exact ciphertext/proof-input byte all-digest admission must reject compressed proof-input framing
+112	D	runtime expected retained in Rust	S	exact ciphertext/proof-input byte admission must reject compressed ciphertext framing before compressed proof-input framing
+113	D	runtime expected retained in Rust	S	exact ciphertext/proof-input byte digest admission must reject compressed ciphertext framing before compressed proof-input framing
+114	D	runtime expected retained in Rust	S	exact ciphertext/proof-input byte all-digest admission must reject compressed ciphertext framing before compressed proof-input framing
+115	S	seeded BFV encryption residual bound	S	exact ciphertext/proof-input byte admission must reject insufficient residual capacity before proof-input or ciphertext framing
+116	S	seeded BFV encryption residual bound	S	exact ciphertext/proof-input byte digest admission must reject insufficient residual capacity before proof-input or ciphertext framing
+117	S	seeded BFV encryption residual bound	S	exact ciphertext/proof-input byte all-digest admission must reject insufficient residual capacity before proof-input or ciphertext framing
+118	S	seeded BFV encryption residual bound	S	exact ciphertext/proof-input byte admission must reject insufficient residual capacity before public-key, ciphertext, or proof-input framing
+119	S	seeded BFV encryption residual bound	S	exact ciphertext/proof-input byte digest admission must reject insufficient residual capacity before public-key, ciphertext, or proof-input framing
+120	S	seeded BFV encryption residual bound	S	exact ciphertext/proof-input byte all-digest admission must reject insufficient residual capacity before public-key, ciphertext, or proof-input framing
+121	S	Norito-encoded BFV proof input material	S	caller-bound exact ciphertext proof input admission must reject non-Norito bytes
+122	S	Norito-encoded BFV proof input material	S	caller-bound exact ciphertext proof input byte digesting must reject non-Norito bytes
+123	S	Norito-encoded BFV proof input material	S	caller-bound exact ciphertext proof input byte digest helper must reject non-Norito bytes
+124	N		S	bounded ciphertext proof input digest must hash self-describing material
+125	N		S	caller-bound bounded ciphertext proof input admission must return decoded material
+126	N		S	caller-bound bounded ciphertext proof input byte digesting must match the typed digest
+127	N		S	caller-bound bounded ciphertext proof input byte digest helper must return decoded material
+128	N		S	caller-bound bounded ciphertext proof input byte digest helper must return the admitted digest
+129	N		S	bounded ciphertext/proof-input byte admission must return decoded key, ciphertext, and material
+130	N		S	bounded ciphertext/proof-input byte digest admission must return decoded key, ciphertext, material, and digest
+131	N		S	bounded ciphertext/proof-input byte digest admission must return decoded key, ciphertext, material, key digest, ciphertext digest, and proof-input digest
+132	S	canonical v1 bytes	S	bounded ciphertext/proof-input byte all-digest admission must reject compressed key framing
+133	S	canonical v1 bytes	S	bounded ciphertext/proof-input byte all-digest admission must reject compressed ciphertext framing
+134	S	caller-declared bound	S	bounded ciphertext/proof-input byte admission must reject oversized declared bounds before ciphertext framing
+135	S	caller-declared bound	S	bounded ciphertext/proof-input byte digest admission must reject oversized declared bounds before ciphertext framing
+136	S	caller-declared bound	S	bounded ciphertext/proof-input byte all-digest admission must reject oversized declared bounds before ciphertext framing
+137	S	caller-declared bound	S	bounded ciphertext/proof-input byte admission must reject oversized declared bounds before public-key or ciphertext framing
+138	S	caller-declared bound	S	bounded ciphertext/proof-input byte digest admission must reject oversized declared bounds before public-key or ciphertext framing
+139	S	caller-declared bound	S	bounded ciphertext/proof-input byte all-digest admission must reject oversized declared bounds before public-key or ciphertext framing
+140	S	caller-declared bound	S	caller-bound bounded ciphertext proof input admission must reject oversized declared bounds before proof-input framing
+141	S	caller-declared bound	S	caller-bound bounded ciphertext proof input byte digesting must reject oversized declared bounds before proof-input framing
+142	S	caller-declared bound	S	caller-bound bounded ciphertext proof input byte digest helper must reject oversized declared bounds before proof-input framing
+143	S	ciphertext c0	S	caller-bound bounded ciphertext proof input admission must reject malformed caller ciphertexts before proof-input framing
+144	S	ciphertext c0	S	caller-bound bounded ciphertext proof input byte digesting must reject malformed caller ciphertexts before proof-input framing
+145	S	ciphertext c0	S	caller-bound bounded ciphertext proof input byte digest helper must reject malformed caller ciphertexts before proof-input framing
+146	S	canonical v1 bytes	S	caller-bound bounded ciphertext proof input admission must reject compressed framing
+147	S	canonical v1 bytes	S	caller-bound bounded ciphertext proof input byte digesting must reject compressed framing
+148	S	canonical v1 bytes	S	caller-bound bounded ciphertext proof input byte digest helper must reject compressed framing
+149	S	canonical v1 bytes	S	bounded ciphertext/proof-input byte admission must reject compressed proof-input framing
+150	S	canonical v1 bytes	S	bounded ciphertext/proof-input byte digest admission must reject compressed proof-input framing
+151	S	canonical v1 bytes	S	bounded ciphertext/proof-input byte all-digest admission must reject compressed proof-input framing
+152	D	runtime expected retained in Rust	S	bounded ciphertext/proof-input byte admission must reject compressed ciphertext framing before compressed proof-input framing
+153	D	runtime expected retained in Rust	S	bounded ciphertext/proof-input byte digest admission must reject compressed ciphertext framing before compressed proof-input framing
+154	D	runtime expected retained in Rust	S	bounded ciphertext/proof-input byte all-digest admission must reject compressed ciphertext framing before compressed proof-input framing
+155	S	fresh encryption noise bound	S	bounded ciphertext/proof-input byte admission must reject insufficient noise capacity before proof-input or ciphertext framing
+156	S	fresh encryption noise bound	S	bounded ciphertext/proof-input byte digest admission must reject insufficient noise capacity before proof-input or ciphertext framing
+157	S	fresh encryption noise bound	S	bounded ciphertext/proof-input byte all-digest admission must reject insufficient noise capacity before proof-input or ciphertext framing
+158	S	fresh encryption noise bound	S	bounded ciphertext/proof-input byte admission must reject insufficient noise capacity before public-key, ciphertext, or proof-input framing
+159	S	fresh encryption noise bound	S	bounded ciphertext/proof-input byte digest admission must reject insufficient noise capacity before public-key, ciphertext, or proof-input framing
+160	S	fresh encryption noise bound	S	bounded ciphertext/proof-input byte all-digest admission must reject insufficient noise capacity before public-key, ciphertext, or proof-input framing
+161	S	Norito-encoded BFV proof input material	S	caller-bound bounded ciphertext proof input admission must reject non-Norito bytes
+162	S	Norito-encoded BFV proof input material	S	caller-bound bounded ciphertext proof input byte digesting must reject non-Norito bytes
+163	S	Norito-encoded BFV proof input material	S	caller-bound bounded ciphertext proof input byte digest helper must reject non-Norito bytes
+164	S	ciphertext mismatch	S	caller-bound bounded ciphertext proof input admission must reject ciphertext substitution
+165	S	ciphertext mismatch	S	caller-bound bounded ciphertext proof input byte digesting must reject ciphertext substitution
+166	S	ciphertext mismatch	S	caller-bound bounded ciphertext proof input byte digest helper must reject ciphertext substitution
+167	S	ciphertext mismatch	S	bounded ciphertext/proof-input byte admission must reject decoded ciphertext substitution
+168	S	ciphertext mismatch	S	bounded ciphertext/proof-input byte digest admission must reject decoded ciphertext substitution
+169	S	ciphertext mismatch	S	bounded ciphertext/proof-input byte all-digest admission must reject decoded ciphertext substitution
+170	S	version mismatch	S	exact public-key proof input digesting must validate material layout
+171	S	field count mismatch	S	exact ciphertext proof input digesting must validate material layout
+172	S	statement hash mismatch	S	bounded public-key proof input digesting must reject stale statement hashes
+173	S	statement hash mismatch	S	bounded ciphertext proof input digesting must reject stale statement hashes

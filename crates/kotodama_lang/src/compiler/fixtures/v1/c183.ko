@@ -1,0 +1,12 @@
+
+seiyaku CanonicalSchemas {
+    state int stored;
+
+    hajimari() {
+        stored = 0;
+    }
+
+    view fn inspect(int marker) -> Json {
+        return json { marker: marker, stored: stored };
+    }
+}

@@ -4151,14 +4151,16 @@ def test_artifact_fingerprint_shape_fails_closed_from_config(
             (
                 "sensitive_key",
                 lambda artifact, secret: artifact["fingerprint"].__setitem__(
-                    "private_key",
-                    secret,
+                    "private_key", secret
                 ),
                 ".fingerprint.<sensitive-key> must not be present",
-                (
-                    "private_key",
-                    f"runtime-only-private-fingerprint-{index:03d}-sensitive_key",
-                ),
+                ("private_key", f"runtime-only-private-fingerprint-{index:03d}-sensitive_key"),
+            ),
+            (
+                "invalid_value",
+                lambda artifact, _secret: artifact["fingerprint"].update(optional=None),
+                ".fingerprint.optional must contain only payload-free canonical metadata",
+                (),
             ),
         ):
             root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
@@ -4166,9 +4168,7 @@ def test_artifact_fingerprint_shape_fails_closed_from_config(
             payload = gate_summary(gate_name)
             secret = f"runtime-only-private-fingerprint-{index:03d}-{suffix}"
             mutate(payload["required"][kind_name]["artifacts"][0], secret)
-            payload["recognized_artifacts"] = recognized_artifacts_from_required(
-                payload
-            )
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(payload)
             recognized_index = next(
                 artifact_index
                 for artifact_index, artifact in enumerate(

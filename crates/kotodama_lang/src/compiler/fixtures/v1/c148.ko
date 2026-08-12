@@ -1,0 +1,12 @@
+
+seiyaku CompilerFixture {
+
+kotoage fn main() authorize("NftAdmin") {
+  ledger::nft::set_metadata(
+    nft: NftId::parse("n0$wonderland.universal"),
+    key: Name::parse("dpn_metadata"),
+    value: Json::parse("{\"meta\":1}"),
+  );
+}
+
+}

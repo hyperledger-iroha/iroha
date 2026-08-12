@@ -782,6 +782,8 @@ HistoricalCommitDecisionDirectEvidence(candidate, qc) ==
 HistoricalCommitDecisionResponseEvidence(candidate, qc) ==
   /\ candidate.evidence \in asyncSentItems
   /\ candidate.evidence.kind = "CommitCertificateResponse"
+  /\ candidate.evidence.source =
+       candidate.evidence.envelope.request.envelope.recipient
   /\ candidate.evidence.envelope.recipient = candidate.node
   /\ candidate.evidence.envelope.qc = qc
   /\ CommitCertificateRequestAuthorized(

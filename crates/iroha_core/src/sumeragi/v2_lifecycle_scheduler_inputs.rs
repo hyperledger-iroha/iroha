@@ -6,6 +6,7 @@ use super::{
     LifecycleCoordinator, LifecycleState, LifecycleWorkClass, LifecycleWorkRegistryHolder,
     PreparedLifecycleIngressSelector, ProductionLifecycleOwnerV1,
     schema::{AttestedReadyValidateDemand, SchedulerInputs, SchedulerReadyInputs},
+    work_registry::ReadyRecoveredDecisionApplyDemand,
 };
 use crate::sumeragi::{
     v2_effects::LifecycleModeRankSnapshot,
@@ -15,6 +16,7 @@ use crate::sumeragi::{
     v2_worker::{
         AuthenticatedLifecycleIoCapacity, LifecycleIoCapacityCaptureFailure,
         LifecycleIoCapacityWait, LifecycleIoCapacityWaitStatus, ProductionV2Services,
+        RecoveredDecisionApplyCapacityCaptureErrorV1, RecoveredDecisionApplyCapacityCaptureV1,
     },
 };
 
@@ -62,9 +64,18 @@ fn authenticated_ready_row(
     factory: &AuthenticatedSchedulerInputsFactory,
     record: &super::LifecycleRecord,
     validate_attestation: Option<AttestedReadyValidateDemand>,
+    recovered_apply_attestation: Option<
+        super::work_registry::ReadyRecoveredDecisionApplyAttestation,
+    >,
     live_debts: [u64; 6],
 ) -> Option<SchedulerReadyInputs> {
-    SchedulerReadyInputs::from_authenticated(factory, record, validate_attestation, live_debts)
+    SchedulerReadyInputs::from_authenticated(
+        factory,
+        record,
+        validate_attestation,
+        recovered_apply_attestation,
+        live_debts,
+    )
 }
 
 fn authenticated_scheduler_inputs(
@@ -105,11 +116,53 @@ pub(crate) enum ProductionSchedulerInputsError {
         /// Exact logical ordinal whose concrete carrier failed validation.
         ordinal: u128,
     },
-    /// Execute-body Validate still requires a service-owned capacity cut.
+    /// The exact recovered Decision Apply carrier could not be bound to this row.
+    InvalidRecoveredDecisionApplyCarrier {
+        /// Exact logical ordinal whose closed Apply carrier failed validation.
+        ordinal: u128,
+    },
+    /// The exact carrier requires a service-owned bounded I/O capacity cut.
     IoCapacityObservationRequired {
         /// Exact logical ordinal awaiting the missing service observation.
         ordinal: u128,
     },
+}
+
+/// Result of one complete recovered Decision Apply claim-and-dispatch turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyDispatchV1 {
+    /// The same service had no free Consensus command position; nothing was claimed.
+    CapacityUnavailable,
+    /// The exact Apply lease now owns one queued dedicated worker command.
+    Queued {
+        /// Immutable lifecycle ordinal retained by both lease and command key.
+        ordinal: u128,
+    },
+}
+
+/// Closed failure before or during recovered Decision Apply dispatch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ProductionRecoveredDecisionApplyDispatchErrorV1 {
+    /// The logical owner already latched a fail-closed condition.
+    CoordinatorFaulted(super::CoordinatorFault),
+    /// A prior turn still owns the sole active lease.
+    UnsettledLease(super::LeaseId),
+    /// The live runner turn did not name this height's Completion service point.
+    ForeignRunnerObservation,
+    /// The launched executor, worker, or body-store instance is not this owner.
+    ForeignServiceOwner,
+    /// The complete Ready census is not the sole exact recovered Apply carrier.
+    InvalidReadyCensus,
+    /// The closed recovered Apply registry attestation failed.
+    InvalidCarrier,
+    /// The worker could not retain the exact queue position.
+    Capacity(RecoveredDecisionApplyCapacityCaptureErrorV1),
+    /// Planning did not return the sole authenticated recovered Apply lease.
+    UnexpectedPlan,
+    /// The claimed row could not project its exact closed worker task.
+    DispatchProjection,
+    /// The reserved queue key and claimed carrier projection disagreed.
+    ReservedCommandMismatch,
 }
 
 /// Opaque service-generation wait retaining every ingress observation.
@@ -223,10 +276,11 @@ pub(crate) enum ProductionIngressSchedulerInputsError {
 /// Authenticate the complete subset of Ready work already owned directly by
 /// the concrete registry.
 ///
-/// The current sound subset consists of closed Validate completion carriers.
-/// Execute-body Validate is rejected because its I/O capacity and outer-runner
-/// reach still need a service-minted joint observation. Other work classes
-/// remain closed until their concrete carrier classifier exists.
+/// The current sound subset consists of closed Validate completion carriers and
+/// the exact recovered Decision Apply carrier. I/O-bearing Validate and Apply
+/// rows are classified here but rejected before planning because their capacity
+/// and outer-runner reach still need a service-minted joint observation. Other
+/// work classes remain closed until their concrete carrier classifier exists.
 fn direct_registry_scheduler_inputs(
     coordinator: &LifecycleCoordinator,
     registry: &LifecycleWorkRegistryHolder,
@@ -256,26 +310,52 @@ fn direct_registry_scheduler_inputs(
             .records
             .get(ordinal)
             .ok_or(ProductionSchedulerInputsError::InvalidReadyCensus)?;
-        if record.work_class != LifecycleWorkClass::Validate {
-            return Err(ProductionSchedulerInputsError::UnsupportedReadyCarrier {
-                ordinal: *ordinal,
-                work_class: record.work_class,
-            });
-        }
-        let attestation = coordinator
-            .attest_ready_validate_demand(registry, *ordinal)
-            .map_err(|_| ProductionSchedulerInputsError::InvalidValidateCarrier {
-                ordinal: *ordinal,
-            })?;
-        if attestation.requires_io_dispatch() {
-            return Err(
-                ProductionSchedulerInputsError::IoCapacityObservationRequired { ordinal: *ordinal },
-            );
-        }
+        let validate_attestation = match record.work_class {
+            LifecycleWorkClass::Validate => {
+                let attestation = coordinator
+                    .attest_ready_validate_demand(registry, *ordinal)
+                    .map_err(|_| ProductionSchedulerInputsError::InvalidValidateCarrier {
+                        ordinal: *ordinal,
+                    })?;
+                if attestation.requires_io_dispatch() {
+                    return Err(
+                        ProductionSchedulerInputsError::IoCapacityObservationRequired {
+                            ordinal: *ordinal,
+                        },
+                    );
+                }
+                Some(attestation)
+            }
+            LifecycleWorkClass::Apply => {
+                let attestation = registry
+                    .attest_ready_recovered_decision_apply(coordinator, *ordinal)
+                    .map_err(|_| {
+                        ProductionSchedulerInputsError::InvalidRecoveredDecisionApplyCarrier {
+                            ordinal: *ordinal,
+                        }
+                    })?;
+                match attestation.demand() {
+                    ReadyRecoveredDecisionApplyDemand::BoundedIo => {
+                        return Err(
+                            ProductionSchedulerInputsError::IoCapacityObservationRequired {
+                                ordinal: *ordinal,
+                            },
+                        );
+                    }
+                }
+            }
+            _ => {
+                return Err(ProductionSchedulerInputsError::UnsupportedReadyCarrier {
+                    ordinal: *ordinal,
+                    work_class: record.work_class,
+                });
+            }
+        };
         let row = authenticated_ready_row(
             &factory,
             record,
-            Some(attestation),
+            validate_attestation,
+            None,
             AuthenticatedLiveRankDebts::DirectRegistryCompletion.components(),
         )
         .ok_or(ProductionSchedulerInputsError::InvalidValidateCarrier { ordinal: *ordinal })?;
@@ -302,6 +382,164 @@ impl ProductionLifecycleOwnerV1 {
     ) -> Result<super::TurnPlan, ProductionSchedulerInputsError> {
         let inputs = direct_registry_scheduler_inputs(&self.coordinator, &self.registry)?;
         Ok(self.coordinator.plan_turn(inputs))
+    }
+
+    /// Reserve, claim, and queue the sole Ready recovered Decision Apply.
+    ///
+    /// This fixed transaction admits no selector or raw command fields. The
+    /// service locks the exact Consensus FIFO position first; only then does
+    /// the coordinator claim the registry-attested Apply and project its
+    /// move-only task. Queue publication consumes that borrow-bound projection
+    /// and arms the carrier's in-flight key in one infallible tail.
+    #[cfg(not(test))]
+    pub(in crate::sumeragi) fn dispatch_recovered_decision_apply(
+        &mut self,
+        services: &ProductionV2Services,
+        executor: &V2EffectExecutor<SerializedV2Runtime>,
+        runner: LifecycleCurrentRunnerTurn<'_>,
+    ) -> Result<
+        ProductionRecoveredDecisionApplyDispatchV1,
+        ProductionRecoveredDecisionApplyDispatchErrorV1,
+    > {
+        let context = self.verified.context();
+        if runner.target() != LifecycleRunnerRankTarget::Completion
+            || runner.height() != context.height
+            || runner.context_id() != context.id()
+        {
+            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::ForeignRunnerObservation);
+        }
+        self.dispatch_recovered_decision_apply_with_runner_debt(services, executor, runner.debt())
+    }
+
+    /// Exercise the exact recovered Apply dispatch with a fixture-owned runner snapshot.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn dispatch_recovered_decision_apply(
+        &mut self,
+        services: &ProductionV2Services,
+        executor: &V2EffectExecutor<SerializedV2Runtime>,
+        runner: LifecycleRunnerRankSnapshot,
+    ) -> Result<
+        ProductionRecoveredDecisionApplyDispatchV1,
+        ProductionRecoveredDecisionApplyDispatchErrorV1,
+    > {
+        let context = self.verified.context();
+        if runner.target() != LifecycleRunnerRankTarget::Completion
+            || runner.height() != context.height
+            || runner.context_id() != context.id()
+        {
+            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::ForeignRunnerObservation);
+        }
+        self.dispatch_recovered_decision_apply_with_runner_debt(services, executor, runner.debt())
+    }
+
+    fn dispatch_recovered_decision_apply_with_runner_debt(
+        &mut self,
+        services: &ProductionV2Services,
+        executor: &V2EffectExecutor<SerializedV2Runtime>,
+        runner_debt: u64,
+    ) -> Result<
+        ProductionRecoveredDecisionApplyDispatchV1,
+        ProductionRecoveredDecisionApplyDispatchErrorV1,
+    > {
+        if let Some(fault) = self.coordinator.fault {
+            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::CoordinatorFaulted(fault));
+        }
+        if let Some(lease) = self.coordinator.active_lease.as_ref() {
+            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::UnsettledLease(lease.id));
+        }
+        let Some(body_store_identity) = self.body_store_identity.as_ref() else {
+            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::ForeignServiceOwner);
+        };
+        if self.body_store.is_some()
+            || !services.matches_lifecycle_body_store(body_store_identity)
+            || !services.matches_lifecycle_executor_output_guard(executor)
+        {
+            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::ForeignServiceOwner);
+        }
+        let mut ready = self.coordinator.ready_index.iter().copied();
+        let Some(ordinal) = ready.next() else {
+            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::InvalidReadyCensus);
+        };
+        if ready.next().is_some() {
+            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::InvalidReadyCensus);
+        }
+        if self
+            .coordinator
+            .records
+            .values()
+            .filter(|record| matches!(record.state, LifecycleState::Ready))
+            .map(|record| record.ordinal)
+            .collect::<BTreeSet<_>>()
+            != BTreeSet::from([ordinal])
+        {
+            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::InvalidReadyCensus);
+        }
+        let attestation = self
+            .registry
+            .attest_ready_recovered_decision_apply(&self.coordinator, ordinal)
+            .map_err(|_| ProductionRecoveredDecisionApplyDispatchErrorV1::InvalidCarrier)?;
+        if attestation.demand() != ReadyRecoveredDecisionApplyDemand::BoundedIo {
+            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::InvalidCarrier);
+        }
+        let dispatch_key = attestation.dispatch_key();
+        let mode = executor.lifecycle_mode_rank_snapshot();
+        let context = self.verified.context();
+        if mode.height() != context.height
+            || mode.context_id() != context.id()
+            || !dispatch_key.matches_height_context(context)
+        {
+            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::ForeignServiceOwner);
+        }
+        let capacity = services
+            .capture_recovered_decision_apply_capacity(dispatch_key)
+            .map_err(ProductionRecoveredDecisionApplyDispatchErrorV1::Capacity)?;
+        let RecoveredDecisionApplyCapacityCaptureV1::Reserved(reservation) = capacity else {
+            return Ok(ProductionRecoveredDecisionApplyDispatchV1::CapacityUnavailable);
+        };
+        let factory = AuthenticatedSchedulerInputsFactory::new();
+        let record = self
+            .coordinator
+            .records
+            .get(&ordinal)
+            .ok_or(ProductionRecoveredDecisionApplyDispatchErrorV1::InvalidReadyCensus)?;
+        let live_debts = [
+            mode.debt(),
+            reservation.authenticated_predecessor_debt(&factory),
+            0,
+            0,
+            0,
+            runner_debt,
+        ];
+        let row = authenticated_ready_row(&factory, record, None, Some(attestation), live_debts)
+            .ok_or(ProductionRecoveredDecisionApplyDispatchErrorV1::InvalidCarrier)?;
+        let inputs = authenticated_scheduler_inputs(
+            factory,
+            BTreeMap::new(),
+            BTreeMap::from([(ordinal, row)]),
+        );
+        let lease = match self.coordinator.plan_turn(inputs) {
+            super::TurnPlan::Execute(lease)
+                if lease.ordinal() == ordinal
+                    && lease.work_class() == LifecycleWorkClass::Apply =>
+            {
+                lease
+            }
+            super::TurnPlan::Execute(_)
+            | super::TurnPlan::Waiting(_)
+            | super::TurnPlan::Idle
+            | super::TurnPlan::FailClosed(_) => {
+                return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::UnexpectedPlan);
+            }
+        };
+        let prepared = self
+            .registry
+            .prepare_recovered_decision_apply_dispatch(&self.coordinator, &lease)
+            .map_err(|_| ProductionRecoveredDecisionApplyDispatchErrorV1::DispatchProjection)?;
+        if !reservation.preflight(&prepared) {
+            return Err(ProductionRecoveredDecisionApplyDispatchErrorV1::ReservedCommandMismatch);
+        }
+        reservation.commit(prepared);
+        Ok(ProductionRecoveredDecisionApplyDispatchV1::Queued { ordinal })
     }
 
     /// Plan, submit, and reblock one exact selected certified-Fetch response.
@@ -457,7 +695,7 @@ impl ProductionLifecycleOwnerV1 {
             .records
             .get(&ordinal)
             .ok_or(ProductionIngressSchedulerInputsError::InvalidSelectedCarrier)?;
-        let row = authenticated_ready_row(&factory, record, None, live_debts)
+        let row = authenticated_ready_row(&factory, record, None, None, live_debts)
             .ok_or(ProductionIngressSchedulerInputsError::InvalidSelectedCarrier)?;
         let (source, generation) = fetch.wake_generation();
         let inputs = authenticated_scheduler_inputs(
@@ -543,6 +781,7 @@ impl ProductionLifecycleOwnerV1 {
         prepared: &PreparedLifecycleIngressSelector,
         effect: crate::sumeragi::v2::AdapterEffect,
         pending: crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding,
+        local_signer: &iroha_crypto::KeyPair,
         root: &std::path::Path,
     ) -> (Self, u128, super::WaitSource) {
         use super::{
@@ -589,22 +828,28 @@ impl ProductionLifecycleOwnerV1 {
             verified.context().clone(),
         )
         .expect("open exact owner body store");
-        let (payload_store, _recovery) =
+        let (payload_store, recovery) =
             crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
                 &root.join("serve"),
                 verified.context(),
             )
             .expect("open exact owner Serve payload store");
+        let serve_payloads = recovery
+            .authenticate(&verified, local_signer, &body_store)
+            .expect("authenticate exact owner Serve payload census");
         (
             Self {
                 verified,
                 coordinator,
                 registry,
                 payload_store,
+                serve_payloads,
                 body_store: Some(body_store),
                 body_store_identity: None,
-                adapter_startup:
+                kura_binding: None,
+                adapter_startup: Some(
                     crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1::fixture_for_test(),
+                ),
             },
             ordinal,
             source,

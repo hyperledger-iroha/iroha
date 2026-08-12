@@ -1,0 +1,6 @@
+
+seiyaku Test {
+  kotoage fn relay(bytes target, Json payload) -> bytes authorize("Admin") {
+    return contract::call(contract: target, entrypoint: "settle", arguments: payload);
+  }
+}

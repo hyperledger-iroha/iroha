@@ -39,6 +39,9 @@ use iroha_data_model::{
 };
 use thiserror::Error;
 
+#[cfg(test)]
+use super::v2_recovery::RecoveredCompleteTipActivationAuthority;
+
 use super::{
     FairV2Ingress, FairV2IngressBarrierBypass, FairV2IngressCapacityError,
     FairV2IngressDequeueDisposition, FairV2IngressOwnershipEvidence, GenesisWithPubKey,
@@ -78,6 +81,9 @@ use super::{
         apply_lane_application_evidence_repair,
         persist_canonical_historical_recovery_payload_custody,
         plan_lane_application_evidence_repair, require_validator_storage_platform,
+    },
+    v2_lifecycle_coordinator::{
+        CompleteTipPredecessorStorageErrorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
     },
     v2_lifecycle_recovery::{
         AutonomousLifecycleDeferredTerminalRecoveryHandoff, reconcile_autonomous_lifecycle_startup,
@@ -266,6 +272,7 @@ impl PendingSuccessorConstruction {
 /// `Running` work stage visible. The outer runner failure guard then closes
 /// output and requires restart; only [`Self::publish`] can claim activation.
 #[derive(Debug)]
+#[allow(variant_size_differences, clippy::large_enum_variant)]
 enum PendingSuccessorActivation {
     /// Uninterrupted rollover whose published Applied predecessor owns the
     /// Running handoff.
@@ -276,7 +283,7 @@ enum PendingSuccessorActivation {
     /// Process restart after recovery authenticated an exact complete durable
     /// tip; the process-local predecessor registry was intentionally cleared.
     RecoveredCompleteTip {
-        authority: DurableSuccessorActivationAuthority,
+        authority: RetiredRecoveredCompleteTipActivationAuthorityV1,
     },
     /// First executable height derived from an authenticated audited snapshot.
     /// This carries no historical CommitQC or Kura finality receipt.
@@ -286,7 +293,10 @@ enum PendingSuccessorActivation {
 }
 
 impl PendingSuccessorActivation {
-    fn recovered(authority: RecoveredSuccessorActivationAuthority) -> Result<Self, V2RunnerError> {
+    fn recovered(
+        authority: RecoveredSuccessorActivationAuthority,
+        local_signer: &KeyPair,
+    ) -> Result<Self, V2RunnerError> {
         let (transition, authority_kind, status_height) = match &authority {
             RecoveredSuccessorActivationAuthority::CompleteTip(authority) => (
                 SUCCESSOR_LIFECYCLE_RETRY_COMPLETE_TIP,
@@ -319,12 +329,38 @@ impl PendingSuccessorActivation {
         let _authorized_lifecycle = checked_lifecycle.into_projection();
         Ok(match authority {
             RecoveredSuccessorActivationAuthority::CompleteTip(authority) => {
-                Self::RecoveredCompleteTip { authority }
+                let expected_predecessor = authority.predecessor();
+                // TODO: The sealed owner/launch cutover must make every live
+                // height write this canonical lifecycle target. Until that
+                // cutover replaces the legacy runner constructors, a missing
+                // target correctly fails closed here before ingress.
+                let retired = authority
+                    .into_canonical_predecessor_storage(local_signer)?
+                    .retire()?;
+                if retired.predecessor() != expected_predecessor {
+                    return Err(V2RunnerError::SuccessorPredecessorAuthorityMismatch {
+                        expected: expected_predecessor,
+                        actual: retired.predecessor(),
+                    });
+                }
+                Self::RecoveredCompleteTip { authority: retired }
             }
             RecoveredSuccessorActivationAuthority::SnapshotBootstrap(authority) => {
                 Self::SnapshotBootstrap { authority }
             }
         })
+    }
+
+    /// Prove every recovered activation crossed its required durable boundary.
+    fn preflight_ingress_open(&self) -> Result<(), V2RunnerError> {
+        match self {
+            Self::RecoveredCompleteTip { authority } => {
+                Err(V2RunnerError::CompleteTipSuccessorLifecycleOwnerRequired {
+                    predecessor: authority.predecessor(),
+                })
+            }
+            Self::Applied { .. } | Self::SnapshotBootstrap { .. } => Ok(()),
+        }
     }
 
     fn publish(self, successor: wire::SumeragiV2Status) -> Result<(), V2RunnerError> {
@@ -340,7 +376,9 @@ impl PendingSuccessorActivation {
                 )?;
             }
             Self::RecoveredCompleteTip { authority } => {
-                super::status::activate_recovered_v2_successor_height(authority, successor)?;
+                return Err(V2RunnerError::CompleteTipSuccessorLifecycleOwnerRequired {
+                    predecessor: authority.predecessor(),
+                });
             }
             Self::SnapshotBootstrap { authority } => {
                 super::status::activate_snapshot_bootstrap_v2_height(authority, successor)?;
@@ -833,6 +871,8 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         mut verified_context,
         context_store,
         mut signature_policy,
+        _lifecycle_storage_authority,
+        _authenticated_genesis,
         recovered_successor_activation,
         mut staged_genesis_nexus_amx_context,
     ) = recovered.into_parts();
@@ -880,9 +920,26 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     validate_deadline_duration(round_timeout)?;
     validate_deadline_duration(retransmit_interval)?;
     let mut cleanup_supervisor = V2CleanupSupervisor::default();
-    let mut pending_successor_activation = recovered_successor_activation
-        .map(PendingSuccessorActivation::recovered)
+    let recovered_activation_guard = recovered_successor_activation
+        .as_ref()
+        .map(|_| {
+            output_guard
+                .begin_fail_stop_operation()
+                .ok_or(V2RunnerError::RestartRequired)
+        })
         .transpose()?;
+    let mut pending_successor_activation = recovered_successor_activation
+        .map(|authority| PendingSuccessorActivation::recovered(authority, &common_config.key_pair))
+        .transpose()?;
+    if let Some(activation) = pending_successor_activation.as_ref() {
+        // CompleteTip has already retired H and authenticated H+1 here, but
+        // must not let the legacy H+1 adapter, workers, clocks, or output start
+        // before the sealed lifecycle owner consumes that exact successor.
+        activation.preflight_ingress_open()?;
+    }
+    if let Some(guard) = recovered_activation_guard {
+        guard.complete();
+    }
     let mut liveness_watchdog = super::status::V2LivenessWatchdog::default();
     let deferred_admission_ordinals = DeferredAdmissionOrdinalSource::new(0);
     let mut retained_merge_sidecars: Option<RetainedMergeSidecars> = None;
@@ -1075,19 +1132,21 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let leader_wire_owner: [u8; 32] = fingerprints.node.into();
         let leader_wire_recovery_authority = adapter.leader_wire_recovery_authority()?;
         let producer_terminals = adapter.durable_producer_terminal_tokens();
-        let (leader_wire_gate, leader_wire_restore) = LeaderWireLifecycleStoreGate::open(
-            &wal_path,
-            context.id(),
-            context.height,
-            leader_wire_owner,
-            leader_wire_roster,
-            leader_wire_capacity,
-            leader_wire_max_chunk_count,
-            leader_wire_recovery_authority,
-            &producer_terminals,
-            &recovered_body_receipts,
-        )
-        .map_err(V2RunnerError::Service)?;
+        let leader_wire_storage = adapter.mint_leader_wire_store_authority(&wal_path)?;
+        let (leader_wire_gate, leader_wire_restore) =
+            LeaderWireLifecycleStoreGate::open_with_safety_wal_authority(
+                leader_wire_storage,
+                context.id(),
+                context.height,
+                leader_wire_owner,
+                leader_wire_roster,
+                leader_wire_capacity,
+                leader_wire_max_chunk_count,
+                leader_wire_recovery_authority,
+                &producer_terminals,
+                &recovered_body_receipts,
+            )
+            .map_err(V2RunnerError::Service)?;
         lifecycle_ordinals
             .advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())
             .map_err(V2RunnerError::Service)?;
@@ -5478,7 +5537,7 @@ fn require_peeked_lane_work_effect(
 
 include!("v2_runner/canonical_recovery_ingress.rs");
 
-fn dispatch_lane_work_effects(
+pub(in crate::sumeragi) fn dispatch_lane_work_effects(
     lane_work: &mut V2LaneWorkAdapter,
     services: &ProductionV2Services,
     limit: usize,
@@ -5681,6 +5740,18 @@ pub(super) enum V2RunnerError {
     /// A typed successor lifecycle transition failed the shared pure refinement kernel.
     #[error("Sumeragi v2 successor lifecycle failed the production refinement kernel")]
     SuccessorRefinementRejected,
+    /// Canonical CompleteTip lifecycle storage could not be retired exactly.
+    #[error(transparent)]
+    CompleteTipPredecessorStorage(#[from] CompleteTipPredecessorStorageErrorV1),
+    /// CompleteTip retirement succeeded, but the canonical successor lifecycle
+    /// frame has not yet been consumed by the sealed owner/launch boundary.
+    #[error(
+        "Sumeragi v2 CompleteTip predecessor {predecessor:?} was retired, but its canonical successor lifecycle owner is not active"
+    )]
+    CompleteTipSuccessorLifecycleOwnerRequired {
+        /// Exact retired durable predecessor whose successor remains closed.
+        predecessor: DurableV2PredecessorIdentity,
+    },
     /// Reducer/WAL adapter failed.
     #[error(transparent)]
     Adapter(#[from] super::v2::AdapterError),

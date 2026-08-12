@@ -14,9 +14,7 @@ macro_rules! derive_freestanding_export_import {
 
         // FFI exports
         mod exports {
-                        use super::*;
-
-            iroha_ffi::def_ffi_fns! { dealloc }
+            use super::*;
 
             $(
                 #[doc = "FFI export function"]

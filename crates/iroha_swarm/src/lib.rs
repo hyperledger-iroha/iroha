@@ -702,8 +702,6 @@ impl From<path::Error> for Error {
 mod tests {
     #![allow(clippy::too_many_lines, clippy::needless_raw_string_hashes)]
 
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-
     use crate::{
         PreparedBuildLine, PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile,
         PreparedValidator, Swarm,
@@ -1661,7 +1659,7 @@ mod tests {
         );
         assert_eq!(
             output
-                .matches(&BASE64_STANDARD.encode(&shared_content))
+                .matches(&base64_standard::encode(&shared_content))
                 .count(),
             1,
             "the binary bytes must be encoded once at the top level"

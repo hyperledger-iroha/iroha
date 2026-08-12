@@ -9111,12 +9111,7 @@ mod tests {
 
     #[test]
     fn named_calls_evaluate_in_source_order_and_permute_only_temp_references() {
-        let src = r#"
-            fn first() -> int { 1 }
-            fn second() -> int { 2 }
-            fn combine(int left, int right) -> int { left * 10 + right }
-            fn run() -> int { combine(right: second(), left: first()) }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i001.ko");
         let typed = analyze(&parse(src).expect("parse named call")).expect("analyze named call");
         let ir = lower(&typed).expect("lower named call");
         let run = ir
@@ -9150,14 +9145,7 @@ mod tests {
 
     #[test]
     fn named_list_intrinsic_evaluates_source_order_before_abi_slots() {
-        let source = r#"
-            fn index() -> int { 0 }
-            fn replacement() -> int { 9 }
-            fn mutate() -> bool {
-                var List<int, 2> values = [1];
-                values.try_set(value: replacement(), index: index())
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i002.ko");
         let lowered = lower(
             &analyze(&parse(source).expect("parse named List intrinsic"))
                 .expect("analyze named List intrinsic"),
@@ -9182,17 +9170,7 @@ mod tests {
 
     #[test]
     fn named_quantity_intrinsic_evaluates_dynamic_arguments_in_source_order() {
-        let source = r#"
-            fn divisor() -> decimal { 2 }
-            fn scale() -> int { 2 }
-            fn rounded(quantity value) -> quantity {
-                value.div_round(
-                    scale: scale(),
-                    mode: Rounding::floor,
-                    divisor: divisor(),
-                )
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i003.ko");
         let lowered = lower(
             &analyze(&parse(source).expect("parse named quantity intrinsic"))
                 .expect("analyze named quantity intrinsic"),
@@ -9217,12 +9195,7 @@ mod tests {
 
     #[test]
     fn require_lowers_declared_error_code_into_abort_ir() {
-        let src = r#"
-            error enum PaymentError { Unauthorized = 1001 }
-            fn authorize_payment(bool allowed) {
-                require(allowed, PaymentError::Unauthorized);
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i004.ko");
         let prog = parse(src).expect("parse error enum");
         let typed = analyze(&prog).expect("analyze stable require");
         let ir = lower(&typed).expect("lower stable require");
@@ -9246,11 +9219,7 @@ mod tests {
 
     #[test]
     fn test_mode_entrypoint_wrapper_checks_override_state_first() {
-        let src = r#"
-            seiyaku Demo {
-                kotoage fn run(int count) -> int authorize("Entry") { return count; }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i005.ko");
         let prog = parse(src).expect("parse wrapper test");
         let typed = analyze(&prog).expect("analyze wrapper test");
         let ir = lower_with_cap_and_test_mode(&typed, 2, true).expect("lower wrapper test");
@@ -9300,11 +9269,7 @@ mod tests {
 
     #[test]
     fn single_json_entrypoint_uses_the_same_one_shot_argument_record() {
-        let src = r#"
-            seiyaku Demo {
-                kotoage fn run(Json ev) authorize("Entry") { let _payload = ev; }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i006.ko");
         let prog = parse(src).expect("parse single json entrypoint");
         let typed = analyze(&prog).expect("analyze single json entrypoint");
         let ir =
@@ -9345,20 +9310,7 @@ mod tests {
 
     #[test]
     fn nested_aggregate_returns_use_every_flattened_abi_word() {
-        let src = r#"
-            seiyaku AggregateReturn {
-                struct Pair { int count, bool ready }
-
-                fn make() -> Result<Option<Pair>, (string, bool)> {
-                    return Result::ok(Option::some(Pair { count: 7, ready: true }));
-                }
-
-                view fn inspect(int seed) -> Result<Option<Pair>, (string, bool)> {
-                    let _ = seed;
-                    return make();
-                }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i007.ko");
         let program = parse(src).expect("parse nested aggregate return");
         let typed = analyze(&program).expect("analyze nested aggregate return");
         let ir = lower(&typed).expect("lower nested aggregate return");
@@ -9405,22 +9357,7 @@ mod tests {
 
     #[test]
     fn inactive_sum_has_no_payload_construction_or_store() {
-        let source = r#"
-            seiyaku InactivePlaceholder {
-                state int counter;
-
-                hajimari() { counter = 0; }
-
-                fn poison() -> int {
-                    counter = counter + 1;
-                    return 99;
-                }
-
-                view fn inspect() -> Option<int> {
-                    return Option::none;
-                }
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i008.ko");
         let program = parse(source).expect("parse active-only Option");
         let typed = analyze(&program).expect("analyze active-only Option");
         let ir = lower(&typed).expect("lower active-only Option");
@@ -9505,14 +9442,7 @@ mod tests {
 
     #[test]
     fn exhaustive_match_reads_only_the_selected_sum_payload() {
-        let source = r#"
-            fn project(Option<int> value) -> int {
-                match value {
-                    Option::some(item) => item,
-                    Option::none => 0,
-                }
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i009.ko");
         let lowered = lower(&analyze(&parse(source).expect("parse match")).expect("analyze match"))
             .expect("lower match");
         let instructions = lowered.functions[0]
@@ -9540,14 +9470,7 @@ mod tests {
 
     #[test]
     fn exhaustive_result_match_reads_only_the_selected_sum_payload() {
-        let source = r#"
-            fn project(Result<int, (int, int)> value) -> int {
-                match value {
-                    Result::ok(item) => item,
-                    Result::err(pair) => pair.0,
-                }
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i010.ko");
         let lowered = lower(
             &analyze(&parse(source).expect("parse Result match")).expect("analyze Result match"),
         )
@@ -9604,12 +9527,7 @@ mod tests {
 
     #[test]
     fn propagation_returns_original_error_handle_without_conversion() {
-        let source = r#"
-            fn propagate(Result<int, bool> value) -> Result<int, bool> {
-                let payload = value?;
-                Result::ok(payload)
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i011.ko");
         let lowered = lower(
             &analyze(&parse(source).expect("parse propagation")).expect("analyze propagation"),
         )
@@ -9651,21 +9569,8 @@ mod tests {
             })
         }
 
-        let propagated = r#"
-            fn widen(Result<int, bool> value) -> Result<(int, int), bool> {
-                let payload = value?;
-                Result::ok((payload, payload))
-            }
-        "#;
-        let explicit = r#"
-            fn widen(Result<int, bool> value) -> Result<(int, int), bool> {
-                let payload = match value {
-                    Result::ok(payload) => payload,
-                    Result::err(failure) => { return Result::err(failure); },
-                };
-                Result::ok((payload, payload))
-            }
-        "#;
+        let propagated = include_str!("ir/fixtures/v1/i012.ko");
+        let explicit = include_str!("ir/fixtures/v1/i013.ko");
         let propagated = lower(
             &analyze(&parse(propagated).expect("parse propagation")).expect("analyze propagation"),
         )
@@ -9692,21 +9597,8 @@ mod tests {
             "the widened error and success paths each allocate the destination layout once"
         );
 
-        let option = r#"
-            fn widen(Option<int> value) -> Option<(int, int)> {
-                let payload = value?;
-                Option::some((payload, payload))
-            }
-        "#;
-        let explicit_option = r#"
-            fn widen(Option<int> value) -> Option<(int, int)> {
-                let payload = match value {
-                    Option::some(payload) => payload,
-                    Option::none => { return Option::none; },
-                };
-                Option::some((payload, payload))
-            }
-        "#;
+        let option = include_str!("ir/fixtures/v1/i014.ko");
+        let explicit_option = include_str!("ir/fixtures/v1/i015.ko");
         let option = lower(
             &analyze(&parse(option).expect("parse Option propagation"))
                 .expect("analyze Option propagation"),
@@ -9730,15 +9622,7 @@ mod tests {
 
     #[test]
     fn typed_query_page_lowers_to_one_host_call_and_two_typed_handles() {
-        let source = r#"
-            fn page(int offset, int limit) -> QueryPage<AccountView> {
-                ledger::query::accounts(offset: offset, limit: limit)
-            }
-
-            fn account(AccountId id) -> Option<AccountView> {
-                ledger::query::account(id)
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i016.ko");
         let lowered = lower(
             &analyze(&parse(source).expect("parse typed query page"))
                 .expect("analyze typed query page"),
@@ -9842,22 +9726,7 @@ mod tests {
 
     #[test]
     fn native_json_lowers_to_one_schema_bound_build_and_one_word_table() {
-        let source = r#"
-            fn build(
-                AccountId owner,
-                string label,
-                Option<quantity> maybe,
-            ) -> Json {
-                let List<string, 4> labels = ["secondary", label];
-                json {
-                    owner: owner,
-                    amount: 1.25,
-                    primary: json ["primary", label],
-                    labels: labels,
-                    maybe: maybe,
-                }
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i017.ko");
         let lowered = lower(
             &analyze(&parse(source).expect("parse native JSON")).expect("analyze native JSON"),
         )
@@ -10056,30 +9925,7 @@ mod tests {
 
     #[test]
     fn scalar_protocol_arguments_use_checked_adaptive_int_conversion() {
-        let source = r#"
-            fn boundaries(
-                bytes payload,
-                int scheme,
-                int tag_length,
-                int enabled,
-            ) {
-                let _verified = crypto::verify_signature(
-                    message: payload,
-                    signature: payload,
-                    public_key: payload,
-                    scheme: scheme,
-                );
-                let _sealed = crypto::sm4_ccm::seal(
-                    key: payload,
-                    nonce: payload,
-                    aad: payload,
-                    payload: payload,
-                    tag_length: tag_length,
-                );
-                ledger::trigger::set_enabled(Name::parse("scheduled"), enabled);
-                let _vrf = crypto::vrf::verify(request: payload);
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i018.ko");
         let lowered = lower(
             &analyze(&parse(source).expect("parse checked scalar boundaries"))
                 .expect("analyze checked scalar boundaries"),
@@ -10178,13 +10024,7 @@ mod tests {
 
     #[test]
     fn scalar_state_paths_lower_to_framed_state_path_bytes() {
-        let source = r#"
-            seiyaku ScalarState {
-                state int counter;
-                hajimari() { counter = 0; }
-                fn read() -> int { return counter; }
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i019.ko");
         let lowered = lower(
             &analyze(&parse(source).expect("parse scalar durable state"))
                 .expect("analyze scalar durable state"),
@@ -10236,12 +10076,7 @@ mod tests {
 
     #[test]
     fn list_literal_and_comprehension_use_only_contiguous_ir_operations() {
-        let source = r#"
-            fn doubled() -> List<int, 4> {
-                let List<int, 4> values = [1, 2, 3];
-                [value * 2 for value in values if value > 1]
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i020.ko");
         let lowered = lower(
             &analyze(&parse(source).expect("parse List comprehension"))
                 .expect("analyze List comprehension"),
@@ -10304,19 +10139,7 @@ mod tests {
 
     #[test]
     fn every_list_method_lowers_without_runtime_helper_calls() {
-        let source = r#"
-            fn methods() {
-                var List<int, 4> values = [1, 2];
-                values.len();
-                values.get(0);
-                values.try_set(index: 0, value: 3);
-                values.try_push(4);
-                values.contains(3);
-                values.pop();
-                values.take(2);
-                values.enumerate();
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i021.ko");
         let lowered = lower(
             &analyze(&parse(source).expect("parse List methods")).expect("analyze List methods"),
         )
@@ -10372,22 +10195,7 @@ mod tests {
 
     #[test]
     fn recursive_list_contains_dereferences_aggregate_handles() {
-        let source = r#"
-            struct Envelope {
-                Option<List<int, 2>> labels,
-                Result<(int, bool), int> outcome,
-            }
-
-            fn contains_nested(Envelope needle) -> bool {
-                let List<Envelope, 2> values = [
-                    Envelope {
-                        labels: Option::some([1, 2]),
-                        outcome: Result::ok((7, true)),
-                    },
-                ];
-                values.contains(needle)
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i022.ko");
         let lowered = lower(
             &analyze(&parse(source).expect("parse recursive List.contains"))
                 .expect("analyze recursive List.contains"),
@@ -10433,24 +10241,7 @@ mod tests {
 
     #[test]
     fn multiword_failed_list_mutation_branches_have_no_stores_or_allocations() {
-        let source = r#"
-            struct Pair { int first, int second }
-
-            fn set(int index) -> bool {
-                var List<Pair, 1> values = [Pair { first: 1, second: 2 }];
-                let Pair replacement = Pair { first: 3, second: 4 };
-                values.try_set(
-                    index: index,
-                    value: replacement,
-                )
-            }
-
-            fn push() -> bool {
-                var List<Pair, 1> values = [Pair { first: 1, second: 2 }];
-                let Pair replacement = Pair { first: 3, second: 4 };
-                values.try_push(replacement)
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i023.ko");
         let lowered = lower(
             &analyze(&parse(source).expect("parse failed mutation paths"))
                 .expect("analyze failed mutation paths"),
@@ -10543,25 +10334,7 @@ mod tests {
     fn query_page_entrypoint_schemas_are_structural_and_roundtrip_for_all_views() {
         use ivm_abi::entrypoint::EntrypointValueTypeNodeV1 as Node;
 
-        let source = r#"
-            seiyaku TypedPages {
-                view fn accounts(int offset, int limit) -> QueryPage<AccountView> {
-                    ledger::query::accounts(offset: offset, limit: limit)
-                }
-                view fn assets(int offset, int limit) -> QueryPage<AssetView> {
-                    ledger::query::assets(offset: offset, limit: limit)
-                }
-                view fn asset_definitions(int offset, int limit) -> QueryPage<AssetDefinitionView> {
-                    ledger::query::asset_definitions(offset: offset, limit: limit)
-                }
-                view fn domains(int offset, int limit) -> QueryPage<DomainView> {
-                    ledger::query::domains(offset: offset, limit: limit)
-                }
-                view fn nfts(int offset, int limit) -> QueryPage<NftView> {
-                    ledger::query::nfts(offset: offset, limit: limit)
-                }
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i024.ko");
         let typed = analyze(&parse(source).expect("parse all typed query pages"))
             .expect("analyze all typed query pages");
         let mut encoded_schemas = BTreeSet::new();
@@ -10624,16 +10397,7 @@ mod tests {
 
     #[test]
     fn aggregate_argument_words_over_register_window_fail_during_lowering() {
-        let src = r#"
-            seiyaku WideCall {
-                struct Wide {
-                    int f00, int f01, int f02, int f03, int f04,
-                    int f05, int f06, int f07, int f08, int f09,
-                    int f10, int f11, int f12, int f13
-                }
-                view fn inspect(Wide value) -> int { return value.f00; }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i025.ko");
         let prog = parse(src).expect("parse oversized aggregate call");
         let typed = analyze(&prog).expect("analyze oversized aggregate call");
         let failure = lower(&typed).expect_err("lowering must reject an oversized call ABI");
@@ -10647,17 +10411,7 @@ mod tests {
 
     #[test]
     fn invoke_entrypoint_lowers_to_wrapper_call_with_override_restore() {
-        let src = r#"
-            seiyaku Demo {
-                kotoage fn run(int count) -> int authorize("Entry") { return count + 1; }
-
-                #[test]
-                fn drive_run() {
-                    let next = test::invoke_kotoage(kotoage: "run", arguments: Json::parse("{\"count\": 7}"));
-                    test::assert_eq(actual: next, expected: 8);
-                }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i026.ko");
         let prog = parse(src).expect("parse invoke_entrypoint");
         let typed = semantic::SemanticContext::with_capabilities(false, true)
             .analyze(&prog)
@@ -10726,18 +10480,7 @@ mod tests {
 
     #[test]
     fn invoke_entrypoint_tuple_return_uses_wrapper_callmulti() {
-        let src = r#"
-            seiyaku Demo {
-                kotoage fn run(int count) -> (int, int) authorize("Entry") { return (count, count + 1); }
-
-                #[test]
-                fn drive_run() {
-                    let pair = test::invoke_kotoage(kotoage: "run", arguments: Json::parse("{\"count\": 7}"));
-                    test::assert_eq(actual: pair.0, expected: 7);
-                    test::assert_eq(actual: pair.1, expected: 8);
-                }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i027.ko");
         let prog = parse(src).expect("parse tuple invoke_entrypoint");
         let typed = semantic::SemanticContext::with_capabilities(false, true)
             .analyze(&prog)
@@ -10776,26 +10519,7 @@ mod tests {
 
     #[test]
     fn invoke_entrypoint_as_lowers_to_test_host_intrinsics() {
-        let src = r#"
-            seiyaku Demo {
-                kotoage fn run(int count) -> int authorize("Entry") { return count + 1; }
-
-                #[test]
-                fn drive_run() {
-                    let next = test::invoke_kotoage_as(
-                        actor: "issuer",
-                        kotoage: "run",
-                        arguments: Json::parse("{\"count\": 7}"),
-                    );
-                    test::expect_reject_as(
-                        actor: "issuer",
-                        kotoage: "run",
-                        arguments: Json::parse("{\"count\": -1}"),
-                    );
-                    let _ = next;
-                }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i028.ko");
         let prog = parse(src).expect("parse invoke_entrypoint_as");
         let typed = semantic::SemanticContext::with_capabilities(false, true)
             .analyze(&prog)
@@ -10835,22 +10559,7 @@ mod tests {
 
     #[test]
     fn invoke_entrypoint_as_tuple_return_lowers_to_multi_intrinsic() {
-        let src = r#"
-            seiyaku Demo {
-                kotoage fn run(int count) -> (int, int) authorize("Entry") { return (count, count + 1); }
-
-                #[test]
-                fn drive_run() {
-                    let pair = test::invoke_kotoage_as(
-                        actor: "issuer",
-                        kotoage: "run",
-                        arguments: Json::parse("{\"count\": 7}"),
-                    );
-                    test::assert_eq(actual: pair.0, expected: 7);
-                    test::assert_eq(actual: pair.1, expected: 8);
-                }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i029.ko");
         let prog = parse(src).expect("parse tuple invoke_entrypoint_as");
         let typed = semantic::SemanticContext::with_capabilities(false, true)
             .analyze(&prog)
@@ -10890,17 +10599,7 @@ mod tests {
 
     #[test]
     fn actor_helpers_lower_to_test_host_intrinsics() {
-        let src = r#"
-            seiyaku Demo {
-                #[test]
-                fn drive_helpers() {
-                    let acct = test::actor_account("issuer");
-                    let pk = test::actor_public_key("issuer");
-                    let sig = test::actor_sign("issuer", b"demo");
-                    let _ = (acct, pk, sig);
-                }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i030.ko");
         let prog = parse(src).expect("parse actor helpers");
         let typed = semantic::SemanticContext::with_capabilities(false, true)
             .analyze(&prog)
@@ -10943,11 +10642,7 @@ mod tests {
 
     #[test]
     fn logical_operators_lower_to_short_circuit_cfg() {
-        let src = r#"
-fn rhs() -> bool { return true; }
-fn both(bool value) -> bool { return value && rhs(); }
-fn either(bool value) -> bool { return value || rhs(); }
-"#;
+        let src = include_str!("ir/fixtures/v1/i031.ko");
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower logical operators");
 
         for (name, short_value, rhs_on_then) in [("both", 0, true), ("either", 1, false)] {
@@ -11040,20 +10735,7 @@ fn either(bool value) -> bool { return value || rhs(); }
 
     #[test]
     fn bounded_loop_only_materializes_live_mutated_phi_slots() {
-        let src = r#"
-            fn f() -> int {
-                let invariant = 7;
-                var carried = 0;
-                var overwritten = 0;
-                for index in range(3) {
-                    carried = carried + index;
-                    overwritten = 99;
-                    let observed = invariant;
-                }
-                overwritten = 5;
-                return carried + overwritten + invariant;
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i032.ko");
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         let function = &ir.functions[0];
         let entry = function
@@ -11095,18 +10777,7 @@ fn either(bool value) -> bool { return value || rhs(); }
 
     #[test]
     fn break_and_continue_update_only_selected_loop_phi_slots() {
-        let src = r#"
-            fn f() -> int {
-                let invariant = 10;
-                var carried = 0;
-                for index in range(4) {
-                    if index == 2 { break; }
-                    carried = carried + 1;
-                    if index == 1 { continue; }
-                }
-                return carried + invariant;
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i033.ko");
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         let function = &ir.functions[0];
         let entry = function
@@ -11139,21 +10810,7 @@ fn either(bool value) -> bool { return value || rhs(); }
 
     #[test]
     fn state_map_foreach_carries_mutated_locals_through_break_and_continue() {
-        let src = r#"
-            seiyaku ForeachPhi {
-                state StateMap<int, int> Values;
-
-                kotoage fn f() -> int authorize("WriteState") {
-                    var seen = 0;
-                    for (key, value) in Values.take(2) {
-                        seen = seen + 1;
-                        if (key == value) { continue; }
-                        if (seen == 2) { break; }
-                    }
-                    return seen;
-                }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i034.ko");
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         let function = ir
             .functions
@@ -11255,19 +10912,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn nested_loops_do_not_carry_outer_invariants() {
-        let src = r#"
-            fn f() -> int {
-                let invariant = 9;
-                var total = 0;
-                for outer in range(2) {
-                    for inner in range(2) {
-                        total = total + outer + inner;
-                        let observed = invariant;
-                    }
-                }
-                return total + invariant;
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i035.ko");
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         let function = &ir.functions[0];
         let invariant = function
@@ -11337,23 +10982,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn mixed_value_and_divergent_function_tails_have_no_reachable_unit_return() {
-        let source = r#"
-            fn via_if(bool flag) -> int {
-                if flag { 7 } else { return 9; }
-            }
-            fn via_if_let(Option<int> value) -> int {
-                if let Option::some(item) = value { item } else { return 0; }
-            }
-            fn via_match(Option<int> value) -> int {
-                match value {
-                    Option::some(item) => item,
-                    Option::none => { return 0; },
-                }
-            }
-            fn wholly_divergent(bool flag) -> int {
-                if flag { return 1; } else { return 2; }
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i036.ko");
         let lowered = lower(
             &analyze(&parse(source).expect("parse mixed flow tails"))
                 .expect("analyze mixed flow tails"),
@@ -11416,13 +11045,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn lower_pointer_constructors_to_datarefs() {
-        let src = r#"
-            fn main() {
-                let k = Name::parse("cursor");
-                let v = Json::parse("{}\n");
-                let d = DomainId::parse("wonderland.universal");
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i037.ko");
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -11908,15 +11531,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn lower_quantity_typed_integer_literal_to_quantity_dataref() {
-        let src = r#"
-            fn main(AccountId account, AssetDefinitionId asset) {
-                ledger::asset::mint(
-                    account: account,
-                    asset_definition: asset,
-                    amount: 1,
-                );
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i038.ko");
         let program = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         let amount = program
             .functions
@@ -11968,52 +11583,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn lower_state_map_sets_keep_declared_base_names() {
-        let src = r#"
-            seiyaku StagedMintRequest {
-              state int MintRequestNextSequence;
-              state StateMap<Name, int> MintRequestSequenceById;
-              state StateMap<int, int> MintRequestSequences;
-              state StateMap<int, Name> MintRequestRequestIds;
-              state StateMap<int, Name> MintRequestFiIds;
-              state StateMap<int, AccountId> MintRequestFiAuthorities;
-              state StateMap<int, AccountId> MintRequestToAccounts;
-              state StateMap<int, int> MintRequestAmounts;
-              state StateMap<int, Json> MintRequestRequestedBy;
-              state StateMap<int, int> MintRequestStates;
-              state StateMap<int, int> MintRequestCreatedAt;
-              state StateMap<int, int> MintRequestExpiresAt;
-              state StateMap<int, int> MintRequestFinalizedAt;
-              state StateMap<int, int> MintRequestCanceledAt;
-
-              hajimari() { MintRequestNextSequence = 0; }
-
-              fn update_record(int sequence,
-                               Name request_id,
-                               Name fi_id,
-                               AccountId fi_multisig_account_id,
-                               AccountId to_account_id,
-                               int amount_i64,
-                               Json requested_by_actor_id,
-                               int state_code,
-                               int created_at_ms,
-                               int expires_at_ms,
-                               int finalized_at_ms,
-                               int canceled_at_ms) {
-                MintRequestSequences[sequence] = sequence;
-                MintRequestRequestIds[sequence] = request_id;
-                MintRequestFiIds[sequence] = fi_id;
-                MintRequestFiAuthorities[sequence] = fi_multisig_account_id;
-                MintRequestToAccounts[sequence] = to_account_id;
-                MintRequestAmounts[sequence] = amount_i64;
-                MintRequestRequestedBy[sequence] = requested_by_actor_id;
-                MintRequestStates[sequence] = state_code;
-                MintRequestCreatedAt[sequence] = created_at_ms;
-                MintRequestExpiresAt[sequence] = expires_at_ms;
-                MintRequestFinalizedAt[sequence] = finalized_at_ms;
-                MintRequestCanceledAt[sequence] = canceled_at_ms;
-              }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i039.ko");
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -12087,12 +11657,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn lower_canonical_trigger_operations() {
-        let src = r#"
-            fn main() {
-                ledger::trigger::register(Json::parse("{}"));
-                ledger::trigger::unregister(Name::parse("wake"));
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i040.ko");
         let ir = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
         let f = &ir.functions[0];
         let mut saw_create = false;
@@ -12111,22 +11676,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn lower_struct_fields_for_transfer_domain() {
-        let src = r#"
-            seiyaku C {
-                struct TransferArgs { DomainId domain; AccountId to; }
-                fn main() {
-                    let args = TransferArgs {
-                        domain: DomainId::parse("wonderland.universal"),
-                        to: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
-                    };
-                    ledger::domain::transfer(
-                        source: context::authority(),
-                        domain: args.domain,
-                        destination: args.to,
-                    );
-                }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i041.ko");
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -12271,19 +11821,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn lower_state_struct_ident_decodes_one_schema_bound_record() {
-        let src = r#"
-            seiyaku C {
-                struct Ledger { int counter; bool flag; }
-                state Ledger ledger;
-
-                hajimari() { ledger = Ledger { counter: 0, flag: false }; }
-
-                fn main() {
-                    let snapshot = ledger;
-                    let _ = snapshot.counter;
-                }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i042.ko");
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -12435,18 +11973,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn lower_state_struct_assignment_encodes_and_writes_once() {
-        let src = r#"
-            seiyaku C {
-                struct Ledger { int counter; bool flag; }
-                state Ledger ledger;
-
-                hajimari() { ledger = Ledger { counter: 0, flag: false }; }
-
-                fn main() {
-                    ledger = Ledger { counter: 7, flag: true };
-                }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i043.ko");
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -12517,19 +12044,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn aggregate_state_map_entry_uses_one_read_and_one_write() {
-        let src = r#"
-            seiyaku C {
-                struct Ledger { int counter; bool flag; }
-                state StateMap<int, Ledger> ledgers;
-
-                hajimari() {}
-
-                fn main() {
-                    ledgers[7] = Ledger { counter: 9, flag: true };
-                    let _snapshot = ledgers.get(7);
-                }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i044.ko");
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -12576,40 +12091,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn aggregate_unwrap_or_lowers_one_eager_fallback_call() {
-        let source = r#"
-            seiyaku C {
-                struct PolicyState {
-                    int version,
-                    bytes document,
-                    bytes document_hash,
-                    AccountId approved_by,
-                    int applied_at_ms,
-                    Name change_id,
-                }
-                state StateMap<Name, PolicyState> Policies;
-                state StateMap<int, int> FallbackCalls;
-
-                fn observed_fallback() -> PolicyState {
-                    let count = FallbackCalls.get(1).unwrap_or(0);
-                    FallbackCalls[1] = count + 1;
-                    return PolicyState {
-                        version: 0,
-                        document: b"fallback",
-                        document_hash: b"fallback-hash",
-                        approved_by: context::authority(),
-                        applied_at_ms: 0,
-                        change_id: Name::parse("fallback"),
-                    };
-                }
-
-                kotoage fn main() -> int authorize("WriteState") {
-                    let policy = Policies.get(Name::parse("spend")).unwrap_or(
-                        observed_fallback(),
-                    );
-                    return policy.version;
-                }
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i045.ko");
         let program = parse(source).expect("parse mixed aggregate unwrap_or");
         let typed = analyze(&program).expect("analyze mixed aggregate unwrap_or");
         let lowered = lower(&typed).expect("lower mixed aggregate unwrap_or");
@@ -12637,22 +12119,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn tuple_binding_projects_one_captured_call_result() {
-        let source = r#"
-            seiyaku C {
-                state StateMap<int, int> Observations;
-
-                fn observed_pair() -> (int, int) {
-                    let count = Observations.get(1).unwrap_or(0);
-                    Observations[1] = count + 1;
-                    return (1, 2);
-                }
-
-                kotoage fn main() -> int authorize("WriteState") {
-                    let pair = observed_pair();
-                    return pair.0 + pair.1;
-                }
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i046.ko");
         let program = parse(source).expect("parse tuple call binding");
         let typed = analyze(&program).expect("analyze tuple call binding");
         let lowered = lower(&typed).expect("lower tuple call binding");
@@ -12680,22 +12147,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn tuple_destructuring_projects_one_captured_call_result() {
-        let source = r#"
-            seiyaku C {
-                state StateMap<int, int> Observations;
-
-                fn observed_pair() -> (int, int) {
-                    let count = Observations.get(1).unwrap_or(0);
-                    Observations[1] = count + 1;
-                    return (1, 2);
-                }
-
-                kotoage fn main() -> int authorize("WriteState") {
-                    let (left, right) = observed_pair();
-                    return left + right;
-                }
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i047.ko");
         let program = parse(source).expect("parse tuple destructuring call");
         let typed = analyze(&program).expect("analyze tuple destructuring call");
         let lowered = lower(&typed).expect("lower tuple destructuring call");
@@ -12723,27 +12175,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn nested_struct_binding_projects_one_captured_call_result() {
-        let source = r#"
-            seiyaku C {
-                struct Inner { int value, bytes marker }
-                struct Outer { Inner inner, int version }
-                state StateMap<int, int> Observations;
-
-                fn observed_outer() -> Outer {
-                    let count = Observations.get(1).unwrap_or(0);
-                    Observations[1] = count + 1;
-                    return Outer {
-                        inner: Inner { value: 40, marker: b"nested" },
-                        version: 2,
-                    };
-                }
-
-                kotoage fn main() -> int authorize("WriteState") {
-                    let outer = observed_outer();
-                    return outer.inner.value + outer.version;
-                }
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i048.ko");
         let program = parse(source).expect("parse nested struct call binding");
         let typed = analyze(&program).expect("analyze nested struct call binding");
         let lowered = lower(&typed).expect("lower nested struct call binding");
@@ -12771,16 +12203,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn scalar_state_read_after_write_reuses_the_live_value() {
-        let src = r#"
-            seiyaku C {
-                state int counter;
-                hajimari() { counter = 0; }
-                fn main() -> int {
-                    counter = 7;
-                    return counter;
-                }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i049.ko");
         let prog = parse(src).expect("parse scalar state root");
         let typed = analyze(&prog).expect("analyze scalar state root");
         let ir = lower(&typed).expect("lower scalar state root");
@@ -12813,14 +12236,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn missing_aggregate_map_entry_branches_before_typed_decode() {
-        let src = r#"
-            seiyaku C {
-                struct Pair { int count; bool ready }
-                state StateMap<int, Pair> values;
-                hajimari() {}
-                fn main() { let _missing = values.get(7); }
-            }
-        "#;
+        let src = include_str!("ir/fixtures/v1/i050.ko");
         let prog = parse(src).expect("parse aggregate map read");
         let typed = analyze(&prog).expect("analyze aggregate map read");
         let ir = lower(&typed).expect("lower aggregate map read");
@@ -12867,16 +12283,7 @@ seiyaku RangeOffsetBits {{
 
     #[test]
     fn bytes_state_map_uses_the_schema_bound_record_codec() {
-        let source = r#"
-            seiyaku C {
-                state StateMap<int, bytes> values;
-                hajimari() {}
-                fn main() {
-                    values[7] = b"payload";
-                    let _stored = values.get(7);
-                }
-            }
-        "#;
+        let source = include_str!("ir/fixtures/v1/i051.ko");
         let program = parse(source).expect("parse bytes state map");
         let typed = analyze(&program).expect("analyze bytes state map");
         let ir = lower(&typed).expect("lower bytes state map");

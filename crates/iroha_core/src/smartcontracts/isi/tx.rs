@@ -1269,11 +1269,12 @@ pub(crate) mod tests {
             prepare_qc,
             commit_qc,
             signer_proofs: Vec::new(),
-            autonomous_network_id: iroha_data_model::NetworkId::from_genesis_hash(
-                iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
-                    Hash::new(b"merge-query-genesis"),
-                ),
-            ),
+            autonomous_network_id:
+                iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                    iroha_data_model::block::BlockHeader,
+                >::from_untyped_unchecked(
+                    Hash::new(b"merge-query-genesis")
+                )),
             autonomous_epoch: 0,
             autonomous_payload_hash: Hash::new(b"merge-query-payload"),
             entrypoint_hashes,

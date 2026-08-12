@@ -253,13 +253,13 @@
         (
             Path("crates/iroha_core/src/sumeragi/mod.rs"),
             "try_push_at",
-            "if retained.merge(candidate).is_err() {",
-            "if false && retained.merge(candidate).is_err() {",
+            "merged.merge_with_receipt(candidate)",
+            "merged.merge_with_receipt(retained)",
             "coalesced ingress shadow-merges one source route without mutating the retained owner",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "try_recv_if_at_checked",
+            "try_recv_if_at_checked_classified",
             "state.pending_wire_owners.remove(key)",
             "state.pending_wire_owners.get(key).cloned()",
             "semantic request ownership retires only when its queued occurrence is serviced",
@@ -410,9 +410,9 @@ def test_transport_geometry_source_fidelity_rejects_reply_route_mutants(
             "drop",
             (
                 (
-                    "impl", "<", "T", ":", "Pload", ",", "K", ":", "Kex",
-                    ",", "E", ":", "Enc", ">", "Drop", "for", "NetworkBase",
-                    "<", "T", ",", "K", ",", "E", ">",
+                    "impl", "<", "T", ":", "Pload", ",", "E", ":", "Enc",
+                    ">", "Drop", "for", "NetworkBase", "<", "T", ",", "E",
+                    ">",
                 ),
             ),
             "let _ = self.cancel_all_reply_route_tenures();",
@@ -1059,7 +1059,7 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
     mutate_rust_item_source(
         module,
         core_path,
-        "try_recv_if_at_checked",
+        "try_recv_if_at_checked_classified",
         "} else if matches!(&source, FairV2IngressSource::Authenticated(_)) {",
         "} else if false && matches!(&source, FairV2IngressSource::Authenticated(_)) {",
     )
@@ -1163,13 +1163,155 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
         "shared Sumeragi fingerprint projection carries H beside ingress capacities",
         "localnet aggregate bytes scale by N+H+1",
         "Taira renderer scales aggregate bytes by N+H+1",
-        "default Taira profile pins H=2 and seven source partitions",
+        "default seven-validator Taira profile pins H=2 and ten source partitions",
         "production Taira profile pins H=2 and seven source partitions",
         "Taira operator documentation states N+H+1 byte scaling",
     ):
         assert any(expected_error in error for error in geometry_errors), (
             expected_error,
             geometry_errors,
+        )
+
+    refresh_mutations = (
+        (
+            Path("crates/iroha_p2p/src/network.rs"),
+            "relay_message_wire_payload_len",
+            "let origin_signature_len = byte_sequence_wire_len(origin_signature_bytes)?;",
+            "let origin_signature_len = 0;",
+            "relay geometry must charge the origin signature and every exact wire field",
+        ),
+        (
+            Path("crates/iroha_p2p/src/peer.rs"),
+            "parse_next_encrypted_frame",
+            ".reserve_decode_scratch(size)",
+            ".reserve_decode_scratch(0)",
+            "receiver decode scratch must be reserved before taking the source-owned ciphertext lease",
+        ),
+        (
+            Path("crates/iroha_p2p/src/network.rs"),
+            "handle_service_message",
+            "self.soranet_transport_key_pair.clone(),",
+            "self.key_pair.clone(),",
+            "inbound stream handoff must carry separate validated node and transport identities",
+        ),
+        (
+            Path("crates/iroha_p2p/src/network.rs"),
+            "handle_service_message",
+            "self.network_id.clone(),",
+            "test_network_id(\"foreign-network\"),",
+            "inbound stream handoff must carry separate validated node and transport identities",
+        ),
+        (
+            Path("crates/iroha_p2p/src/network.rs"),
+            "run",
+            "self.set_validator_dial_roster(roster);",
+            "let _ = roster;",
+            "network actor must consume coupled validator dial-roster and topology ownership updates",
+        ),
+        (
+            Path("crates/iroha_p2p/src/network.rs"),
+            "peer_connected",
+            "self.validator_dial_scheduler.note_session_established(",
+            "unreviewed_validator_dial_scheduler.note_session_established(",
+            "accepted peer must publish validator dial session ownership",
+        ),
+        (
+            Path("defaults/kagami/iroha3-taira/config.toml"),
+            None,
+            "max_frame_bytes = 23068700",
+            "max_frame_bytes = 23068699",
+            "default Taira profile carries maximum privacy transaction and block-sync frames",
+        ),
+        (
+            Path("defaults/kagami/iroha3-taira/genesis.json"),
+            None,
+            '"max_payload_size_bytes": 16777216',
+            '"max_payload_size_bytes": 16777215',
+            "default Taira genesis DA pins the revision-4 protocol ceiling",
+        ),
+        (
+            Path("xtask/src/kagami_profiles.rs"),
+            None,
+            "const TAIRA_MAX_FRAME_BYTES: usize = 23_068_700;",
+            "const TAIRA_MAX_FRAME_BYTES: usize = 23_068_699;",
+            "Kagami Taira encrypted-frame ceiling",
+        ),
+        (
+            Path("xtask/src/kagami_profiles.rs"),
+            None,
+            "const TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC: usize = 23_068_672;",
+            "const TAIRA_MAX_FRAME_BYTES_BLOCK_SYNC: usize = 23_068_671;",
+            "Kagami Taira block-sync frame ceiling",
+        ),
+        (
+            Path("xtask/src/kagami_profiles.rs"),
+            None,
+            "const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 11_534_336;",
+            "const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 11_534_335;",
+            "Kagami Taira transaction-gossip frame ceiling",
+        ),
+        (
+            Path("xtask/src/kagami_profiles.rs"),
+            "render_peer_config_with_private_keys",
+            'let taira_network_frame_overrides = if spec.slug == "iroha3-taira" {',
+            'let taira_network_frame_overrides = if spec.slug == "iroha3-dev" {',
+            "Taira-only Kagami frame override branch",
+        ),
+        (
+            Path("xtask/src/kagami_profiles.rs"),
+            "render_peer_config_with_private_keys",
+            "fn render_peer_config_with_private_keys(",
+            "fn disabled_render_peer_config_with_private_keys(",
+            "require exactly one Kagami render_peer_config_with_private_keys item",
+        ),
+        (
+            Path("xtask/src/kagami_profiles.rs"),
+            "render_peer_config_with_private_keys",
+            "taira_network_frame_overrides = taira_network_frame_overrides,",
+            "taira_network_frame_overrides = String::new(),",
+            "install the Taira frame overrides in the network table",
+        ),
+    )
+    refresh_source_relatives = (
+        ("p2p_network", Path("crates/iroha_p2p/src/network.rs")),
+        ("p2p_peer", Path("crates/iroha_p2p/src/peer.rs")),
+        ("kagami_profiles", Path("xtask/src/kagami_profiles.rs")),
+        ("taira_renderer", Path("scripts/render_taira_validator_bundle.py")),
+        ("taira_default", Path("defaults/kagami/iroha3-taira/config.toml")),
+        ("taira_config", Path("configs/soranexus/taira/config.toml")),
+        ("taira_genesis", Path("configs/soranexus/taira/genesis.json")),
+        (
+            "taira_default_genesis",
+            Path("defaults/kagami/iroha3-taira/genesis.json"),
+        ),
+    )
+    for index, (relative, item_name, old, new, expected_error) in enumerate(
+        refresh_mutations
+    ):
+        mutation_formal_dir = copy_async_source_fidelity_fixture(
+            tmp_path / f"refresh_{index}", module, "SumeragiV2AsyncNetwork.tla"
+        )
+        mutation_root = mutation_formal_dir.parents[2]
+        path = mutation_root / relative
+        if item_name is None:
+            mutate_source_once(path, old, new)
+        else:
+            mutate_rust_item_source(module, path, item_name, old, new)
+
+        mutation_paths = {
+            role: mutation_root / source_relative
+            for role, source_relative in refresh_source_relatives
+        }
+        mutation_sources = {
+            role: source_path.read_text(encoding="utf-8")
+            for role, source_path in mutation_paths.items()
+        }
+        mutation_errors = module._transport_geometry_refresh_resistant_errors(
+            mutation_paths, mutation_sources
+        )
+        assert any(expected_error in error for error in mutation_errors), (
+            expected_error,
+            mutation_errors,
         )
 
 
@@ -1525,7 +1667,7 @@ def test_transport_geometry_source_fidelity_requires_configure_and_open_rechecks
         ),
         (
             Path("crates/iroha_p2p/src/network.rs"),
-            "start_with_crypto",
+            "start_with_crypto_and_initial_authorities",
             "let transport_geometry = validate_transport_queue_geometry::<E>(",
             "let transport_geometry = unchecked_transport_queue_geometry::<E>(",
             "complete transport geometry validation must be the first P2P startup action before any listener bind",

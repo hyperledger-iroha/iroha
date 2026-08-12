@@ -1103,6 +1103,21 @@ so a later ignored/retransmit publication cannot erase it. The marker starts
 the new height at progress rank zero and cannot mask a later missing-proposal
 stall.
 
+Recovered CompleteTip has an additional disk-ownership prerequisite. Its
+retired predecessor authority must first bind the exact unlaunched H+1
+lifecycle owner. Authenticated height recovery is also the sole source of its
+move-only storage authority: the capability fixes the live Kura instance,
+verified context, context-addressed lifecycle/body roots, and exact body
+signature policy. Owner construction cannot accept those components
+independently, and launch rechecks the same process-local Kura identity before
+moving either adapter or body ownership. That bound join can enter the existing
+owner-to-runtime, executor, and I/O launch only through a consuming transition whose opaque
+result retains the running H+1 stack together with the retired-H authority. It
+has no generic owner, parts, status, or activation accessor. The serialized
+runner still must consume this complete wrapper in the one-shot activation
+transaction above; until then, the recovered CompleteTip path remains
+fail-closed before status publication.
+
 Asynchronous work from the predecessor can still arrive after this handoff, as
 can work tagged for a non-current view or an older reducer generation. The
 reducer and its production refinement gates accept such wrong-height,
@@ -1284,17 +1299,18 @@ Replacing one obsolete restart selector with its two raw/coalesced
 crash boundaries and restoring two implemented certified-ingress regressions
 brings the inventory to the 829-test checkpoint. Autonomous-lifecycle
 terminal-outcome and startup-recovery coverage plus final source reconciliation
-bring the 837-test, 39-module checkpoint. Ten unignored deterministic network
-simulations cover lossy/offline leaders, symmetric and asymmetric partitions,
-current-owner QC redelivery, leader crashes, bounded corrupted-chunk recovery,
-WAL-intent replay, and divergent Taira views. They bring the inventory to the
-847-test checkpoint. The source-bound terminal-sweep partition regression brings
-the source-bound inventory to the 848-test checkpoint. The late passive-Fetch
-completion and one-shot completed-Serve reopening regressions bring the
-850-test checkpoint. Seven Native AMX finality-bound merge-projection
-regressions bring the 857-test, 40-module checkpoint. Three Kura recovery
-regressions and the governance-unlock audit bring the current
-source-bound inventory to 861 exact tests across 41 modules and 89 pre-network
+bring the 837-test, 39-module checkpoint. Ten deterministic network simulations
+bring the 847-test, 40-module checkpoint. The source-bound terminal-sweep
+partition regression brings the source-bound inventory to the 848-test
+checkpoint. The late passive-Fetch completion and one-shot completed-Serve
+reopening regressions bring the 850-test checkpoint. Seven Native AMX finality-
+bound merge-projection regressions bring the 857-test, 40-module checkpoint.
+Three Kura recovery regressions and the governance-unlock audit bring the 861-
+test, 41-module checkpoint. The production-adapter activation guard and two
+deferred-canonical-carrier completion regressions produced the historical
+864-test, 41-module checkpoint. Retiring the duplicate inline network-simulation
+rows brings the current
+source-bound inventory to 854 exact tests across 40 modules and 88 pre-network
 legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1303,11 +1319,11 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`8c39cb3717a9cab79e4d442e8179030c3af5af74947864d45838b80864290d2f`.
-Nine of those legs execute the separate 524-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 525 TSV lines and has SHA-256
-`bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`.
-The 318-test core group includes grouped Native prevote-budget rejection before
+`07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf`.
+Nine of those legs execute the separate 525-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 526 TSV lines and has SHA-256
+`dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
+The 319-test core group includes grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
 Native signing-boundary drift rejection, atomic grouped reservation commit,
@@ -1550,9 +1566,8 @@ authenticated-non-validator, and two-anonymous owners (`5N+3H+2` total)
 capacity-negative boundary and the exact
 PrepareQC equal-vote quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-89 legs, including the dedicated ten-test V2 core network-simulation module,
-the governance-unlock audit module, the autonomous lifecycle-recovery module,
-separate exact
+88 legs, including the governance-unlock audit module, the autonomous
+lifecycle-recovery module, separate exact
 status and atomic lane-certificate decode
 contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
 fixture check, two `iroha_config` geometry modules, the two new `iroha_p2p`
@@ -1564,7 +1579,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 861-test inventory is a mechanically checked
+The current 854-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1754,9 +1769,9 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 861 exact production
-liveness tests and executes all 41 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 524-test
+Before those longer scenarios, the PR gate inventories 854 exact production
+liveness tests and executes all 40 owning Rust modules serially. The release
+profile additionally records nine G-UNIT legs executing a separate 525-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -1917,7 +1932,11 @@ to the 848-test checkpoint. The two late-predecessor reopening regressions bring
 the 850-test checkpoint. Seven Native AMX finality-bound merge-projection
 regressions bring the 857-test checkpoint across the same 40 modules and 87
 legs. Three Kura recovery regressions and the governance-unlock audit bring the
-current inventory to 861 tests across 41 modules and 89 legs.
+861-test checkpoint across 41 modules and 89 legs. The production-adapter
+activation guard and two deferred-canonical-carrier completion regressions
+produced the historical 864-test, 41-module, 89-leg checkpoint. After retirement
+of the duplicate inline network-simulation rows, the current inventory contains
+854 tests across 40 modules and 88 legs.
 The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -2203,8 +2222,8 @@ without terminal validation it cannot publish external completion.
 
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
-evidence directory. That receipt binds the 89 pre-network corridor legs and
-their exact 861-test production inventory, the separate 524-test G-UNIT
+evidence directory. That receipt binds the 88 pre-network corridor legs and
+their exact 854-test production inventory, the separate 525-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

@@ -220,7 +220,7 @@ BY Isa
 THEOREM AsyncNetworkItemsStableUnderContextAndViewFrame ==
   UNCHANGED <<context, nodeView>> => UNCHANGED AsyncNetworkItems
 BY Isa
-   DEF AsyncNetworkItems, AsyncUntrustedTransportCompletionItem
+   DEF AsyncNetworkItems, AsyncUntrustedCertifiedResponseItem
 
 THEOREM CertifiedArchiveRoutesStableUnderContextFrame ==
   \A node, qc:

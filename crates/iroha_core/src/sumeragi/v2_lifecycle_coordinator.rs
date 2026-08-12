@@ -19,6 +19,10 @@ mod concrete_admission;
 #[path = "v2_lifecycle_ingress_position.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
 mod ingress_position;
+/// Consuming production launch from the recovered owner into runtime and I/O.
+#[path = "v2_lifecycle_launch.rs"]
+#[cfg_attr(not(test), allow(dead_code))]
+mod launch;
 /// Durable lifecycle ledger, sealed behind the coordinator authority.
 #[path = "v2_lifecycle_ledger.rs"]
 mod ledger;
@@ -65,11 +69,27 @@ use body_pipeline_transition::{
     durable_validate_payload_is_exact,
 };
 pub(crate) use concrete_admission::LifecycleWorkRegistryHolder;
+pub(in crate::sumeragi) use launch::{
+    LaunchedProductionLifecycleV1, ProductionLifecycleLaunchErrorV1,
+    ProductionLifecycleLaunchInputsV1, ProductionRecoveredDecisionApplyCompletionErrorV1,
+    ProductionRecoveredDecisionApplyCompletionV1, ProductionRecoveredDecisionApplyRetryV1,
+    ProductionV2CompletionObserverActivationPermitV1, RetainedRecoveredDecisionApplyDeferredV1,
+};
 pub(crate) use ledger::AuthenticatedRecoveredWalValidateLedgerParent;
 pub(crate) use ledger::ProductionLifecycleStartupErrorV1;
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use ledger::WalVoteLedgerRepairTestSummary;
+pub(in crate::sumeragi) use ledger::{
+    AuthenticatedCompleteTipPredecessorStorageV1, CompleteTipPredecessorStorageErrorV1,
+    RetiredRecoveredCompleteTipActivationAuthorityV1, open_complete_tip_predecessor_storage,
+};
+#[cfg(all(test, feature = "bls"))]
+/// Run the two release-bound CompleteTip disk-retirement regressions.
+pub(crate) fn run_complete_tip_retirement_release_regressions() {
+    ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_survives_completed_serve_body_cleanup_with_live_work();
+    ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_binds_only_the_exact_unlaunched_successor_owner();
+}
 #[cfg(test)]
 pub(crate) use ledger::{
     append_same_owner_foreign_terminal_for_test,
@@ -85,6 +105,7 @@ pub(crate) use projection::{
     AdapterEffectAdmissionError, CertifiedServeAdmissionError,
     CertifiedServeTerminalSettlementErrorV1, CertifiedServeTerminalSettlementFailureV1,
 };
+pub(in crate::sumeragi) use replay_authority::LifecycleReplayAuthorityV1;
 pub(in crate::sumeragi) use replay_authority::RecoveredDecisionApplyCandidateLineageV1;
 pub(super) use replay_authority::SealedLiveWalPersistedEffectV1;
 pub(in crate::sumeragi) use replay_authority::{
@@ -104,6 +125,9 @@ pub(crate) use scheduler_inputs::{
     AuthenticatedSchedulerInputsFactory, PreparedProductionIngressCapacityWait,
     ProductionIngressCapacityStatus, ProductionIngressSchedulerInputsError,
     ProductionIngressTurnPreparation, ProductionSchedulerInputsError, QueuedProductionIngressFetch,
+};
+pub(in crate::sumeragi) use scheduler_inputs::{
+    ProductionRecoveredDecisionApplyDispatchErrorV1, ProductionRecoveredDecisionApplyDispatchV1,
 };
 pub(crate) use schema::{
     AdmissionDecision, AdmissionRejection, AdmissionRequest, CandidateAdmission, CapacityClass,
@@ -138,7 +162,7 @@ pub(in crate::sumeragi) use wal_recovery::{
     AuthenticatedRecoveredWalControlProjection, AuthenticatedRecoveredWalDecisionFetchProjection,
     AuthenticatedRecoveredWalVoteProjection, RecoveredDecisionApplyPendingLineageV1,
 };
-pub(in crate::sumeragi) use work_registry::ReadyValidateSignPredecessorAuthority;
+pub(in crate::sumeragi) use work_registry::RecoveredDecisionApplyRegistryProjectionPermit;
 pub(crate) use work_registry::{
     AuthenticatedRecoveredWalValidateLifecycleRepair,
     DurableAuthenticatedRecoveredWalValidateLifecycleRepair, ExactStoreRecoveredWalPersistError,
@@ -155,6 +179,11 @@ pub(crate) use work_registry::{
 pub(in crate::sumeragi) use work_registry::{
     LiveValidateSignRegistryReservation, LiveValidateSignWorkProjectionPermit,
     PreparedLiveValidateSignRegistryWork,
+};
+pub(in crate::sumeragi) use work_registry::{
+    PreparedRecoveredDecisionApplyDispatch, ReadyValidateSignPredecessorAuthority,
+    RecoveredDecisionApplyCompletionProjectionPermit, RecoveredDecisionApplyDispatchIdentityV1,
+    RecoveredDecisionApplyDispatchKeyV1,
 };
 
 const MAX_PENDING_ADMISSION_WAITS: usize = 64;
@@ -199,48 +228,29 @@ pub(crate) struct ProductionLifecycleOwnerV1 {
     coordinator: LifecycleCoordinator,
     registry: LifecycleWorkRegistryHolder,
     payload_store: crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1,
+    serve_payloads: crate::sumeragi::v2_certified_serve_payload_store::AuthenticatedCertifiedServePayloadRecoveryCut,
     body_store: Option<crate::sumeragi::v2_body_store::V2BodyStore>,
     body_store_identity: Option<crate::sumeragi::v2_body_store::V2BodyStoreInstanceIdentity>,
-    adapter_startup: crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+    kura_binding: Option<crate::sumeragi::v2::RecoveredLifecycleOwnerKuraBindingV1>,
+    adapter_startup: Option<crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1>,
 }
 // PRODUCTION_LIFECYCLE_OWNER_DECLARATION_END
 
-/// Fail-stop status-publication error retaining the complete lifecycle owner.
-#[must_use = "failed owner publication requires process restart"]
-pub(in crate::sumeragi) struct ProductionLifecycleOwnerStatusErrorV1 {
-    _owner: ProductionLifecycleOwnerV1,
-    error: crate::sumeragi::v2::AdapterError,
-}
-
-impl ProductionLifecycleOwnerStatusErrorV1 {
-    /// Return a stable diagnostic without releasing any retained authority.
-    pub(in crate::sumeragi) fn reason(&self) -> &'static str {
-        match &self.error {
-            crate::sumeragi::v2::AdapterError::FailClosed => {
-                "adapter status publication is fail-closed"
-            }
-            _ => "adapter status publication failed after exact lifecycle open",
-        }
-    }
-}
-
 impl ProductionLifecycleOwnerV1 {
-    /// Publish startup status only after all storage and registry joins succeed.
-    pub(in crate::sumeragi) fn publish_recovered_adapter_status(
+    /// Bind the Kura instance authenticated by the sole production factory.
+    ///
+    /// Test-only raw-root fixtures never call this method and remain
+    /// deliberately unlaunchable. A second binding is an invariant violation
+    /// because it would detach already-opened storage from its live Kura owner.
+    pub(in crate::sumeragi) fn with_recovered_kura_binding(
         mut self,
-    ) -> Result<Self, ProductionLifecycleOwnerStatusErrorV1> {
-        if let Err(error) = self.adapter_startup.publish_status() {
-            return Err(ProductionLifecycleOwnerStatusErrorV1 {
-                _owner: self,
-                error,
-            });
-        }
-        Ok(self)
+        binding: crate::sumeragi::v2::RecoveredLifecycleOwnerKuraBindingV1,
+    ) -> Self {
+        assert!(self.kura_binding.is_none());
+        self.kura_binding = Some(binding);
+        self
     }
 }
-// TODO: Replace the runner's independent `ProductionV2Services::start` body
-// store argument with a consuming launch from this owner, then retain only the
-// exact instance identity here before enabling production planner calls.
 
 impl LifecycleCoordinator {
     #[cfg(test)]
@@ -1843,7 +1853,7 @@ mod tests {
             scheduler
                 .matches("AuthenticatedSchedulerInputsFactory::new()")
                 .count(),
-            2
+            3
         );
         assert!(schema.contains("_factory: &AuthenticatedSchedulerInputsFactory"));
         assert!(schema.contains("_factory: AuthenticatedSchedulerInputsFactory"));
@@ -4662,190 +4672,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn dependency_free_explorer_covers_capacities_peers_stages_and_eight_events() {
-        let mut covered_stages = BTreeSet::new();
-        let mut covered_phases = BTreeSet::new();
-        let mut covered_work_classes = BTreeSet::new();
-        let mut explored_states = 0_usize;
-
-        for capacity in 0..=3 {
-            let geometry = capacities(capacity);
-            for template_start in (0..EXPLORER_TEMPLATES.len()).step_by(4) {
-                let candidates: Vec<_> = (0_u8..4)
-                    .map(|peer| {
-                        let seed = 100_u8
-                            .checked_add(peer * 20)
-                            .and_then(|seed| {
-                                seed.checked_add(
-                                    u8::try_from(template_start)
-                                        .expect("explorer template index fits u8"),
-                                )
-                            })
-                            .expect("explorer seed remains representable");
-                        let template = EXPLORER_TEMPLATES
-                            [(template_start + usize::from(peer)) % EXPLORER_TEMPLATES.len()];
-                        capacity_matched(explorer_candidate(seed, template), &geometry)
-                    })
-                    .collect();
-                let initial = LifecycleCoordinator::new(context(), 0, geometry.clone());
-                let mut frontier = vec![initial.clone()];
-                let mut seen = BTreeSet::from([format!("{initial:?}")]);
-
-                for depth in 0_u64..=8 {
-                    let mut next = Vec::new();
-                    for state in frontier {
-                        explored_states += 1;
-                        assert_coordinator_invariants(&state);
-                        for record in state.records.values() {
-                            covered_stages.insert(record.stage.kind);
-                            covered_phases.insert(record.key.phase);
-                            covered_work_classes.insert(record.work_class);
-                        }
-                        if depth == 8 || state.fault.is_some() {
-                            continue;
-                        }
-
-                        let mut successors = Vec::new();
-                        for candidate in &candidates {
-                            let mut admitted = state.clone();
-                            admitted.admit(AdmissionRequest::Candidate(candidate.clone()));
-                            successors.push(admitted);
-                        }
-                        if state.active_lease.is_none() {
-                            let mut planned = state.clone();
-                            plan_turn(
-                                &mut planned,
-                                [(WaitSource::External(digest(240)), depth + 1)],
-                            );
-                            successors.push(planned);
-                        } else {
-                            let lease = state
-                                .active_lease
-                                .clone()
-                                .expect("active explorer lease is present");
-                            let lease_capacity_class = lease.work_class.capacity_class();
-                            for outcome in [
-                                TurnOutcome::Advanced,
-                                TurnOutcome::Terminal(TerminalOutcome::Completed(None)),
-                                TurnOutcome::Terminal(TerminalOutcome::Completed(Some(digest(
-                                    241,
-                                )))),
-                                TurnOutcome::Terminal(TerminalOutcome::Cancelled),
-                                TurnOutcome::Blocked(WaitToken::new(
-                                    WaitSource::External(digest(240)),
-                                    depth,
-                                )),
-                                TurnOutcome::Replenished(PhysicalSlot::new(
-                                    PhysicalSlotId::for_capacity(lease_capacity_class, 1),
-                                    digest(
-                                        u8::try_from(depth + 1).expect("depth is at most eight"),
-                                    ),
-                                )),
-                            ] {
-                                let mut settled = state.clone();
-                                settle_with_test_serve_receipt(
-                                    &mut settled,
-                                    lease.clone(),
-                                    outcome,
-                                );
-                                successors.push(settled);
-                            }
-                        }
-                        for record in state.records.values().filter(|record| {
-                            matches!(record.state, LifecycleState::Waiting(_))
-                                && !matches!(
-                                    record.state,
-                                    LifecycleState::Waiting(WaitToken {
-                                        source: WaitSource::ProducerTurn(_),
-                                        ..
-                                    })
-                                )
-                        }) {
-                            let LifecycleState::Waiting(wait) = record.state else {
-                                unreachable!("filtered waiting record")
-                            };
-                            let mut published = state.clone();
-                            published.publish_ready(ReadyEvent::new(
-                                record.ordinal,
-                                record.owner,
-                                wait,
-                                None,
-                            ));
-                            successors.push(published);
-                        }
-                        let mut restarted = LifecycleCoordinator::new_with_authority(
-                            state.episode_authority.clone(),
-                            state.high_water,
-                        );
-                        restarted.reconcile_restart(recovery_snapshot(&state));
-                        successors.push(restarted);
-                        if state.active_lease.is_none()
-                            && let Some(successor_height) =
-                                state.active_context.height.checked_add(1)
-                        {
-                            let successor = LifecycleContext::new(
-                                digest(
-                                    220_u8
-                                        .checked_add(
-                                            u8::try_from(depth).expect("depth is at most eight"),
-                                        )
-                                        .expect("rollover explorer digest fits"),
-                                ),
-                                successor_height,
-                            );
-                            let mut rolled = state.clone();
-                            rolled.rollover(RolloverSnapshot {
-                                retired_context: state.active_context,
-                                successor_context: successor,
-                                successor_predecessor: state.active_context.id,
-                                successor_authority: authority(
-                                    successor,
-                                    state.capacity_geometry.clone(),
-                                ),
-                                successor_ledger_root: None,
-                                serve_cancellations: Vec::new(),
-                                retained_high_water: state.high_water,
-                                retire_ordinals: state
-                                    .records
-                                    .iter()
-                                    .filter_map(|(ordinal, record)| {
-                                        (!matches!(record.state, LifecycleState::Terminal(_)))
-                                            .then_some(*ordinal)
-                                    })
-                                    .collect(),
-                                retire_admission_keys: state
-                                    .admission_waits
-                                    .keys()
-                                    .copied()
-                                    .collect(),
-                            });
-                            successors.push(rolled);
-                        }
-
-                        for successor in successors {
-                            assert_terminal_irreversibility(&state, &successor);
-                            assert_coordinator_invariants(&successor);
-                            let signature = format!("{successor:?}");
-                            if seen.insert(signature) {
-                                next.push(successor);
-                            }
-                        }
-                    }
-                    frontier = next;
-                }
-            }
-        }
-
-        assert_eq!(covered_stages, BTreeSet::from(LifecycleStageKind::ALL));
-        assert_eq!(covered_phases, BTreeSet::from(LifecyclePhase::ALL));
-        assert_eq!(
-            covered_work_classes,
-            BTreeSet::from(LifecycleWorkClass::ALL)
-        );
-        assert!(explored_states > 10_000);
-    }
-
+    include!("tests/v2_lifecycle_coordinator_explorer_cases.rs");
     #[test]
     fn restart_seeds_high_water_and_rollover_preserves_it() {
         let mut coordinator = LifecycleCoordinator::new(context(), 5, capacities(8));

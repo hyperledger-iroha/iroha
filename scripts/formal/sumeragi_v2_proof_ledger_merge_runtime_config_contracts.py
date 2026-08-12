@@ -558,7 +558,7 @@ let sidecar_server_roster = context
     .iter()
     .map(|entry| entry.validator.clone())
     .collect::<Vec<_>>();
-let sidecar_server_stream_capacity = sidecar_server_roster.len();
+let sidecar_server_stream_capacity = merge_sidecar_server_stream_capacity(sidecar_server_roster.len());
 let sidecar_server_roster_digest =
     canonical_merge_sidecar_roster_digest(&sidecar_server_roster);
 let merge_sidecars = match retained_merge_sidecars {
@@ -591,6 +591,7 @@ let merge_sidecars = match retained_merge_sidecars {
         """
 merge_signing_guard,
 merge_sidecars,
+predecessor_sidecar_requesters: None,
 exact_output_handoff_owner,
 authenticated_merge_qcs: BTreeSet::new(),
 """,

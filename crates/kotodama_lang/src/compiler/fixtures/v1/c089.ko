@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  let _bad = crypto::sha256(1);
+}
+
+}

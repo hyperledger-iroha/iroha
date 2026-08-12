@@ -989,19 +989,6 @@ pub struct AppMeta {
     pub icon_hash: Option<String>,
 }
 
-/// Optional wallet metadata for display.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(decode_from_slice)]
-#[allow(clippy::size_of_ref)]
-pub struct WalletMeta {
-    /// Wallet display name.
-    pub name: String,
-    /// Optional homepage URL.
-    pub url: Option<String>,
-    /// Optional icon hash (algorithm‑qualified, e.g., blake2b:... ).
-    pub icon_hash: Option<String>,
-}
-
 /// Server-to-client events that do not require encryption.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(decode_from_slice)]
@@ -1058,31 +1045,8 @@ pub struct SignInProofV1 {
     pub nonce: String,
 }
 
-/// Canonical aliases for the current Connect wire format.
-/// Wallet signature used in control and payload messages.
-pub type WalletSignature = WalletSignatureV1;
-/// Top-level Connect frame routed over transport channels.
-pub type ConnectFrame = ConnectFrameV1;
-/// Top-level authenticated Connect P2P relay envelope.
-pub type ConnectRelayEnvelope = ConnectRelayEnvelopeV1;
 /// Top-level Connect P2P control-plane message.
 pub type ConnectP2pMessage = ConnectP2pMessageV1;
-/// Plaintext control channel payload used during session lifecycle.
-pub type ConnectControl = ConnectControlV1;
-/// Ciphertext envelope metadata carried in a frame.
-pub type ConnectCiphertext = ConnectCiphertextV1;
-/// Decrypted envelope containing sequence and payload.
-pub type Envelope = EnvelopeV1;
-/// Encrypted payload variants carried inside an envelope.
-pub type ConnectPayload = ConnectPayloadV1;
-/// Encrypted control variants permitted after key establishment.
-pub type ControlAfterKey = ControlAfterKeyV1;
-/// Server-generated event payload delivered on the control channel.
-pub type ServerEvent = ServerEventV1;
-/// Permission request/approval surface.
-pub type Permissions = PermissionsV1;
-/// Optional sign-in proof payload.
-pub type SignInProof = SignInProofV1;
 
 #[cfg(test)]
 mod tests {

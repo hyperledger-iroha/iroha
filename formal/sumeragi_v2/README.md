@@ -13,6 +13,16 @@ The production protocol admits only unit-vote committees with exact
 validators with quorum `q = 2f + 1`. Stake may affect election or eligibility;
 it never weights a consensus or timeout vote.
 
+The production source guard also binds the durable adapter seam to one opened
+post-open safety-WAL directory owner. WAL append and the serviced-candidate and
+leader-wire sibling snapshots use descriptor-relative, bounded operations;
+the two sibling authorities are distinct and one-shot, and raw-path store
+constructors remain test-only. This is a source-refinement contract, not a
+formal filesystem proof. It does not yet authenticate pre-open ancestry back
+to an opened Kura root, which remains a runner-cutover obligation. Non-Unix
+basic WAL I/O keeps its legacy path implementation, while adjacent-store
+authority minting fails closed until a handle-relative implementation exists.
+
 Revision 4 deterministically rotates a height-seeded roster permutation. Set A
 contains the first `q` members, with the leader first and proxy tail last; Set B
 contains the remaining `f`. The leader sends the proposal manifest
@@ -552,7 +562,7 @@ height-context state are not migrated in place.
   wake-up, predecessor drop, successor retry, frozen recipients, and Kura
   revalidation. Fresh isolated Rust 1.93.1 locked/offline slices passed the 18
   exact Kura replica tests and four exact configuration tests; the complete
-  524-test `G-UNIT` run, formal-engine receipts, and network corridors remain
+  525-test `G-UNIT` run, formal-engine receipts, and network corridors remain
   separate release obligations.
   One hundred six `_bug.cfg` controls deliberately weaken one boundary each and
   must produce the named invariant counterexample.
@@ -1345,8 +1355,8 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 861 named tests
-across 41 Rust modules. The preceding 298-name inventory was produced from the
+Before network startup, the executable wrapper inventories 854 named tests
+across 40 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
 historical/current applied-height rollover; 2 bind peer-writer flush and
@@ -1460,10 +1470,14 @@ partition regression brings the 848-test checkpoint. The late passive-Fetch
 completion and one-shot completed-Serve reopening regressions bring the
 850-test checkpoint. Seven Native AMX finality-bound merge-projection
 regressions bring the 857-test checkpoint across 40 modules. Three Kura recovery
-regressions and the governance-unlock audit bring the current
-inventory to 861 tests across 41 modules.
+regressions and the governance-unlock audit bring the 861-test checkpoint
+across 41 modules. The production-adapter activation guard and two deferred-
+canonical-carrier completion regressions produced that historical 864-test,
+41-module checkpoint. Retiring the duplicate inline network-simulation rows
+brings the current
+inventory to 854 tests across 40 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 89 legs. The
+corridor contains 88 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
 The first-release sidecar keeps wire protocol version 1 and uses positive
 `NonZeroU64` responder generation, requester epoch, and per-stream semantic
@@ -1536,7 +1550,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`8c39cb3717a9cab79e4d442e8179030c3af5af74947864d45838b80864290d2f`.
+`07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1573,16 +1587,15 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The five integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 89 legs, including the dedicated
-ten-test V2 core network-simulation leg, the governance-unlock audit module, the
-autonomous lifecycle-recovery module, and separate exact
+the complete pre-network corridor now spans 88 legs, including the governance-
+unlock audit module, the autonomous lifecycle-recovery module, and separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, and source-sealed
 command-success legs. Its finality, offline compact-QC,
 and height-context proposal-origin modules each use a dedicated
 `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of those forty-one modules or eighty-nine legs. The
+geometry tests as part of those forty modules or eighty-eight legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -1712,8 +1725,8 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 89 pre-network legs and the exact
-861-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and the exact
+854-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and

@@ -1,7 +1,8 @@
 //! Schema metadata test covering enums with implicit discriminants.
 
-use std::any::TypeId;
+mod common;
 
+use common::{assert_schema, entry};
 use iroha_schema::prelude::*;
 use norito::{Decode, Encode};
 
@@ -17,83 +18,14 @@ enum Foo {
 
 #[test]
 fn default_discriminants() {
-    use std::collections::BTreeMap;
-
-    use IntMode::*;
-    use Metadata::*;
-
-    let expected = vec![
-        (
-            TypeId::of::<::std::result::Result<bool, ::std::string::String>>(),
-            MetaMapEntry {
-                type_id: "Result<bool, String>".to_owned(),
-                type_name: "Result<bool, String>".to_owned(),
-                metadata: Result(ResultMeta {
-                    ok: TypeId::of::<bool>(),
-                    err: TypeId::of::<::std::string::String>(),
-                }),
-            },
-        ),
-        (
-            TypeId::of::<::std::string::String>(),
-            MetaMapEntry {
-                type_id: "String".to_owned(),
-                type_name: "String".to_owned(),
-                metadata: String,
-            },
-        ),
-        (
-            TypeId::of::<bool>(),
-            MetaMapEntry {
-                type_id: "bool".to_owned(),
-                type_name: "bool".to_owned(),
-                metadata: Bool,
-            },
-        ),
-        (
-            TypeId::of::<Foo>(),
-            MetaMapEntry {
-                type_id: "Foo".to_owned(),
-                type_name: "Foo".to_owned(),
-                metadata: Enum(EnumMeta {
-                    variants: vec![
-                        EnumVariant {
-                            tag: "Variant1".to_owned(),
-                            discriminant: 0,
-                            ty: Some(TypeId::of::<bool>()),
-                        },
-                        EnumVariant {
-                            tag: "Variant2".to_owned(),
-                            discriminant: 1,
-                            ty: Some(TypeId::of::<::std::string::String>()),
-                        },
-                        EnumVariant {
-                            tag: "Variant3".to_owned(),
-                            discriminant: 2,
-                            ty: Some(TypeId::of::<
-                                ::std::result::Result<bool, ::std::string::String>,
-                            >()),
-                        },
-                        EnumVariant {
-                            tag: "Variant5".to_owned(),
-                            discriminant: 4,
-                            ty: Some(TypeId::of::<i32>()),
-                        },
-                    ],
-                }),
-            },
-        ),
-        (
-            TypeId::of::<i32>(),
-            MetaMapEntry {
-                type_id: "i32".to_owned(),
-                type_name: "i32".to_owned(),
-                metadata: Int(FixedWidth),
-            },
-        ),
-    ]
-    .into_iter()
-    .collect::<BTreeMap<_, _>>();
-
-    assert_eq!(Foo::schema(), expected);
+    assert_schema::<Foo>(
+        "enum_default.default_discriminants",
+        &[
+            entry::<Result<bool, String>>("Result<bool, String>"),
+            entry::<String>("String"),
+            entry::<bool>("bool"),
+            entry::<Foo>("Foo"),
+            entry::<i32>("i32"),
+        ],
+    );
 }

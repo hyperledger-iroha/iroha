@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  ledger::trigger::register(Name::parse("bad"));
+}
+
+}

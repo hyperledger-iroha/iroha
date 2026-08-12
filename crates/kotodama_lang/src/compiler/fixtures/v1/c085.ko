@@ -1,0 +1,11 @@
+
+seiyaku CompilerFixture {
+
+kotoage fn run(bytes payload) authorize("Admin") {
+  ledger::sccp::record(payload);
+  ledger::governance::submit_ballot(payload);
+  ledger::subscription::bill();
+  ledger::subscription::record_usage();
+}
+
+}

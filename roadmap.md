@@ -5,6 +5,28 @@ Last updated: 2026-08-12
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Build-efficiency closeout
+
+- Preserve the reviewed 5,067,263-line first-party Rust baseline and the
+  4,560,536-line ten-percent ceiling. The current 5,018,658-line ratchet leaves
+  a 458,122-line gap; do not redefine the baseline, count moved test code as a
+  physical reduction, or weaken required runtime, security, consensus, SDK, or
+  release-evidence behavior to close it.
+- Add the new source and fixture files to the eventual signed commit, then rerun
+  the strict SDK source-closure guard from the tracked candidate. Keep the
+  staged merge-resolution layer and unstaged optimization layer reviewable
+  until that signed commit is prepared.
+- Obtain the reviewed workspace lockfile that matches the merged manifests
+  without locally regenerating `Cargo.lock`. From that immutable candidate, run
+  the full locked workspace build and tests, strict all-target/all-feature
+  Clippy, ABI and canonical wire goldens, focused Sumeragi/Kura recovery suites,
+  and representative four-validator deterministic consensus tests.
+- Capture comparable `valid: true` cold/warm and compiler-work reports for the
+  baseline and candidate with identical source, lock, toolchain, arguments,
+  environment, and host. Expand compile-unit coverage beyond the current
+  data-model graph to the daemon, CLI, and workspace release lanes before
+  claiming reduced compiler work or runtime performance neutrality.
+
 ## Exact network identity completion
 
 Signed queries, ordinary transactions, peer authentication, core consensus
@@ -36,10 +58,22 @@ Revision-4 implementation facts are recorded in `status.md`. Older Sumeragi
 V1/revision-3 checkpoint lists elsewhere in this file are historical and do
 not add release gates. Guarded formatting, explicit production `iroha_core`
 library compilation, profile-tool compilation, Swarm/Kagami prepared-bundle
-regressions, generated-artifact determinism, exact profile-config admission,
-and public consensus wire roundtrips are complete. The outstanding revision-4
-work is limited to:
+regressions, deterministic Swarm/Kagami profile-bundle regeneration, exact
+profile-config admission, and public consensus wire roundtrips are complete.
+The five checked-in OpenAPI artifacts remain stale and require deterministic
+regeneration from a clean exact candidate; the dirty unsigned development
+checkout is not release provenance. The outstanding revision-4 work is limited
+to:
 
+- At runner cutover, replace the lexical Kura storage-root handoff with an
+  opened Kura-root directory capability which mints the existing opened
+  SafetyWal directory owner. The current seam already rejects a final `wal/`
+  symlink and every post-open parent/leaf substitution, and all WAL-adjacent
+  production I/O is descriptor-relative, but pre-open ancestor substitution
+  is not yet physically joined to Kura's instance identity. Add the equivalent
+  fail-closed handle-relative implementation before enabling the adjacent
+  serviced-candidate and leader-wire stores on non-Unix targets; basic WAL
+  recovery and append retain their legacy portable path fallback meanwhile.
 - Wire the unified consuming V1 lifecycle-owner factory into the serialized
   runner so the retained verified context, coordinator, concrete registry,
   Certified-Serve payload store, and body store become the sole production
@@ -56,9 +90,40 @@ work is limited to:
   the current later-view tag only with its exact active-lock `LockAndCommit`
   PrepareQC lineage. The runner's already-open body store must first consume
   semantic marker replay into the sole move-only startup cut; the production
-  factory has no root-reopen alternative. Residual and WAL-projection
+  factory has no root-reopen alternative. Authenticated height recovery now
+  mints one move-only storage authority binding the verified context, exact
+  Kura instance, context-addressed ledger/body roots, and authenticated
+  genesis-or-rotating signature policy. The same recovery boundary also
+  retains the universal genesis account derived from its authenticated genesis
+  key; launch releases that account only after rechecking the exact Kura
+  instance. The same seal now retains the lexically Kura-derived safety-WAL and
+  chunk paths; the factory binds the adapter's held WAL before store side effects, and launch
+  internally restores one ordinal source, folds producer and leader-wire
+  high-watermarks, opens the gate from the owner-held body store, binds it to
+  the still-closed ingress, and retains RAII unbinding ownership. Raw paths,
+  ordinals, and receipts are no longer launch inputs. The authenticated adapter
+  startup retains its validation frontier internally and provides in production
+  only one consuming WAL-bound leader-wire launch authority, so neither the
+  adapter nor replay batch can be extracted.
+  Residual and WAL-projection
   mismatches fail before that cut is unsealed and before Serve or Ledger opens,
-  and status follows the opaque owner.
+  while status remains unpublished in the opaque owner. A sealed consuming
+  launch now transfers that owner's exact body store through the runtime and
+  executor into the I/O worker. Staged-genesis verification seals the exact
+  signed body into a move-only recovery token, and launch may install only
+  that optional token before worker start. It verifies the store/output identities, and
+  leaves only the store-instance seal in the owner; the runner must consume
+  this launch and publish status only after clocks and authenticated ingress
+  are live. CompleteTip retirement now retains the actual opened canonical H+1
+  ledger handle/frame and can consume an unlaunched lifecycle owner into an
+  opaque exact join only after rechecking its verified context/parent QC,
+  ledger target and projection, body and Serve roots, the exact post-prune
+  authenticated Serve cut against a fresh bounded directory census, adapter
+  context, and concrete registry. That bound-owner seal now consumes the sole
+  generic owner launch and returns another opaque wrapper which retains the
+  running H+1 stack together with its retired-H authority. Wire that complete
+  wrapper into the later one-shot activation; do not unwrap it into the generic
+  successor publisher.
   No caller-supplied branch or recovery cut remains. The owner now has a
   sealed scheduler-input factory for the complete directly owned Ready subset:
   closed Validate completions reattest
@@ -67,10 +132,11 @@ work is limited to:
   live executor mode, ingress selector/lane/source, concrete registry carrier,
   and runner-reach observation, followed by the exact `n + 1` Blocked command
   fence and existing `n + 2` durable completion. It currently rejects
-  production use because the runner independently gives its body store to
-  `ProductionV2Services`; next replace that construction with a consuming
-  owner-to-I/O-worker transfer which leaves the running owner an exact instance
-  seal, and call the method only from the runner's live current-Ingress cursor.
+  production use because the runner still follows its independent
+  adapter/body-store/service construction path. Replace that construction
+  with the landed consuming owner-to-I/O-worker launch, then call the planner
+  only from the runner's live current-Ingress cursor and delete the old launch
+  surface in the same cut.
   Certified-Serve startup now installs exact shared-family Serve and
   ProducerTurn carriers, and an unwired selector-bound fresh transaction
   fsyncs its payload before atomically staging LedgerV1 plus both carriers.
@@ -94,16 +160,48 @@ work is limited to:
   certificate-only V1 origin for its absent manifest and enters the complete
   Ledger/registry/coordinator startup census with exact no-rewrite coalescing;
   quarantined markers cannot cross the revalidated-store seal. A matching
-  promoted success detaches into an opaque same-store/full-context cut and is
-  restored without rewriting while Apply remains unavailable; promoted or
-  quarantined deterministic rejection cannot be treated as refetch or Apply
-  authority.
-  TODO: Decision Apply must consume the sealed Decision-Fetch authority, exact
-  semantically revalidated BodyFrame cut, and any exact LedgerV1 Validate
-  parent in one fixed reducer transaction without exposing intermediate work.
-  It is not available until the transaction publishes the complete successor,
-  installs the final live Apply carrier, and storage-only restart reconstructs
-  that carrier after a Ledger-fsync/volatile-publication crash cut.
+  promoted success detaches into an opaque same-store/full-context cut;
+  promoted or quarantined deterministic rejection cannot be treated as refetch
+  or Apply authority. Decision Apply now consumes the sealed Decision-Fetch
+  authority and exact semantically revalidated BodyFrame cut, drives the fixed
+  reducer body sequence, publishes or exact-stutters the complete four-row
+  LedgerV1 successor, installs the final live Apply carrier, and reconstructs
+  that carrier during storage-only restart. Its opaque bounded-I/O attestation
+  now drives a dedicated worker command and guarded result without
+  manufacturing a runtime ownership sidecar. Applied completion rejoins the
+  exact claimed carrier and commits Kura -> LedgerV1 ->
+  coordinator/registry/adapter/executor -> worker acknowledgement in durable
+  order. The typed missing-sidecar retry now republishes only the unchanged
+  task under its existing dedicated key while both fail-stop guards remain
+  armed. Settlement first registers the exact round/subject/reference in the
+  lane recovery journal. Its stable keyed owner preserves each decided carrier
+  across executor cleanup, retains terminal invalid-entry evidence outside the
+  generic drain, and dispatches only the next fair matching request through
+  the exact paired service/lane endpoints. Retry reauthenticates that local
+  sidecar before reserving Consensus capacity; unavailable sidecar or capacity
+  returns the whole owner unchanged. Queue-level regressions now pin the exact
+  keyed retry transfer and both capacity/barrier non-mutation cases. Add
+  production-shaped dispatch/settlement/sidecar-driver regressions. CompleteTip
+  recovery now retains its full Kura artifact and receipt instead of a lossy
+  predecessor hash projection, and terminal Apply has a separate exact
+  four-row ledger oracle which cannot mint a live carrier. CompleteTip recovery
+  now retains verified H and derives private context-addressed H/H+1 lifecycle
+  targets plus the predecessor body-store root/signature policy from the same
+  Kura instance; a copied predecessor frame at another root is rejected. The
+  production disk-only retirement transaction is wired before ingress: it
+  consumes receipt-refreshed Certified-Serve terminal updates, cancels every
+  remaining live row, clears producer debt, fsyncs/reloads H, then initializes
+  H+1 at the retained ordinal high-water or authenticates a later exact
+  descendant above that floor. A dedicated move-only retired token is retained
+  but cannot publish status: runner preflight stays closed until the sealed H+1
+  lifecycle owner consumes that canonical successor frame, and that rejection
+  precedes every legacy H+1 adapter/worker/output constructor. Its bound launch
+  now consumes the generic owner-to-I/O transaction without exposing either
+  half, retaining the launched stack and retired-H authority in one typed
+  activation prerequisite. Next, consume that wrapper from the runner,
+  reconcile the retained H+1 ledger, add the dedicated typed publisher, and
+  remove the independent startup path; then add the separate uninterrupted
+  live-owner rollover transaction.
 - Close the autonomous carrier terminal-gating, signed-bootstrap roll-forward,
   and lifecycle-retention release gate from one final source seal. Run the
   focused Kura and Sumeragi regressions, build the optimized `irohad` and
@@ -568,9 +666,13 @@ tests pass.
 The validator-only, prepared-bundle Compose redesign passes its focused
 `iroha_swarm` suite (24 tests) and all four Kagami positive/mismatch
 regressions. The zero-chain genesis, three generated Compose manifests, and
-dev/Taira profile bundles are refreshed and deterministic; exact generated
-profile configs also pass runtime admission. Daemon config-digest execution
-remains blocked by the unrelated Bootle-Lantern lib-test compile error.
+dev/Taira profile bundles are refreshed and deterministic. Taira generation
+now pins all three reviewed network frame caps, chain discriminant `369`, and
+the canonical fee, stake, slash, and gas protocol accounts; all 18 tracked
+Taira bundle outputs were regenerated together. Exact generated profile
+configs also pass runtime admission. This development-tree regeneration is not
+a live Taira rollout or release receipt. Daemon config-digest execution remains
+blocked by the unrelated Bootle-Lantern lib-test compile error.
 
 Do not promote the private audit ledger to complete until those source-bound
 commands and the final reconciliation pass are recorded.
@@ -582,7 +684,8 @@ exact verified copy of the pinned installed Node dependency graph, and clean up
 safely under Bash 3.2 even when preflight rejects the checkout.
 Closure still requires a clean double regeneration, synchronized manifests and
 version maps, an explicit generated-client versus hand-maintained-SDK policy,
-the external Ed25519 HSM envelope, and a production gate run with
+an independently administered external software Ed25519 envelope, and a
+production gate run with
 `OPENAPI_REQUIRE_SIGNED=1` and the approved operator allowlist.
 
 ## SoraFS V1 Governance DAG deployment closure
@@ -744,8 +847,8 @@ evidence.
 
 ## Sumeragi V2 production multilane release closure
 
-On the current tree, the independent 87-leg release inventory contract is
-sealed at 857 production tests across 40 modules, 524 G-UNIT rows, and four
+On the current tree, the independent 88-leg release inventory contract is
+sealed at 854 production tests across 40 modules, 525 G-UNIT rows, and four
 mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
 Fresh guard and mutation execution against this source is pending. The
 package-layout preflight and aggregate checker also bind the sole reviewed
@@ -789,16 +892,17 @@ tests. The isolated `iroha_core` library check also passed before the final
 reader deduplication, with post-edit startup-binding and B/A/B regressions
 green. This focused evidence does not replace the complete release gates.
 
-The static release inventory now matches `857/857` production tests across 40
-modules and `524/524` focused `G-UNIT` entries. Its canonical 525-line TSV has
+The static release inventory now matches `854/854` production tests across 40
+modules and `525/525` focused `G-UNIT` entries. Its canonical 526-line TSV has
 SHA-256
-`bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`.
+`dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
 The separate canonical production module/test TSV has SHA-256
-`090d4aa1d2ed4be9a55f4d6f265c51896034077f2f1bc7e33d80bba5cd440afd`;
+`07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf`;
 the newest rows bind crash-safe autonomous lifecycle terminal completion,
-startup reconciliation before lane-work activation, ten deterministic network
-simulations, and the exact pre-mutation terminal-sweep partition.
-The 318-entry core group additionally source-seals grouped Native prevote
+startup reconciliation before lane-work activation, and the exact pre-mutation
+terminal-sweep partition. The duplicate inline V2 core network simulations
+are retired; the standalone `iroha_sumeragi_core` harness remains.
+The 319-entry core group additionally source-seals grouped Native prevote
 budget rejection before Kura/WSV mutation, historical source-bundle
 authentication, crash-safe latest-index and prune-V2 recovery, cross-route
 manifest-barrier isolation, durable Native signing-boundary drift rejection,
@@ -840,12 +944,12 @@ multilane binding ledger keeps this as the
 `composed_state_action_relation_no_trace_extraction` claim, and source-binds
 the exact payload, reservation, queue-order, Kura persistence/recovery, runner,
 and release-receipt consumers. The schema-5 structural/source-binding checks,
-exact 857-test production inventory, 524-test G-UNIT source inventory, 12
+exact 854-test production inventory, 525-test G-UNIT source inventory, 12
 fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
 contract controls require a fresh source-bound rerun. The ledger retains the
 distinct fifth layout-only Apalache result after the four refinement rows. The
-G-UNIT inventory has 525 TSV lines and SHA-256
-`bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`.
+G-UNIT inventory has 526 TSV lines and SHA-256
+`dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
 The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
 again and passes all 15 focused tests. No TLC or Apalache engine execution is
 claimed by those static checks, and the total Rust transition projection
@@ -887,12 +991,12 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 857-test,
+  mutations before promotion, then finish the remaining 854-test,
   40-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
   obligations remain in the formal dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 524 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 525 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
@@ -904,7 +1008,7 @@ The remaining work is evidence-driven and must stay in order:
   `4c21e1fcf5589a3c8177c3ef533542655cdbe6082d726c0fb8ee2bcdf56df913`,
   and wire-TSV SHA-256
   `f4ed50fb3db8aba9a8f50c542a58b72099c162e5cb927637c83634bca5120ae7`.
-  The current harness inventories OpenAPI `7`, Python `62`, JavaScript `59`,
+  The current harness inventories OpenAPI `7`, Python `62`, JavaScript `60`,
   Swift `4`, Kotlin `6`, and Java `5` tests. The predecessor fixture's direct
   subset results are not an archived all-surface replay and do not attest this
   corpus; the aggregate source/distribution harness remains required.
@@ -987,8 +1091,11 @@ Repository conformance and synthetic fixture aggregates are not promotion
 evidence. L1 requires the live four-voting-validator, multi-provider,
 dual-gateway, dual-Governance-DAG deployment, resilience/load/24-hour soak
 evidence, and exactly 17 fresh payload-free summaries under one deployment
-context. L2 requires the externally HSM-signed ordered `SFM-1`, `SF-1`,
-`SF-2`, `SF-2c`, `SF-3`, `SF-4`, `SF-5b`, `SF-6`, and `SF-8a` envelope.
+context. L2 requires the ordered `SFM-1`, `SF-1`, `SF-2`, `SF-2c`, `SF-3`,
+`SF-4`, `SF-5b`, `SF-6`, and `SF-8a` envelope signed by an independently
+administered external software Ed25519 signer. Its binding must pin
+`signing_provider=authenticated_external_signer`, `signing_backend=software`,
+and `signer_qualification=software-key-qualified`.
 Promotion is allowed only when both deterministic runs emit `status=ready`,
 `summary_file_count=17`, `recognized_summary_count=17`, every lane is valid,
 no critical/high vulnerability remains, and rollback is usable.
@@ -1011,9 +1118,11 @@ before opening any archive, consensus, node-handle, or outbox state. The exact
 opaque-preflight consumption/revalidation and main daemon startup-order tests
 are green; remaining L0 execution includes clean workspace gates and final
 artifact provenance. Seven focused Rust `EscrowId` hard-cut
-regressions and the aggregate production-readiness regression suite passed all
-459 tests in two complete runs. Neither local result substitutes for native
-qualification or genuine L1/L2 evidence.
+regressions and the latest complete aggregate production-readiness regression
+run passed all 465 current tests; earlier complete runs covered the then-current
+459-test suite. A second complete 465-test final-tree replay remains required.
+Neither local result substitutes for native qualification or genuine L1/L2
+evidence.
 PDP, PoR, and PoTR production failure handoff uses the exact-chain durable
 native transaction forwarder, and storage work is gated by the finalized
 native task cursor, revision, lease owner, generation, and expiry. The
@@ -26851,9 +26960,11 @@ versions, and hashes are receipt-bound.
 
 The current release-support suites are green at 11/11 seed-matrix, 189/189
 release-receipt, and 71/71 protected-bootstrap tests. The source-bound release
-gate now requires exactly 3,676 proof-fidelity cases and 26 formal-launcher
-cases. The source-derived proof-fidelity composition is 3,633 ledger/checker
-cases, 28 pinned-Verus evidence cases, and 15 TLC-normalizer cases. It includes
+gate now requires exactly 5,291 proof-fidelity cases and 26 formal-launcher
+cases. The source-derived proof-fidelity composition is 5,189 ledger/checker
+cases, 28 pinned-Verus evidence cases, 15 TLC-normalizer cases, eight
+reviewed-Rust closure cases, 31 Native/passive multilane source-contract cases,
+and twenty selected layout/wire cases. It includes
 the new fail-closed mutations for exact-request coalescing, exact-output
 lifecycle source seals, and durable Apply-tombstone monotonicity. Fresh
 settled-tree collection and execution of both

@@ -84,6 +84,10 @@ jobs:
         run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
       - name: Unit-test Kotodama documentation checker
         run: python3 -m pytest -q pytests/scripts/check_kotodama_docs_test.py
+      - name: Verify sealed Kotodama compiler test sources
+        run: |
+          python3 -m pytest -q pytests/scripts/kotodama_fixture_manifest_test.py
+          python3 scripts/check_kotodama_test_sources.py
       - name: Verify workspace release-workflow semantics
         run: python3 -m pytest -q pytests/scripts/workspace_release_gate_test.py
       - name: Compile canonical Kotodama documentation fences
@@ -190,13 +194,18 @@ jobs:
             pytests/scripts/check_cargo_feature_hygiene_test.py \
             pytests/scripts/check_workspace_target_inventory_test.py \
             scripts/tests/profile_build_test.py \
+            scripts/tests/profile_cargo_build_test.py \
             scripts/tests/check_musubi_fixture_owner_test.py \
+            scripts/tests/check_compile_time_table_assets_test.py \
+            scripts/tests/check_dependency_budget_test.py \
             scripts/tests/check_source_file_budget_test.py \
             scripts/tests/check_compile_unit_budget_test.py \
             scripts/tests/check_generated_artifacts_test.py \
             scripts/tests/check_nexus_provisioning_templates_test.py
           python3 scripts/check_cargo_feature_hygiene.py
           python3 scripts/check_workspace_target_inventory.py
+          python3 scripts/check_compile_time_table_assets.py
+          python3 scripts/check_dependency_budget.py
           python3 scripts/check_source_file_budget.py
           python3 scripts/check_generated_artifacts.py
           python3 scripts/check_nexus_provisioning_templates.py
@@ -245,10 +254,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          toolchain: 1.93.1
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"
-          shared-key: rust-lane-${{ matrix.lane }}
+          shared-key: rust-lane-1.93.1-${{ matrix.lane }}
       - name: Download test-network binaries
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:

@@ -1,0 +1,119 @@
+{
+  "format_version": 1,
+  "source_commit": "47cdc2d11e90d7034b57ae97fb460005020f037d",
+  "source_slice_hash_scope": "complete Rust constant declaration including trailing LF",
+  "assets": [
+    {
+      "path": "kgen_fxp_gm_u64le_v1.bin",
+      "byte_length": 16384,
+      "sha256": "e0746da83816f05bd5a3bbe0867bba11ee2bab9cd781780ce4d205d6c51b03d9",
+      "layout": "1024 records: FXC.re raw FXR u64 LE, FXC.im raw FXR u64 LE",
+      "source_preimages": [
+        {
+          "path": "../kgen/fxp.rs",
+          "constant": "GM_TAB",
+          "physical_lines": 4098,
+          "sha256": "eb808018f8dc5ad9b2c2cc172438b1663126e89c21e0efd7d796814935475137"
+        }
+      ]
+    },
+    {
+      "path": "kgen_mp31_tables_le_v1.bin",
+      "byte_length": 9440,
+      "sha256": "5d3bdf8667346efdebb704f50b5b52951da8084ec6e5a502cf5b3f40adb2ee20",
+      "layout": "1024 REV10 u16 LE, then 308 records of p,p0i,R2,g,ig,s as u32 LE",
+      "source_preimages": [
+        {
+          "path": "../kgen/mp31.rs",
+          "constant": "REV10",
+          "physical_lines": 56,
+          "sha256": "a61e00779cfe0ae7a588679254cd5841caf0b56bbb289d2e0df891a5f508bfe2"
+        },
+        {
+          "path": "../kgen/mp31.rs",
+          "constant": "PRIMES",
+          "physical_lines": 2466,
+          "sha256": "893c6a9709106745fc590331439050ff2fdc1ddfc0cf94de88e29ff153e2c694"
+        }
+      ]
+    },
+    {
+      "path": "sign_gm_binary64le_v1.bin",
+      "byte_length": 16384,
+      "sha256": "7bc33e12d16cf8d3e29e0bbfeb5747423a748dbab1c276e812c0d44c8644f8c5",
+      "layout": "2048 emulated FLR raw binary64 bit patterns as u64 LE",
+      "source_preimages": [
+        {
+          "path": "../sign/poly.rs",
+          "constant": "GM",
+          "physical_lines": 2050,
+          "sha256": "2b5042176178242452237953378df1c4c91e401eaf8f80ad38051384c5aea384"
+        }
+      ]
+    },
+    {
+      "path": "comm_ntt_u16le_v1.bin",
+      "byte_length": 4096,
+      "sha256": "24c08d54048851b0062e687277613026ee80ac0ed640f511388053ff51dc7401",
+      "layout": "1024 GM u16 LE, then 1024 iGM u16 LE",
+      "source_preimages": [
+        {
+          "path": "../comm/mq.rs",
+          "constant": "GM",
+          "physical_lines": 70,
+          "sha256": "8b8147f65ce1ab51ab358d6568c4d7de0adb99e69257748cb54e2606bcb66cdf"
+        },
+        {
+          "path": "../comm/mq.rs",
+          "constant": "iGM",
+          "physical_lines": 69,
+          "sha256": "3089300da8c3e80262906d23e3894f124d97c35a16eea3851c50e3c1e8d57879"
+        }
+      ]
+    },
+    {
+      "path": "kat512_v1.bin",
+      "byte_length": 3168,
+      "sha256": "6686d88e2eb22d12b346ea5fc0c5cec2dffb6614c39bfe0c353e2a419954242b",
+      "layout": "f,g,F,G as four 512-byte raw i8 arrays; 96 RND bytes; 512 signature i16 LE",
+      "source_preimages": [
+        {
+          "path": "../kat_vectors.rs",
+          "constant": "KAT_512_f",
+          "physical_lines": 21,
+          "sha256": "49fd25f6b62794c675872974327e9551c076af2cb8d838f8159695f2756bebd0"
+        },
+        {
+          "path": "../kat_vectors.rs",
+          "constant": "KAT_512_g",
+          "physical_lines": 21,
+          "sha256": "c349ec66c01d5ffc78f54debdb208bdf21d06c11147f41278b1f4e47b3dc9f04"
+        },
+        {
+          "path": "../kat_vectors.rs",
+          "constant": "KAT_512_F",
+          "physical_lines": 25,
+          "sha256": "7cd4374e9f2a3e16d351b1a84685aeefc56ebb9614214cb891a8944e4187fbc8"
+        },
+        {
+          "path": "../kat_vectors.rs",
+          "constant": "KAT_512_G",
+          "physical_lines": 25,
+          "sha256": "77bb5b040a52aa873c0d1b9d70390bab1616c689908c88dea2936bda9bc1822d"
+        },
+        {
+          "path": "../kat_vectors.rs",
+          "constant": "KAT_512_RND",
+          "physical_lines": 11,
+          "sha256": "4d9429413b8f63fd63806214f4cb2295639806373ade949210472aed30569a4c"
+        },
+        {
+          "path": "../kat_vectors.rs",
+          "constant": "KAT_512_sig_raw",
+          "physical_lines": 30,
+          "sha256": "47f4dd06ce6bfb7aee06161331a9c66cb689da5436f236af73dbd3ee583f68c5"
+        }
+      ]
+    }
+  ]
+}

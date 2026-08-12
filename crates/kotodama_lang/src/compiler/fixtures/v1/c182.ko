@@ -1,0 +1,18 @@
+
+        seiyaku Demo {
+            state int Counter;
+            state StateMap<Name, int> Prices;
+            state Option<int> MaybeCounter;
+            state Result<bool, string> Outcome;
+
+            hajimari() {
+                Counter = 0;
+                MaybeCounter = Option::none;
+                Outcome = Result::err("not ready");
+            }
+
+            view fn get_counter() -> int {
+                return Counter;
+            }
+        }
+        

@@ -197,16 +197,6 @@ path = "benches/bench_zk.rs"
 harness = false
 
 [[bench]]
-name = "bench_dex"
-path = "benches/bench_dex.rs"
-harness = false
-
-[[bench]]
-name = "bench_voting"
-path = "benches/bench_voting.rs"
-harness = false
-
-[[bench]]
 name = "bench_poseidon"
 path = "benches/bench_poseidon.rs"
 harness = false

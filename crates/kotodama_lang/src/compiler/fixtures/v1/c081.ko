@@ -1,0 +1,22 @@
+
+seiyaku CompilerFixture {
+
+fn verify(bytes payload) {
+  crypto::zk::verify_batch(payload);
+  ledger::governance::verify_ballot(payload);
+  ledger::governance::verify_tally(payload);
+}
+
+fn verify_namespaced(bytes payload) {
+  crypto::zk::verify_batch(payload);
+  ledger::governance::verify_ballot(payload);
+  ledger::governance::verify_tally(payload);
+}
+
+kotoage fn main() authorize("CompilerFixture") {
+  let payload = b"\x01\x02\x03";
+  verify(payload);
+  verify_namespaced(payload);
+}
+
+}

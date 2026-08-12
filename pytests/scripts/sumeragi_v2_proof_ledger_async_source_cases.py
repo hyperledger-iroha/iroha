@@ -2825,7 +2825,26 @@ def test_local_runner_service_contract_source_fidelity_is_current(
         formal_dir=formal_dir,
     )
 
-    assert errors == []
+    assert errors == [], errors
+    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    mutate_rust_item_source_in_context(
+        module,
+        runner_path,
+        "next",
+        (("impl", "Iterator", "for", "OuterIngressTurns"),),
+        "OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,",
+        "OuterIngressTurn::Runtime => OuterIngressTurn::Completion,",
+    )
+    errors = module._local_runner_service_contract_source_fidelity_errors(
+        module.load_ledger(),
+        repo_root=tmp_path,
+        formal_dir=formal_dir,
+    )
+    assert any(
+        "ordinary ingress must alternate finite Completion, Runtime, and Ingress turns"
+        in error
+        for error in errors
+    ), errors
 
 
 def test_local_runner_service_contract_rejects_broadened_trust_boundary(
@@ -2866,16 +2885,17 @@ def test_local_runner_service_contract_rejects_broadened_trust_boundary(
         (
             "SumeragiV2AsyncLivenessProofs.tla",
             "LocalRunnerServiceContractDebt",
+            "  IF node \\in AsyncTimedServiceNodes\n"
+            "       /\\ asyncNodeServiceDeadlines[node] <= asyncNow\n",
             "  IF node \\in LocalRunnerServiceOwners\n"
             "       /\\ asyncNodeServiceDeadlines[node] <= asyncNow\n",
-            "  IF asyncNodeServiceDeadlines[node] <= asyncNow\n",
             "LocalRunnerServiceContractDebt must equal only",
         ),
         (
             "SumeragiV2AsyncLivenessProofs.tla",
             "LocalRunnerServiceContractDecreaseStep",
+            "  \\E node \\in AsyncTimedServiceNodes:\n",
             "  \\E node \\in LocalRunnerServiceOwners:\n",
-            "  \\E node \\in ValidatorIds:\n",
             "LocalRunnerServiceContractDecreaseStep must equal only",
         ),
         (
@@ -3069,3 +3089,15 @@ def test_effect_capacity_reconciled_semantics_survive_digest_refresh(
     errors = module._effect_capacity_production_source_fidelity_errors(repo_root)
 
     assert any(diagnostic in error for error in errors), errors
+    if item_name == "retire_restored_producer_continuation":
+        adapter = ROOT_DIR / "crates/iroha_core/src/sumeragi/v2.rs"
+        adapter_item, = module.rust_items(
+            adapter.read_text(encoding="utf-8"), "step_with_defer_policy"
+        )
+        check = module._adapter_step_has_synchronous_reducer_effect_dataflow
+        reducer = "self.step_reducer(event)"
+        drive = "self.drive_effects(outcome.into_effects())"
+        assert check(adapter_item.source)
+        assert not check(adapter_item.source.replace(drive, "Vec::new()", 1))
+        assert not check(f"let outcome = match {drive} {{}}; {reducer};")
+        assert not check(f"if false {{ let _ = {reducer}; }} {adapter_item.source}")

@@ -1,0 +1,9 @@
+
+    if true {
+      return 1;
+    } else {
+      for (dead_key, dead_value) in Entries.range(1, 5) {
+        let _copy = dead_value;
+      }
+      return 2;
+    }

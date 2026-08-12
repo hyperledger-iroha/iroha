@@ -1,0 +1,4 @@
+
+seiyaku CompilerFixture {
+fn main() { let _height = context::block_height(1); }
+}

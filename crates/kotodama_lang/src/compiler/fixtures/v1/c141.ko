@@ -1,0 +1,12 @@
+
+seiyaku Test {
+  state StateMap<int, int> Foo;
+
+  kotoage fn read_dyn(int k)  authorize("Entry") {
+    let _x = Foo.get(k);
+  }
+
+  kotoage fn read_lit()  authorize("Entry") {
+    let _x = Foo.get(1);
+  }
+}

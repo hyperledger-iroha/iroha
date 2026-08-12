@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main(AccountId account) {
+  ledger::role::grant(account, Json::parse("{}"));
+}
+
+}

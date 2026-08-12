@@ -1021,24 +1021,9 @@ fn assert_permissions_query_targets_account(
     query: &iroha_data_model::query::QueryWithParams,
     account_id: &AccountId,
 ) {
-    use iroha_data_model::{
-        permission::Permission,
-        prelude::FindPermissionsByAccountId,
-        query::{QueryItemKind, iter_query_inner},
-    };
+    use iroha_data_model::{prelude::FindPermissionsByAccountId, query::QueryItemKind};
 
-    if let Some(query_box) = query.query_box() {
-        let erased = iter_query_inner::<Permission>(query_box)
-            .expect("permissions query should preserve erased permission item kind");
-        let decoded = super::decode_query_payload::<FindPermissionsByAccountId>(erased.payload())
-            .expect("permissions query payload should decode");
-        assert_eq!(decoded.account_id(), account_id);
-        return;
-    }
-
-    let (item_kind, _, _, payload) = query
-        .fast_dsl_parts()
-        .expect("permissions query should expose fast-dsl payload");
+    let (item_kind, _, _, payload) = query.parts();
     assert_eq!(item_kind, QueryItemKind::Permission);
     let decoded = super::decode_query_payload::<FindPermissionsByAccountId>(payload)
         .expect("permissions query payload should decode");
@@ -1049,24 +1034,9 @@ fn assert_roles_query_targets_account(
     query: &iroha_data_model::query::QueryWithParams,
     account_id: &AccountId,
 ) {
-    use iroha_data_model::{
-        prelude::FindRolesByAccountId,
-        query::{QueryItemKind, iter_query_inner},
-        role::RoleId,
-    };
+    use iroha_data_model::{prelude::FindRolesByAccountId, query::QueryItemKind};
 
-    if let Some(query_box) = query.query_box() {
-        let erased = iter_query_inner::<RoleId>(query_box)
-            .expect("roles query should preserve erased role-id item kind");
-        let decoded = super::decode_query_payload::<FindRolesByAccountId>(erased.payload())
-            .expect("roles query payload should decode");
-        assert_eq!(decoded.account_id(), account_id);
-        return;
-    }
-
-    let (item_kind, _, _, payload) = query
-        .fast_dsl_parts()
-        .expect("roles query should expose fast-dsl payload");
+    let (item_kind, _, _, payload) = query.parts();
     assert_eq!(item_kind, QueryItemKind::RoleId);
     let decoded = super::decode_query_payload::<FindRolesByAccountId>(payload)
         .expect("roles query payload should decode");
@@ -1077,23 +1047,9 @@ fn assert_domains_query_targets_account(
     query: &iroha_data_model::query::QueryWithParams,
     account_id: &AccountId,
 ) {
-    use iroha_data_model::{
-        prelude::FindDomainsByAccountId,
-        query::{QueryItemKind, iter_query_inner},
-    };
+    use iroha_data_model::{prelude::FindDomainsByAccountId, query::QueryItemKind};
 
-    if let Some(query_box) = query.query_box() {
-        let erased = iter_query_inner::<iroha_data_model::domain::Domain>(query_box)
-            .expect("domains query should preserve erased domain item kind");
-        let decoded = super::decode_query_payload::<FindDomainsByAccountId>(erased.payload())
-            .expect("domains query payload should decode");
-        assert_eq!(decoded.account_id(), account_id);
-        return;
-    }
-
-    let (item_kind, _, _, payload) = query
-        .fast_dsl_parts()
-        .expect("domains query should expose fast-dsl payload");
+    let (item_kind, _, _, payload) = query.parts();
     assert_eq!(item_kind, QueryItemKind::Domain);
     let decoded = super::decode_query_payload::<FindDomainsByAccountId>(payload)
         .expect("domains query payload should decode");
@@ -1104,23 +1060,9 @@ fn assert_assets_query_targets_account(
     query: &iroha_data_model::query::QueryWithParams,
     account_id: &AccountId,
 ) {
-    use iroha_data_model::{
-        prelude::FindAssetsByAccountId,
-        query::{QueryItemKind, iter_query_inner},
-    };
+    use iroha_data_model::{prelude::FindAssetsByAccountId, query::QueryItemKind};
 
-    if let Some(query_box) = query.query_box() {
-        let erased = iter_query_inner::<iroha_data_model::asset::value::Asset>(query_box)
-            .expect("assets query should preserve erased asset item kind");
-        let decoded = super::decode_query_payload::<FindAssetsByAccountId>(erased.payload())
-            .expect("assets query payload should decode");
-        assert_eq!(decoded.account_id(), account_id);
-        return;
-    }
-
-    let (item_kind, _, _, payload) = query
-        .fast_dsl_parts()
-        .expect("assets query should expose fast-dsl payload");
+    let (item_kind, _, _, payload) = query.parts();
     assert_eq!(item_kind, QueryItemKind::Asset);
     let decoded = super::decode_query_payload::<FindAssetsByAccountId>(payload)
         .expect("assets query payload should decode");
@@ -1131,24 +1073,9 @@ fn assert_accounts_with_asset_query_targets_domain(
     query: &iroha_data_model::query::QueryWithParams,
     asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
 ) {
-    use iroha_data_model::{
-        account::Account,
-        prelude::FindAccountsWithAsset,
-        query::{QueryItemKind, iter_query_inner},
-    };
+    use iroha_data_model::{prelude::FindAccountsWithAsset, query::QueryItemKind};
 
-    if let Some(query_box) = query.query_box() {
-        let erased = iter_query_inner::<Account>(query_box)
-            .expect("accounts-with-asset query should preserve erased account item kind");
-        let decoded = super::decode_query_payload::<FindAccountsWithAsset>(erased.payload())
-            .expect("accounts-with-asset query payload should decode");
-        assert_eq!(decoded.asset_definition_id(), asset_definition_id);
-        return;
-    }
-
-    let (item_kind, _, _, payload) = query
-        .fast_dsl_parts()
-        .expect("accounts-with-asset query should expose fast-dsl payload");
+    let (item_kind, _, _, payload) = query.parts();
     assert_eq!(item_kind, QueryItemKind::Account);
     let decoded = super::decode_query_payload::<FindAccountsWithAsset>(payload)
         .expect("accounts-with-asset query payload should decode");
@@ -1159,23 +1086,9 @@ fn assert_nfts_query_targets_account(
     query: &iroha_data_model::query::QueryWithParams,
     account_id: &AccountId,
 ) {
-    use iroha_data_model::{
-        prelude::FindNftsByAccountId,
-        query::{QueryItemKind, iter_query_inner},
-    };
+    use iroha_data_model::{prelude::FindNftsByAccountId, query::QueryItemKind};
 
-    if let Some(query_box) = query.query_box() {
-        let erased = iter_query_inner::<iroha_data_model::nft::Nft>(query_box)
-            .expect("nfts query should preserve erased nft item kind");
-        let decoded = super::decode_query_payload::<FindNftsByAccountId>(erased.payload())
-            .expect("nfts query payload should decode");
-        assert_eq!(decoded.account_id(), account_id);
-        return;
-    }
-
-    let (item_kind, _, _, payload) = query
-        .fast_dsl_parts()
-        .expect("nfts query should expose fast-dsl payload");
+    let (item_kind, _, _, payload) = query.parts();
     assert_eq!(item_kind, QueryItemKind::Nft);
     let decoded = super::decode_query_payload::<FindNftsByAccountId>(payload)
         .expect("nfts query payload should decode");

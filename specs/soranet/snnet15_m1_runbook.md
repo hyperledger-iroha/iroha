@@ -42,8 +42,8 @@ Operational steps to execute the M1 alpha scope for the SoraGlobal Gateway CDN. 
   ```
   cargo xtask soranet-gateway-billing \
     --usage <usage_snapshot.json> \
-    --catalog configs/soranet/gateway_m0/billing/billing_meter_catalog.json \
-    --guardrails configs/soranet/gateway_m0/billing/billing_guardrails.json \
+    --catalog configs/soranet/gateway_m0/meter_catalog.json \
+    --guardrails configs/soranet/gateway_m0/billing_guardrails.json \
     --output-dir artifacts/soranet/gateway_billing/m1_alpha \
     --payer <payer_account> \
     --treasury <treasury_account> \

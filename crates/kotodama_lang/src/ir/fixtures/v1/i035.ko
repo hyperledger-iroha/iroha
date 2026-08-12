@@ -1,0 +1,13 @@
+
+            fn f() -> int {
+                let invariant = 9;
+                var total = 0;
+                for outer in range(2) {
+                    for inner in range(2) {
+                        total = total + outer + inner;
+                        let observed = invariant;
+                    }
+                }
+                return total + invariant;
+            }
+        

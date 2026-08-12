@@ -1,0 +1,6 @@
+
+seiyaku Test {
+  kotoage fn register() authorize("Admin") {
+    ledger::peer::register(Json::parse("{}"));
+  }
+}

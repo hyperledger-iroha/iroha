@@ -116,6 +116,30 @@ def test_exact_decision_lifecycle_contracts_reject_semantic_weakening() -> None:
             f"{symbol} must equal only" in error for error in errors
         ), errors
 
+    symbol = "ExactDecisionRequestFrozenServeBarrierPreservesTargetIngressCoalescing"
+    extracted = module._top_level_theorem_body(
+        source, symbol, preserve_string_contents=True
+    )
+    assert extracted is not None
+    expected = module.EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS[
+        (module_name, symbol)
+    ]
+    assert module._tla_statement_without_proof(extracted[0]) == expected
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        "       /\\ \\E source \\in AsyncIngressSources:\n"
+        "            request \\in SequenceSet(\n"
+        "              IngressLane(archive, source))'\n",
+        "       /\\ request \\in SequenceSet(\n"
+        "            IngressLane(archive, IngressResourceSource(request)))'\n",
+    )
+    assert mutated != source
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"], {module_name: mutated}
+    )
+    assert any(f"{symbol} must state only" in error for error in errors), errors
+
 
 def test_historical_certificate_lineage_quantifiers_are_current() -> None:
     """Unbounded certificates precede the responsive-node domain explicitly."""
@@ -170,6 +194,20 @@ def test_historical_certificate_lineage_rejects_mixed_binder_regression() -> Non
         assert any(
             f"{symbol} must equal only" in error for error in errors
         ), errors
+
+    response_symbol = "IndexedHistoricalCommitResponseIdentity"
+    mutated = mutate_tla_operator(
+        source,
+        response_symbol,
+        "  /\\ response.source = request.envelope.recipient\n",
+        "  /\\ response.source = IndexedAsync(initialContext)!AsyncUntrustedSource\n",
+    )
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"], {module_name: mutated}
+    )
+    assert any(
+        f"{response_symbol} must equal only" in error for error in errors
+    ), errors
 
 
 def test_post_retransmit_cut_continuation_quantifier_is_pinned() -> None:
@@ -316,13 +354,31 @@ def test_timeout_physical_control_retransmission_typed_item_binder_is_pinned() -
     )
     assert any(f"{symbol} must state only" in error for error in errors), errors
 
+    symbol = "TimeoutPhysicalControlPacketAdmissionPreservesExactHandoff"
+    extracted = module._top_level_theorem_body(
+        source, symbol, preserve_string_contents=True
+    )
+    assert extracted is not None
+    expected = module.EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS[
+        (module_name, symbol)
+    ]
+    assert module._tla_statement_without_proof(extracted[0]) == expected
+    mutated = mutate_tla_theorem(
+        source,
+        symbol,
+        "packet.authenticatedSource",
+        "item.source",
+    )
+    assert mutated != source
+    errors = module._proof_obligation_architecture_errors(
+        module.load_ledger()["obligations"], {module_name: mutated}
+    )
+    assert any(f"{symbol} must state only" in error for error in errors), errors
 
-def test_leader_wire_recovery_cut_uses_shared_physical_highwater(
-    tmp_path: Path,
-) -> None:
-    """The recovery cut preserves the shared physical ingress high-water."""
 
-    module = load_checker()
+def copy_persistent_recovery_cut_fixture(tmp_path: Path, module) -> Path:
+    """Copy the exact Rust and TLA sources reviewed by the recovery-cut checker."""
+
     repo_root = tmp_path / "repo"
     relatives = (
         "crates/iroha_core/src/sumeragi/v2.rs",
@@ -337,12 +393,258 @@ def test_leader_wire_recovery_cut_uses_shared_physical_highwater(
         destination = repo_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(module.ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(repo_root)
+    return repo_root
+
+
+def _check_effect_capacity_terminal_wrapper_attribute_is_exact(
+    module,
+    tmp_path: Path,
+    replacement: str,
+    expected_error: str,
+) -> None:
+    """The reviewed dead-code allowance cannot be dropped or replaced by a gate."""
+
+    repo_root, _formal_dir = copy_effect_capacity_mutation_fixture(tmp_path, module)
+    runtime_path = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    mutate_source_once(
+        runtime_path,
+        "    #[allow(dead_code)]\n"
+        "    pub(crate) fn commit_body_pipeline_candidate_terminal(\n",
+        replacement
+        + "    pub(crate) fn commit_body_pipeline_candidate_terminal(\n",
+    )
+
+    errors = module._effect_capacity_production_source_fidelity_errors(repo_root)
+    assert any(
+        "checked single body-terminal authority commit wrapper" in error
+        and expected_error in error
+        and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+
+def _check_certified_fence_capacity_regression_survives_digest_refresh(
+    module,
+    tmp_path: Path,
+    item_name: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Refreshing either regression seal cannot hide its capacity assertion."""
+
+    runtime_parent = tmp_path / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    runtime_parent.parent.mkdir(parents=True)
+    shutil.copy2(
+        module.ROOT_DIR / runtime_parent.relative_to(tmp_path), runtime_parent
+    )
+    copy_reviewed_rust_include_components(tmp_path)
+    runtime_path = (
+        runtime_parent.parent
+        / "tests/v2_runtime_unsealed_02_owner_retirement_and_fairness.rs"
+    )
+    mutate_rust_item_source(module, runtime_path, item_name, old, new)
+    items = module.rust_items(runtime_path.read_text(encoding="utf-8"), item_name)
+    assert len(items) == 1, item_name
+    seal_key = f"test::{item_name}"
+    expected_sha256 = module._PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256[
+        seal_key
+    ]
+    module._PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256[seal_key] = (
+        module._rust_item_token_sha256(items[0])
+    )
+
+    errors = module._runtime_certified_fence_capacity_source_fidelity_errors(
+        tmp_path
+    )
+    module._PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256[seal_key] = (
+        expected_sha256
+    )
+    assert any(
+        expected_error in error and "exact reviewed token digest" not in error
+        for error in errors
+    ), errors
+
+
+def _check_persistent_recovery_cut_binds_capacity_constructor(
+    module,
+    tmp_path: Path,
+) -> None:
+    """Restart ordering must live in the capacity-bound production constructor."""
+
+    repo_root = copy_persistent_recovery_cut_fixture(tmp_path, module)
+    path = repo_root / "crates/iroha_core/src/sumeragi/v2.rs"
+    real_sequence = """        adapter.reconcile_restored_reserved_producer_frontier()?;
+        adapter.reclaim_serviced_candidates()?;
+        let replay_tag = adapter.reducer.current_tag();"""
+    mutate_rust_item_source_in_context(
+        module,
+        path,
+        "open_with_aggregator_and_publication_with_capacity",
+        (("impl", "SumeragiV2Adapter"),),
+        real_sequence,
+        "        let replay_tag = adapter.reducer.current_tag();",
+    )
+    mutate_rust_item_source_in_context(
+        module,
+        path,
+        "open_with_aggregator",
+        (("impl", "SumeragiV2Adapter"),),
+        "Self::open_with_aggregator_and_publication(\n",
+        real_sequence + "\n        Self::open_with_aggregator_and_publication(\n",
+    )
+
+    errors = module._persistent_recovery_cut_source_fidelity_errors(repo_root)
+
+    assert any(
+        "restart frontier pruning must precede runtime replay and dormant capacity installation"
+        in error
+        for error in errors
+    ), errors
+
+
+def _check_persistent_recovery_cut_requires_concrete_runtime_impl(
+    module,
+    tmp_path: Path,
+) -> None:
+    """Persistent-body methods cannot be satisfied by a generic lookalike impl."""
+
+    repo_root = copy_persistent_recovery_cut_fixture(tmp_path, module)
+    path = repo_root / "crates/iroha_core/src/sumeragi/v2_runtime.rs"
+    mutate_source_once(
+        path,
+        "impl SerializedV2Runtime<SumeragiV2Adapter> {",
+        "impl SerializedV2Runtime {",
+    )
+
+    errors = module._persistent_recovery_cut_source_fidelity_errors(repo_root)
+
+    for item_name in (
+        "body_available_has_persistent_producer",
+        "rebind_body_available",
+        "retire_restored_body_fetch_parent",
+    ):
+        assert any(
+            item_name in error
+            and "SerializedV2Runtime', '<', 'SumeragiV2Adapter', '>'" in error
+            and "found 0" in error
+            for error in errors
+        ), (item_name, errors)
+
+
+def _check_causal_test_wrapper_attributes(module, tmp_path: Path) -> None:
+    """Test-only causal wrappers cannot be cfg-gated into production."""
+
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path, module, "SumeragiV2AsyncNetwork.tla"
+    )
+    for relative, declaration, description in (
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(crate) fn drain_deferred_with_evidence(\n",
+            "single-transition adapter deferred ownership dispatcher",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "fn minimum_active_lifecycle_ordinal_for_deferred(\n",
+            "target-relative deferred lifecycle minimum wrapper",
+        ),
+    ):
+        path = tmp_path / relative
+        canonical = path.read_text(encoding="utf-8")
+        old = "    #[cfg(test)]\n    " + declaration
+        assert canonical.count(old) == 1, relative
+        path.write_text(
+            canonical.replace(
+                old, "    #[cfg_attr(not(test), allow(dead_code))]\n    " + declaration, 1
+            ),
+            encoding="utf-8",
+        )
+        errors = module._production_causal_fifo_source_fidelity_errors(formal_dir)
+        assert any(
+            description in error
+            and "may not be disabled or replaced" in error
+            and "exact reviewed token digest" not in error
+            for error in errors
+        ), (description, errors)
+        path.write_text(canonical, encoding="utf-8")
+
+
+def test_leader_wire_recovery_cut_uses_shared_physical_highwater(
+    tmp_path: Path,
+) -> None:
+    """The recovery cut preserves the shared physical ingress high-water."""
+
+    module = load_checker()
+    for index, (replacement, expected_error) in enumerate(
+        (
+            ("", "must have exact reviewed attributes"),
+            (
+                "    #[cfg(test)]\n",
+                "may not be disabled or replaced through unreviewed cfg/cfg_attr attributes",
+            ),
+        )
+    ):
+        _check_effect_capacity_terminal_wrapper_attribute_is_exact(
+            module, tmp_path / f"terminal-attr-{index}", replacement, expected_error
+        )
+    for index, (item_name, old, new, expected_error) in enumerate(
+        (
+            (
+                "retiring_the_sole_certificate_does_not_fake_completion_headroom",
+                """        assert_eq!(
+            runtime.remaining_completion_capacity(),
+            0,
+            "retiring the sole certificate removes its credit as well as its physical owner"
+        );""",
+                """        assert_eq!(
+            runtime.remaining_completion_capacity(),
+            1,
+            "retiring the sole certificate removes its credit as well as its physical owner"
+        );""",
+                "sole-certificate retirement must not invent Completion headroom",
+            ),
+            (
+                "unpublished_body_replacement_cannot_overbook_the_certified_slot",
+                """        assert_eq!(
+            runtime.queued_commands(),
+            2,
+            "the conflicting proposal must retire before the reservation becomes live"
+        );""",
+                """        assert_eq!(
+            runtime.queued_commands(),
+            3,
+            "the conflicting proposal must retire before the reservation becomes live"
+        );""",
+                "unpublished BodyAvailable must atomically replace its conflict",
+            ),
+        )
+    ):
+        _check_certified_fence_capacity_regression_survives_digest_refresh(
+            module,
+            tmp_path / f"certified-fence-{index}",
+            item_name,
+            old,
+            new,
+            expected_error,
+        )
+    _check_persistent_recovery_cut_binds_capacity_constructor(
+        module, tmp_path / "capacity-constructor"
+    )
+    _check_persistent_recovery_cut_requires_concrete_runtime_impl(
+        module, tmp_path / "concrete-runtime"
+    )
+    _check_causal_test_wrapper_attributes(module, tmp_path / "causal-attrs")
+    repo_root = copy_persistent_recovery_cut_fixture(
+        tmp_path / "leader-wire", module
+    )
 
     marker = "leader-wire recovery-cut high-water theorem"
     errors = module._persistent_recovery_cut_source_fidelity_errors(repo_root)
     assert not any(marker in error for error in errors), errors
 
-    path = repo_root / relatives[-1]
+    path = repo_root / "formal/sumeragi_v2/SumeragiV2AsyncNetwork.tla"
     source = path.read_text(encoding="utf-8")
     path.write_text(
         mutate_tla_theorem(

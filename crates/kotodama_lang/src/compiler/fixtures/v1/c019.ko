@@ -1,0 +1,12 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  ledger::escrow::resolve_dispute(
+    offer: Name::parse("deal"),
+    buyer_amount: Name::parse("buyer"),
+    seller_amount: 4,
+  );
+}
+
+}

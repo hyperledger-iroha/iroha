@@ -1,0 +1,16 @@
+
+            seiyaku C {
+                state StateMap<int, int> Observations;
+
+                fn observed_pair() -> (int, int) {
+                    let count = Observations.get(1).unwrap_or(0);
+                    Observations[1] = count + 1;
+                    return (1, 2);
+                }
+
+                kotoage fn main() -> int authorize("WriteState") {
+                    let (left, right) = observed_pair();
+                    return left + right;
+                }
+            }
+        

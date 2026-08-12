@@ -3,12 +3,12 @@
 //! Run:
 //!   cargo run -p `iroha_torii_shared` --example `connect_dump_open`
 
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::{NetworkId, block::BlockHeader};
 use iroha_torii_shared::connect::{
     AppMeta, ConnectControlV1, ConnectFrameV1, Constraints, Dir, FrameKind, PermissionsV1,
     encode_connect_frame_bare,
 };
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{NetworkId, block::BlockHeader};
 
 fn main() {
     let frame = ConnectFrameV1 {
@@ -23,9 +23,11 @@ fn main() {
                 icon_hash: None,
             }),
             constraints: Constraints {
-                network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
-                    Hash::new(b"connect-dump-open-genesis"),
-                )),
+                network_id: NetworkId::from_genesis_hash(
+                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                        b"connect-dump-open-genesis",
+                    )),
+                ),
             },
             permissions: Some(PermissionsV1 {
                 methods: vec!["SIGN_REQUEST_TX".into(), "SIGN_REQUEST_RAW".into()],

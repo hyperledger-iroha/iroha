@@ -1206,16 +1206,6 @@ required_production_liveness_tests=(
   sumeragi::v2_core::tests::replay_resigns_same_subject_reproposal_fifo_without_relabelling_old_commit
   sumeragi::v2_core::tests::replay_accepts_strictly_higher_matching_prepare_qc_proposal
   sumeragi::v2_core::tests::future_prepare_qc_is_transactionally_ignored_without_retransmit_ownership
-  sumeragi::v2_core::network_simulation::lossy_offline_leader_simulations_commit_for_4_7_and_10_validators
-  sumeragi::v2_core::network_simulation::two_by_two_partition_cannot_advance_but_healing_retransmits_tc_and_commits
-  sumeragi::v2_core::network_simulation::historical_prepare_qc_uses_current_consumer_tag_after_timeout_install
-  sumeragi::v2_core::network_simulation::responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc
-  sumeragi::v2_core::network_simulation::asymmetric_partition_stalls_without_dual_quorum_then_heals_and_applies
-  sumeragi::v2_core::network_simulation::leader_crash_after_proposal_broadcast_does_not_block_the_remaining_quorum
-  sumeragi::v2_core::network_simulation::leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum
-  sumeragi::v2_core::network_simulation::corrupted_chunks_and_withheld_commit_evidence_recover_by_bounded_retransmission
-  sumeragi::v2_core::network_simulation::crash_after_proposal_wal_before_signature_replays_exact_intent
-  sumeragi::v2_core::network_simulation::taira_divergent_views_converge_and_commit_within_one_rotation
   sumeragi::v2_core::refinement::tests::durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations
   sumeragi::v2_core::refinement::tests::locked_commit_progress_witness_accepts_exact_owners_and_rejects_mutations
   sumeragi::v2_core::refinement::tests::lock_and_commit_requires_one_current_vote_and_proposal_round
@@ -1692,7 +1682,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::finalized_rollover_closes_ingress_before_successor_replay
   sumeragi::v2_runner::tests::synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff
   sumeragi::v2_runner::tests::successor_activation_is_published_only_after_ingress_is_open
-  sumeragi::v2_runner::tests::complete_tip_recovery_uses_the_same_live_successor_boundary
+  sumeragi::v2_runner::tests::complete_tip_recovery_requires_authenticated_predecessor_retirement
   sumeragi::v2_runner::tests::successor_startup_failure_stays_running_and_fails_closed_without_activation
   sumeragi::v2_runner::tests::status_guard_retains_failure_snapshot_and_clears_clean_shutdown
   sumeragi::v2_runner::tests::unsupported_storage_platform_rejects_runner_voter_and_admits_observer
@@ -1700,6 +1690,9 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::direct_close_ack_retains_reply_route_from_lane_through_worker
   sumeragi::v2_runner::tests::empty_drain_after_peek_is_restart_required_without_panicking
   sumeragi::v2_runner::tests::relayed_generation_hint_preserves_reply_route_from_lane_through_worker
+  sumeragi::v2_lane_work::tests::production_adapter_stays_carrier_silent_until_exact_queue_activation
+  sumeragi::v2_apply::tests::deferred_canonical_carrier_owned_and_absent_groups_complete_before_gate_publication
+  sumeragi::v2_apply::tests::deferred_canonical_carrier_missing_after_queue_cleanup_keeps_startup_gate_closed
   sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation
   sumeragi::v2_runner::tests::terminal_sweep_source_partitions_whole_units_before_any_mutation
   sumeragi::v2_runner::tests::local_producer_queue_custody_is_preflighted_before_cursor_mutation
@@ -1849,7 +1842,7 @@ required_production_liveness_tests=(
   sumeragi::status::v2_liveness_watchdog_tests::live_effect_completion_observer_survives_stopped_runner_and_clears_stale_depth
   sumeragi::status::v2_liveness_watchdog_tests::successor_handoff_is_visible_until_the_exact_successor_becomes_active_once
   sumeragi::status::v2_liveness_watchdog_tests::completed_predecessor_work_alone_never_claims_successor_activation
-  sumeragi::status::v2_liveness_watchdog_tests::complete_tip_recovery_publishes_one_exact_live_successor_boundary
+  sumeragi::status::v2_liveness_watchdog_tests::complete_tip_retirement_and_successor_owner_bind_are_release_bound
   sumeragi::status::v2_liveness_watchdog_tests::rejected_successor_activation_never_mutates_or_replaces_the_predecessor
   sumeragi::status::v2_liveness_watchdog_tests::successor_handoff_rejects_every_incomplete_predecessor_witness
   sumeragi::status::v2_liveness_watchdog_tests::successor_startup_overlays_never_cross_the_height_context_boundary
@@ -2001,7 +1994,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=861
+readonly expected_production_liveness_test_count=854
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2100,7 +2093,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 861-test liveness inventory above. The later
+# not belong to the canonical 854-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -2422,6 +2415,7 @@ required_multilane_core_focus_tests=(
   sumeragi::v2_apply::tests::historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application
   sumeragi::v2_lifecycle_recovery::tests::every_lifecycle_recovery_cursor_cas_boundary_survives_restart
   sumeragi::v2_lifecycle_recovery::tests::local_producer_recovery_requires_the_exact_current_queue_owner
+  sumeragi::v2_apply::tests::deferred_canonical_carrier_missing_after_queue_cleanup_keeps_startup_gate_closed
   sumeragi::v2_runner::tests::local_producer_queue_custody_is_preflighted_before_cursor_mutation
 )
 required_multilane_queue_journal_focus_tests=(
@@ -2646,7 +2640,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=524
+readonly expected_multilane_focus_test_count=525
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2817,7 +2811,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-  # unambiguous one-test Cargo transcript per entry. The canonical 524-row TSV is
+  # unambiguous one-test Cargo transcript per entry. The canonical 525-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2925,8 +2919,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 525 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 524 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 526 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 525 focused tests" >&2
     exit 1
   fi
 fi
@@ -3023,7 +3017,6 @@ production_liveness_modules=(
   merge_sidecar::tests
   state::tests
   sumeragi::v2_core::tests
-  sumeragi::v2_core::network_simulation
   sumeragi::v2_core::refinement::tests
   sumeragi::v2_core::wal::byte_lifecycle_tests
   sumeragi::v2_core::reducer::source_link_tests
@@ -3066,7 +3059,6 @@ production_liveness_leg_ids=(
   production-merge-sidecar
   production-state-governance-unlock-audit
   production-v2-core
-  production-v2-core-network-simulation
   production-v2-core-refinement
   production-v2-core-wal
   production-v2-core-source-link
@@ -3722,10 +3714,10 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_rejects_semantic_source_mutation
 )
 proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
-# Collection is source-bound as 5,129 ledger/checker cases (including the
+# Collection is source-bound as 5,189 ledger/checker cases (including the
 # lexically executed case components), 28 pinned-Verus evidence cases,
-# 15 TLC-normalizer cases, eight reviewed-Rust closure cases, 29 Native/passive
-  # multilane source-contract cases, and eighteen cases from twelve selected
+# 15 TLC-normalizer cases, eight reviewed-Rust closure cases, 31 Native/passive
+# multilane source-contract cases, and twenty cases from twelve selected
 # layout/wire selectors.
 release_gate_boundary "preflight-proof-fidelity:before" || exit $?
 set +e
@@ -3735,15 +3727,15 @@ proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-proof-fidelity:after-natural-completion" || exit $?
 proof_fidelity_pass_summary="$(
-  grep -Ec '^5227 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^5291 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5227 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5291 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 5227 \
+  preflight-proof-fidelity pytest 5291 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -3820,10 +3812,10 @@ publish_corridor_completion() {
     echo "source-bound localnet binary bundle changed before corridor completion" >&2
     return 1
   fi
-  # 41 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
+  # 40 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
   # command + 6 Taira + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped
-  # SDK + 6 diagnostics + 11 pytest legs = 89.
-  readonly expected_corridor_leg_count=89
+  # SDK + 6 diagnostics + 11 pytest legs = 88.
+  readonly expected_corridor_leg_count=88
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
@@ -4245,4 +4237,4 @@ if ((aggregate_publication_status != 0)) \
   exit 1
 fi
 
-echo "Sumeragi v2 production release gates passed, including exact 524/524 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+echo "Sumeragi v2 production release gates passed, including exact 525/525 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

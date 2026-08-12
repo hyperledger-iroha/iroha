@@ -255,27 +255,6 @@ pub mod fixed_bytes {
     }
 }
 
-/// Serialize fixed-size `u64` limb arrays as canonical JSON arrays.
-#[cfg(feature = "json")]
-#[allow(dead_code)]
-pub mod fixed_u64_limbs {
-    use super::*;
-
-    pub fn serialize<const N: usize>(limbs: &[u64; N], out: &mut String) {
-        JsonSerialize::json_serialize(&limbs.as_slice().to_vec(), out);
-    }
-
-    pub fn deserialize<const N: usize>(parser: &mut Parser<'_>) -> Result<[u64; N], json::Error> {
-        let limbs = Vec::<u64>::json_deserialize(parser)?;
-        limbs.try_into().map_err(|limbs: Vec<u64>| {
-            json::Error::Message(format!(
-                "expected exactly {N} u64 limbs, got {}",
-                limbs.len()
-            ))
-        })
-    }
-}
-
 /// Serialize fixed-size `u32` limb arrays as canonical JSON arrays.
 #[cfg(feature = "json")]
 #[allow(dead_code)]
@@ -448,27 +427,6 @@ pub mod privacy_mode {
     }
 }
 
-/// Helper that strips sensitive strings from JSON serialization while retaining internal storage.
-#[cfg(feature = "json")]
-#[allow(dead_code)]
-pub mod secret_string {
-    use super::*;
-
-    pub fn serialize(_value: &str, out: &mut String) {
-        JsonSerialize::json_serialize("", out);
-    }
-
-    pub fn deserialize(parser: &mut Parser<'_>) -> Result<String, json::Error> {
-        parser.skip_ws();
-        if parser.try_consume_null()? {
-            return Ok(String::new());
-        }
-        // Parse and discard the payload; consumers reconstruct empty message for external use.
-        let _ignored = String::json_deserialize(parser)?;
-        Ok(String::new())
-    }
-}
-
 /// Serialize a map keyed by [`AccountId`] into a string-keyed JSON object.
 #[cfg(feature = "json")]
 #[allow(dead_code)]
@@ -510,74 +468,16 @@ pub mod account_metadata_map {
     }
 }
 
-/// Serialize Soracloud Inrou guest-image maps as string-keyed JSON objects.
-#[cfg(feature = "json")]
-#[allow(dead_code)]
-pub mod sora_inrou_guest_images_map {
-    use super::*;
-    use crate::soracloud::{SoraInrouGuestImageV1, SoraInrouGuestIsaV1};
-
-    pub fn serialize(
-        value: &BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
-        out: &mut String,
-    ) {
-        let string_keyed: BTreeMap<String, SoraInrouGuestImageV1> = value
-            .iter()
-            .map(|(guest_isa, image)| (guest_isa.as_str().to_owned(), image.clone()))
-            .collect();
-        JsonSerialize::json_serialize(&string_keyed, out);
-    }
-
-    pub fn deserialize(
-        parser: &mut Parser<'_>,
-    ) -> Result<BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>, norito::json::Error> {
-        let value = Value::json_deserialize(parser)?;
-        let object = match value {
-            Value::Object(map) => map,
-            other => {
-                return Err(norito::json::Error::Message(format!(
-                    "expected object for Soracloud Inrou guest image map, got {other:?}"
-                )));
-            }
-        };
-
-        object
-            .into_iter()
-            .map(|(key, value)| {
-                let guest_isa = SoraInrouGuestIsaV1::parse_key(&key).ok_or_else(|| {
-                    norito::json::Error::Message(format!(
-                        "unsupported Soracloud Inrou guest ISA key: {key}"
-                    ))
-                })?;
-                let image: SoraInrouGuestImageV1 = json::from_value(value)?;
-                Ok((guest_isa, image))
-            })
-            .collect()
-    }
-}
-
 #[cfg(all(test, feature = "json"))]
 mod tests {
     use norito::json;
 
     use super::*;
-    use crate::soracloud::{
-        SoraArtifactDistributionPolicyV1, SoraInrouGuestImageV1, SoraInrouGuestIsaV1,
-    };
 
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct Base64Wrapper {
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
         data: Vec<u8>,
-    }
-
-    #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
-    struct FixedU64LimbsWrapper {
-        #[cfg_attr(
-            feature = "json",
-            norito(with = "crate::json_helpers::fixed_u64_limbs")
-        )]
-        limbs: [u64; 4],
     }
 
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
@@ -593,25 +493,6 @@ mod tests {
     struct FixedStringArrayWrapper {
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_array"))]
         values: [String; 2],
-    }
-
-    #[test]
-    fn fixed_u64_limbs_roundtrip_and_reject_wrong_length() {
-        let wrapper = FixedU64LimbsWrapper {
-            limbs: [0, 1, 42, u64::MAX],
-        };
-
-        let encoded = json::to_json(&wrapper).expect("serialize fixed u64 limbs");
-        let decoded: FixedU64LimbsWrapper =
-            json::from_str(&encoded).expect("decode fixed u64 limbs");
-        assert_eq!(decoded, wrapper);
-
-        let error = json::from_str::<FixedU64LimbsWrapper>(r#"{"limbs":[1,2,3]}"#)
-            .expect_err("wrong fixed limb count must fail");
-        assert!(
-            error.to_string().contains("expected exactly 4 u64 limbs"),
-            "unexpected fixed-limb error: {error}"
-        );
     }
 
     #[test]
@@ -717,65 +598,6 @@ mod tests {
         match err {
             norito::json::Error::Message(message) => assert!(
                 message.contains("invalid i128 string representation"),
-                "unexpected message: {message}"
-            ),
-            other => panic!("unexpected error variant: {other:?}"),
-        }
-    }
-
-    #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
-    struct InrouGuestImagesWrapper {
-        #[cfg_attr(
-            feature = "json",
-            norito(with = "crate::json_helpers::sora_inrou_guest_images_map")
-        )]
-        guest_images: BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
-    }
-
-    #[test]
-    fn sora_inrou_guest_images_map_roundtrip_serialization() {
-        let wrapper = InrouGuestImagesWrapper {
-            guest_images: BTreeMap::from([
-                (
-                    SoraInrouGuestIsaV1::X8664,
-                    SoraInrouGuestImageV1 {
-                        kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
-                        rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
-                        initrd_image_path: None,
-                        distribution: SoraArtifactDistributionPolicyV1::default(),
-                        published_artifact: None,
-                    },
-                ),
-                (
-                    SoraInrouGuestIsaV1::Aarch64,
-                    SoraInrouGuestImageV1 {
-                        kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
-                        rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
-                        initrd_image_path: Some("/inrou/aarch64/initrd.img".to_owned()),
-                        distribution: SoraArtifactDistributionPolicyV1::default(),
-                        published_artifact: None,
-                    },
-                ),
-            ]),
-        };
-
-        let json = json::to_json(&wrapper).expect("serialize to JSON");
-        assert!(json.contains("\"x86_64\""));
-        assert!(json.contains("\"aarch64\""));
-
-        let decoded: InrouGuestImagesWrapper = json::from_str(&json).expect("decode from JSON");
-        assert_eq!(decoded, wrapper);
-    }
-
-    #[test]
-    fn sora_inrou_guest_images_map_rejects_unknown_keys() {
-        let json = r#"{"guest_images":{"riscv64":{"kernel_image_path":"/inrou/riscv64/vmlinux","rootfs_image_path":"/inrou/riscv64/rootfs.ext4","initrd_image_path":null}}}"#;
-        let err = json::from_str::<InrouGuestImagesWrapper>(json)
-            .expect_err("unknown guest ISA must fail");
-
-        match err {
-            norito::json::Error::Message(message) => assert!(
-                message.contains("unsupported Soracloud Inrou guest ISA key"),
                 "unexpected message: {message}"
             ),
             other => panic!("unexpected error variant: {other:?}"),

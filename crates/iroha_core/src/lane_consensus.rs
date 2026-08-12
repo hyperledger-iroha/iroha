@@ -4585,7 +4585,8 @@ fn qc_signers(qc: &LaneBlockQcV1) -> Vec<PeerId> {
 
 #[cfg(test)]
 fn session_proposal_height(session: &LaneBlockSession) -> Option<u64> {
-    session.proposal
+    session
+        .proposal
         .as_ref()
         .map(|proposal| proposal.descriptor.proposal_height)
         .or_else(|| {
@@ -5737,7 +5738,6 @@ mod tests {
         let (mut body, _) = lane_drain_fixture(&keys);
         body.final_frontier = native_drain_frontier_fixture();
         validate_lane_drain_certificate_body(&body).expect("valid Native-derived drain frontier");
-
         let without_native = {
             let mut changed = body.clone();
             changed.final_frontier.native_application = None;

@@ -106,9 +106,9 @@ fn staging_receipt(
 ) -> MusubiSeedIngressReceiptV1 {
     let broker_keypair = keypair(70);
     let binding = MusubiSeedIngressReceiptBindingV1 {
-        network_id: NetworkId::from_genesis_hash(
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x71; 32])),
-        ),
+        network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([0x71; 32]),
+        )),
         publisher: account(71),
         ingress_broker: AccountId::new(broker_keypair.public_key().clone()),
         seed_provider: ProviderId::new([0x72; 32]),

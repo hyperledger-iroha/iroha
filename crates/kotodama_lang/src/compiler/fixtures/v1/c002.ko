@@ -1,0 +1,4 @@
+
+seiyaku MyC {
+  hajimari() { let a = 1; }
+}

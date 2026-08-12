@@ -567,14 +567,14 @@
             "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             ".project_retained_reply_routes(prune_receipt)",
             ".project_retained_reply_routes(prune_receipt.clone())",
-            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+            "candidate pruning must retain its ownership receipt while strict or explicitly authorized superseded history produces a typed merge receipt",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             ".merge_with_receipt(&candidate_routes)",
             ".merge(&candidate_routes)",
-            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+            "candidate pruning must retain its ownership receipt while strict or explicitly authorized superseded history produces a typed merge receipt",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -646,7 +646,7 @@
             "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             "let retained_routes = self.reply_routes.clone().ok_or_else",
             "let retained_routes = candidate.reply_routes.clone().ok_or_else",
-            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+            "candidate pruning must retain its ownership receipt while strict or explicitly authorized superseded history produces a typed merge receipt",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -800,14 +800,14 @@
             "pub(crate) fn covered_source_hash(",
             "self.finality_artifact_hash != HashOf::new(finality_artifact)",
             "false && self.finality_artifact_hash != HashOf::new(finality_artifact)",
-            "lane rollover authority must bind the exact finality artifact and height",
+            "lane rollover authority must bind the exact finality artifact and consult its proposal-keyed durable source before height supersession",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
             "pub(crate) fn covered_source_hash(",
             "self.durable_sessions.get(&proposal_hash)",
             "self.durable_sessions.values().next()",
-            "winning lane output must use its proposal-keyed durable session witness",
+            "lane rollover authority must bind the exact finality artifact and consult its proposal-keyed durable source before height supersession",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
@@ -966,8 +966,10 @@
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "fn claim_runner_lifecycle_process_generation(",
-            "kura.claim_autonomous_lifecycle_process_generation(",
-            "kura.read_autonomous_lifecycle_process_generation(",
+            "NodeRole::Validator => kura\n"
+            "            .claim_autonomous_lifecycle_process_generation(",
+            "NodeRole::Validator => kura\n"
+            "            .read_autonomous_lifecycle_process_generation(",
             "the configured-role process generation helper must durably claim validator ownership",
         ),
         (
@@ -1917,14 +1919,14 @@
             "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             "after_candidate_prune(merge_attempt);",
             "let _ = merge_attempt;",
-            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+            "candidate pruning must retain its ownership receipt while strict or explicitly authorized superseded history produces a typed merge receipt",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
             "if candidate_routes.len() >= live_before_merge {",
             "if false && candidate_routes.len() >= live_before_merge {",
-            "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+            "candidate pruning must retain its ownership receipt while strict or explicitly authorized superseded history produces a typed merge receipt",
         ),
         (
             "crates/iroha_config/src/parameters/defaults.rs",
@@ -2052,7 +2054,7 @@
             "let _ = reply_routes.clone().merge_observed_with_receipt(&reply_routes);\n"
             "        self.queue\n"
             "            .commit_serve(admission, reply_routes, ingress_ownership)",
-            "the exact Serve retry must be the sole worker-side observed-history reconciliation seam",
+            "the exact Serve retry and reply-target plan must be the worker-side observed-history reconciliation seams",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -2337,6 +2339,7 @@
 )
 def test_exact_output_production_source_mutations_fail_closed(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     relative_path: str,
     region_marker: str,
     old: str,
@@ -2369,11 +2372,245 @@ def test_exact_output_production_source_mutations_fail_closed(
         encoding="utf-8",
     )
 
-    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
     expected_errors = (
-        (error_fragment,) if isinstance(error_fragment, str) else error_fragment
+        [error_fragment]
+        if isinstance(error_fragment, str)
+        else list(error_fragment)
     )
+    if region_marker == "fn lifecycle_max_snapshot_bytes_for_attempt_capacity(":
+        expected_errors.extend(
+            _apply_exact_output_non_runtime_extended_mutations(
+                tmp_path, module, monkeypatch
+            )
+        )
+
+    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
     assert all(
         any(expected_error in error for error in errors)
         for expected_error in expected_errors
     ), errors
+
+
+def _apply_exact_output_non_runtime_extended_mutations(
+    tmp_path: Path, module, monkeypatch: pytest.MonkeyPatch
+) -> list[str]:
+    mutations = (
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn derive_server_request_capacities(",
+            "|| server_stream_capacity > MAX_CERTIFIED_MERGE_SERVER_STREAMS",
+            "|| false",
+            "must enforce the protocol roster bound",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn lifecycle_protocol_max_snapshot_bytes(",
+            "MAX_CERTIFIED_MERGE_SERVER_STREAMS,",
+            "self.server_stream_capacity,",
+            "must reserve the maximum bounded responder roster",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn rehydrate_after_lifecycle_restore(",
+            "if server_stream_capacity < self.server_stream_capacity {",
+            "if false && server_stream_capacity < self.server_stream_capacity {",
+            "permit only monotonic same-roster capacity expansion",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "        Self {\n            session_capacity,",
+            "historical_recovery_retry_floor,",
+            "historical_recovery_retry_ceiling,",
+            "lane limits must retain the exact configured reply-source geometry",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn new_with_output_guard_and_transport(",
+            ".zip(verified_context.proofs_of_possession())",
+            ".zip(std::iter::empty())",
+            "must derive its context and frozen validator proofs from one verified carrier",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn new_with_output_guard_and_transport_inner(",
+            "let sidecar_server_stream_capacity =\n"
+            "            merge_sidecar_server_stream_capacity(sidecar_server_roster.len());",
+            "let sidecar_server_stream_capacity = 1;",
+            "must derive the canonical responder roster",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn hydrate_canonical_lane_artifacts(",
+            "&& !self.lane_sessions.contains_proposal(proposal)",
+            "&& false",
+            "must bound and authorize every exact historical recovery proposal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn validate_winning_lane_output(",
+            "validate_lane_vote_for_proposal(vote, proposal)?;",
+            "let _ = (vote, proposal);",
+            "must authenticate both standalone votes and aggregate certificates",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn durable_lane_rollover_authority(",
+            "if retained_proposal == proposal",
+            "if true",
+            "must require either an exact durable certificate or the bounded retained successor owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn durable_lane_rollover_authority(",
+            "durable_sessions.insert(proposal.proposal_hash, source);",
+            "let _ = source;",
+            "must preserve one exact retained or persistent witness per winner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "struct FinalityCompletion {",
+            "ownership: RuntimeEffectOwnership,",
+            "ownership: Option<RuntimeEffectOwnership>,",
+            "durable Apply tombstone must retain the exact reducer incarnation tag",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "pub(crate) fn complete_application<S: V2EffectServices>(",
+            "            ownership,\n        });",
+            "            ownership: ownership.clone(),\n        });",
+            "durable Apply completion must retain the exact tag",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "fn begin_apply<S: V2EffectServices>(",
+            ".same_commit_decision(certificate.as_ref())",
+            ".same_commit_decision(existing.task.certificate.as_ref())",
+            "exact Apply retransmission must retain the incumbent authority",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn sweep_buffered_payload_chunk_lifecycles<R: EffectRuntime>(",
+            "                Err(error) => {\n"
+            "                    self.orphan_lifecycle_sweep_cursor = Some(OrphanPayloadLifecycleSweepCursor {\n"
+            "                        manifest_hash: cursor.manifest_hash,\n"
+            "                        chunk_offset: cursor.chunk_offset.saturating_add(1),\n"
+            "                    });",
+            "                Err(error) => {\n"
+            "                    self.orphan_lifecycle_sweep_cursor = None;",
+            "buffered lifecycle sweep must preserve every nonterminal or unclassifiable exact owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            "if !self.rollover_claim.accepts_superseded_reply_delivery() {",
+            "if false {",
+            "explicitly authorized superseded history produces a typed merge receipt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            ".merge_observed_with_receipt(&candidate_routes)",
+            ".merge_with_receipt(&candidate_routes)",
+            "worker-side observed-history reconciliation seams",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn reply_target_merge_plan_with_hooks<AfterCandidatePrune, AfterRouteMerge>(",
+            ".merge_downstream_with_observed_receipt(candidate, receipt)",
+            ".merge_downstream_with_strict_receipt(candidate, receipt)",
+            "must consume the typed strict or superseded receipt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "fn applied_height_reconstruction_covers(",
+            "if proposal_height >= artifact.height {",
+            "if false {",
+            "lane output retirement must require exact typed durable or independently readable historical lane authority",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker.rs",
+            "let covered = match envelope.as_message() {",
+            "lane_output_is_covered(lane_message)?",
+            "false",
+            "lane output retirement must route every typed lane class through the reviewed authority classifier",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn run_inner(",
+            "            leader_wire_recovery_authority,\n"
+            "            exact_output_service_owner,",
+            "            None,\n            exact_output_service_owner,",
+            "runner construction must move the unique service owner",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "let lane_work_limits = lane_work_limits(",
+            "            retransmit_interval,\n            round_timeout,",
+            "            Duration::ZERO,\n            Duration::ZERO,",
+            "runner construction must pass the exact P2P source geometry into lane work",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "V2LaneWorkAdapter::new_with_output_guard_and_transport(",
+            "                    &verified_context,",
+            "                    &context,",
+            "lane adapter must be constructed from the same configured role after startup reconciliation",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "V2LaneWorkAdapter::new_with_output_guard_and_transport(",
+            "                    _lifecycle_process_generation.clone(),",
+            "                    None,",
+            "lane adapter must receive the same process-lifetime generation claim",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn drain_v2_ingress(",
+            "executor.can_admit_timeout_vote_recovery_episode(message, ownership)",
+            "executor.can_admit_timeout_vote_recovery_episode(message, ownership,)",
+            "ingress drain must use the gate-bound checked selector, keep the TimeoutVote bypass explicit, and revalidate runtime capacity before physical removal",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_worker/exact_output_rollover_claim.rs",
+            "const fn accepts_superseded_reply_delivery(&self) -> bool {",
+            "| Self::DurableCertifiedBodyResponse { .. }",
+            "| Self::DurableLaneCertificateResponse { .. }",
+            "superseded reply history must be limited to durable global response claims",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "fn matches_apply(",
+            "self.ownership == *ownership",
+            "true",
+            "durable Apply tombstone equality must bind tag, ownership, finality decision, and Kura receipt",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "pub(crate) fn durable_historical_lane_output_source_hash(",
+            "if durable.proposal.proposal_hash != proposal_hash {",
+            "if false {",
+            "historical lane retirement must authenticate the exact durable proposal and bind its output hash",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+            "fn durable_historical_lane_verification_pops(",
+            "|| hint.proposal_block_hash != finality.block_hash",
+            "|| false",
+            "historical lane verification must source alternate signer PoPs from the frozen finality roster",
+        ),
+    )
+    diagnostics = []
+    for relative_path, marker, old, new, diagnostic in mutations:
+        path = tmp_path / relative_path
+        source = path.read_text(encoding="utf-8")
+        region = source.find(marker)
+        assert region >= 0, (relative_path, marker)
+        offset = source.find(old, region)
+        assert offset >= 0, (relative_path, marker, old)
+        path.write_text(
+            source[:offset] + new + source[offset + len(old) :],
+            encoding="utf-8",
+        )
+        diagnostics.append(diagnostic)
+    monkeypatch.setattr(module, "_require_rust_item_token_sha256", lambda *args: None)
+    return diagnostics

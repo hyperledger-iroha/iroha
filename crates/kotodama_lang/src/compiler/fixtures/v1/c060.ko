@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  test::assert_eq(actual: true, expected: 1);
+}
+
+}

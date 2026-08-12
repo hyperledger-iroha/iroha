@@ -1,0 +1,8 @@
+
+            fn index() -> int { 0 }
+            fn replacement() -> int { 9 }
+            fn mutate() -> bool {
+                var List<int, 2> values = [1];
+                values.try_set(value: replacement(), index: index())
+            }
+        
