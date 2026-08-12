@@ -681,6 +681,251 @@
     }
 
     #[test]
+    fn ready_validate_prepare_sign_uses_real_wal_and_retains_pre_wal_retry() {
+        let directory = TempDir::new().expect("temporary Ready Validate Sign directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let (tag, manifest, _durable, validated) =
+            advance_direct_validation_fixture_to_durable(&mut adapter, 0xB9);
+        let reducer_before = adapter.reducer.clone();
+        let registry_before = adapter.registry.clone();
+        let last_progress_before = adapter.last_progress;
+        let fence_before = adapter.reducer_fence_generation;
+        let (validate, validate_pending) =
+            ordinary_validate_predecessor_for_test(tag, manifest.round, manifest.subject, 61_001);
+        let DirectValidationSucceededPreparation::Persist(preview) = adapter
+            .prepare_direct_validation_succeeded(tag, manifest.round, manifest.subject, &validated)
+            .expect("preview exact successful validation")
+        else {
+            panic!("ordinary validation must stage PrepareIntent")
+        };
+        let publication = SealedReadyDurableValidateAdapterPreview(
+            ReadyDurableValidateAdapterPreviewKind::ValidatedPersist(preview),
+        )
+        .preflight_publication()
+        .expect("preflight PrepareIntent publication");
+        let exact_sign = match &publication.0 {
+            ReadyDurableValidateAdapterPublicationState::ValidatedPersist(prepared) => {
+                assert!(prepared.registered_prepare.is_none());
+                prepared.sign_effect.clone()
+            }
+            _ => unreachable!("fixture retains one Persist publication"),
+        };
+
+        let (foreign_validate, foreign_pending) =
+            ordinary_validate_predecessor_for_test(tag, manifest.round, subject(0xBA), 61_002);
+        let publication = match publication.bind_validate_sign_predecessor(
+            ReadyValidateSignPredecessorAuthority::for_test(&foreign_validate, &foreign_pending),
+        ) {
+            Ok(_) => panic!("foreign predecessor cannot bind the WAL Sign intent"),
+            Err(publication) => publication,
+        };
+        let ReadyDurableValidateAdapterPublicationState::ValidatedPersist(prepared) =
+            &publication.0
+        else {
+            unreachable!("failed pre-WAL join returns the exact publication")
+        };
+        assert!(prepared._adapter.wal.recovered_records().is_empty());
+        assert!(prepared._adapter.pending_persistence_id.is_none());
+        assert!(!prepared._adapter.fail_closed);
+
+        let bound = publication
+            .bind_validate_sign_predecessor(ReadyValidateSignPredecessorAuthority::for_test(
+                &validate,
+                &validate_pending,
+            ))
+            .unwrap_or_else(|_| panic!("returned publication remains exactly retryable"));
+        assert!(bound.pre_wal_is_exact());
+        let persisted = bound
+            .append_live_wal()
+            .unwrap_or_else(|_| panic!("append and fsync exact PrepareIntent"));
+        assert_eq!(persisted.adapter.wal.recovered_records().len(), 1);
+        assert_eq!(persisted.adapter.pending_persistence_id, Some(1));
+        assert!(!persisted.adapter.fail_closed);
+        assert!(
+            persisted
+                .persisted_sign
+                .as_ref()
+                .expect("post-WAL fixture retains its nested Sign seal")
+                .exactly_matches_validate_sign_for_test(
+                    &exact_sign,
+                    validate_pending.causal_lifecycle_key(),
+                )
+        );
+        assert!(matches!(
+            persisted
+                .next_reducer
+                .as_ref()
+                .expect("post-WAL fixture retains staged reducer state")
+                .awaiting_signature(),
+            Some(reducer::SignableMessage::Vote(vote))
+                if vote.phase() == reducer::Phase::Prepare
+        ));
+        let committed_status = persisted
+            .committed_status
+            .as_ref()
+            .expect("post-WAL fixture precomputes exact committed status");
+        assert_eq!(committed_status.pending_persistence_id, None);
+        assert_eq!(committed_status.phase, wire::SumeragiV2StatusPhase::Prepare);
+        assert_eq!(
+            committed_status.body_state,
+            wire::SumeragiV2BodyState::Validated
+        );
+        assert!(matches!(
+            committed_status.liveness.last_progress,
+            Some(wire::SumeragiV2ProgressTransitionStatus {
+                transition: wire::SumeragiV2ProgressTransition::BodyValidated,
+                ..
+            })
+        ));
+        drop(persisted);
+
+        assert_eq!(adapter.reducer, reducer_before);
+        assert_registry_eq(&adapter.registry, &registry_before);
+        assert_eq!(adapter.last_progress, last_progress_before);
+        assert_eq!(adapter.reducer_fence_generation, fence_before);
+        assert_eq!(adapter.pending_persistence_id, Some(1));
+        assert_eq!(adapter.wal.recovered_records().len(), 1);
+        assert!(adapter.fail_closed);
+    }
+
+    #[test]
+    fn ready_validate_commit_sign_uses_only_registered_prepare_capability() {
+        let directory = TempDir::new().expect("temporary Ready Validate Commit directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let (tag, manifest, _durable, validated) =
+            advance_direct_validation_fixture_to_durable(&mut adapter, 0xBB);
+        let prepare = wire::QuorumCertificate {
+            round: manifest.round,
+            proposal_round: manifest.round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: manifest.subject,
+            execution_commitment: validated.execution_commitment(),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0xBB; 96],
+        };
+        let observed = adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                    prepare.clone(),
+                )),
+            ))
+            .expect("register concurrent PrepareQC");
+        assert!(observed.effects().is_empty());
+        let wal_records_before = adapter.wal.recovered_records().len();
+        let (validate, ordinary_pending) =
+            ordinary_validate_predecessor_for_test(tag, manifest.round, manifest.subject, 61_003);
+        let wal_before = std::fs::read(directory.path().join("safety.wal"))
+            .expect("snapshot WAL before substituted registered-QC preflight");
+        let DirectValidationSucceededPreparation::Persist(mut substituted) = adapter
+            .prepare_direct_validation_succeeded(tag, manifest.round, manifest.subject, &validated)
+            .expect("preview exact LockAndCommit for substitution check")
+        else {
+            panic!("concurrent PrepareQC must stage LockAndCommit")
+        };
+        let reducer::Effect::Persist { entry, .. } = &substituted.persist_effect else {
+            unreachable!("successful validation stages one Persist effect")
+        };
+        let reducer::WalRecord::LockAndCommit {
+            prepare: registered_prepare,
+            ..
+        } = entry.record()
+        else {
+            unreachable!("concurrent PrepareQC stages LockAndCommit")
+        };
+        substituted
+            .next_registry
+            .certificates
+            .get_mut(&registered_prepare.reference())
+            .expect("staged registry retains its registered PrepareQC")
+            .execution_commitment = execution_commitment(0xBC);
+        assert!(substituted.preflight_publication().is_err());
+        assert_eq!(adapter.wal.recovered_records().len(), wal_records_before);
+        assert!(adapter.pending_persistence_id.is_none());
+        assert_eq!(
+            std::fs::read(directory.path().join("safety.wal"))
+                .expect("read WAL after substituted registered-QC preflight"),
+            wal_before
+        );
+
+        let DirectValidationSucceededPreparation::Persist(preview) = adapter
+            .prepare_direct_validation_succeeded(tag, manifest.round, manifest.subject, &validated)
+            .expect("preview exact LockAndCommit validation")
+        else {
+            panic!("concurrent PrepareQC must stage LockAndCommit")
+        };
+        let publication = SealedReadyDurableValidateAdapterPreview(
+            ReadyDurableValidateAdapterPreviewKind::ValidatedPersist(preview),
+        )
+        .preflight_publication()
+        .expect("preflight LockAndCommit publication");
+        let exact_sign = match &publication.0 {
+            ReadyDurableValidateAdapterPublicationState::ValidatedPersist(prepared) => {
+                assert!(prepared.registered_prepare.is_some());
+                assert!(matches!(
+                    &prepared.persist_effect,
+                    reducer::Effect::Persist { entry, .. }
+                        if matches!(entry.record(), reducer::WalRecord::LockAndCommit { .. })
+                ));
+                prepared.sign_effect.clone()
+            }
+            _ => unreachable!("fixture retains one LockAndCommit publication"),
+        };
+        assert!(
+            ordinary_pending
+                .project_validate_sign_commit_successor(&validate, &exact_sign)
+                .is_none(),
+            "ordinary Validate cannot mint Commit without the opaque carrier"
+        );
+
+        let bound = publication
+            .bind_validate_sign_predecessor(ReadyValidateSignPredecessorAuthority::for_test(
+                &validate,
+                &ordinary_pending,
+            ))
+            .unwrap_or_else(|_| panic!("registered carrier refines ordinary Validate"));
+        let persisted = bound
+            .append_live_wal()
+            .unwrap_or_else(|_| panic!("append and fsync exact LockAndCommit"));
+        let frame = persisted
+            .adapter
+            .wal
+            .recovered_records()
+            .last()
+            .expect("one real LockAndCommit frame");
+        let mut encoded = frame.payload();
+        let envelope = WalEnvelopeV2::decode(&mut encoded).expect("decode persisted envelope");
+        assert!(encoded.is_empty());
+        assert!(matches!(
+            envelope.record,
+            WalRecordV2::LockAndCommit {
+                prepare: persisted_prepare,
+                vote,
+            } if persisted_prepare == prepare
+                && vote.phase == wire::GlobalPhase::Commit
+                && vote.execution_commitment == validated.execution_commitment()
+        ));
+        assert!(
+            persisted
+                .persisted_sign
+                .as_ref()
+                .expect("post-WAL fixture retains its nested Sign seal")
+                .exactly_matches_validate_sign_for_test(
+                    &exact_sign,
+                    ordinary_pending.causal_lifecycle_key(),
+                )
+        );
+        drop(persisted);
+
+        assert_eq!(
+            adapter.wal.recovered_records().len(),
+            wal_records_before + 1
+        );
+        assert!(adapter.fail_closed);
+    }
+
+    #[test]
     fn direct_validation_apply_preview_preserves_complete_decision_authority() {
         let directory = TempDir::new().expect("temporary direct-validation Apply directory");
         let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
@@ -1070,7 +1315,7 @@
 
     #[test]
     fn direct_validation_preview_surface_is_closed_move_only_and_unwired() {
-        let source = include_str!("v2.rs");
+        let source = include_str!("../v2.rs");
         let (production, _) = source
             .split_once("\n#[cfg(test)]\nmod tests {")
             .expect("locate unconditional production/test boundary");
@@ -1640,7 +1885,7 @@
 
     #[test]
     fn direct_validation_failed_surface_is_closed_move_only_and_unwired() {
-        let source = include_str!("v2.rs");
+        let source = include_str!("../v2.rs");
         let (production, _) = source
             .split_once("\n#[cfg(test)]\nmod tests {")
             .expect("locate unconditional production/test boundary");
@@ -1730,8 +1975,9 @@
     }
 
     #[test]
-    fn ready_validate_adapter_bridge_is_sealed_fixed_output_and_unwired() {
-        let source = include_str!("v2.rs");
+    #[allow(clippy::too_many_lines)]
+    fn ready_validate_adapter_bridge_is_sealed_and_live_sign_has_one_real_append() {
+        let source = include_str!("../v2.rs");
         let (production, _) = source
             .split_once("\n#[cfg(test)]\nmod tests {")
             .expect("locate unconditional production/test boundary");
@@ -1758,6 +2004,14 @@
             .map(|offset| token_start + offset)
             .expect("locate end of sealed Ready Validate adapter inventory");
         let tokens = &production[token_start..token_end];
+        let live_start = tokens
+            .find("// READY_DURABLE_VALIDATE_LIVE_SIGN_BEGIN")
+            .expect("locate sealed live-Sign cut");
+        let live_end = tokens
+            .find("// READY_DURABLE_VALIDATE_LIVE_SIGN_END")
+            .expect("locate end of sealed live-Sign cut");
+        let live_sign = &tokens[live_start..live_end];
+        let preflight_tokens = [&tokens[..live_start], &tokens[live_end..]].concat();
         assert!(tokens.contains("pub(crate) struct SealedReadyDurableValidateAdapterPreview"));
         assert!(
             tokens.contains("pub(crate) struct PreparedReadyDurableValidateAdapterPublication")
@@ -1819,8 +2073,83 @@
             "fn persisted_event(",
         ] {
             assert!(
-                !tokens.contains(forbidden),
+                !preflight_tokens.contains(forbidden),
                 "sealed Ready Validate adapter token exposes forbidden surface {forbidden}"
+            );
+        }
+        for required in [
+            "PreparedReadyDurableValidateBoundSignPublication",
+            "PreparedReadyDurableValidatePersistedSign",
+            "ReadyValidateSignPredecessorAuthority",
+            ".project_successor(&self.sign_effect, self.registered_prepare.as_ref())",
+            "adapter.wal.append(&encoded_wal_payload)",
+            "LiveWalFrameIdentity::from_append_receipt(frame, receipt, persistence_id)",
+            "bind_exact_validate_sign_pending(child_pending)",
+            "impl Drop for PreparedReadyDurableValidatePersistedSign",
+            "self.adapter.fail_closed = true",
+            "registry_work: Option<PreparedLiveValidateSignRegistryWork>",
+            "committed_status: Option<wire::SumeragiV2Status>",
+            "let committed_status = adapter.status()",
+            "work.install_into(reservation)",
+            "self.adapter.pending_persistence_id = None",
+            "self.adapter.record_reducer_outcome(",
+            ".log_body_progress(&validation_event, reducer::StepDisposition::Applied, 1)",
+            "self.armed = false",
+            "super::status::set_v2_status(committed_status)",
+        ] {
+            assert!(
+                live_sign.contains(required),
+                "sealed live-Sign cut omitted {required}"
+            );
+        }
+        assert_eq!(live_sign.matches(".wal.append(").count(), 1);
+        let post_fsync = live_sign
+            .split("fn install_registry_and_commit_adapter(")
+            .nth(1)
+            .and_then(|suffix| suffix.split("\n    }\n}").next())
+            .expect("live Sign adapter publication has one bounded body");
+        let registry_install = post_fsync
+            .find("work.install_into(reservation)")
+            .expect("reserved registry child is installed");
+        let reducer_swap = post_fsync
+            .find("self.adapter.reducer = next_reducer")
+            .expect("adapter reducer is swapped");
+        let marker_clear = post_fsync
+            .find("self.adapter.pending_persistence_id = None")
+            .expect("post-WAL marker is cleared");
+        let disarm = post_fsync
+            .find("self.armed = false")
+            .expect("fail-stop Drop is disarmed before status publication");
+        let status_publish = post_fsync
+            .find("super::status::set_v2_status(committed_status)")
+            .expect("precomputed committed status is published last");
+        assert!(
+            registry_install < reducer_swap
+                && reducer_swap < marker_clear
+                && marker_clear < disarm
+                && disarm < status_publish
+        );
+        for forbidden in ["?", "return Err", "publish_status(", ".wal.append("] {
+            assert!(
+                !post_fsync.contains(forbidden),
+                "post-fsync adapter publication acquired fallible work through {forbidden}"
+            );
+        }
+        for forbidden in [
+            "LiveWalFrameIdentity::for_test",
+            "fn into_parts(",
+            "fn effect(",
+            "fn pending(",
+            "fn receipt(",
+            "fn locator(",
+            "fn commit(",
+            "fn install(",
+            "LifecycleCoordinator",
+            "persist_durable_projection",
+        ] {
+            assert!(
+                !live_sign.contains(forbidden),
+                "sealed live-Sign cut exposed forbidden surface {forbidden}"
             );
         }
 
@@ -1868,7 +2197,7 @@
 
     #[test]
     fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
-        let source = include_str!("v2.rs");
+        let source = include_str!("../v2.rs");
         let (production, _) = source
             .split_once("\n#[cfg(test)]\nmod tests {")
             .expect("locate unconditional production/test boundary");
@@ -1901,10 +2230,14 @@
             "prepare_certificate: Option<wire::QuorumCertificate>",
             "pub(crate) struct RecoveredAdapterStartup",
             "pub(crate) struct AuthenticatedRecoveredAdapterStartup",
+            "pub(crate) struct ProductionLifecycleAdapterStartupV1",
             "struct AuthenticatedRecoveredWalLifecycleStartup<'registry>",
             "struct StorageAuthenticatedRecoveredWalLifecycleStartup<'registry>",
-            "recovery: AuthenticatedLifecycleRecoveryCut",
             "ledger: OpenedRecoveredWalValidateLedger",
+            "struct PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>",
+            "struct InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>",
+            "struct ProductionRecoveredLifecycleOwnerStartupV1",
+            "ProductionRecoveredLifecycleOwnerAssemblyPermitV1",
             "struct DurableAuthenticatedRecoveredWalLifecycleStartup<'registry>",
             "struct InstalledRecoveredWalLifecycleStartup<'registry>",
             "struct RecoveredWalLifecycleLedgerPersistError<'registry>",
@@ -1912,7 +2245,18 @@
             "repair: AuthenticatedRecoveredWalValidateLifecycleRepair<'registry>",
             "repair: DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>",
             "installed: InstalledRecoveredWalSignRegistryCut<'registry>",
-            "pub(crate) fn authenticate_final_wal_vote(",
+            "pub(crate) fn authenticate_final_wal_startup_authority(",
+            "pub(crate) fn open_production_lifecycle_owner_v1(",
+            "if !self.effects.is_empty()",
+            "enum RecoveredWalStartupAuthorityV1",
+            "PhaseVote(RecoveredWalVoteSign)",
+            "ControlSign(RecoveredWalControlSign)",
+            "ProductionLifecycleOwnerV1::open_storage_only_recovered_startup(",
+            ".persist_repair()",
+            ".install_recovered_sign()",
+            ".open_production_owner_seals(",
+            ".into_owner(registry, payload_store, body_store)",
+            "ProductionLifecycleOwnerV1::from_recovered_wal_open(",
             "#[cfg(test)]\n    #[allow(clippy::result_large_err)]\n    fn finish_without_wal_vote(",
             "fn authenticate_recovered_parent_from_storage<'registry, 'body>(",
             "registry: &'registry mut LifecycleWorkRegistryHolder",
@@ -1935,6 +2279,28 @@
                 "recovery token omitted {required}"
             );
         }
+        assert_eq!(
+            token
+                .matches("ProductionRecoveredLifecycleOwnerAssemblyPermitV1::mint_paired()")
+                .count(),
+            1,
+            "only the paired recovered startup may mint owner-assembly authority"
+        );
+        let production_open = token
+            .split_once("fn open_production_owner_seals(")
+            .expect("locate paired production open")
+            .1
+            .split_once("#[cfg(test)]\nimpl<'registry> AuthenticatedRecoveredWalLifecycleStartup")
+            .expect("locate the end of paired production open")
+            .0;
+        let open_signature = production_open
+            .split_once(") -> Result<")
+            .expect("paired production open signature ends")
+            .0;
+        assert!(!open_signature.contains("verified: VerifiedHeightContext"));
+        assert!(production_open.contains("context: adapter.wire_context.clone()"));
+        assert!(production_open.contains("ProductionRecoveredLifecycleOwnerStartupV1"));
+        assert!(!production_open.contains("Ok(("));
         for forbidden in [
             "#[derive(Clone)]\npub(crate) struct RecoveredWalVoteSign",
             "pub(crate) const fn frame_sequence(",
@@ -1956,6 +2322,8 @@
             "validate_effect: AdapterEffect",
             "validate_pending: PendingRuntimeEffectBinding",
             "RuntimeLifecycleOrdinalSource",
+            "recovery: AuthenticatedLifecycleRecoveryCut",
+            "recovered_vote: Option<RecoveredWalVoteSign>,\n        recovery:",
         ] {
             assert!(
                 !token.contains(forbidden),
@@ -1970,6 +2338,25 @@
             1,
             "the sealed startup join owns one private recovery-token mint"
         );
+        let frontier_start = production
+            .find("fn authenticate_recovered_wal_frontier(")
+            .expect("locate independent recovered WAL frontier authentication");
+        let frontier_end = production[frontier_start..]
+            .find("// RECOVERED_WAL_VOTE_SIGN_MINT_BEGIN")
+            .map(|offset| frontier_start + offset)
+            .expect("locate end of recovered WAL frontier authentication");
+        let frontier = &production[frontier_start..frontier_end];
+        for required in [
+            "self.reducer.durable_state().last_id().get()",
+            "self.wal.recovered_records().last()",
+            "self.authenticate_recovered_wal_frame(frame)?",
+            "envelope.persistence_id != durable_last_id",
+        ] {
+            assert!(
+                frontier.contains(required),
+                "recovered WAL frontier omitted {required}"
+            );
+        }
         let mint_start = production
             .find("// RECOVERED_WAL_VOTE_SIGN_MINT_BEGIN")
             .expect("locate recovered WAL vote-sign mint");
@@ -1979,17 +2366,20 @@
             .expect("locate end of recovered WAL vote-sign mint");
         let mint = &production[mint_start..mint_end];
         for required in [
-            "self.wal.recovered_records().last()",
             "startup_effects.len() > MAX_ADAPTER_EFFECTS_PER_MACRO_STEP",
-            "WalEnvelopeV2::decode",
-            "RecoveredWalFrameIdentity::from_recovered_record(frame, envelope.persistence_id)",
-            "frame.frame_hash()",
-            "self.reducer.durable_state().last_id().get()",
             "self.reducer.awaiting_signature()",
-            ".unsigned_vote_to_wire(awaiting_vote.clone())?",
-            "verify_wal_record_authority(",
-            "WalRecordV2::PrepareIntent(vote)",
-            "WalRecordV2::LockAndCommit { prepare, vote }",
+            ".unsigned_vote_to_wire(*awaiting_vote)?",
+            "vote.round != vote.proposal_round",
+            "vote.proposal_round.context_id != self.wire_context.id()",
+            "vote.proposal_round.height != self.wire_context.height",
+            "self.wal.recovered_records().iter().rev()",
+            "self.authenticate_recovered_wal_frame(frame)?",
+            "WalRecordV2::PrepareIntent(candidate)",
+            "WalRecordV2::LockAndCommit {",
+            "vote: candidate",
+            "prepare.round == prepare.proposal_round",
+            "commit_intent_for_lock(locked)",
+            "self.registry.reducer_qc_matches_wire(locked, &prepare)",
             "prepare.execution_commitment",
             "vote.execution_commitment",
             "RecoveredWalVoteReplayEvidenceV1::from_sealed_recovered_vote",
@@ -2008,6 +2398,7 @@
             "publish_status(",
             "for_test(",
             "pub(crate) fn authenticate_recovered_wal_vote_sign(",
+            "self.wal.recovered_records().last()",
         ] {
             assert!(
                 !mint.contains(forbidden),
@@ -2015,7 +2406,7 @@
             );
         }
 
-        let runtime = include_str!("v2_runtime.rs");
+        let runtime = include_str!("../v2_runtime.rs");
         let successor_start = runtime
             .find("pub(crate) struct RecoveredWalVoteSuccessor")
             .expect("locate recovered WAL successor");
@@ -2032,6 +2423,8 @@
             "predecessor_effect: AdapterEffect",
             "predecessor_pending: PendingRuntimeEffectBinding",
             "pending: PendingRuntimeEffectBinding",
+            "_prepare_certificate: Option<wire::QuorumCertificate>",
+            "CommitSuccessorTagRelation::RecoveredMonotone",
             "fn into_ledger_lifecycle_projection(",
             "fn into_durable_lifecycle_projection(",
             "RecoveredWalCandidateProjectionPermit::new()",
@@ -2069,8 +2462,62 @@
         assert!(projection.contains("recovered.replay_evidence_is_exact()"));
         assert!(projection.contains("recovered.replay_evidence().clone()"));
         assert!(projection.contains("predecessor_pending: self"));
+        assert!(projection.contains("recovered.prepare_certificate().and_then(|prepare|"));
+        assert!(projection.contains("project_recovered_inherited_validate_commit_successor"));
+        assert!(projection.contains("project_recovered_ordinary_validate_commit_successor"));
 
-        let replay = include_str!("v2_lifecycle_replay_authority.rs");
+        let commit_relation_start = runtime
+            .find("enum CommitSuccessorTagRelation")
+            .expect("locate bounded Commit tag relation");
+        let commit_relation_end = runtime[commit_relation_start..]
+            .find("\nimpl PendingRuntimeEffectBinding")
+            .map(|offset| commit_relation_start + offset)
+            .expect("locate end of bounded Commit tag relation");
+        let commit_relation = &runtime[commit_relation_start..commit_relation_end];
+        for required in [
+            "LiveExact",
+            "RecoveredMonotone",
+            "predecessor == successor",
+            "successor.view() == vote_round.view",
+            "predecessor.generation() == successor.generation()",
+            "predecessor.view() >= vote_round.view",
+            "predecessor.view() <= successor.view()",
+            "recovered_prepare_matches_commit_vote",
+            "prepare.execution_commitment == vote.execution_commitment",
+        ] {
+            assert!(
+                commit_relation.contains(required),
+                "bounded Commit tag relation omitted {required}"
+            );
+        }
+        let live_commit = runtime
+            .split_once("pub(crate) fn project_validate_sign_commit_successor(")
+            .expect("locate live Commit projection")
+            .1
+            .split_once("/// Project a Commit-vote successor for an ordinary Validate")
+            .expect("locate end of live Commit projection")
+            .0;
+        assert!(live_commit.contains("CommitSuccessorTagRelation::LiveExact"));
+        let runtime_production = runtime
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("locate runtime test boundary")
+            .0;
+        assert_eq!(
+            runtime_production
+                .matches("project_recovered_inherited_validate_commit_successor(")
+                .count(),
+            2,
+            "recovered inherited-Prepare retag is called only by its sealed projection"
+        );
+        assert_eq!(
+            runtime_production
+                .matches("project_recovered_ordinary_validate_commit_successor(")
+                .count(),
+            2,
+            "recovered ordinary-Validate retag is called only by its sealed projection"
+        );
+
+        let replay = include_str!("../v2_lifecycle_replay_authority.rs");
         for required in [
             "pub(crate) struct RecoveredWalVoteReplayEvidenceV1",
             "locator: PersistedWalFrameLocatorV1",
@@ -2079,6 +2526,10 @@
             "fn project_recovered_vote_candidate(",
             "source.locator.exactly_matches_runtime(locator)",
             "LifecycleReplayAuthorityV1::decode_canonical",
+            "wire::GlobalPhase::Prepare => tag.view() == vote.round.view",
+            "wire::GlobalPhase::Commit => tag.view() >= vote.round.view",
+            "wire::GlobalPhase::Prepare => self.tag.view == vote.round.view",
+            "wire::GlobalPhase::Commit => true",
         ] {
             assert!(
                 replay.contains(required),
@@ -2097,6 +2548,28 @@
                 "recovered replay evidence exposes {forbidden}"
             );
         }
+        for required in [
+            "struct RecoveredDecisionApplyReplayLineageV1",
+            "fetch: LifecycleReplayAuthorityV1",
+            "body: RecoveredDecisionBodyPipelineReplayFamilyV1",
+            "apply: LifecycleReplayAuthorityV1",
+            "BodyPipelineOriginV1::RecoveredDecision",
+            "WalReplayActionV1::FetchDecision",
+            "WalReplayActionV1::ApplyDecision",
+            "fn is_stage_closed(&self, context: LifecycleContext) -> bool",
+            "DurableContinuationEdge::FetchToStore",
+            "DurableContinuationEdge::StoreToValidate",
+            "DurableContinuationEdge::ValidateToApply",
+        ] {
+            assert!(
+                replay.contains(required),
+                "recovered Decision body lineage omitted {required}"
+            );
+        }
+        assert!(
+            !replay.contains("project_exact_body_candidate"),
+            "recovered Decision body lineage exposes a raw candidate projector"
+        );
 
         let reconstructed_start = runtime
             .find("pub(crate) fn reconstruct_recovered_wal_vote_successor(")
@@ -2132,7 +2605,7 @@
             );
         }
 
-        let body_store = include_str!("v2_body_store.rs");
+        let body_store = include_str!("../v2_body_store.rs");
         let marker_start = body_store
             .find("pub(super) struct RecoveredValidatedBodyCut<'store>")
             .expect("locate recovered validated-body cut");
@@ -2147,6 +2620,14 @@
             "self.store.validated.insert(self.key, validated)",
             "pub(super) fn exactly_matches_ledger_parent",
             "pub(super) fn into_validation_outcome",
+            "pub(in crate::sumeragi) struct RecoveredDecisionApplyBodyCut<'store>",
+            "store_identity: V2BodyStoreInstanceIdentity",
+            "context: wire::HeightContext",
+            "envelope: StoredBodyEnvelope",
+            "impl Drop for RecoveredDecisionApplyBodyCut<'_>",
+            "a detached recovered Decision body cannot collide while restoring",
+            "wire::GlobalPhase::Prepare => recovered.tag().view() == vote.round.view",
+            "wire::GlobalPhase::Commit => recovered.tag().view() >= vote.round.view",
         ] {
             assert!(
                 marker.contains(required),
@@ -2158,6 +2639,8 @@
             "fn receipt(",
             "fn into_receipt(",
             "into_parts",
+            "fn manifest(",
+            "fn body(",
         ] {
             assert!(
                 !marker.contains(forbidden),
@@ -2167,8 +2650,99 @@
         assert!(
             !body_store.contains("#[derive(Clone)]\npub(super) struct RecoveredValidatedBodyCut")
         );
+        for required in [
+            "pub(crate) struct RevalidatedV2BodyStore(V2BodyStore)",
+            "pub(crate) fn into_revalidated_startup(",
+            "self.ensure_recovered_markers_revalidated()?",
+            "fn matches_context(&self, context: &wire::HeightContext)",
+            "fn detach_recovered_decision_apply_body(",
+            "fn into_lifecycle_owner_store(",
+            "if &self.0.context != expected_context",
+        ] {
+            assert!(
+                body_store.contains(required),
+                "revalidated same-store startup cut omitted {required}"
+            );
+        }
+        assert!(!body_store.contains("impl Clone for RevalidatedV2BodyStore"));
 
-        let ledger = include_str!("v2_lifecycle_ledger.rs");
+        let decision_composite = body_store
+            .split_once("struct RecoveredDecisionApplyAdapterPreviewV1<'store>")
+            .expect("locate recovered Decision adapter composite")
+            .1
+            .split_once("/// One-shot call capability for deriving")
+            .expect("locate end of recovered Decision adapter composite")
+            .0;
+        for required in [
+            "_fetch: AuthenticatedRecoveredWalDecisionFetchProjection",
+            "_body: RecoveredDecisionApplyBodyCut<'store>",
+            "RecoveredDecisionApplyReplayLineageV1",
+            "_staged: super::v2::RecoveredDecisionApplyStagedAdapterV1",
+            "RecoveredDecisionApplyAdapterPreviewFailure<'store>",
+        ] {
+            assert!(
+                decision_composite.contains(required),
+                "recovered Decision adapter composite omitted {required}"
+            );
+        }
+        for forbidden in [
+            "fn effect(",
+            "fn pending(",
+            "fn candidate(",
+            "fn body(",
+            "fn replay(",
+            "into_parts",
+        ] {
+            assert!(
+                !decision_composite.contains(forbidden),
+                "recovered Decision adapter composite exposes {forbidden}"
+            );
+        }
+
+        let decision_wal_recovery = include_str!("../v2_lifecycle_wal_recovery.rs");
+        let decision_preview = production
+            .split_once("fn prepare_recovered_decision_apply_fast_forward(")
+            .expect("locate recovered Decision adapter fast-forward")
+            .1
+            .split_once("/// Preview a certified Fetch completion directly")
+            .expect("locate end of recovered Decision adapter fast-forward")
+            .0;
+        for required in [
+            "let mut comparison_registry = self.registry.clone()",
+            "prepare_direct_certified_body_available",
+            "prepare_direct_body_stored",
+            "prepare_direct_validation_succeeded",
+            "apply_certificate == &certificate",
+            "project_decision_apply_pending_lineage",
+            "project_certified_fetch_store_successor",
+            "project_store_validate_successor",
+            "project_validate_apply_successor",
+            "RecoveredDecisionApplyAdapterRollback",
+            "reducer_fence_generation",
+            "last_progress",
+            "rollback.restore(&mut adapter)",
+        ] {
+            assert!(
+                decision_preview.contains(required) || decision_wal_recovery.contains(required),
+                "recovered Decision fast-forward omitted {required}"
+            );
+        }
+        for forbidden in [
+            ".commit()",
+            "commit_recovered_decision_apply",
+            "CandidateAdmission",
+            "LifecycleCoordinator",
+            "LifecycleWorkRegistry",
+            ".wal.append(",
+            "publish_status(",
+        ] {
+            assert!(
+                !decision_preview.contains(forbidden),
+                "recovered Decision fast-forward invokes {forbidden}"
+            );
+        }
+
+        let ledger = include_str!("../v2_lifecycle_ledger.rs");
         let parent_start = ledger
             .find("pub(crate) struct AuthenticatedRecoveredWalValidateLedgerParent")
             .expect("locate opaque recovered ledger parent");
@@ -2181,6 +2755,8 @@
             "fn authenticate_recovered_wal_validate_parent(",
             "recovered.prepare_certificate().is_none()",
             "prepare.execution_commitment == vote.execution_commitment",
+            "wire::GlobalPhase::Prepare => recovered.tag().view() == vote.round.view",
+            "wire::GlobalPhase::Commit => recovered.tag().view() >= vote.round.view",
             "LifecycleStageKind::ValidateBody",
             "DurableContinuation::None",
             "TerminalOutcome::Advanced",
@@ -2206,7 +2782,121 @@
             );
         }
 
-        let wal_recovery = include_str!("v2_lifecycle_wal_recovery.rs");
+        let registry = include_str!("../v2_lifecycle_work_registry.rs");
+        let exact_store = registry
+            .split_once("pub(crate) struct OpenedRecoveredWalValidateLedger")
+            .expect("locate exact recovered-WAL store cut")
+            .1
+            .split_once(
+                "/// Opaque failure from storage-authenticated recovered-parent reconstruction.",
+            )
+            .expect("locate end of exact recovered-WAL store transaction")
+            .0;
+        for required in [
+            "store: super::ledger::LifecycleLedgerStoreV1",
+            "opened: super::ledger::LifecycleLedgerV1",
+            "struct PersistedRecoveredWalValidateLedger<'registry>",
+            "struct InstalledRecoveredWalSignStorage<'registry>",
+            "persist_recovered_wal_repair",
+            "install_recovered_wal_sign",
+            "authenticate_durable_certified_fetch_startup(verified, body_store)",
+            "assemble_storage_only_with_recovered_wal_sign_and_durable_fetch_startup",
+            "install_alongside_recovered_wal_authority",
+            "open_with_exact_store_authority(authority, store, payload_store, recovery)",
+            "let body_store_identity = body_store.instance_identity()",
+            "let payload_store_identity = payload_store.instance_identity()",
+            "ProductionOpenedRecoveredWalSignLifecycleCut",
+        ] {
+            assert!(
+                exact_store.contains(required),
+                "exact recovered-WAL store transaction omitted {required}"
+            );
+        }
+        for forbidden in [
+            "ledger_root",
+            "LifecycleLedgerStoreV1::open(",
+            "fn into_parts(",
+            "pub(crate) fn store(",
+            "pub(crate) fn ledger(",
+        ] {
+            assert!(
+                !exact_store.contains(forbidden),
+                "exact recovered-WAL store transaction exposed {forbidden}"
+            );
+        }
+        let owner_seal = registry
+            .split_once("pub(crate) struct RecoveredWalProductionOwnerOpenV1")
+            .expect("locate recovered-WAL owner seal")
+            .1
+            .split_once("/// Opaque fail-stop coordinator-open error")
+            .expect("locate end of recovered-WAL owner seal")
+            .0;
+        for required in [
+            "verified: VerifiedHeightContext",
+            "registry_identity: ConcreteLifecycleWorkRegistryInstanceIdentity",
+            "V2BodyStoreInstanceIdentity",
+            "CertifiedServePayloadStoreInstanceIdentity",
+        ] {
+            assert!(
+                owner_seal.contains(required),
+                "recovered-WAL owner seal omitted {required}"
+            );
+        }
+        let authenticated_open = registry
+            .split_once("pub(crate) struct ProductionOpenedRecoveredWalSignLifecycleCut")
+            .expect("locate store-authenticated recovered open")
+            .1
+            .split_once("/// No-lifetime exact-open seal")
+            .expect("locate the end of the store-authenticated recovered open")
+            .0;
+        for required in [
+            "opened: OpenedRecoveredWalSignLifecycleCut<'registry>",
+            "verified: VerifiedHeightContext",
+            "V2BodyStoreInstanceIdentity",
+            "CertifiedServePayloadStoreInstanceIdentity",
+        ] {
+            assert!(
+                authenticated_open.contains(required),
+                "store-authenticated recovered open omitted {required}"
+            );
+        }
+        let owner_conversion = registry
+            .split_once("impl<'registry> ProductionOpenedRecoveredWalSignLifecycleCut<'registry>")
+            .expect("locate store-authenticated owner conversion")
+            .1
+            .split_once("#[cfg(test)]\nimpl OpenedRecoveredWalSignLifecycleCut")
+            .expect("locate the end of store-authenticated owner conversion")
+            .0;
+        assert!(owner_conversion.contains("fn into_production_owner_open(\n        self,"));
+        for forbidden in [
+            "verified: VerifiedHeightContext,",
+            "body_store_identity:",
+            "payload_store_identity:",
+        ] {
+            let signature = owner_conversion
+                .split_once("fn into_production_owner_open(")
+                .expect("locate owner conversion signature")
+                .1
+                .split_once(") ->")
+                .expect("owner conversion signature ends")
+                .0;
+            assert!(
+                !signature.contains(forbidden),
+                "owner conversion accepts caller-supplied authority {forbidden}"
+            );
+        }
+        let owner_assembly = ledger
+            .split_once("pub(in crate::sumeragi) fn from_recovered_wal_open(")
+            .expect("locate the recovered owner assembly")
+            .1
+            .split_once("#[cfg(test)]\nimpl ProductionLifecycleOwnerV1")
+            .expect("locate the end of recovered owner assembly")
+            .0;
+        assert!(
+            owner_assembly.contains("_permit: ProductionRecoveredLifecycleOwnerAssemblyPermitV1")
+        );
+
+        let wal_recovery = include_str!("../v2_lifecycle_wal_recovery.rs");
         for required in [
             "struct AuthenticatedRecoveredWalVoteProjection",
             "_permit: RecoveredWalCandidateProjectionPermit",

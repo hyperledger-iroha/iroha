@@ -889,7 +889,7 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "successor_begin": "f95cef32673e4198e82e345d2c65013bfbd4ce2b805d23577c1a1d4e095f8c2a",
     "successor_fail": "9b5397ef6ec9c1ec10afcd09f165cca3b490745fa5116bbcc987195d8f665164",
     # Refresh after atomic-reservation work stops touching v2_runner.rs.
-    "successor_retry": "6891e48b93cba8622846afda4f0f08fb5efaa7fb98f5d58d5cfb791ce64cc203",
+    "successor_retry": "18d0d9f57698c98fed549b3901c76f2f7750f0066c65eced99b4a4e9b2acb255",
     "historical_certificate": "9028b1db75d71c3ab5e72573e5c3e7b46d92c0ffe4a1cd1805ebfde379fbdbfa",
     "historical_body": "61abf0bd81035ebb5776a4a8893fd955249d6b2dfc2dcb23904749e75e71de79",
     "terminal_application": "be93d5b4fb78680ddab5a473fb2f54741dda8ef5d6a86e49003ec7e86e64cdc2",
@@ -49471,7 +49471,7 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "replayed_proposal_sign": (
         "760229a1544f797631e86183706e70f32ac34534c03fd30d2db445f4e37e7db5"
     ),
-    "run_inner": "ab23dad98c55d25f940f2da39ba7c053e6a20fa3d27fa7ed87900a0dd31ee0fe",
+    "run_inner": "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca",
     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner": (
         "6799b44549fe649a8253b718b8f3ba76fcce296e594f41e212d9c8c7e3bc3d23"
     ),

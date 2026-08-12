@@ -1215,6 +1215,57 @@ fn test_successor_authority(
     DurableSuccessorActivationAuthority::for_test(predecessor, successor_context_id)
 }
 
+fn test_recovered_complete_tip_authority(
+    context: &wire::HeightContext,
+    successor_context_id: wire::HeightContextId,
+    label: &[u8],
+    predecessor_root: &std::path::Path,
+) -> RecoveredCompleteTipActivationAuthority {
+    let subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(
+            [b"recovered complete-tip block", label].concat(),
+        )),
+        payload_hash: Hash::new([b"recovered complete-tip payload", label].concat()),
+    };
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let artifact = wire::finality::V2FinalityArtifact::new(
+        context.clone(),
+        subject,
+        wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                Hash::new(b"recovered complete-tip parent state"),
+                Hash::new(b"recovered complete-tip post state"),
+                Hash::new(b"recovered complete-tip writes"),
+                1,
+                Hash::new(b"recovered complete-tip executed block"),
+            ),
+            signers: Vec::new(),
+            aggregate_signature: Vec::new(),
+        },
+        Vec::new(),
+    );
+    let receipt = KuraV2CommitReceipt::for_test(&artifact);
+    let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt)
+        .expect("synthetic complete-tip artifact and receipt match exactly");
+    RecoveredCompleteTipActivationAuthority::authenticate_for_lifecycle_test(
+        artifact,
+        receipt,
+        successor_context_id,
+        test_successor_authority(predecessor, successor_context_id),
+        predecessor_root,
+    )
+    .expect("synthetic complete-tip activation matches its exact durable evidence")
+}
+
 fn valid_ingress_probe() -> BlockMessage {
     let validator = PeerId::new(
         KeyPair::try_from_seed(vec![0xD7; 32], Algorithm::BlsNormal)

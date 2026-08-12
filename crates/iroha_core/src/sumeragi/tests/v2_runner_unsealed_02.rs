@@ -530,9 +530,17 @@ fn replayed_proposal_sign_reserves_only_the_exact_current_lock_owner() {
 
 #[test]
 fn outer_ingress_batch_services_completions_and_runtime_before_every_ingress() {
-    let (context, _keys) = context();
+    let (context, _) = context();
+    let collect = |limit| {
+        let mut cursor = outer_ingress_turns(limit, context.id(), context.height);
+        let mut turns = Vec::new();
+        while let Some(turn) = cursor.next_current() {
+            turns.push(turn.turn());
+        }
+        turns
+    };
     assert_eq!(
-        outer_ingress_turns(3, context.id(), context.height).collect::<Vec<_>>(),
+        collect(3),
         vec![
             OuterIngressTurn::Completion,
             OuterIngressTurn::Runtime,
@@ -546,7 +554,7 @@ fn outer_ingress_batch_services_completions_and_runtime_before_every_ingress() {
         ]
     );
     assert_eq!(
-        outer_ingress_turns(0, context.id(), context.height).collect::<Vec<_>>(),
+        collect(0),
         vec![
             OuterIngressTurn::Completion,
             OuterIngressTurn::Runtime,
@@ -862,83 +870,47 @@ fn successor_activation_is_published_only_after_ingress_is_open() {
 }
 
 #[test]
-fn complete_tip_recovery_uses_the_same_live_successor_boundary() {
+fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
     let _guard = super::super::status::rbc_status_test_guard();
     super::super::status::clear_v2_status();
-    let (parent_context, _) = context();
+    let (parent_context, keys) = context();
     let ready = AtomicBool::new(false);
     let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
     ingress
         .configure_roster(std::iter::empty())
         .expect("configure untrusted test lane");
+    let directory = TempDir::new().expect("temporary unretired CompleteTip lifecycle root");
 
     let mut successor_context = parent_context.clone();
     successor_context.height += 1;
-    let mut successor = runner_status(&successor_context);
-    successor.last_committed_height = parent_context.height;
-    successor.liveness.generation = successor_context.height;
-    successor.liveness.last_progress = Some(wire::SumeragiV2ProgressTransitionStatus {
-        generation: successor.liveness.generation,
-        round: wire::ConsensusRound {
-            context_id: successor.height_context_id,
-            height: successor.height,
-            view: successor.view,
-        },
-        transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
-        age_ms: 0,
-    });
-    let output_guard = ConsensusOutputGuard::isolated();
-    let foreign_context_id =
-        wire::HeightContextId(HashOf::<wire::HeightContext>::from_untyped_unchecked(
-            Hash::new(b"foreign recovered successor context"),
-        ));
-    let predecessor = test_predecessor(&parent_context, b"complete tip recovery");
-    let foreign_activation =
-        PendingSuccessorActivation::recovered(RecoveredSuccessorActivationAuthority::CompleteTip(
-            test_successor_authority(predecessor, foreign_context_id),
-        ))
-        .expect("authenticate complete-tip retry lifecycle");
-    assert!(
-        open_ingress_for_active_height(
-            output_guard.as_ref(),
-            &ready,
-            &ingress,
-            Some((foreign_activation, successor.clone())),
-        )
-        .is_err(),
-        "recovery cannot authorize a same-height snapshot from another context"
-    );
+    let error = PendingSuccessorActivation::recovered(
+        RecoveredSuccessorActivationAuthority::CompleteTip(
+            test_recovered_complete_tip_authority(
+                &parent_context,
+                successor_context.id(),
+                b"exact recovered successor context",
+                directory.path(),
+            ),
+        ),
+        &keys[0],
+    )
+    .expect_err("CompleteTip cannot form activation before exact predecessor retirement");
+    assert!(matches!(
+        error,
+        V2RunnerError::CompleteTipPredecessorStorage(_)
+    ));
     assert!(!ready.load(Ordering::Acquire));
     assert!(
         super::super::status::v2_status().is_none(),
-        "rejected recovery must not publish a successor"
+        "unretired CompleteTip recovery must not publish successor status"
     );
-
-    let activation =
-        PendingSuccessorActivation::recovered(RecoveredSuccessorActivationAuthority::CompleteTip(
-            test_successor_authority(predecessor, successor.height_context_id),
-        ))
-        .expect("authenticate complete-tip retry lifecycle");
-    open_ingress_for_active_height(
-        output_guard.as_ref(),
-        &ready,
-        &ingress,
-        Some((activation, successor.clone())),
-    )
-    .expect("open recovered successor");
-
-    assert!(ready.load(Ordering::Acquire));
-    let active = super::super::status::v2_status().expect("recovered successor status");
-    assert_eq!(active.height, successor.height);
-    assert_eq!(active.last_committed_height, parent_context.height);
-    assert!(matches!(
-        active.liveness.last_progress,
-        Some(wire::SumeragiV2ProgressTransitionStatus {
-            transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
-            ..
-        })
-    ));
-    close_ingress_for_rollover(&ready, &ingress);
+    assert!(
+        matches!(
+            ingress.push(missing_ancestry_response(6)),
+            Err(FairV2IngressPushError::Closed(_))
+        ),
+        "unretired CompleteTip recovery must leave ingress closed"
+    );
     super::super::status::clear_v2_status();
 }
 

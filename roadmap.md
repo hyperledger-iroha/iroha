@@ -65,6 +65,143 @@ regeneration from a clean exact candidate; the dirty unsigned development
 checkout is not release provenance. The outstanding revision-4 work is limited
 to:
 
+- At runner cutover, replace the lexical Kura storage-root handoff with an
+  opened Kura-root directory capability which mints the existing opened
+  SafetyWal directory owner. The current seam already rejects a final `wal/`
+  symlink and every post-open parent/leaf substitution, and all WAL-adjacent
+  production I/O is descriptor-relative, but pre-open ancestor substitution
+  is not yet physically joined to Kura's instance identity. Add the equivalent
+  fail-closed handle-relative implementation before enabling the adjacent
+  serviced-candidate and leader-wire stores on non-Unix targets; basic WAL
+  recovery and append retain their legacy portable path fallback meanwhile.
+- Wire the unified consuming V1 lifecycle-owner factory into the serialized
+  runner so the retained verified context, coordinator, concrete registry,
+  Certified-Serve payload store, and body store become the sole production
+  execution owner. Startup now privately selects exactly one of no WAL
+  authority, recovered phase-vote repair, recovered control-Sign repair, or
+  recovered Decision-Fetch repair.
+  Exact `ProposalIntent -> SignProposal` and
+  `TimeoutIntent -> SignTimeoutVote` restart paths authenticate the terminal
+  WAL frontier independently, then retain the latest exact frame owning the
+  reducer's current signature through checked LedgerV1 admission, concrete
+  carrier installation, and the final Fetch/Serve/Producer open. Identical
+  repeated intents select the later match, and terminal frames may instead own
+  queued Prepare/Commit signatures. A historical Commit remains eligible under
+  the current later-view tag only with its exact active-lock `LockAndCommit`
+  PrepareQC lineage. The runner's already-open body store must first consume
+  semantic marker replay into the sole move-only startup cut; the production
+  factory has no root-reopen alternative. Authenticated height recovery now
+  mints one move-only storage authority binding the verified context, exact
+  Kura instance, context-addressed ledger/body roots, and authenticated
+  genesis-or-rotating signature policy. The same recovery boundary also
+  retains the universal genesis account derived from its authenticated genesis
+  key; launch releases that account only after rechecking the exact Kura
+  instance. The same seal now retains the lexically Kura-derived safety-WAL and
+  chunk paths; the factory binds the adapter's held WAL before store side effects, and launch
+  internally restores one ordinal source, folds producer and leader-wire
+  high-watermarks, opens the gate from the owner-held body store, binds it to
+  the still-closed ingress, and retains RAII unbinding ownership. Raw paths,
+  ordinals, and receipts are no longer launch inputs. The authenticated adapter
+  startup retains its validation frontier internally and provides in production
+  only one consuming WAL-bound leader-wire launch authority, so neither the
+  adapter nor replay batch can be extracted.
+  Residual and WAL-projection
+  mismatches fail before that cut is unsealed and before Serve or Ledger opens,
+  while status remains unpublished in the opaque owner. A sealed consuming
+  launch now transfers that owner's exact body store through the runtime and
+  executor into the I/O worker. Staged-genesis verification seals the exact
+  signed body into a move-only recovery token, and launch may install only
+  that optional token before worker start. It verifies the store/output identities, and
+  leaves only the store-instance seal in the owner; the runner must consume
+  this launch and publish status only after clocks and authenticated ingress
+  are live. CompleteTip retirement now retains the actual opened canonical H+1
+  ledger handle/frame and can consume an unlaunched lifecycle owner into an
+  opaque exact join only after rechecking its verified context/parent QC,
+  ledger target and projection, body and Serve roots, the exact post-prune
+  authenticated Serve cut against a fresh bounded directory census, adapter
+  context, and concrete registry. That bound-owner seal now consumes the sole
+  generic owner launch and returns another opaque wrapper which retains the
+  running H+1 stack together with its retired-H authority. Wire that complete
+  wrapper into the later one-shot activation; do not unwrap it into the generic
+  successor publisher.
+  No caller-supplied branch or recovery cut remains. The owner now has a
+  sealed scheduler-input factory for the complete directly owned Ready subset:
+  closed Validate completions reattest
+  through the registry and raw rank construction is unavailable. Certified
+  Fetch now also has a consuming locked I/O-capacity transaction joining the
+  live executor mode, ingress selector/lane/source, concrete registry carrier,
+  and runner-reach observation, followed by the exact `n + 1` Blocked command
+  fence and existing `n + 2` durable completion. It currently rejects
+  production use because the runner still follows its independent
+  adapter/body-store/service construction path. Replace that construction
+  with the landed consuming owner-to-I/O-worker launch, then call the planner
+  only from the runner's live current-Ingress cursor and delete the old launch
+  surface in the same cut.
+  Certified-Serve startup now installs exact shared-family Serve and
+  ProducerTurn carriers, and an unwired selector-bound fresh transaction
+  fsyncs its payload before atomically staging LedgerV1 plus both carriers.
+  That fresh transaction deliberately accepts only the startup-derived exact
+  Fetch/Serve/Producer census, optionally beside one exclusive phase-vote,
+  control-Sign, or Decision-Fetch WAL carrier. During runner cutover, replace
+  this bounded census
+  with the exhaustive all-kind
+  coordinator/registry oracle and wire the sealed selector target into the
+  owner. The receipt-free terminal owner transaction now closes payload store,
+  coordinator, registry, and LedgerV1 ownership and performs the exact
+  Serve/Producer carrier replacement or removal; runner cutover must transfer
+  body-store completion authority to the worker without exposing a receipt or
+  raw parts API. ExecuteBody Validate remains typed unsupported. Then delete the
+  selected-Serve episode/witness/latch and runtime lifecycle-ordinal machinery.
+  Run the phase-vote/control-Sign/Decision-Fetch end-to-end owner factory and
+  the existing
+  empty/two-Fetch/terminal-Validate-plus-Serve startup regressions, including
+  steady and payload-store-ahead terminal Serve, once the active formal
+  validation process releases the build lane. Decision Fetch now has an exact
+  certificate-only V1 origin for its absent manifest and enters the complete
+  Ledger/registry/coordinator startup census with exact no-rewrite coalescing;
+  quarantined markers cannot cross the revalidated-store seal. A matching
+  promoted success detaches into an opaque same-store/full-context cut;
+  promoted or quarantined deterministic rejection cannot be treated as refetch
+  or Apply authority. Decision Apply now consumes the sealed Decision-Fetch
+  authority and exact semantically revalidated BodyFrame cut, drives the fixed
+  reducer body sequence, publishes or exact-stutters the complete four-row
+  LedgerV1 successor, installs the final live Apply carrier, and reconstructs
+  that carrier during storage-only restart. Its opaque bounded-I/O attestation
+  now drives a dedicated worker command and guarded result without
+  manufacturing a runtime ownership sidecar. Applied completion rejoins the
+  exact claimed carrier and commits Kura -> LedgerV1 ->
+  coordinator/registry/adapter/executor -> worker acknowledgement in durable
+  order. The typed missing-sidecar retry now republishes only the unchanged
+  task under its existing dedicated key while both fail-stop guards remain
+  armed. Settlement first registers the exact round/subject/reference in the
+  lane recovery journal. Its stable keyed owner preserves each decided carrier
+  across executor cleanup, retains terminal invalid-entry evidence outside the
+  generic drain, and dispatches only the next fair matching request through
+  the exact paired service/lane endpoints. Retry reauthenticates that local
+  sidecar before reserving Consensus capacity; unavailable sidecar or capacity
+  returns the whole owner unchanged. Queue-level regressions now pin the exact
+  keyed retry transfer and both capacity/barrier non-mutation cases. Add
+  production-shaped dispatch/settlement/sidecar-driver regressions. CompleteTip
+  recovery now retains its full Kura artifact and receipt instead of a lossy
+  predecessor hash projection, and terminal Apply has a separate exact
+  four-row ledger oracle which cannot mint a live carrier. CompleteTip recovery
+  now retains verified H and derives private context-addressed H/H+1 lifecycle
+  targets plus the predecessor body-store root/signature policy from the same
+  Kura instance; a copied predecessor frame at another root is rejected. The
+  production disk-only retirement transaction is wired before ingress: it
+  consumes receipt-refreshed Certified-Serve terminal updates, cancels every
+  remaining live row, clears producer debt, fsyncs/reloads H, then initializes
+  H+1 at the retained ordinal high-water or authenticates a later exact
+  descendant above that floor. A dedicated move-only retired token is retained
+  but cannot publish status: runner preflight stays closed until the sealed H+1
+  lifecycle owner consumes that canonical successor frame, and that rejection
+  precedes every legacy H+1 adapter/worker/output constructor. Its bound launch
+  now consumes the generic owner-to-I/O transaction without exposing either
+  half, retaining the launched stack and retired-H authority in one typed
+  activation prerequisite. Next, consume that wrapper from the runner,
+  reconcile the retained H+1 ledger, add the dedicated typed publisher, and
+  remove the independent startup path; then add the separate uninterrupted
+  live-owner rollover transaction.
 - Close the autonomous carrier terminal-gating, signed-bootstrap roll-forward,
   and lifecycle-retention release gate from one final source seal. Run the
   focused Kura and Sumeragi regressions, build the optimized `irohad` and
@@ -762,7 +899,7 @@ modules and `525/525` focused `G-UNIT` entries. Its canonical 526-line TSV has
 SHA-256
 `dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
 The separate canonical production module/test TSV has SHA-256
-`df90ef7d94284bc805ff55ead6c6d938ba0f681a1d39e7b929fc275e8019aefa`;
+`07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf`;
 the newest rows bind crash-safe autonomous lifecycle terminal completion,
 startup reconciliation before lane-work activation, and the exact pre-mutation
 terminal-sweep partition. The duplicate inline V2 core network simulations

@@ -15,7 +15,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
         mpsc,
     },
     thread,
@@ -85,11 +85,13 @@ use super::{
         BlockMessage, BlockMessageWire, KuraReplicaAdvertV1, LaneHistoricalRecoveryPayloadV1,
         LaneHistoricalRecoveryRequestV1, LaneHistoricalRecoveryResponseV1,
     },
-    output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
-    v2_apply::V2ApplyService,
+    output_guard::{ConsensusFailStopOperation, ConsensusOutputGuard, ConsensusOutputPermit},
+    v2_apply::{
+        RecoveredDecisionApplyTaskV1, RecoveredDecisionApplyWorkerResultV1, V2ApplyService,
+    },
     v2_body_store::{
         BodyStoreCompletion, BodyValidationCompletion, V2BodyRetirementJob, V2BodyStore,
-        ValidatedBodyReceipt,
+        V2BodyStoreInstanceIdentity, ValidatedBodyReceipt,
     },
     v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession, encode_payload},
     v2_effects::{
@@ -101,12 +103,20 @@ use super::{
         PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor, V2EffectServices,
     },
     v2_lane_work::{
-        DurableLaneRolloverAuthority, V2LaneWorkEffect, durable_historical_lane_output_source_hash,
-        lane_output_identity,
+        DurableLaneRolloverAuthority, V2LaneWorkAdapter, V2LaneWorkEffect,
+        durable_historical_lane_output_source_hash, lane_output_identity,
+    },
+    v2_lifecycle_coordinator::{
+        AuthenticatedSchedulerInputsFactory, CertifiedFetchBodyPersistenceCompletion,
+        CertifiedFetchBodyPersistenceId, CertifiedFetchBodyPersistenceTask,
+        LifecycleIngressIoTargetKind, LifecycleIngressIoTargetSeal,
+        PreparedLifecycleIngressSelector, PreparedRecoveredDecisionApplyDispatch,
+        ProductionV2CompletionObserverActivationPermitV1, RecoveredDecisionApplyDispatchKeyV1,
     },
     v2_runtime::{
         ExactServePredecessorCompletionEvidence, ExactServePredecessorEpisodeWitness,
         LeaderWireRuntimeTerminal, RuntimeLifecycleOrdinalSource, RuntimeQueueLaneSnapshot,
+        SerializedV2Runtime,
     },
     v2_transport::{
         AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk,
@@ -285,8 +295,12 @@ enum V2IoCommand {
         restore_outbound_payload: bool,
     },
     Store(BodyStoreTask),
+    PersistCertifiedFetchBody(CertifiedFetchBodyPersistenceTask),
     Validate(BodyValidationTask),
     Apply(ApplyTask),
+    RecoveredDecisionApply(RecoveredDecisionApplyTaskV1),
+    #[cfg(test)]
+    RecoveredDecisionApplyFixture(RecoveredDecisionApplyDispatchKeyV1),
     Serve {
         lifecycle_id: CertifiedServeLifecycleId,
         request: AuthenticatedCertifiedBodyRequest,
@@ -1181,9 +1195,14 @@ impl V2IoCommand {
     const fn admission_class(&self) -> V2IoAdmissionClass {
         match self {
             Self::Serve { .. } => V2IoAdmissionClass::Auxiliary,
-            Self::Sign { .. } | Self::Store(_) | Self::Validate(_) | Self::Apply(_) => {
-                V2IoAdmissionClass::Consensus
-            }
+            Self::Sign { .. }
+            | Self::Store(_)
+            | Self::PersistCertifiedFetchBody(_)
+            | Self::Validate(_)
+            | Self::Apply(_)
+            | Self::RecoveredDecisionApply(_) => V2IoAdmissionClass::Consensus,
+            #[cfg(test)]
+            Self::RecoveredDecisionApplyFixture(_) => V2IoAdmissionClass::Consensus,
             Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => {
                 V2IoAdmissionClass::Control
             }
@@ -1194,11 +1213,16 @@ impl V2IoCommand {
         match self {
             Self::Sign { task, .. } => Some(task.id()),
             Self::Store(task) => Some(task.id()),
+            Self::PersistCertifiedFetchBody(task) => Some(task.work_id()),
             Self::Validate(task) => Some(task.id()),
             Self::Apply(task) => Some(task.id()),
-            Self::Serve { .. } | Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => {
-                None
-            }
+            Self::RecoveredDecisionApply(_)
+            | Self::Serve { .. }
+            | Self::LoadCandidate { .. }
+            | Self::Retire(_)
+            | Self::Shutdown => None,
+            #[cfg(test)]
+            Self::RecoveredDecisionApplyFixture(_) => None,
         }
     }
 
@@ -1209,9 +1233,14 @@ impl V2IoCommand {
             Self::Store(task) => Some(task.lifecycle_ordinal()),
             Self::Validate(task) => Some(task.lifecycle_ordinal()),
             Self::Apply(task) => Some(task.lifecycle_ordinal()),
-            Self::Serve { .. } | Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => {
-                None
-            }
+            Self::RecoveredDecisionApply(task) => Some(task.dispatch_key().lifecycle_ordinal()),
+            #[cfg(test)]
+            Self::RecoveredDecisionApplyFixture(key) => Some(key.lifecycle_ordinal()),
+            Self::PersistCertifiedFetchBody(_)
+            | Self::Serve { .. }
+            | Self::LoadCandidate { .. }
+            | Self::Retire(_)
+            | Self::Shutdown => None,
         }
     }
 
@@ -1220,11 +1249,15 @@ impl V2IoCommand {
             Self::Serve { lifecycle_id, .. } => Some(*lifecycle_id),
             Self::Sign { .. }
             | Self::Store(_)
+            | Self::PersistCertifiedFetchBody(_)
             | Self::Validate(_)
             | Self::Apply(_)
+            | Self::RecoveredDecisionApply(_)
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
             | Self::Shutdown => None,
+            #[cfg(test)]
+            Self::RecoveredDecisionApplyFixture(_) => None,
         }
     }
 
@@ -1234,10 +1267,14 @@ impl V2IoCommand {
             Self::Store(_) => Some(V2IoCancellableKind::Store),
             Self::Validate(_) => Some(V2IoCancellableKind::Validate),
             Self::Apply(_)
+            | Self::RecoveredDecisionApply(_)
+            | Self::PersistCertifiedFetchBody(_)
             | Self::Serve { .. }
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
             | Self::Shutdown => None,
+            #[cfg(test)]
+            Self::RecoveredDecisionApplyFixture(_) => None,
         }
     }
 
@@ -1263,6 +1300,13 @@ impl V2IoCommand {
                     canonical_wire_hash: Hash::new(task.canonical_wire()),
                 },
             )),
+            Self::PersistCertifiedFetchBody(task) => Some((
+                task.work_id(),
+                V2IoWorkDescriptor::PersistCertifiedFetchBody {
+                    id: task.id(),
+                    response_hash: task.response_hash(),
+                },
+            )),
             Self::Validate(task) => Some((
                 task.id(),
                 V2IoWorkDescriptor::Validate {
@@ -1278,9 +1322,30 @@ impl V2IoCommand {
                     validated_receipt: task.validated_receipt().clone(),
                 },
             )),
-            Self::Serve { .. } | Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => {
-                None
-            }
+            Self::RecoveredDecisionApply(_)
+            | Self::Serve { .. }
+            | Self::LoadCandidate { .. }
+            | Self::Retire(_)
+            | Self::Shutdown => None,
+            #[cfg(test)]
+            Self::RecoveredDecisionApplyFixture(_) => None,
+        }
+    }
+
+    const fn recovered_decision_apply_key(&self) -> Option<RecoveredDecisionApplyDispatchKeyV1> {
+        match self {
+            Self::RecoveredDecisionApply(task) => Some(task.dispatch_key()),
+            #[cfg(test)]
+            Self::RecoveredDecisionApplyFixture(key) => Some(*key),
+            Self::Sign { .. }
+            | Self::Store(_)
+            | Self::PersistCertifiedFetchBody(_)
+            | Self::Validate(_)
+            | Self::Apply(_)
+            | Self::Serve { .. }
+            | Self::LoadCandidate { .. }
+            | Self::Retire(_)
+            | Self::Shutdown => None,
         }
     }
 }
@@ -1297,6 +1362,10 @@ enum V2IoWorkDescriptor {
         manifest_hash: HashOf<wire::PayloadManifest>,
         canonical_wire_len: usize,
         canonical_wire_hash: Hash,
+    },
+    PersistCertifiedFetchBody {
+        id: CertifiedFetchBodyPersistenceId,
+        response_hash: HashOf<wire::CertifiedBodyResponse>,
     },
     Validate {
         durable_receipt: super::v2_body_store::DurableBodyReceipt,
@@ -1322,7 +1391,7 @@ impl V2IoWorkDescriptor {
             Self::Sign { .. } => Some(V2IoCancellableKind::Sign),
             Self::Store { .. } => Some(V2IoCancellableKind::Store),
             Self::Validate { .. } => Some(V2IoCancellableKind::Validate),
-            Self::Apply { .. } => None,
+            Self::PersistCertifiedFetchBody { .. } | Self::Apply { .. } => None,
         }
     }
 }
@@ -1335,6 +1404,8 @@ impl V2IoWorkDescriptor {
 /// worker still consumes one physical FIFO, so admission never reorders work.
 struct V2IoAdmission {
     queued: AtomicUsize,
+    lifecycle_capacity_generation: AtomicU64,
+    lifecycle_capacity_generation_exhausted: AtomicBool,
     auxiliary_limit: usize,
     consensus_limit: usize,
     capacity: usize,
@@ -1348,6 +1419,7 @@ struct V2IoCompletionOwnership {
     service_debt: u64,
     requires_runtime_capacity: bool,
     runtime_lifecycle_ordinal: Option<u128>,
+    recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,
 }
 
 #[derive(Debug, Default)]
@@ -1365,6 +1437,8 @@ impl V2IoAdmission {
             .ok_or_else(|| "Sumeragi v2 I/O queue capacity overflow".to_owned())?;
         Ok(Self {
             queued: AtomicUsize::new(0),
+            lifecycle_capacity_generation: AtomicU64::new(0),
+            lifecycle_capacity_generation_exhausted: AtomicBool::new(false),
             auxiliary_limit: auxiliary_capacity,
             consensus_limit,
             capacity,
@@ -1382,6 +1456,8 @@ impl V2IoAdmission {
     fn unbounded_for_tests() -> Arc<Self> {
         Arc::new(Self {
             queued: AtomicUsize::new(0),
+            lifecycle_capacity_generation: AtomicU64::new(0),
+            lifecycle_capacity_generation_exhausted: AtomicBool::new(false),
             auxiliary_limit: usize::MAX,
             consensus_limit: usize::MAX,
             capacity: usize::MAX,
@@ -1421,6 +1497,28 @@ impl V2IoAdmission {
             previous != 0,
             "Sumeragi v2 I/O admission released an unreserved command"
         );
+        if self
+            .lifecycle_capacity_generation
+            .fetch_update(
+                AtomicOrdering::AcqRel,
+                AtomicOrdering::Acquire,
+                |generation| generation.checked_add(1),
+            )
+            .is_err()
+        {
+            self.lifecycle_capacity_generation_exhausted
+                .store(true, AtomicOrdering::Release);
+        }
+    }
+
+    fn lifecycle_capacity_generation(&self) -> u64 {
+        self.lifecycle_capacity_generation
+            .load(AtomicOrdering::Acquire)
+    }
+
+    fn lifecycle_capacity_generation_exhausted(&self) -> bool {
+        self.lifecycle_capacity_generation_exhausted
+            .load(AtomicOrdering::Acquire)
     }
 
     fn retain_completion(
@@ -1428,6 +1526,7 @@ impl V2IoAdmission {
         retained_at: Instant,
         requires_runtime_capacity: bool,
         runtime_lifecycle_ordinal: Option<u128>,
+        recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,
     ) {
         let mut state = self
             .completion_state
@@ -1442,6 +1541,7 @@ impl V2IoAdmission {
             service_debt: 0,
             requires_runtime_capacity,
             runtime_lifecycle_ordinal,
+            recovered_decision_apply,
         });
     }
 
@@ -1464,6 +1564,59 @@ impl V2IoAdmission {
         // Some unit seams inject directly into the raw channel. Production
         // sends always retain an ownership record before publication.
         let _ = state.owned.remove(position);
+    }
+
+    fn recovered_decision_apply_completion_is_exact(
+        &self,
+        key: RecoveredDecisionApplyDispatchKeyV1,
+    ) -> bool {
+        let state = self
+            .completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut matches = state.owned.iter().filter(|owned| {
+            owned.requires_runtime_capacity
+                && owned.runtime_lifecycle_ordinal == Some(key.lifecycle_ordinal())
+                && owned.recovered_decision_apply == Some(key)
+        });
+        matches.next().is_some() && matches.next().is_none()
+    }
+
+    fn transfer_recovered_decision_apply_completion(
+        &self,
+        key: RecoveredDecisionApplyDispatchKeyV1,
+    ) -> bool {
+        let mut state = self
+            .completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut positions = state
+            .owned
+            .iter()
+            .enumerate()
+            .filter_map(|(position, owned)| {
+                (owned.requires_runtime_capacity
+                    && owned.runtime_lifecycle_ordinal == Some(key.lifecycle_ordinal())
+                    && owned.recovered_decision_apply == Some(key))
+                .then_some(position)
+            });
+        let Some(position) = positions.next() else {
+            return false;
+        };
+        if positions.next().is_some() {
+            return false;
+        }
+        state.owned.remove(position).is_some()
+    }
+
+    fn acknowledge_recovered_decision_apply_completion(
+        &self,
+        key: RecoveredDecisionApplyDispatchKeyV1,
+    ) {
+        assert!(
+            self.transfer_recovered_decision_apply_completion(key),
+            "settled recovered Apply must retain one exact completion owner"
+        );
     }
 
     fn completion_requires_runtime_capacity_at(&self, position: usize) -> Option<bool> {
@@ -1530,6 +1683,46 @@ struct V2IoTrackedWork {
     state: V2IoWorkState,
 }
 
+#[derive(Debug)]
+struct V2IoTrackedRecoveredDecisionApplyV1 {
+    state: V2IoWorkState,
+}
+
+enum RecoveredDecisionApplyRetryQueueErrorV1<T> {
+    Unavailable(T),
+    InvalidOwner(T),
+}
+
+trait RecoveredDecisionApplyRetryTaskV1 {
+    fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1;
+
+    fn into_command(self) -> V2IoCommand;
+}
+
+impl RecoveredDecisionApplyRetryTaskV1 for RecoveredDecisionApplyTaskV1 {
+    fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
+        RecoveredDecisionApplyTaskV1::dispatch_key(self)
+    }
+
+    fn into_command(self) -> V2IoCommand {
+        V2IoCommand::RecoveredDecisionApply(self)
+    }
+}
+
+#[cfg(test)]
+struct RecoveredDecisionApplyRetryTaskFixtureV1(RecoveredDecisionApplyDispatchKeyV1);
+
+#[cfg(test)]
+impl RecoveredDecisionApplyRetryTaskV1 for RecoveredDecisionApplyRetryTaskFixtureV1 {
+    fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
+        self.0
+    }
+
+    fn into_command(self) -> V2IoCommand {
+        V2IoCommand::RecoveredDecisionApplyFixture(self.0)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V2IoServeState {
     /// Durable unsealed lifecycle admitted before selector visibility or
@@ -1581,6 +1774,8 @@ struct V2IoTrackedServe {
 struct V2IoCommandQueueState {
     commands: VecDeque<V2IoCommand>,
     work: BTreeMap<EffectWorkId, V2IoTrackedWork>,
+    recovered_decision_applies:
+        BTreeMap<RecoveredDecisionApplyDispatchKeyV1, V2IoTrackedRecoveredDecisionApplyV1>,
     serves: BTreeMap<CertifiedServeLifecycleId, V2IoTrackedServe>,
     serve_by_request: BTreeMap<HashOf<wire::CertifiedBodyRequest>, CertifiedServeLifecycleId>,
     /// One monotone high-watermark/lifecycle slot per signed requester and
@@ -1671,10 +1866,480 @@ struct V2IoCommandReceiver {
     queue: Arc<V2IoCommandQueue>,
 }
 
+/// Service-owned release-generation observation for one unavailable lifecycle
+/// target. It exposes neither queue depth nor an admission limit; retry is
+/// meaningful only after the same queue reports that a real release advanced
+/// this opaque observation.
+#[must_use = "capacity retry must wait for the service generation to advance"]
+pub(crate) struct LifecycleIoCapacityWait {
+    queue: Arc<V2IoCommandQueue>,
+    output_guard: Arc<ConsensusOutputGuard>,
+    target: LifecycleIngressIoTargetSeal,
+    observed_generation: u64,
+}
+
+/// Sealed liveness classification for one retained lifecycle capacity wait.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LifecycleIoCapacityWaitStatus {
+    /// The same connected service has not released capacity since capture.
+    SamePending,
+    /// The same connected service observed at least one real capacity release.
+    Released,
+    /// The same service reached the terminal release generation.
+    GenerationExhausted,
+    /// The retained authority no longer names a live matching service.
+    ForeignOrDisconnected,
+}
+
+impl LifecycleIoCapacityWait {
+    /// Classify retry liveness against the exact service which minted the wait.
+    pub(crate) fn status(&self, services: &ProductionV2Services) -> LifecycleIoCapacityWaitStatus {
+        let target_context = self.target.context();
+        let Some(io) = services.io.as_ref() else {
+            return LifecycleIoCapacityWaitStatus::ForeignOrDisconnected;
+        };
+        if !Arc::ptr_eq(&self.queue, &io.command_tx.queue)
+            || !Arc::ptr_eq(&self.output_guard, &services.output_guard)
+            || target_context.height() != services.context.height
+            || target_context.id().as_bytes() != services.context.id().0.as_ref()
+            || services.output_guard.restart_required()
+        {
+            return LifecycleIoCapacityWaitStatus::ForeignOrDisconnected;
+        }
+        let state = self.queue.lock();
+        if !state.sender_open || !state.receiver_open {
+            return LifecycleIoCapacityWaitStatus::ForeignOrDisconnected;
+        }
+        if self
+            .queue
+            .admission
+            .lifecycle_capacity_generation_exhausted()
+        {
+            return LifecycleIoCapacityWaitStatus::GenerationExhausted;
+        }
+        let status = match self
+            .queue
+            .admission
+            .lifecycle_capacity_generation()
+            .cmp(&self.observed_generation)
+        {
+            std::cmp::Ordering::Greater => LifecycleIoCapacityWaitStatus::Released,
+            std::cmp::Ordering::Equal => LifecycleIoCapacityWaitStatus::SamePending,
+            std::cmp::Ordering::Less => LifecycleIoCapacityWaitStatus::ForeignOrDisconnected,
+        };
+        if services.output_guard.restart_required() {
+            LifecycleIoCapacityWaitStatus::ForeignOrDisconnected
+        } else {
+            status
+        }
+    }
+}
+
+/// Borrow-bound exact target reservation in the one physical I/O FIFO.
+///
+/// The queue-state guard and hierarchical admission slot are acquired in one
+/// transaction and retained together. Consequently no producer can enter
+/// behind the target and the worker cannot drain a predecessor while planning
+/// observes the target's exact position. The production owner must either use
+/// the typed pre-plan abort or consume the reservation into the command family
+/// sealed by `target` after its complete scheduler preflight. Any other drop
+/// closes consensus output for restart before releasing the slot.
+#[must_use = "the exact I/O reservation must commit or use its typed pre-plan abort"]
+pub(crate) struct LifecycleIoCapacityReservation<'a> {
+    queue: &'a V2IoCommandQueue,
+    state: Option<std::sync::MutexGuard<'a, V2IoCommandQueueState>>,
+    operation: Option<ConsensusFailStopOperation<'a>>,
+    target: Option<LifecycleIngressIoTargetSeal>,
+    predecessor_debt: u64,
+}
+
+impl LifecycleIoCapacityReservation<'_> {
+    /// Return the exact frozen predecessor debt only to the sealed scheduler
+    /// factory capability. There is no raw production getter.
+    pub(crate) const fn authenticated_predecessor_debt(
+        &self,
+        _factory: &super::v2_lifecycle_coordinator::AuthenticatedSchedulerInputsFactory,
+    ) -> u64 {
+        self.predecessor_debt
+    }
+
+    /// Reject a repeated selected Fetch while its exact work id is still
+    /// queued, active, or awaiting completion acknowledgement.
+    pub(crate) fn preflight_selected_target_work_absent(&self) -> bool {
+        let target = self
+            .target
+            .as_ref()
+            .expect("live reservation retains its one-shot target");
+        let state = self
+            .state
+            .as_ref()
+            .expect("live reservation retains the queue guard");
+        !state
+            .work
+            .keys()
+            .copied()
+            .any(|work_id| target.matches_certified_fetch_work_id(work_id))
+    }
+
+    /// Verify that one prepared persistence command can consume this exact
+    /// target slot without any fallible queue mutation after planning.
+    pub(crate) fn preflight_certified_fetch_body_persistence(
+        &self,
+        task: &CertifiedFetchBodyPersistenceTask,
+    ) -> bool {
+        let target = self
+            .target
+            .as_ref()
+            .expect("live reservation retains its one-shot target");
+        if target.kind() != LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence
+            || !task.matches_ingress_identity(target.ingress_identity())
+            || !target.matches_certified_fetch_work_id(task.work_id())
+        {
+            return false;
+        }
+        let work_id = task.work_id();
+        let state = self
+            .state
+            .as_ref()
+            .expect("live reservation retains the queue guard");
+        self.preflight_selected_target_work_absent() && state.work.get(&work_id).is_none()
+    }
+
+    /// Abort before planning and restore the one-shot target into its exact
+    /// selector while releasing capacity under the retained queue lock.
+    pub(crate) fn abort_into_prepared(
+        mut self,
+        mut prepared: PreparedLifecycleIngressSelector,
+    ) -> PreparedLifecycleIngressSelector {
+        let target = self
+            .target
+            .take()
+            .expect("aborted reservation retains its one-shot target");
+        prepared
+            .restore_lifecycle_io_target(target)
+            .expect("reservation target must restore only into its source selector");
+        let state = self
+            .state
+            .take()
+            .expect("aborted reservation retains the queue guard");
+        self.queue.admission.release();
+        drop(state);
+        self.queue.ready.notify_all();
+        self.operation
+            .take()
+            .expect("aborted reservation retains its fail-stop operation")
+            .complete();
+        prepared
+    }
+
+    /// Consume the locked reservation into the preflighted exact persistence
+    /// command and publish the FIFO only after its ownership index is installed.
+    pub(crate) fn commit_certified_fetch_body_persistence(
+        mut self,
+        task: CertifiedFetchBodyPersistenceTask,
+    ) {
+        assert!(
+            self.preflight_certified_fetch_body_persistence(&task),
+            "reserved certified-Fetch command changed after exact preflight"
+        );
+        let work_id = task.work_id();
+        let descriptor = V2IoWorkDescriptor::PersistCertifiedFetchBody {
+            id: task.id(),
+            response_hash: task.response_hash(),
+        };
+        let mut state = self
+            .state
+            .take()
+            .expect("committed reservation retains the queue guard");
+        let replaced = state.work.insert(
+            work_id,
+            V2IoTrackedWork {
+                descriptor,
+                state: V2IoWorkState::Queued,
+            },
+        );
+        assert!(replaced.is_none(), "preflight forbids in-flight coalescing");
+        state
+            .commands
+            .push_back(V2IoCommand::PersistCertifiedFetchBody(task));
+        drop(state);
+        self.queue.ready.notify_all();
+        self.operation
+            .take()
+            .expect("committed reservation retains its fail-stop operation")
+            .complete();
+    }
+
+    #[cfg(test)]
+    fn cancel_before_plan_for_test(mut self) {
+        let state = self
+            .state
+            .take()
+            .expect("cancelled test reservation retains the queue guard");
+        self.queue.admission.release();
+        drop(state);
+        self.queue.ready.notify_all();
+        self.operation
+            .take()
+            .expect("cancelled test reservation retains its fail-stop operation")
+            .complete();
+    }
+}
+
+/// Locked Consensus-lane capacity for one exact recovered Decision Apply key.
+///
+/// The queue cut and output operation stay armed until the registry's prepared
+/// dispatch is consumed directly into the FIFO. No raw task or unreserved
+/// enqueue surface exists.
+#[must_use = "the recovered Decision Apply reservation must commit its prepared dispatch"]
+pub(in crate::sumeragi) struct RecoveredDecisionApplyCapacityReservationV1<'a> {
+    queue: &'a V2IoCommandQueue,
+    state: Option<std::sync::MutexGuard<'a, V2IoCommandQueueState>>,
+    operation: Option<ConsensusFailStopOperation<'a>>,
+    key: RecoveredDecisionApplyDispatchKeyV1,
+    predecessor_debt: u64,
+    predecessor_ordinal: Option<u128>,
+}
+
+impl RecoveredDecisionApplyCapacityReservationV1<'_> {
+    /// Return the exact frozen predecessor debt only to scheduler authority.
+    pub(in crate::sumeragi) const fn authenticated_predecessor_debt(
+        &self,
+        _factory: &AuthenticatedSchedulerInputsFactory,
+    ) -> u64 {
+        self.predecessor_debt
+    }
+
+    /// Recheck that the claimed registry projection names this exact reservation.
+    pub(in crate::sumeragi) fn preflight(
+        &self,
+        prepared: &PreparedRecoveredDecisionApplyDispatch<'_>,
+    ) -> bool {
+        let state = self
+            .state
+            .as_ref()
+            .expect("live recovered Apply reservation retains its queue cut");
+        prepared.dispatch_key() == self.key
+            && !state.recovered_decision_applies.contains_key(&self.key)
+    }
+
+    /// Atomically arm the registry dispatch and publish its dedicated worker command.
+    pub(in crate::sumeragi) fn commit(
+        mut self,
+        prepared: PreparedRecoveredDecisionApplyDispatch<'_>,
+    ) {
+        assert!(
+            self.preflight(&prepared),
+            "reserved recovered Decision Apply changed before queue publication"
+        );
+        let task = prepared.commit_for_worker();
+        assert_eq!(
+            task.dispatch_key(),
+            self.key,
+            "registry projection returned another recovered Apply dispatch"
+        );
+        let mut state = self
+            .state
+            .take()
+            .expect("committed recovered Apply reservation retains its queue cut");
+        let replaced = state.recovered_decision_applies.insert(
+            self.key,
+            V2IoTrackedRecoveredDecisionApplyV1 {
+                state: V2IoWorkState::Queued,
+            },
+        );
+        assert!(
+            replaced.is_none(),
+            "exact preflight forbids a duplicate dispatch"
+        );
+        state
+            .commands
+            .push_back(V2IoCommand::RecoveredDecisionApply(task));
+        drop(state);
+        self.queue.ready.notify_all();
+        self.operation
+            .take()
+            .expect("committed recovered Apply retains its fail-stop operation")
+            .complete();
+    }
+}
+
+impl Drop for RecoveredDecisionApplyCapacityReservationV1<'_> {
+    fn drop(&mut self) {
+        drop(self.operation.take());
+        if let Some(mut state) = self.state.take() {
+            self.queue.admission.release();
+            if let Some(predecessor_ordinal) = self.predecessor_ordinal {
+                let reservation = state
+                    .serve_ingress_reservation
+                    .as_mut()
+                    .expect("reserved recovered Apply predecessor retains its Serve ticket");
+                if let CertifiedServeRuntimeEpisodeState::Claimed {
+                    predecessor_ordinal: selected,
+                } = &mut reservation.runtime_episode
+                    && *selected == Some(predecessor_ordinal)
+                {
+                    *selected = None;
+                }
+            }
+            let materialized = self.queue.materialize_serve_barrier(&mut state);
+            drop(state);
+            if materialized {
+                self.queue.ready.notify_all();
+            }
+        }
+    }
+}
+
+/// Typed capacity result for the recovered Decision Apply Consensus lane.
+#[must_use = "the recovered Decision Apply capacity result must be consumed"]
+pub(in crate::sumeragi) enum RecoveredDecisionApplyCapacityCaptureV1<'a> {
+    /// The exact queue cut is reserved and ready for registry projection commit.
+    Reserved(RecoveredDecisionApplyCapacityReservationV1<'a>),
+    /// No Consensus position was available at the current release generation.
+    Unavailable,
+}
+
+/// Closed failure before recovered Decision Apply capacity can be retained.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum RecoveredDecisionApplyCapacityCaptureErrorV1 {
+    /// The dispatch key belongs to another immutable height context.
+    ForeignContext,
+    /// The height-local worker command corridor is closed.
+    Disconnected,
+    /// Canonical output admission already requires restart.
+    OutputClosed,
+    /// The exact queue position is not representable in the scheduler rank.
+    PositionOverflow,
+    /// The same closed carrier already owns queued, active, or pending work.
+    AlreadyDispatched,
+}
+
+impl Drop for LifecycleIoCapacityReservation<'_> {
+    fn drop(&mut self) {
+        // An incomplete reservation is fatal. Close output admission while the
+        // queue cut is still frozen so no new operation can cross a gap before
+        // rollback releases the reserved slot.
+        drop(self.operation.take());
+        if let Some(state) = self.state.take() {
+            self.queue.admission.release();
+            drop(state);
+            self.queue.ready.notify_all();
+        }
+    }
+}
+
+enum V2IoLifecycleCapacityCapture<'a> {
+    Reserved(LifecycleIoCapacityReservation<'a>),
+    Unavailable(LifecycleIoCapacityWait),
+}
+
+/// Failure before the I/O service can issue a target-capacity result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LifecycleIoCapacityCaptureFailure {
+    /// The prepared selector has no supported I/O target carrier.
+    InvalidTarget,
+    /// The selector belongs to another immutable height context.
+    ForeignContext,
+    /// Canonical output admission has already closed for restart.
+    OutputClosed,
+    /// The height-local I/O worker is absent or disconnected.
+    Disconnected,
+    /// The exact queue position is not representable in the scheduler rank.
+    PositionOverflow,
+    /// The service-owned release generation reached its terminal value.
+    GenerationExhausted,
+}
+
+/// Opaque atomic result retaining both the selector and its service authority.
+///
+/// Neither the reservation nor an unavailable wait can be separated from the
+/// selector that minted its one-shot target seal.
+#[must_use = "the prepared capacity transaction must enter owner planning or be dropped"]
+pub(crate) struct LifecycleIoCapacityCapture<'a> {
+    outcome: LifecycleIoCapacityOutcome<'a>,
+}
+
+enum LifecycleIoCapacityOutcome<'a> {
+    Reserved {
+        reservation: LifecycleIoCapacityReservation<'a>,
+        prepared: PreparedLifecycleIngressSelector,
+    },
+    Unavailable {
+        wait: LifecycleIoCapacityWait,
+        prepared: PreparedLifecycleIngressSelector,
+    },
+}
+
+/// Capacity authority opened only by the sealed scheduler factory permit.
+pub(crate) enum AuthenticatedLifecycleIoCapacity<'a> {
+    /// A live locked slot retains the complete selected carrier.
+    Reserved {
+        /// Exact service reservation.
+        reservation: LifecycleIoCapacityReservation<'a>,
+        /// Complete selector which minted the reservation target.
+        prepared: PreparedLifecycleIngressSelector,
+    },
+    /// No slot was available at the retained release generation.
+    Unavailable {
+        /// Opaque service generation wait.
+        wait: LifecycleIoCapacityWait,
+        /// Complete selector retained with that wait.
+        prepared: PreparedLifecycleIngressSelector,
+    },
+}
+
+impl<'a> LifecycleIoCapacityCapture<'a> {
+    /// Open this transaction only for the non-clone sealed scheduler factory.
+    pub(crate) fn into_authenticated(
+        self,
+        _factory: &AuthenticatedSchedulerInputsFactory,
+    ) -> AuthenticatedLifecycleIoCapacity<'a> {
+        match self.outcome {
+            LifecycleIoCapacityOutcome::Reserved {
+                reservation,
+                prepared,
+            } => AuthenticatedLifecycleIoCapacity::Reserved {
+                reservation,
+                prepared,
+            },
+            LifecycleIoCapacityOutcome::Unavailable { wait, prepared } => {
+                AuthenticatedLifecycleIoCapacity::Unavailable { wait, prepared }
+            }
+        }
+    }
+}
+
+/// Ownership-preserving failure before any capacity authority was acquired.
+#[must_use = "the complete selector remains available for a corrected attempt"]
+pub(crate) struct LifecycleIoCapacityCaptureError {
+    failure: LifecycleIoCapacityCaptureFailure,
+    prepared: PreparedLifecycleIngressSelector,
+}
+
+impl LifecycleIoCapacityCaptureError {
+    /// Return the closed service failure classification.
+    pub(crate) const fn failure(&self) -> LifecycleIoCapacityCaptureFailure {
+        self.failure
+    }
+
+    /// Recover the complete selector with its one-shot target restored.
+    pub(crate) fn into_prepared(self) -> PreparedLifecycleIngressSelector {
+        self.prepared
+    }
+}
+
 enum V2IoTrySendError {
     Full(V2IoCommand),
-    Disconnected,
-    ConflictingWorkId { work_id: EffectWorkId },
+    Disconnected(V2IoCommand),
+    ConflictingWorkId {
+        work_id: EffectWorkId,
+        command: V2IoCommand,
+    },
+    UnreservedRecoveredDecisionApply {
+        key: RecoveredDecisionApplyDispatchKeyV1,
+        command: V2IoCommand,
+    },
 }
 
 enum CertifiedServeCommit {
@@ -1693,10 +2358,14 @@ impl std::fmt::Debug for V2IoTrySendError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Full(_) => formatter.write_str("Full(..)"),
-            Self::Disconnected => formatter.write_str("Disconnected"),
-            Self::ConflictingWorkId { work_id } => formatter
+            Self::Disconnected(_) => formatter.write_str("Disconnected(..)"),
+            Self::ConflictingWorkId { work_id, .. } => formatter
                 .debug_struct("ConflictingWorkId")
                 .field("work_id", work_id)
+                .finish(),
+            Self::UnreservedRecoveredDecisionApply { key, .. } => formatter
+                .debug_struct("UnreservedRecoveredDecisionApply")
+                .field("key", key)
                 .finish(),
         }
     }
@@ -2307,6 +2976,7 @@ fn build_v2_io_command_channel(
         state: Mutex::new(V2IoCommandQueueState {
             commands: VecDeque::with_capacity(capacity.min(1_024)),
             work: BTreeMap::new(),
+            recovered_decision_applies: BTreeMap::new(),
             serves,
             serve_by_request,
             serve_by_family,
@@ -2853,6 +3523,166 @@ impl V2IoCommandQueue {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn capture_lifecycle_capacity<'a>(
+        self: &'a Arc<Self>,
+        operation: ConsensusFailStopOperation<'a>,
+        output_guard: Arc<ConsensusOutputGuard>,
+        target: LifecycleIngressIoTargetSeal,
+    ) -> Result<
+        V2IoLifecycleCapacityCapture<'a>,
+        (
+            LifecycleIoCapacityCaptureFailure,
+            LifecycleIngressIoTargetSeal,
+        ),
+    > {
+        let class = match target.kind() {
+            LifecycleIngressIoTargetKind::CertifiedServe => V2IoAdmissionClass::Auxiliary,
+            LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence => {
+                V2IoAdmissionClass::Consensus
+            }
+        };
+        let state = self.lock();
+        if !state.sender_open || !state.receiver_open {
+            drop(operation);
+            return Err((LifecycleIoCapacityCaptureFailure::Disconnected, target));
+        }
+        if self.admission.lifecycle_capacity_generation_exhausted() {
+            drop(operation);
+            return Err((
+                LifecycleIoCapacityCaptureFailure::GenerationExhausted,
+                target,
+            ));
+        }
+        let predecessor_debt = match u64::try_from(state.commands.len()) {
+            Ok(debt) => debt,
+            Err(_) => {
+                drop(operation);
+                return Err((LifecycleIoCapacityCaptureFailure::PositionOverflow, target));
+            }
+        };
+        if state.commands.len() >= self.capacity || !self.admission.try_reserve(class) {
+            let observed_generation = self.admission.lifecycle_capacity_generation();
+            drop(state);
+            operation.complete();
+            return Ok(V2IoLifecycleCapacityCapture::Unavailable(
+                LifecycleIoCapacityWait {
+                    queue: Arc::clone(self),
+                    output_guard,
+                    target,
+                    observed_generation,
+                },
+            ));
+        }
+        Ok(V2IoLifecycleCapacityCapture::Reserved(
+            LifecycleIoCapacityReservation {
+                queue: self.as_ref(),
+                state: Some(state),
+                operation: Some(operation),
+                target: Some(target),
+                predecessor_debt,
+            },
+        ))
+    }
+
+    fn capture_recovered_decision_apply_capacity<'a>(
+        self: &'a Arc<Self>,
+        operation: ConsensusFailStopOperation<'a>,
+        key: RecoveredDecisionApplyDispatchKeyV1,
+    ) -> Result<
+        RecoveredDecisionApplyCapacityCaptureV1<'a>,
+        RecoveredDecisionApplyCapacityCaptureErrorV1,
+    > {
+        let mut state = self.lock();
+        if !state.sender_open || !state.receiver_open {
+            drop(operation);
+            return Err(RecoveredDecisionApplyCapacityCaptureErrorV1::Disconnected);
+        }
+        if state.recovered_decision_applies.contains_key(&key) {
+            drop(operation);
+            return Err(RecoveredDecisionApplyCapacityCaptureErrorV1::AlreadyDispatched);
+        }
+        let predecessor_debt = match u64::try_from(state.commands.len()) {
+            Ok(debt) => debt,
+            Err(_) => {
+                drop(operation);
+                return Err(RecoveredDecisionApplyCapacityCaptureErrorV1::PositionOverflow);
+            }
+        };
+        let command_ordinal = key.lifecycle_ordinal();
+        let exact_predecessor_ordinal =
+            state
+                .serve_ingress_reservation
+                .as_ref()
+                .and_then(|reservation| {
+                    if command_ordinal >= reservation.id.0 {
+                        return None;
+                    }
+                    match reservation.runtime_episode {
+                        CertifiedServeRuntimeEpisodeState::Claimed {
+                            predecessor_ordinal: None,
+                        } => Some(command_ordinal),
+                        CertifiedServeRuntimeEpisodeState::Claimed {
+                            predecessor_ordinal: Some(existing),
+                        } if existing == command_ordinal => Some(command_ordinal),
+                        CertifiedServeRuntimeEpisodeState::Ready
+                        | CertifiedServeRuntimeEpisodeState::Claimed { .. }
+                        | CertifiedServeRuntimeEpisodeState::Complete => None,
+                    }
+                });
+        let exact_target_active = state.serve_ingress_reservation.is_some()
+            || !state.serve_ingress_waiters.is_empty()
+            || state.serve_barrier.is_some();
+        if exact_target_active && exact_predecessor_ordinal.is_none() {
+            operation.complete();
+            return Ok(RecoveredDecisionApplyCapacityCaptureV1::Unavailable);
+        }
+        let suspended_target = exact_predecessor_ordinal.is_some()
+            && self.suspend_materialized_serve_barrier_for_runtime_predecessor(&mut state);
+        if state.commands.len() >= self.capacity
+            || !self.admission.try_reserve(V2IoAdmissionClass::Consensus)
+        {
+            if suspended_target {
+                assert!(
+                    self.materialize_serve_barrier(&mut state),
+                    "failed recovered Apply reservation must restore its Serve placeholder"
+                );
+            }
+            operation.complete();
+            return Ok(RecoveredDecisionApplyCapacityCaptureV1::Unavailable);
+        }
+        if let Some(predecessor_ordinal) = exact_predecessor_ordinal {
+            let reservation = state
+                .serve_ingress_reservation
+                .as_mut()
+                .expect("recovered Apply predecessor retains its exact Serve ticket");
+            match &mut reservation.runtime_episode {
+                CertifiedServeRuntimeEpisodeState::Claimed {
+                    predecessor_ordinal: selected,
+                } => match selected {
+                    Some(existing) => assert_eq!(
+                        *existing, predecessor_ordinal,
+                        "one Serve turn cannot admit two causal lifecycle owners"
+                    ),
+                    None => *selected = Some(predecessor_ordinal),
+                },
+                CertifiedServeRuntimeEpisodeState::Ready
+                | CertifiedServeRuntimeEpisodeState::Complete => {
+                    unreachable!("recovered Apply predecessor escaped its claimed Serve turn")
+                }
+            }
+        }
+        Ok(RecoveredDecisionApplyCapacityCaptureV1::Reserved(
+            RecoveredDecisionApplyCapacityReservationV1 {
+                queue: self.as_ref(),
+                state: Some(state),
+                operation: Some(operation),
+                key,
+                predecessor_debt,
+                predecessor_ordinal: exact_predecessor_ordinal,
+            },
+        ))
     }
 
     fn begin_decision_serve_reconciliation(&self) -> Result<(), String> {
@@ -6121,10 +6951,13 @@ impl V2IoCommandQueue {
             command.serve_lifecycle_id().is_none(),
             "Serve commands require an atomic fair-ingress reservation"
         );
+        if let Some(key) = command.recovered_decision_apply_key() {
+            return Err(V2IoTrySendError::UnreservedRecoveredDecisionApply { key, command });
+        }
         let descriptor = command.work_descriptor();
         let mut state = self.lock();
         if !state.sender_open || !state.receiver_open {
-            return Err(V2IoTrySendError::Disconnected);
+            return Err(V2IoTrySendError::Disconnected(command));
         }
         let _ = self.materialize_serve_barrier(&mut state);
         if let Some((work_id, descriptor)) = &descriptor
@@ -6133,7 +6966,10 @@ impl V2IoCommandQueue {
             if existing.descriptor == *descriptor {
                 return Ok(());
             }
-            return Err(V2IoTrySendError::ConflictingWorkId { work_id: *work_id });
+            return Err(V2IoTrySendError::ConflictingWorkId {
+                work_id: *work_id,
+                command,
+            });
         }
         let command_lifecycle_ordinal = command.runtime_lifecycle_ordinal();
         let exact_predecessor_ordinal =
@@ -6290,6 +7126,14 @@ impl V2IoCommandQueue {
                     assert_eq!(tracked.state, V2IoWorkState::Queued);
                     tracked.state = V2IoWorkState::Active;
                 }
+                if let Some(key) = command.recovered_decision_apply_key() {
+                    let tracked = state
+                        .recovered_decision_applies
+                        .get_mut(&key)
+                        .expect("queued recovered Decision Apply must have an ownership record");
+                    assert_eq!(tracked.state, V2IoWorkState::Queued);
+                    tracked.state = V2IoWorkState::Active;
+                }
                 if let Some(lifecycle_id) = command.serve_lifecycle_id() {
                     let tracked = state
                         .serves
@@ -6343,6 +7187,14 @@ impl V2IoCommandQueue {
             assert_eq!(tracked.state, V2IoWorkState::Queued);
             tracked.state = V2IoWorkState::Active;
         }
+        if let Some(key) = command.recovered_decision_apply_key() {
+            let tracked = state
+                .recovered_decision_applies
+                .get_mut(&key)
+                .expect("queued recovered Decision Apply must have an ownership record");
+            assert_eq!(tracked.state, V2IoWorkState::Queued);
+            tracked.state = V2IoWorkState::Active;
+        }
         if let Some(lifecycle_id) = command.serve_lifecycle_id() {
             let tracked = state
                 .serves
@@ -6364,6 +7216,129 @@ impl V2IoCommandQueue {
         tracked.state = V2IoWorkState::CompletionPending;
     }
 
+    fn complete_recovered_decision_apply(
+        &self,
+        key: RecoveredDecisionApplyDispatchKeyV1,
+        result: &RecoveredDecisionApplyWorkerResultV1,
+    ) -> Result<(), String> {
+        let mut state = self.lock();
+        let tracked = state
+            .recovered_decision_applies
+            .get_mut(&key)
+            .ok_or_else(|| {
+                "completed recovered Decision Apply lost its lifecycle owner".to_owned()
+            })?;
+        if tracked.state != V2IoWorkState::Active || result.dispatch_key() != key {
+            return Err(
+                "completed recovered Decision Apply changed its exact dispatch material".to_owned(),
+            );
+        }
+        tracked.state = V2IoWorkState::CompletionPending;
+        Ok(())
+    }
+
+    fn retry_recovered_decision_apply<T: RecoveredDecisionApplyRetryTaskV1>(
+        &self,
+        task: T,
+    ) -> Result<(), RecoveredDecisionApplyRetryQueueErrorV1<T>> {
+        let key = task.dispatch_key();
+        let mut state = self.lock();
+        if !state.sender_open
+            || !state.receiver_open
+            || !self
+                .admission
+                .recovered_decision_apply_completion_is_exact(key)
+            || state
+                .recovered_decision_applies
+                .get(&key)
+                .is_none_or(|tracked| tracked.state != V2IoWorkState::CompletionPending)
+            || state
+                .commands
+                .iter()
+                .any(|command| command.recovered_decision_apply_key() == Some(key))
+        {
+            return Err(RecoveredDecisionApplyRetryQueueErrorV1::InvalidOwner(task));
+        }
+        let command_ordinal = key.lifecycle_ordinal();
+        let exact_predecessor_ordinal =
+            state
+                .serve_ingress_reservation
+                .as_ref()
+                .and_then(|reservation| {
+                    if command_ordinal >= reservation.id.0 {
+                        return None;
+                    }
+                    match reservation.runtime_episode {
+                        CertifiedServeRuntimeEpisodeState::Claimed {
+                            predecessor_ordinal: None,
+                        } => Some(command_ordinal),
+                        CertifiedServeRuntimeEpisodeState::Claimed {
+                            predecessor_ordinal: Some(existing),
+                        } if existing == command_ordinal => Some(command_ordinal),
+                        CertifiedServeRuntimeEpisodeState::Ready
+                        | CertifiedServeRuntimeEpisodeState::Claimed { .. }
+                        | CertifiedServeRuntimeEpisodeState::Complete => None,
+                    }
+                });
+        let exact_target_active = state.serve_ingress_reservation.is_some()
+            || !state.serve_ingress_waiters.is_empty()
+            || state.serve_barrier.is_some();
+        if exact_target_active && exact_predecessor_ordinal.is_none() {
+            return Err(RecoveredDecisionApplyRetryQueueErrorV1::Unavailable(task));
+        }
+        let suspended_target = exact_predecessor_ordinal.is_some()
+            && self.suspend_materialized_serve_barrier_for_runtime_predecessor(&mut state);
+        if state.commands.len() >= self.capacity
+            || !self.admission.try_reserve(V2IoAdmissionClass::Consensus)
+        {
+            if suspended_target {
+                assert!(
+                    self.materialize_serve_barrier(&mut state),
+                    "failed recovered Apply retry must restore its Serve placeholder"
+                );
+            }
+            return Err(RecoveredDecisionApplyRetryQueueErrorV1::Unavailable(task));
+        }
+        if let Some(predecessor_ordinal) = exact_predecessor_ordinal {
+            let reservation = state
+                .serve_ingress_reservation
+                .as_mut()
+                .expect("recovered Apply retry predecessor retains its exact Serve ticket");
+            match &mut reservation.runtime_episode {
+                CertifiedServeRuntimeEpisodeState::Claimed {
+                    predecessor_ordinal: selected,
+                } => match selected {
+                    Some(existing) => assert_eq!(
+                        *existing, predecessor_ordinal,
+                        "one Serve turn cannot retry two causal lifecycle owners"
+                    ),
+                    None => *selected = Some(predecessor_ordinal),
+                },
+                CertifiedServeRuntimeEpisodeState::Ready
+                | CertifiedServeRuntimeEpisodeState::Complete => {
+                    unreachable!("recovered Apply retry escaped its claimed Serve turn")
+                }
+            }
+        }
+        // Transfer the exact keyed completion slot back to the command FIFO
+        // while the same queue cut is still locked. The worker cannot publish
+        // the replacement completion before the old owner is gone.
+        assert!(
+            self.admission
+                .transfer_recovered_decision_apply_completion(key),
+            "locked recovered Apply retry must retain its exact completion owner"
+        );
+        state
+            .recovered_decision_applies
+            .get_mut(&key)
+            .expect("validated recovered Apply retry retains its command owner")
+            .state = V2IoWorkState::Queued;
+        state.commands.push_back(task.into_command());
+        drop(state);
+        self.ready.notify_all();
+        Ok(())
+    }
+
     fn acknowledge_completion(&self, work_id: EffectWorkId) {
         let mut state = self.lock();
         let tracked = state
@@ -6371,6 +7346,98 @@ impl V2IoCommandQueue {
             .remove(&work_id)
             .expect("delivered Sumeragi v2 completion must have an ownership record");
         assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
+    }
+
+    fn prepare_recovered_decision_apply_ack(
+        self: &Arc<Self>,
+        key: RecoveredDecisionApplyDispatchKeyV1,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> Result<RecoveredDecisionApplyWorkAckV1, String> {
+        let state = self.lock();
+        let tracked = state.recovered_decision_applies.get(&key).ok_or_else(|| {
+            "recovered Decision Apply completion lost its exact command owner".to_owned()
+        })?;
+        if tracked.state != V2IoWorkState::CompletionPending {
+            return Err(
+                "recovered Decision Apply completion crossed a non-pending command owner"
+                    .to_owned(),
+            );
+        }
+        if !self
+            .admission
+            .recovered_decision_apply_completion_is_exact(key)
+        {
+            return Err(
+                "recovered Decision Apply completion changed its bounded FIFO ownership".to_owned(),
+            );
+        }
+        drop(state);
+        Ok(RecoveredDecisionApplyWorkAckV1 {
+            queue: Arc::clone(self),
+            output_guard,
+            key,
+            armed: true,
+        })
+    }
+
+    fn acknowledge_recovered_decision_apply(&self, key: RecoveredDecisionApplyDispatchKeyV1) {
+        let mut state = self.lock();
+        let tracked = state
+            .recovered_decision_applies
+            .remove(&key)
+            .expect("settled recovered Decision Apply must retain its exact command owner");
+        assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
+    }
+
+    fn prepare_certified_fetch_body_persistence_ack(
+        self: &Arc<Self>,
+        completion: &CertifiedFetchBodyPersistenceCompletion,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> Result<CertifiedFetchBodyPersistenceWorkAck, String> {
+        let work_id = completion.work_id();
+        let descriptor = V2IoWorkDescriptor::PersistCertifiedFetchBody {
+            id: completion.id(),
+            response_hash: completion.response_hash(),
+        };
+        let state = self.lock();
+        let tracked = state.work.get(&work_id).ok_or_else(|| {
+            format!(
+                "persisted certified-Fetch body work {} lost its exact command owner",
+                work_id.get()
+            )
+        })?;
+        if tracked.state != V2IoWorkState::CompletionPending || tracked.descriptor != descriptor {
+            return Err(format!(
+                "persisted certified-Fetch body work {} changed its exact command owner",
+                work_id.get()
+            ));
+        }
+        drop(state);
+        Ok(CertifiedFetchBodyPersistenceWorkAck {
+            queue: Arc::clone(self),
+            output_guard,
+            work_id,
+            descriptor,
+            armed: true,
+        })
+    }
+
+    fn acknowledge_exact_lifecycle_completion(
+        &self,
+        work_id: EffectWorkId,
+        descriptor: &V2IoWorkDescriptor,
+    ) {
+        let mut state = self.lock();
+        let tracked = state
+            .work
+            .get(&work_id)
+            .expect("preflighted lifecycle completion retains its exact command owner");
+        assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
+        assert_eq!(&tracked.descriptor, descriptor);
+        state
+            .work
+            .remove(&work_id)
+            .expect("preflighted lifecycle completion work remains indexed");
     }
 
     fn close_sender(&self) {
@@ -6443,6 +7510,9 @@ impl V2IoCommandQueue {
         // records until the serialized handle drains and acknowledges them.
         state
             .work
+            .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
+        state
+            .recovered_decision_applies
             .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
         for _ in 0..queued.saturating_add(active_serves) {
             self.admission.release();
@@ -6636,6 +7706,14 @@ impl V2IoCommandReceiver {
         self.queue.complete_work(work_id);
     }
 
+    fn complete_recovered_decision_apply(
+        &self,
+        key: RecoveredDecisionApplyDispatchKeyV1,
+        result: &RecoveredDecisionApplyWorkerResultV1,
+    ) -> Result<(), String> {
+        self.queue.complete_recovered_decision_apply(key, result)
+    }
+
     fn complete_serve_response(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
@@ -6669,6 +7747,280 @@ impl Iterator for V2IoCommandTryIter<'_> {
     }
 }
 
+/// Persisted certified-Fetch completion guarded until its exact work-index
+/// acknowledgement has been prepared.
+///
+/// Raw shutdown, cleanup, channel-send, and held-completion paths may receive
+/// an ordinary [`V2IoCompletion`] without constructing a lifecycle `WorkAck`.
+/// Keeping the output guard beside this one variant makes every such drop
+/// fail-stop. The normal typed drain first validates the work index by borrow,
+/// then consumes this envelope only after the armed `WorkAck` exists.
+struct CertifiedFetchBodyPersistenceDropGuard {
+    output_guard: Arc<ConsensusOutputGuard>,
+    armed: bool,
+}
+
+impl CertifiedFetchBodyPersistenceDropGuard {
+    fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
+        Self {
+            output_guard,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CertifiedFetchBodyPersistenceDropGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.output_guard.close_admission_for_restart();
+        }
+    }
+}
+
+struct GuardedCertifiedFetchBodyPersistenceCompletion {
+    completion: Option<CertifiedFetchBodyPersistenceCompletion>,
+    drop_guard: CertifiedFetchBodyPersistenceDropGuard,
+}
+
+impl GuardedCertifiedFetchBodyPersistenceCompletion {
+    fn new(
+        completion: CertifiedFetchBodyPersistenceCompletion,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> Self {
+        Self {
+            completion: Some(completion),
+            drop_guard: CertifiedFetchBodyPersistenceDropGuard::new(output_guard),
+        }
+    }
+
+    fn completion(&self) -> &CertifiedFetchBodyPersistenceCompletion {
+        self.completion
+            .as_ref()
+            .expect("armed certified-Fetch completion retains its payload")
+    }
+
+    fn into_completion(mut self) -> CertifiedFetchBodyPersistenceCompletion {
+        let completion = self
+            .completion
+            .take()
+            .expect("prepared WorkAck consumes the guarded completion once");
+        self.drop_guard.disarm();
+        completion
+    }
+}
+
+struct RecoveredDecisionApplyCompletionDropGuardV1 {
+    output_guard: Arc<ConsensusOutputGuard>,
+    armed: bool,
+}
+
+impl RecoveredDecisionApplyCompletionDropGuardV1 {
+    fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
+        Self {
+            output_guard,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RecoveredDecisionApplyCompletionDropGuardV1 {
+    fn drop(&mut self) {
+        if self.armed {
+            self.output_guard.close_admission_for_restart();
+        }
+    }
+}
+
+struct GuardedRecoveredDecisionApplyWorkerResultV1 {
+    result: Option<RecoveredDecisionApplyWorkerResultV1>,
+    drop_guard: RecoveredDecisionApplyCompletionDropGuardV1,
+}
+
+impl GuardedRecoveredDecisionApplyWorkerResultV1 {
+    fn new(
+        result: RecoveredDecisionApplyWorkerResultV1,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> Self {
+        Self {
+            result: Some(result),
+            drop_guard: RecoveredDecisionApplyCompletionDropGuardV1::new(output_guard),
+        }
+    }
+
+    fn result(&self) -> &RecoveredDecisionApplyWorkerResultV1 {
+        self.result
+            .as_ref()
+            .expect("armed recovered Decision Apply completion retains its result")
+    }
+
+    fn into_result(mut self) -> RecoveredDecisionApplyWorkerResultV1 {
+        let result = self
+            .result
+            .take()
+            .expect("settled recovered Decision Apply consumes its result once");
+        self.drop_guard.disarm();
+        result
+    }
+
+    fn into_retry_parts(
+        self,
+    ) -> (
+        RecoveredDecisionApplyWorkerResultV1,
+        RecoveredDecisionApplyCompletionDropGuardV1,
+    ) {
+        let Self { result, drop_guard } = self;
+        (
+            result.expect("armed recovered Decision Apply completion retains its result"),
+            drop_guard,
+        )
+    }
+
+    fn from_retry_parts(
+        result: RecoveredDecisionApplyWorkerResultV1,
+        drop_guard: RecoveredDecisionApplyCompletionDropGuardV1,
+    ) -> Self {
+        Self {
+            result: Some(result),
+            drop_guard,
+        }
+    }
+}
+
+/// Move-only acknowledgement for one exact recovered Decision Apply command.
+///
+/// The lifecycle owner must durably settle the borrowed worker result before
+/// consuming this acknowledgement. Dropping it closes consensus output for
+/// restart without releasing the dedicated queue index.
+#[must_use = "recovered Decision Apply work remains indexed until owner settlement"]
+struct RecoveredDecisionApplyWorkAckV1 {
+    queue: Arc<V2IoCommandQueue>,
+    output_guard: Arc<ConsensusOutputGuard>,
+    key: RecoveredDecisionApplyDispatchKeyV1,
+    armed: bool,
+}
+
+impl RecoveredDecisionApplyWorkAckV1 {
+    fn acknowledge(mut self) {
+        self.queue.acknowledge_recovered_decision_apply(self.key);
+        self.queue
+            .admission
+            .acknowledge_recovered_decision_apply_completion(self.key);
+        self.armed = false;
+    }
+
+    fn acknowledge_retry_publication(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RecoveredDecisionApplyWorkAckV1 {
+    fn drop(&mut self) {
+        if self.armed {
+            self.output_guard.close_admission_for_restart();
+        }
+    }
+}
+
+/// Guarded worker result which can be consumed only after lifecycle settlement.
+#[must_use = "the recovered Decision Apply result still requires owner settlement"]
+pub(in crate::sumeragi) struct PreparedRecoveredDecisionApplyCompletionV1 {
+    guarded: Box<GuardedRecoveredDecisionApplyWorkerResultV1>,
+    work_ack: RecoveredDecisionApplyWorkAckV1,
+}
+
+/// Result of atomically returning one guarded missing-sidecar Apply to the worker FIFO.
+#[must_use = "an unavailable recovered Apply retry still owns its guarded completion"]
+pub(in crate::sumeragi) enum RecoveredDecisionApplyDeferredRetryV1 {
+    /// The same dispatch key and task were republished to the dedicated worker queue.
+    Requeued,
+    /// Consensus queue capacity is unavailable; the complete guarded result remains owned.
+    Unavailable(PreparedRecoveredDecisionApplyCompletionV1),
+    /// The dedicated queue index no longer matched the retained completion.
+    RestartRequired,
+}
+
+impl PreparedRecoveredDecisionApplyCompletionV1 {
+    /// Match the exact service queue, output guard, and lane recovery owner.
+    ///
+    /// This comparison-only oracle lets the launched lifecycle stack drive a
+    /// missing-sidecar retry without releasing the guarded completion or any
+    /// process-local dependency.
+    pub(in crate::sumeragi) fn authorizes_sidecar_owner(
+        &self,
+        services: &ProductionV2Services,
+        lane_work: &V2LaneWorkAdapter,
+    ) -> bool {
+        services.owns_recovered_decision_apply_queue(&self.work_ack.queue)
+            && Arc::ptr_eq(&services.output_guard, &self.work_ack.output_guard)
+            && services.matches_lifecycle_lane_work(lane_work)
+    }
+
+    /// Borrow the exact Applied/Deferred result while the command remains indexed.
+    pub(in crate::sumeragi) fn result(&self) -> &RecoveredDecisionApplyWorkerResultV1 {
+        self.guarded.result()
+    }
+
+    /// Release the dedicated queue index after the owner durably settled this result.
+    ///
+    /// This is intentionally not a generic worker acknowledgement: its only
+    /// caller is the recovered Decision Apply owner settlement transaction.
+    pub(in crate::sumeragi) fn acknowledge_after_owner_settlement(
+        self,
+    ) -> RecoveredDecisionApplyWorkerResultV1 {
+        let Self { guarded, work_ack } = self;
+        work_ack.acknowledge();
+        (*guarded).into_result()
+    }
+
+    /// Atomically republish an unchanged missing-sidecar task under its existing owner.
+    ///
+    /// The dedicated command index must still be `CompletionPending`. Capacity
+    /// is reserved and the exact task is enqueued before either completion
+    /// guard is disarmed. An unavailable lane reconstructs this whole token;
+    /// an ownership mismatch drops the armed guards and requires restart.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn retry_deferred(self) -> RecoveredDecisionApplyDeferredRetryV1 {
+        let Self { guarded, work_ack } = self;
+        let (result, mut completion_guard) = (*guarded).into_retry_parts();
+        let RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference } = result else {
+            drop(work_ack);
+            drop(completion_guard);
+            return RecoveredDecisionApplyDeferredRetryV1::RestartRequired;
+        };
+        match work_ack.queue.retry_recovered_decision_apply(task) {
+            Ok(()) => {
+                work_ack.acknowledge_retry_publication();
+                completion_guard.disarm();
+                RecoveredDecisionApplyDeferredRetryV1::Requeued
+            }
+            Err(RecoveredDecisionApplyRetryQueueErrorV1::Unavailable(task)) => {
+                RecoveredDecisionApplyDeferredRetryV1::Unavailable(Self {
+                    guarded: Box::new(
+                        GuardedRecoveredDecisionApplyWorkerResultV1::from_retry_parts(
+                            RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference },
+                            completion_guard,
+                        ),
+                    ),
+                    work_ack,
+                })
+            }
+            Err(RecoveredDecisionApplyRetryQueueErrorV1::InvalidOwner(_task)) => {
+                drop(work_ack);
+                drop(completion_guard);
+                RecoveredDecisionApplyDeferredRetryV1::RestartRequired
+            }
+        }
+    }
+}
+
 enum V2IoCompletion {
     Signature {
         work_id: EffectWorkId,
@@ -6676,8 +8028,10 @@ enum V2IoCompletion {
         outbound_payload: Option<EncodedV2Payload>,
     },
     Stored(BodyStoreCompletion),
+    CertifiedFetchBodyPersisted(GuardedCertifiedFetchBodyPersistenceCompletion),
     Validated(BodyValidationCompletion),
     Applied(Box<DurableApplyCompletion>),
+    RecoveredDecisionApply(Box<GuardedRecoveredDecisionApplyWorkerResultV1>),
     ApplyDeferred {
         work_id: EffectWorkId,
         reference: CertifiedMergeLedgerReference,
@@ -6709,6 +8063,13 @@ enum V2IoCompletion {
 }
 
 impl V2IoCompletion {
+    fn recovered_decision_apply_key(&self) -> Option<RecoveredDecisionApplyDispatchKeyV1> {
+        match self {
+            Self::RecoveredDecisionApply(guarded) => Some(guarded.result().dispatch_key()),
+            _ => None,
+        }
+    }
+
     // `false` variants never enqueue a reducer completion. They operate only
     // on non-reducer effect, network, or service state (or report a terminal
     // failure), so they may be serviced behind one retained runtime result
@@ -6716,7 +8077,11 @@ impl V2IoCompletion {
     const fn requires_runtime_capacity(&self) -> bool {
         matches!(
             self,
-            Self::Signature { .. } | Self::Stored(_) | Self::Validated(_) | Self::Applied(_)
+            Self::Signature { .. }
+                | Self::Stored(_)
+                | Self::Validated(_)
+                | Self::Applied(_)
+                | Self::RecoveredDecisionApply(_)
         )
     }
 
@@ -6726,10 +8091,16 @@ impl V2IoCompletion {
                 V2IoCompletionAcknowledgement::Work(*work_id)
             }
             Self::Stored(completion) => V2IoCompletionAcknowledgement::Work(completion.work_id()),
+            Self::CertifiedFetchBodyPersisted(_) => {
+                V2IoCompletionAcknowledgement::LifecycleWorkRetained
+            }
             Self::Validated(completion) => {
                 V2IoCompletionAcknowledgement::Work(completion.work_id())
             }
             Self::Applied(completion) => V2IoCompletionAcknowledgement::Work(completion.work_id()),
+            Self::RecoveredDecisionApply(_) => {
+                V2IoCompletionAcknowledgement::RecoveredDecisionApplyRetained
+            }
             Self::CertifiedResponse {
                 lifecycle_id,
                 response,
@@ -6756,7 +8127,112 @@ impl V2IoCompletion {
 enum V2IoCompletionAcknowledgement {
     Work(EffectWorkId),
     Serve(Box<V2IoServeCompletionAcknowledgement>),
+    LifecycleWorkRetained,
+    RecoveredDecisionApplyRetained,
     Untracked,
+}
+
+/// Move-only acknowledgement owner for one exact indexed persistence command.
+///
+/// Extraction removes only completion-channel position ownership. This token
+/// keeps the existing work descriptor in `CompletionPending`, so a repeated
+/// selector probe coalesces until Phase B consumes the physical ingress carrier.
+#[must_use = "the exact command index must remain occupied until Phase B commits"]
+pub(in crate::sumeragi) struct CertifiedFetchBodyPersistenceWorkAck {
+    queue: Arc<V2IoCommandQueue>,
+    output_guard: Arc<ConsensusOutputGuard>,
+    work_id: EffectWorkId,
+    descriptor: V2IoWorkDescriptor,
+    armed: bool,
+}
+
+impl CertifiedFetchBodyPersistenceWorkAck {
+    /// Release the exact command index only in the post-dequeue infallible tail.
+    pub(in crate::sumeragi) fn commit(mut self) {
+        self.queue
+            .acknowledge_exact_lifecycle_completion(self.work_id, &self.descriptor);
+        self.armed = false;
+    }
+}
+
+impl Drop for CertifiedFetchBodyPersistenceWorkAck {
+    fn drop(&mut self) {
+        if self.armed {
+            self.output_guard.close_admission_for_restart();
+        }
+    }
+}
+
+/// Persisted body plus its still-indexed exact command owner.
+#[must_use = "the persisted response and duplicate fence require Phase-B consumption"]
+pub(crate) struct PreparedCertifiedFetchBodyPersistenceCompletion {
+    completion: CertifiedFetchBodyPersistenceCompletion,
+    work_ack: CertifiedFetchBodyPersistenceWorkAck,
+}
+
+impl PreparedCertifiedFetchBodyPersistenceCompletion {
+    /// Return the still-indexed existing executor work identity for diagnostics.
+    pub(in crate::sumeragi) const fn work_id(&self) -> EffectWorkId {
+        self.completion.work_id()
+    }
+
+    /// Split two opaque move-only authorities for the sealed composite transaction.
+    pub(in crate::sumeragi) fn into_parts(
+        self,
+    ) -> (
+        CertifiedFetchBodyPersistenceCompletion,
+        CertifiedFetchBodyPersistenceWorkAck,
+    ) {
+        (self.completion, self.work_ack)
+    }
+
+    /// Rejoin an unchanged pre-dequeue completion after a retryable failure.
+    pub(in crate::sumeragi) fn from_parts(
+        completion: CertifiedFetchBodyPersistenceCompletion,
+        work_ack: CertifiedFetchBodyPersistenceWorkAck,
+    ) -> Self {
+        Self {
+            completion,
+            work_ack,
+        }
+    }
+}
+
+/// Typed outcome of the ordinary bounded completion drain.
+///
+/// A persisted certified-Fetch body is returned directly to the serialized
+/// caller; it is never parked in a service-side flag, latch, or second queue.
+#[must_use = "a persisted certified-Fetch body must be consumed by its coordinator owner"]
+pub(crate) struct V2CompletionDrainOutcome {
+    serviced: usize,
+    certified_fetch_body: Option<PreparedCertifiedFetchBodyPersistenceCompletion>,
+}
+
+impl V2CompletionDrainOutcome {
+    /// Split the count from the move-only lifecycle completion.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        usize,
+        Option<PreparedCertifiedFetchBodyPersistenceCompletion>,
+    ) {
+        (self.serviced, self.certified_fetch_body)
+    }
+}
+
+/// Owner-only result of draining at most one recovered Decision Apply completion.
+#[must_use = "a returned recovered Decision Apply completion must be settled by its owner"]
+pub(in crate::sumeragi) struct RecoveredDecisionApplyCompletionDrainV1 {
+    completion: Option<PreparedRecoveredDecisionApplyCompletionV1>,
+}
+
+impl RecoveredDecisionApplyCompletionDrainV1 {
+    /// Consume the drain result into its optional exact owner completion.
+    pub(in crate::sumeragi) fn into_completion(
+        self,
+    ) -> Option<PreparedRecoveredDecisionApplyCompletionV1> {
+        self.completion
+    }
 }
 
 struct V2IoServeCompletionAcknowledgement {
@@ -7050,6 +8526,7 @@ impl V2IoHandle {
                 let mut body_store = Some(body_store);
                 while let Ok(command) = command_rx.recv() {
                     let work_id = command.work_id();
+                    let recovered_decision_apply_key = command.recovered_decision_apply_key();
                     let serve_lifecycle_id = command.serve_lifecycle_id();
                     let runtime_lifecycle_ordinal = command.runtime_lifecycle_ordinal();
                     match command {
@@ -7125,6 +8602,21 @@ impl V2IoHandle {
                                         .execute_store_task(&task)
                                         .map(V2IoCompletion::Stored)
                                         .map_err(|error| error.to_string()),
+                                    V2IoCommand::PersistCertifiedFetchBody(task) => task
+                                        .persist(
+                                            body_store
+                                                .as_mut()
+                                                .expect("body store remains live before Retire"),
+                                        )
+                                        .map(|completion| {
+                                            V2IoCompletion::CertifiedFetchBodyPersisted(
+                                                GuardedCertifiedFetchBodyPersistenceCompletion::new(
+                                                    completion,
+                                                    Arc::clone(&output_guard),
+                                                ),
+                                            )
+                                        })
+                                        .map_err(|(error, _task)| error.to_string()),
                                     V2IoCommand::Validate(task) => body_store
                                         .as_mut()
                                         .expect("body store remains live before Retire")
@@ -7156,6 +8648,31 @@ impl V2IoHandle {
                                         }
                                         Err(error) => Err(error.to_string()),
                                     },
+                                    V2IoCommand::RecoveredDecisionApply(task) => apply_service
+                                        .execute_recovered_decision_apply(
+                                            &context,
+                                            body_store
+                                                .as_mut()
+                                                .expect("body store remains live before Retire"),
+                                            task,
+                                        )
+                                        .map(|result| {
+                                            V2IoCompletion::RecoveredDecisionApply(
+                                                Box::new(GuardedRecoveredDecisionApplyWorkerResultV1::new(
+                                                    result,
+                                                    Arc::clone(&output_guard),
+                                                )),
+                                            )
+                                        })
+                                        .or_else(|error| {
+                                            if error.requires_restart_recovery() {
+                                                Ok(V2IoCompletion::RecoveryRequired(
+                                                    error.to_string(),
+                                                ))
+                                            } else {
+                                                Err(error.to_string())
+                                            }
+                                        }),
                                     V2IoCommand::Serve {
                                         lifecycle_id,
                                         request,
@@ -7173,6 +8690,12 @@ impl V2IoHandle {
                                     | V2IoCommand::Shutdown => {
                                         unreachable!(
                                             "cleanup commands handled before fail-stop I/O"
+                                        )
+                                    }
+                                    #[cfg(test)]
+                                    V2IoCommand::RecoveredDecisionApplyFixture(_) => {
+                                        unreachable!(
+                                            "recovered Apply queue fixtures never enter a worker"
                                         )
                                     }
                                 }
@@ -7210,13 +8733,29 @@ impl V2IoHandle {
                                             response,
                                         } => command_rx
                                             .complete_serve_response(*lifecycle_id, response),
+                                        V2IoCompletion::RecoveredDecisionApply(guarded) => {
+                                            recovered_decision_apply_key.map_or_else(
+                                                || {
+                                                    Err("recovered Decision Apply completion lost its command key"
+                                                        .to_owned())
+                                                },
+                                                |key| {
+                                                    command_rx
+                                                        .complete_recovered_decision_apply(
+                                                            key,
+                                                            guarded.result(),
+                                                        )
+                                                        .map(|()| true)
+                                                },
+                                            )
+                                        }
                                         _ => Ok(true),
                                     };
                                     match seal_result {
                                         Err(reason) => {
                                             iroha_logger::error!(
                                                 %reason,
-                                                "failed to seal Sumeragi v2 certified-body completion"
+                                                "failed to seal Sumeragi v2 I/O completion"
                                             );
                                             if let Some(lifecycle_id) = serve_lifecycle_id {
                                                 command_rx.fail_serve(lifecycle_id);
@@ -7281,11 +8820,16 @@ impl V2IoHandle {
     fn enqueue(&self, command: V2IoCommand) -> Result<(), String> {
         self.try_enqueue(command).map_err(|error| match error {
             V2IoTrySendError::Full(_) => "Sumeragi v2 I/O queue is full".to_owned(),
-            V2IoTrySendError::Disconnected => "Sumeragi v2 I/O worker is disconnected".to_owned(),
-            V2IoTrySendError::ConflictingWorkId { work_id } => format!(
+            V2IoTrySendError::Disconnected(_) => {
+                "Sumeragi v2 I/O worker is disconnected".to_owned()
+            }
+            V2IoTrySendError::ConflictingWorkId { work_id, .. } => format!(
                 "Sumeragi v2 I/O work {} was reused by a conflicting command",
                 work_id.get()
             ),
+            V2IoTrySendError::UnreservedRecoveredDecisionApply { .. } => {
+                "recovered Decision Apply dispatch was reused by conflicting material".to_owned()
+            }
         })
     }
 
@@ -7440,10 +8984,32 @@ impl V2IoHandle {
                 self.command_tx
                     .acknowledge_serve_completion(serve.lifecycle_id, serve.terminal)?;
             }
+            V2IoCompletionAcknowledgement::LifecycleWorkRetained => {}
+            V2IoCompletionAcknowledgement::RecoveredDecisionApplyRetained => {}
             V2IoCompletionAcknowledgement::Untracked => {}
         }
         self.admission.acknowledge_completion_at(ownership_position);
         Ok(())
+    }
+
+    fn prepare_certified_fetch_body_persistence_ack(
+        &self,
+        completion: &CertifiedFetchBodyPersistenceCompletion,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> Result<CertifiedFetchBodyPersistenceWorkAck, String> {
+        self.command_tx
+            .queue
+            .prepare_certified_fetch_body_persistence_ack(completion, output_guard)
+    }
+
+    fn prepare_recovered_decision_apply_ack(
+        &self,
+        key: RecoveredDecisionApplyDispatchKeyV1,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> Result<RecoveredDecisionApplyWorkAckV1, String> {
+        self.command_tx
+            .queue
+            .prepare_recovered_decision_apply_ack(key, output_guard)
     }
 
     fn acknowledge_completion(&self, completion: &V2IoCompletion) -> Result<(), String> {
@@ -7514,8 +9080,11 @@ impl V2IoHandle {
                         break;
                     }
                 }
-                Err(V2IoTrySendError::Disconnected) => break,
-                Err(V2IoTrySendError::ConflictingWorkId { .. }) => {
+                Err(V2IoTrySendError::Disconnected(_)) => break,
+                Err(
+                    V2IoTrySendError::ConflictingWorkId { .. }
+                    | V2IoTrySendError::UnreservedRecoveredDecisionApply { .. },
+                ) => {
                     unreachable!("shutdown commands do not carry work identifiers");
                 }
             }
@@ -7568,10 +9137,12 @@ fn send_tracked_completion_with_lifecycle_ordinal(
     completion: V2IoCompletion,
     runtime_lifecycle_ordinal: Option<u128>,
 ) -> Result<(), mpsc::SendError<V2IoCompletion>> {
+    let recovered_decision_apply = completion.recovered_decision_apply_key();
     admission.retain_completion(
         Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
+        recovered_decision_apply,
     );
     sender.send(completion).inspect_err(|_| {
         admission.abandon_latest_completion();
@@ -7592,10 +9163,12 @@ fn try_send_tracked_completion_with_lifecycle_ordinal(
     completion: V2IoCompletion,
     runtime_lifecycle_ordinal: Option<u128>,
 ) -> Result<(), mpsc::TrySendError<V2IoCompletion>> {
+    let recovered_decision_apply = completion.recovered_decision_apply_key();
     admission.retain_completion(
         Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
+        recovered_decision_apply,
     );
     sender.try_send(completion).inspect_err(|_| {
         admission.abandon_latest_completion();
@@ -7892,14 +9465,17 @@ enum BodyFetchServiceOwner {
 /// Dropping it leaves every service index unchanged. The commit surface stays
 /// private until the final late-response transaction joins it to the response
 /// claim, queue CAS, runtime reservation, registry swap, and coordinator wake.
-struct PreparedCertifiedBodyFetchOwnerRemoval<'a> {
+pub(in crate::sumeragi) struct PreparedCertifiedBodyFetchOwnerRemoval<'a> {
     services: &'a mut ProductionV2Services,
     task: BodyFetchTask,
     owner: BodyFetchServiceOwner,
 }
 
 impl PreparedCertifiedBodyFetchOwnerRemoval<'_> {
-    fn commit(self, permit: &ConsensusOutputPermit<'_>) -> CertifiedBodyFetchCompletionDisposition {
+    pub(in crate::sumeragi) fn commit(
+        self,
+        permit: &ConsensusOutputPermit<'_>,
+    ) -> CertifiedBodyFetchCompletionDisposition {
         assert!(
             permit.authorizes(self.services.output_guard.as_ref()),
             "certified body-fetch removal requires this service's live output permit"
@@ -10032,6 +11608,14 @@ pub(crate) fn durable_exact_output_handoff_owner_pair() -> (
 }
 
 impl DurableExactOutputServiceOwner {
+    /// Return whether this service endpoint was minted with one transport endpoint.
+    pub(in crate::sumeragi) fn is_bound_to_transport_owner(
+        &self,
+        owner: &DurableExactOutputTransportOwner,
+    ) -> bool {
+        Arc::ptr_eq(&self.0, &owner.0)
+    }
+
     fn is_sealed(&self) -> bool {
         self.0.sealed.load(AtomicOrdering::Acquire)
     }
@@ -10042,6 +11626,14 @@ impl DurableExactOutputServiceOwner {
             .compare_exchange(false, true, AtomicOrdering::AcqRel, AtomicOrdering::Acquire)
             .map(|_| ())
             .map_err(|_| "Sumeragi v2 durable exact-output handoff was already sealed".to_owned())
+    }
+}
+
+#[cfg(test)]
+impl DurableExactOutputTransportOwner {
+    /// Reconstruct the paired test endpoint without exposing the owner nonce.
+    pub(in crate::sumeragi) fn paired_service_for_test(&self) -> DurableExactOutputServiceOwner {
+        DurableExactOutputServiceOwner(Arc::clone(&self.0))
     }
 }
 
@@ -13704,6 +15296,7 @@ pub(crate) struct ProductionV2Services {
     kura: Arc<Kura>,
     chunk_root: PathBuf,
     io: Option<V2IoHandle>,
+    lifecycle_body_store_identity: Option<V2BodyStoreInstanceIdentity>,
     fetches: BTreeMap<EffectWorkId, FetchSession>,
     fetch_by_manifest: BTreeMap<HashOf<wire::PayloadManifest>, EffectWorkId>,
     orphan_chunks: BTreeMap<HashOf<wire::PayloadManifest>, VecDeque<BufferedPayloadChunk>>,
@@ -13748,6 +15341,180 @@ fn maximum_orphan_chunk_bytes(layout: wire::DataAvailabilityLayout) -> u64 {
 }
 
 impl ProductionV2Services {
+    /// Return whether this service and executor share one canonical output gate.
+    pub(in crate::sumeragi) fn matches_lifecycle_executor_output_guard(
+        &self,
+        executor: &V2EffectExecutor<SerializedV2Runtime>,
+    ) -> bool {
+        executor.matches_lifecycle_output_guard(&self.output_guard)
+    }
+
+    /// Return whether one lane adapter shares this exact height and storage owner.
+    pub(in crate::sumeragi) fn matches_lifecycle_lane_work(
+        &self,
+        lane_work: &V2LaneWorkAdapter,
+    ) -> bool {
+        lane_work.matches_lifecycle_dependencies(
+            &self.context,
+            &self.state,
+            &self.kura,
+            &self.output_guard,
+            &self.local_peer,
+            &self.exact_output_handoff_owner,
+        )
+    }
+
+    fn owns_recovered_decision_apply_queue(&self, queue: &Arc<V2IoCommandQueue>) -> bool {
+        self.io
+            .as_ref()
+            .is_some_and(|io| Arc::ptr_eq(&io.command_tx.queue, queue))
+    }
+
+    /// Return whether the live worker owns the exact body-store instance
+    /// transferred by the lifecycle owner.
+    pub(crate) fn matches_lifecycle_body_store(
+        &self,
+        owner_identity: &V2BodyStoreInstanceIdentity,
+    ) -> bool {
+        self.io.is_some()
+            && self
+                .lifecycle_body_store_identity
+                .as_ref()
+                .is_some_and(|worker_identity| worker_identity.same_instance(owner_identity))
+    }
+
+    /// Publish the live completion owner only from final runner activation.
+    ///
+    /// The move-only permit is minted and retained by the opaque lifecycle
+    /// launch stack. No constructor, drain, or ordinary status update can
+    /// register this observer. The runner cut will consume this method only as
+    /// part of its final all-or-restart activation transaction.
+    // TODO: Consume this seam in the one-shot runner activation transaction.
+    #[allow(dead_code)]
+    pub(in crate::sumeragi) fn activate_effect_completion_observer(
+        &self,
+        _permit: ProductionV2CompletionObserverActivationPermitV1,
+    ) -> Result<(), String> {
+        let activation_guard = Arc::clone(&self.output_guard);
+        let activation = activation_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| {
+                "Sumeragi v2 completion observer activation requires process restart".to_owned()
+            })?;
+        let io = self
+            .io
+            .as_ref()
+            .ok_or_else(|| "Sumeragi v2 completion observer lost its live worker".to_owned())?;
+        super::status::set_v2_effect_completion_observer(
+            self.context.id(),
+            self.context.height,
+            &io.admission,
+        );
+        activation.complete();
+        Ok(())
+    }
+
+    /// Atomically reserve the selected lifecycle carrier's exact I/O target.
+    ///
+    /// The selector's one-shot target seal is consumed only after this service
+    /// has proved that its height-local worker and canonical output gate are
+    /// live. Success retains the queue mutex, hierarchical admission slot, and
+    /// armed fail-stop output operation in one borrow-bound value; unavailable
+    /// capacity returns a service-generation wait rather than a sampled depth.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn capture_lifecycle_capacity_rank<'a>(
+        &'a self,
+        mut prepared: PreparedLifecycleIngressSelector,
+    ) -> Result<LifecycleIoCapacityCapture<'a>, LifecycleIoCapacityCaptureError> {
+        let Some(io) = self.io.as_ref() else {
+            return Err(LifecycleIoCapacityCaptureError {
+                failure: LifecycleIoCapacityCaptureFailure::Disconnected,
+                prepared,
+            });
+        };
+        let target = match prepared.take_lifecycle_io_target() {
+            Ok(target) => target,
+            Err(_) => {
+                return Err(LifecycleIoCapacityCaptureError {
+                    failure: LifecycleIoCapacityCaptureFailure::InvalidTarget,
+                    prepared,
+                });
+            }
+        };
+        let target_context = target.context();
+        if target_context.height() != self.context.height
+            || target_context.id().as_bytes() != self.context.id().0.as_ref()
+        {
+            prepared
+                .restore_lifecycle_io_target(target)
+                .expect("the just-consumed selector target must restore exactly");
+            return Err(LifecycleIoCapacityCaptureError {
+                failure: LifecycleIoCapacityCaptureFailure::ForeignContext,
+                prepared,
+            });
+        }
+        let Some(operation) = self.output_guard.begin_fail_stop_operation() else {
+            prepared
+                .restore_lifecycle_io_target(target)
+                .expect("the output-rejected selector target must restore exactly");
+            return Err(LifecycleIoCapacityCaptureError {
+                failure: LifecycleIoCapacityCaptureFailure::OutputClosed,
+                prepared,
+            });
+        };
+        match io.command_tx.queue.capture_lifecycle_capacity(
+            operation,
+            Arc::clone(&self.output_guard),
+            target,
+        ) {
+            Ok(V2IoLifecycleCapacityCapture::Reserved(reservation)) => {
+                Ok(LifecycleIoCapacityCapture {
+                    outcome: LifecycleIoCapacityOutcome::Reserved {
+                        reservation,
+                        prepared,
+                    },
+                })
+            }
+            Ok(V2IoLifecycleCapacityCapture::Unavailable(wait)) => Ok(LifecycleIoCapacityCapture {
+                outcome: LifecycleIoCapacityOutcome::Unavailable { wait, prepared },
+            }),
+            Err((failure, target)) => {
+                prepared
+                    .restore_lifecycle_io_target(target)
+                    .expect("the rejected selector target must restore exactly");
+                Err(LifecycleIoCapacityCaptureError { failure, prepared })
+            }
+        }
+    }
+
+    /// Reserve the Consensus I/O lane for one exact recovered Decision Apply key.
+    ///
+    /// Capacity is captured before the coordinator claims the carrier. The
+    /// returned locked reservation accepts only the borrow-bound registry
+    /// projection carrying this same opaque key.
+    pub(in crate::sumeragi) fn capture_recovered_decision_apply_capacity<'a>(
+        &'a self,
+        key: RecoveredDecisionApplyDispatchKeyV1,
+    ) -> Result<
+        RecoveredDecisionApplyCapacityCaptureV1<'a>,
+        RecoveredDecisionApplyCapacityCaptureErrorV1,
+    > {
+        if !key.matches_height_context(&self.context) {
+            return Err(RecoveredDecisionApplyCapacityCaptureErrorV1::ForeignContext);
+        }
+        let io = self
+            .io
+            .as_ref()
+            .ok_or(RecoveredDecisionApplyCapacityCaptureErrorV1::Disconnected)?;
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or(RecoveredDecisionApplyCapacityCaptureErrorV1::OutputClosed)?;
+        io.command_tx
+            .queue
+            .capture_recovered_decision_apply_capacity(operation, key)
+    }
+
     /// Restore the actor-global lifecycle source before constructing runtime
     /// owners for this height.
     ///
@@ -13822,6 +15589,134 @@ impl ProductionV2Services {
             super::serviced_candidate_store::LeaderWireRecoveryAuthority,
         exact_output_handoff_owner: DurableExactOutputServiceOwner,
     ) -> Result<Self, String> {
+        let apply_service = V2ApplyService::new(
+            Arc::clone(&state),
+            queue,
+            Arc::clone(&kura),
+            provider_ingest_finalized_archive,
+            reputation_finalized_archive,
+            block_cadence,
+            genesis_account,
+            events_sender,
+            validator_set_pops.clone(),
+        );
+        Self::start_inner(
+            context,
+            initial_tag,
+            durable_decided_subject,
+            validator_set_pops,
+            local_peer,
+            local_validator,
+            key_pair,
+            network,
+            chunk_root,
+            body_store,
+            state,
+            kura,
+            apply_service,
+            consensus_io_capacity,
+            auxiliary_io_capacity,
+            orphan_chunk_capacity,
+            lifecycle_ordinals,
+            output_guard,
+            leader_wire_ingress,
+            kura_replica_advert_refresh,
+            leader_wire_recovery_authority,
+            exact_output_handoff_owner,
+        )
+    }
+
+    /// Start with the exact application service used for recovered marker replay.
+    ///
+    /// Identity validation runs before the shared constructor creates the
+    /// context chunk directory or starts any worker, so a substituted State,
+    /// Kura, network, or proof roster fails without startup side effects.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn start_with_apply_service(
+        _permit: super::v2_lifecycle_coordinator::ProductionLifecycleApplyServiceLaunchPermitV1,
+        context: wire::HeightContext,
+        initial_tag: EventTag,
+        durable_decided_subject: Option<wire::BlockSubject>,
+        validator_set_pops: Vec<Vec<u8>>,
+        local_peer: PeerId,
+        local_validator: Option<wire::ValidatorIndex>,
+        key_pair: KeyPair,
+        network: IrohaNetwork,
+        chunk_root: impl AsRef<Path>,
+        body_store: V2BodyStore,
+        state: Arc<crate::state::State>,
+        kura: Arc<crate::kura::Kura>,
+        apply_service: V2ApplyService,
+        consensus_io_capacity: usize,
+        auxiliary_io_capacity: usize,
+        orphan_chunk_capacity: usize,
+        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+        output_guard: Arc<ConsensusOutputGuard>,
+        leader_wire_ingress: Arc<FairV2Ingress>,
+        kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
+        leader_wire_recovery_authority:
+            super::serviced_candidate_store::LeaderWireRecoveryAuthority,
+        exact_output_handoff_owner: DurableExactOutputServiceOwner,
+    ) -> Result<Self, String> {
+        if !state.matches_kura_instance(&kura)
+            || !apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops)
+        {
+            return Err(
+                "Sumeragi v2 recovered Apply service changed lifecycle identity".to_owned(),
+            );
+        }
+        Self::start_inner(
+            context,
+            initial_tag,
+            durable_decided_subject,
+            validator_set_pops,
+            local_peer,
+            local_validator,
+            key_pair,
+            network,
+            chunk_root,
+            body_store,
+            state,
+            kura,
+            apply_service,
+            consensus_io_capacity,
+            auxiliary_io_capacity,
+            orphan_chunk_capacity,
+            lifecycle_ordinals,
+            output_guard,
+            leader_wire_ingress,
+            kura_replica_advert_refresh,
+            leader_wire_recovery_authority,
+            exact_output_handoff_owner,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start_inner(
+        context: wire::HeightContext,
+        initial_tag: EventTag,
+        durable_decided_subject: Option<wire::BlockSubject>,
+        validator_set_pops: Vec<Vec<u8>>,
+        local_peer: PeerId,
+        local_validator: Option<wire::ValidatorIndex>,
+        key_pair: KeyPair,
+        network: IrohaNetwork,
+        chunk_root: impl AsRef<Path>,
+        body_store: V2BodyStore,
+        state: Arc<crate::state::State>,
+        kura: Arc<crate::kura::Kura>,
+        apply_service: V2ApplyService,
+        consensus_io_capacity: usize,
+        auxiliary_io_capacity: usize,
+        orphan_chunk_capacity: usize,
+        lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+        output_guard: Arc<ConsensusOutputGuard>,
+        leader_wire_ingress: Arc<FairV2Ingress>,
+        kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
+        leader_wire_recovery_authority:
+            super::serviced_candidate_store::LeaderWireRecoveryAuthority,
+        exact_output_handoff_owner: DurableExactOutputServiceOwner,
+    ) -> Result<Self, String> {
         let construction_guard = Arc::clone(&output_guard);
         let construction = construction_guard
             .begin_fail_stop_operation()
@@ -13883,17 +15778,7 @@ impl ProductionV2Services {
         let durable_history = Arc::clone(&kura);
         let evidence_state = Arc::clone(&state);
         let certified_serve_validator_set_pops = validator_set_pops.clone();
-        let apply_service = V2ApplyService::new(
-            state,
-            queue,
-            Arc::clone(&kura),
-            provider_ingest_finalized_archive,
-            reputation_finalized_archive,
-            block_cadence,
-            genesis_account,
-            events_sender,
-            validator_set_pops,
-        );
+        let lifecycle_body_store_identity = body_store.instance_identity();
         let io = V2IoHandle::spawn(
             body_store,
             apply_service,
@@ -13909,11 +15794,6 @@ impl ProductionV2Services {
             lifecycle_ordinals,
             Arc::clone(&output_guard),
         )?;
-        super::status::set_v2_effect_completion_observer(
-            context.id(),
-            context.height,
-            &io.admission,
-        );
         let mut service = Self {
             context,
             validator_set_pops: certified_serve_validator_set_pops,
@@ -13925,6 +15805,7 @@ impl ProductionV2Services {
             kura: durable_history,
             chunk_root: context_chunk_root,
             io: Some(io),
+            lifecycle_body_store_identity: Some(lifecycle_body_store_identity),
             fetches: BTreeMap::new(),
             fetch_by_manifest: BTreeMap::new(),
             orphan_chunks: BTreeMap::new(),
@@ -14197,7 +16078,7 @@ impl ProductionV2Services {
         Ok(owner)
     }
 
-    fn prepare_certified_body_fetch_owner_removal(
+    pub(in crate::sumeragi) fn prepare_certified_body_fetch_owner_removal(
         &mut self,
         task: &BodyFetchTask,
     ) -> Result<PreparedCertifiedBodyFetchOwnerRemoval<'_>, String> {
@@ -14213,6 +16094,12 @@ impl ProductionV2Services {
             task: task.clone(),
             owner,
         })
+    }
+
+    /// Clone the process output guard before an exact service-removal token
+    /// exclusively borrows this service owner.
+    pub(in crate::sumeragi) fn lifecycle_output_guard(&self) -> Arc<ConsensusOutputGuard> {
+        Arc::clone(&self.output_guard)
     }
 
     fn commit_exact_body_fetch_owner_removal(
@@ -15378,6 +17265,11 @@ impl ProductionV2Services {
     }
 
     fn take_io_completion(&mut self, runtime_capacity_available: bool) -> IoCompletionTake {
+        if self.held_io_completion.as_ref().is_some_and(|completion| {
+            matches!(completion, V2IoCompletion::RecoveredDecisionApply(_))
+        }) {
+            return IoCompletionTake::retained_runtime();
+        }
         if runtime_capacity_available && let Some(completion) = self.held_io_completion.take() {
             return IoCompletionTake::ready(PendingServiceCompletion::Io {
                 completion,
@@ -15403,6 +17295,14 @@ impl ProductionV2Services {
         let Ok(completion) = io.try_recv_completion_unacknowledged() else {
             return IoCompletionTake::unavailable();
         };
+        if matches!(&completion, V2IoCompletion::RecoveredDecisionApply(_)) {
+            assert!(
+                self.held_io_completion.is_none(),
+                "completion ownership metadata must preserve one recovered Apply head"
+            );
+            self.held_io_completion = Some(completion);
+            return IoCompletionTake::retained_runtime();
+        }
         if !runtime_capacity_available && completion.requires_runtime_capacity() {
             assert!(
                 self.held_io_completion.is_none(),
@@ -15415,6 +17315,34 @@ impl ProductionV2Services {
             completion,
             ownership_position,
         })
+    }
+
+    fn take_recovered_decision_apply_completion(&mut self) -> IoCompletionTake {
+        if let Some(completion) = self.held_io_completion.take() {
+            if matches!(&completion, V2IoCompletion::RecoveredDecisionApply(_)) {
+                return IoCompletionTake::ready(PendingServiceCompletion::Io {
+                    completion,
+                    ownership_position: 0,
+                });
+            }
+            self.held_io_completion = Some(completion);
+            return IoCompletionTake::unavailable();
+        }
+        let Some(io) = self.io.as_ref() else {
+            return IoCompletionTake::unavailable();
+        };
+        let Ok(completion) = io.try_recv_completion_unacknowledged() else {
+            return IoCompletionTake::unavailable();
+        };
+        if matches!(&completion, V2IoCompletion::RecoveredDecisionApply(_)) {
+            IoCompletionTake::ready(PendingServiceCompletion::Io {
+                completion,
+                ownership_position: 0,
+            })
+        } else {
+            self.held_io_completion = Some(completion);
+            IoCompletionTake::unavailable()
+        }
     }
 
     fn take_next_completion(&mut self, runtime_capacity_available: bool) -> IoCompletionTake {
@@ -15579,6 +17507,55 @@ impl ProductionV2Services {
         &mut self,
         executor: &mut V2EffectExecutor<R>,
     ) -> Result<usize, EffectExecutorError> {
+        let outcome = self.drain_completions_with_lifecycle(executor)?;
+        self.require_no_unowned_lifecycle_completion(executor, outcome)
+    }
+
+    /// Drain the oldest completion only when it belongs to recovered Decision Apply.
+    ///
+    /// This path does not accept an effect executor and cannot call the
+    /// reducer's generic application completion API. A different oldest
+    /// completion remains held in place for the ordinary drain, preserving
+    /// the single worker FIFO.
+    pub(in crate::sumeragi) fn drain_recovered_decision_apply_completion(
+        &mut self,
+    ) -> Result<RecoveredDecisionApplyCompletionDrainV1, String> {
+        if self.output_guard.restart_required() {
+            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+        }
+        let take = self.take_recovered_decision_apply_completion();
+        let Some(PendingServiceCompletion::Io {
+            completion: V2IoCompletion::RecoveredDecisionApply(guarded),
+            ownership_position: _,
+        }) = take.completion
+        else {
+            return Ok(RecoveredDecisionApplyCompletionDrainV1 { completion: None });
+        };
+        let key = guarded.result().dispatch_key();
+        let work_ack = self
+            .io
+            .as_ref()
+            .ok_or_else(|| {
+                "recovered Decision Apply completion lost its I/O service owner".to_owned()
+            })?
+            .prepare_recovered_decision_apply_ack(key, Arc::clone(&self.output_guard))?;
+        Ok(RecoveredDecisionApplyCompletionDrainV1 {
+            completion: Some(PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack }),
+        })
+    }
+
+    /// Drain the ordinary bounded completion source while returning a
+    /// persisted certified-Fetch body directly to its serialized owner.
+    ///
+    /// TODO: Give the final runner one `LifecycleCoordinator`/registry owner and
+    /// consume this typed outcome only after restart recovery can rebuild the
+    /// exact Ready-Fetch response occurrence from a typed durable locator (or
+    /// this transaction durably advances directly to the BodyFrame-bound Store
+    /// stage). Until then, the count-only caller fail-stops on this outcome.
+    pub(crate) fn drain_completions_with_lifecycle<R: EffectRuntime>(
+        &mut self,
+        executor: &mut V2EffectExecutor<R>,
+    ) -> Result<V2CompletionDrainOutcome, EffectExecutorError> {
         self.drain_completions_inner(
             executor,
             MAX_COMPLETION_DRAIN_BATCH,
@@ -15601,13 +17578,14 @@ impl ProductionV2Services {
         executor: &mut V2EffectExecutor<R>,
         serve_lifecycle_ordinal: u128,
     ) -> Result<usize, EffectExecutorError> {
-        self.drain_completions_inner(
+        let outcome = self.drain_completions_inner(
             executor,
             1,
             CompletionDrainPolicy::ExactServePredecessor {
                 serve_lifecycle_ordinal,
             },
-        )
+        )?;
+        self.require_no_unowned_lifecycle_completion(executor, outcome)
     }
 
     /// Admit at most one completed causal owner from the inclusive timeout
@@ -15621,13 +17599,14 @@ impl ProductionV2Services {
         executor: &mut V2EffectExecutor<R>,
         inclusive_lifecycle_cut: u128,
     ) -> Result<usize, EffectExecutorError> {
-        self.drain_completions_inner(
+        let outcome = self.drain_completions_inner(
             executor,
             1,
             CompletionDrainPolicy::TimeoutRecoveryPrefix {
                 inclusive_lifecycle_cut,
             },
-        )
+        )?;
+        self.require_no_unowned_lifecycle_completion(executor, outcome)
     }
 
     /// Service at most one I/O result from the producer prefix frozen before an
@@ -15643,7 +17622,11 @@ impl ProductionV2Services {
             io.serve_barrier_waits_for_predecessor_completion()
         });
         match waits {
-            Ok(true) => self.drain_completions_inner(executor, 1, CompletionDrainPolicy::IoOnly),
+            Ok(true) => {
+                let outcome =
+                    self.drain_completions_inner(executor, 1, CompletionDrainPolicy::IoOnly)?;
+                self.require_no_unowned_lifecycle_completion(executor, outcome)
+            }
             Ok(false) => Ok(0),
             Err(reason) => Err(executor.external_service_failed(reason, self)),
         }
@@ -15654,7 +17637,7 @@ impl ProductionV2Services {
         executor: &mut V2EffectExecutor<R>,
         limit: usize,
         policy: CompletionDrainPolicy,
-    ) -> Result<usize, EffectExecutorError> {
+    ) -> Result<V2CompletionDrainOutcome, EffectExecutorError> {
         if self.output_guard.restart_required() {
             return Err(executor
                 .external_service_failed("Sumeragi v2 consensus requires process restart", self));
@@ -15663,6 +17646,7 @@ impl ProductionV2Services {
         let mut attempts = 0usize;
         let mut worker_completion_deferred = false;
         let mut local_completion_deferred = false;
+        let mut certified_fetch_body = None;
         while attempts < limit {
             let runtime_capacity_available = executor.remaining_completion_capacity() != 0;
             let take = match policy {
@@ -15721,6 +17705,32 @@ impl ProductionV2Services {
                 } => Some((completion.acknowledgement(), *ownership_position)),
                 PendingServiceCompletion::Local(_) => None,
             };
+            let mut certified_fetch_work_ack = match &completion {
+                PendingServiceCompletion::Io {
+                    completion: V2IoCompletion::CertifiedFetchBodyPersisted(completion),
+                    ..
+                } => {
+                    let prepared = self.io.as_ref().map_or_else(
+                        || {
+                            Err("persisted certified-Fetch body lost its I/O command owner"
+                                .to_owned())
+                        },
+                        |io| {
+                            io.prepare_certified_fetch_body_persistence_ack(
+                                completion.completion(),
+                                Arc::clone(&self.output_guard),
+                            )
+                        },
+                    );
+                    match prepared {
+                        Ok(prepared) => Some(prepared),
+                        Err(reason) => {
+                            return Err(executor.external_service_failed(reason, self));
+                        }
+                    }
+                }
+                PendingServiceCompletion::Io { .. } | PendingServiceCompletion::Local(_) => None,
+            };
             let serviced: Result<(), EffectExecutorError> = (|| {
                 match completion {
                     PendingServiceCompletion::Io {
@@ -15750,6 +17760,22 @@ impl ProductionV2Services {
                         {
                             return Err(executor.external_service_failed(reason, self));
                         }
+                    }
+                    PendingServiceCompletion::Io {
+                        completion: V2IoCompletion::CertifiedFetchBodyPersisted(completion),
+                        ..
+                    } => {
+                        assert!(
+                            certified_fetch_body.is_none(),
+                            "one bounded drain turn returns at most one lifecycle completion"
+                        );
+                        certified_fetch_body =
+                            Some(PreparedCertifiedFetchBodyPersistenceCompletion {
+                                completion: completion.into_completion(),
+                                work_ack: certified_fetch_work_ack.take().expect(
+                                    "persisted Fetch completion retains its exact work ack",
+                                ),
+                            });
                     }
                     PendingServiceCompletion::Io {
                         completion: V2IoCompletion::Validated(completion),
@@ -15872,6 +17898,15 @@ impl ProductionV2Services {
                         }
                     }
                     PendingServiceCompletion::Io {
+                        completion: V2IoCompletion::RecoveredDecisionApply(_),
+                        ..
+                    } => {
+                        return Err(executor.external_service_failed(
+                            "recovered Decision Apply completion crossed the generic executor drain",
+                            self,
+                        ));
+                    }
+                    PendingServiceCompletion::Io {
                         completion:
                             V2IoCompletion::CandidateLoadUnavailable {
                                 acquisition_id,
@@ -15989,6 +18024,9 @@ impl ProductionV2Services {
                 break;
             }
             count = count.saturating_add(1);
+            if certified_fetch_body.is_some() {
+                break;
+            }
         }
         if count != 0 || worker_completion_deferred {
             let status = executor.status();
@@ -16017,7 +18055,25 @@ impl ProductionV2Services {
                 return Err(executor.external_service_failed(reason, self));
             }
         }
-        Ok(count)
+        Ok(V2CompletionDrainOutcome {
+            serviced: count,
+            certified_fetch_body,
+        })
+    }
+
+    fn require_no_unowned_lifecycle_completion<R: EffectRuntime>(
+        &mut self,
+        executor: &mut V2EffectExecutor<R>,
+        outcome: V2CompletionDrainOutcome,
+    ) -> Result<usize, EffectExecutorError> {
+        let (serviced, completion) = outcome.into_parts();
+        if completion.is_some() {
+            return Err(executor.external_service_failed(
+                "persisted certified-Fetch body has no live lifecycle coordinator owner",
+                self,
+            ));
+        }
+        Ok(serviced)
     }
 
     /// Hand all height-local body and chunk cleanup to the bounded janitor.
@@ -16127,14 +18183,17 @@ impl ProductionV2Services {
                             }
                         }
                     }
-                    Err(V2IoTrySendError::Disconnected) => {
+                    Err(V2IoTrySendError::Disconnected(_)) => {
                         outcome.record(
                             PostFinalityCleanupTarget::CleanupWorker,
                             "Sumeragi v2 I/O worker disconnected before body retirement",
                         );
                         break;
                     }
-                    Err(V2IoTrySendError::ConflictingWorkId { .. }) => {
+                    Err(
+                        V2IoTrySendError::ConflictingWorkId { .. }
+                        | V2IoTrySendError::UnreservedRecoveredDecisionApply { .. },
+                    ) => {
                         unreachable!("retirement commands do not carry work identifiers")
                     }
                 }
@@ -18512,13 +20571,6 @@ impl V2EffectServices for ProductionV2Services {
             .acquire()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         let mut status = status.clone();
-        if let Some(io) = self.io.as_ref() {
-            super::status::set_v2_effect_completion_observer(
-                self.context.id(),
-                self.context.height,
-                &io.admission,
-            );
-        }
         status.pending_candidate_loads = self
             .locked_candidate_acquisition
             .as_ref()
@@ -18643,6 +20695,433 @@ pub(super) mod tests {
     };
 
     #[test]
+    fn recovered_decision_apply_completion_drop_is_fail_stop() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        drop(RecoveredDecisionApplyCompletionDropGuardV1::new(
+            Arc::clone(&output_guard),
+        ));
+        assert!(output_guard.restart_required());
+    }
+
+    #[test]
+    fn settled_recovered_decision_apply_completion_disarms_drop_guard() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        let mut guard = RecoveredDecisionApplyCompletionDropGuardV1::new(Arc::clone(&output_guard));
+        guard.disarm();
+        drop(guard);
+        assert!(!output_guard.restart_required());
+    }
+
+    #[test]
+    fn recovered_decision_apply_source_stays_outside_generic_effect_ownership() {
+        let apply_source = include_str!("v2_apply.rs");
+        let task_source = apply_source
+            .split_once("pub(in crate::sumeragi) struct RecoveredDecisionApplyTaskV1")
+            .expect("recovered Apply task remains declared")
+            .1
+            .split_once("pub(in crate::sumeragi) struct RecoveredDecisionApplyCompletionV1")
+            .expect("recovered Apply completion follows its task")
+            .0;
+        for forbidden in [
+            "EffectWorkId",
+            "RuntimeEffectOwnership",
+            "PendingApply",
+            "DurableApplyCompletion",
+        ] {
+            assert!(
+                !task_source.contains(forbidden),
+                "recovered Apply task reintroduced generic owner {forbidden}"
+            );
+        }
+        let recovered_execute = apply_source
+            .split_once("fn execute_recovered_decision_apply(")
+            .expect("dedicated recovered Apply executor remains present")
+            .1
+            .split_once("fn execute_exact_apply(")
+            .expect("dedicated recovered Apply executor precedes the shared core")
+            .0;
+        assert!(
+            recovered_execute
+                .find("matches_height_context(context)")
+                .is_some_and(|oracle| {
+                    recovered_execute
+                        .find("self.execute_exact_apply(")
+                        .is_some_and(|execute| oracle < execute)
+                }),
+            "recovered Apply must authenticate its exact context before storage execution"
+        );
+        let carrier_source = include_str!("v2.rs");
+        assert_eq!(
+            carrier_source
+                .matches("RecoveredDecisionApplyTaskV1::from_registry_projection")
+                .count(),
+            1,
+            "only the fixed recovered carrier projection may mint the worker task"
+        );
+    }
+
+    #[test]
+    fn recovered_decision_apply_worker_source_keeps_a_separate_owner_corridor() {
+        let source = include_str!("v2_worker.rs");
+        let generic_enqueue = source
+            .split_once("fn try_send_as(")
+            .expect("generic queue enqueue remains present")
+            .1
+            .split_once("fn cancel(")
+            .expect("generic queue enqueue precedes cancellation")
+            .0;
+        assert!(generic_enqueue.contains("UnreservedRecoveredDecisionApply"));
+
+        let reservation = source
+            .split_once("impl RecoveredDecisionApplyCapacityReservationV1<'_>")
+            .expect("dedicated recovered Apply reservation remains present")
+            .1
+            .split_once("impl Drop for RecoveredDecisionApplyCapacityReservationV1")
+            .expect("reservation implementation precedes its fail-stop drop")
+            .0;
+        assert!(reservation.contains("authenticated_predecessor_debt"));
+        assert!(reservation.contains("prepared.commit_for_worker()"));
+        assert!(reservation.contains("V2IoCommand::RecoveredDecisionApply(task)"));
+
+        let completion = source
+            .split_once("struct RecoveredDecisionApplyWorkAckV1")
+            .expect("dedicated recovered Apply acknowledgement remains present")
+            .1
+            .split_once("enum V2IoCompletion")
+            .expect("dedicated acknowledgement precedes the completion enum")
+            .0;
+        assert!(completion.contains("acknowledge_recovered_decision_apply"));
+        assert!(completion.contains("fn acknowledge_retry_publication"));
+        assert!(completion.contains("fn retry_deferred("));
+        assert!(completion.contains("retry_recovered_decision_apply(task)"));
+        assert!(completion.contains("acknowledge_recovered_decision_apply_completion(self.key)"));
+
+        let retry = source
+            .split_once("fn retry_recovered_decision_apply<")
+            .expect("dedicated recovered Apply retry remains present")
+            .1
+            .split_once("fn acknowledge_completion(")
+            .expect("retry precedes ordinary acknowledgement")
+            .0;
+        let pending = retry.find("V2IoWorkState::CompletionPending").unwrap();
+        let barrier = retry.find("exact_target_active").unwrap();
+        let reserve = retry
+            .find("try_reserve(V2IoAdmissionClass::Consensus)")
+            .unwrap();
+        let transfer = retry
+            .find("transfer_recovered_decision_apply_completion(key)")
+            .unwrap();
+        let queued = retry.find("V2IoWorkState::Queued").unwrap();
+        let publish = retry.find("task.into_command()").unwrap();
+        assert!(
+            pending < barrier
+                && barrier < reserve
+                && reserve < transfer
+                && transfer < queued
+                && queued < publish,
+            "deferred retry must rejoin the Serve barrier and transfer completion ownership before publication"
+        );
+
+        let generic_take = source
+            .split_once("fn take_io_completion(")
+            .expect("ordinary completion take remains present")
+            .1
+            .split_once("fn take_recovered_decision_apply_completion(")
+            .expect("owner-only completion take follows ordinary take")
+            .0;
+        assert!(generic_take.contains("V2IoCompletion::RecoveredDecisionApply(_)"));
+        assert!(generic_take.contains("IoCompletionTake::retained_runtime()"));
+        let runtime_capacity = source
+            .split_once("const fn requires_runtime_capacity(&self) -> bool")
+            .expect("completion runtime-capacity classifier remains present")
+            .1
+            .split_once("fn acknowledgement(&self)")
+            .expect("completion acknowledgement follows capacity classification")
+            .0;
+        assert!(runtime_capacity.contains("Self::RecoveredDecisionApply(_)"));
+        assert!(source.contains("fn drain_recovered_decision_apply_completion("));
+        assert!(source.contains("fn authorizes_sidecar_owner("));
+        assert!(!source.contains("_services: &'services mut ProductionV2Services"));
+        assert!(!source.contains("complete_application(*guarded"));
+    }
+
+    #[test]
+    fn recovered_decision_apply_completion_accounting_is_stable_by_exact_key() {
+        let admission = V2IoAdmission::new(2, 2).expect("construct bounded I/O admission");
+        let key = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 1);
+        let same_ordinal_foreign = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 2);
+        admission.retain_completion(Instant::now(), false, None, None);
+        admission.retain_completion(Instant::now(), true, Some(7), Some(key));
+        admission.retain_completion(Instant::now(), false, Some(8), None);
+
+        assert!(admission.recovered_decision_apply_completion_is_exact(key));
+        assert!(
+            !admission.recovered_decision_apply_completion_is_exact(same_ordinal_foreign),
+            "an ordinal alone cannot authorize lifecycle completion ownership"
+        );
+        assert!(admission.transfer_recovered_decision_apply_completion(key));
+        assert!(!admission.recovered_decision_apply_completion_is_exact(key));
+        assert_eq!(
+            admission
+                .completion_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .owned
+                .len(),
+            2,
+            "keyed transfer must preserve unrelated completion positions"
+        );
+    }
+
+    #[test]
+    fn recovered_decision_apply_retry_requeues_exact_key_and_preserves_foreign_completions() {
+        let admission = Arc::new(V2IoAdmission::new(2, 2).expect("bounded retry admission"));
+        let (command_tx, _command_rx) =
+            v2_io_command_channel(admission.capacity(), 1, 1, 1, Arc::clone(&admission));
+        let key = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 1);
+        let same_ordinal_foreign = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 2);
+        admission.retain_completion(Instant::now(), false, None, None);
+        admission.retain_completion(Instant::now(), true, Some(7), Some(key));
+        admission.retain_completion(Instant::now(), true, Some(7), Some(same_ordinal_foreign));
+        command_tx.queue.lock().recovered_decision_applies.insert(
+            key,
+            V2IoTrackedRecoveredDecisionApplyV1 {
+                state: V2IoWorkState::CompletionPending,
+            },
+        );
+        let unrelated_before = admission
+            .completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .owned
+            .iter()
+            .filter(|owner| owner.recovered_decision_apply != Some(key))
+            .map(|owner| {
+                (
+                    owner.retained_at,
+                    owner.service_debt,
+                    owner.requires_runtime_capacity,
+                    owner.runtime_lifecycle_ordinal,
+                    owner.recovered_decision_apply,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            command_tx
+                .queue
+                .retry_recovered_decision_apply(RecoveredDecisionApplyRetryTaskFixtureV1(key))
+                .is_ok(),
+            "the exact retained completion must re-enter its dedicated queue"
+        );
+
+        let state = command_tx.queue.lock();
+        assert_eq!(
+            state
+                .recovered_decision_applies
+                .get(&key)
+                .map(|work| work.state),
+            Some(V2IoWorkState::Queued)
+        );
+        assert_eq!(state.commands.len(), 1);
+        assert!(matches!(
+            state.commands.front(),
+            Some(V2IoCommand::RecoveredDecisionApplyFixture(queued)) if *queued == key
+        ));
+        drop(state);
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
+        assert!(!admission.recovered_decision_apply_completion_is_exact(key));
+        assert!(admission.recovered_decision_apply_completion_is_exact(same_ordinal_foreign));
+        let unrelated_after = admission
+            .completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .owned
+            .iter()
+            .map(|owner| {
+                (
+                    owner.retained_at,
+                    owner.service_debt,
+                    owner.requires_runtime_capacity,
+                    owner.runtime_lifecycle_ordinal,
+                    owner.recovered_decision_apply,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(unrelated_after, unrelated_before);
+    }
+
+    #[test]
+    fn recovered_decision_apply_retry_unavailable_preserves_pending_owner_and_barrier() {
+        {
+            let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded retry admission"));
+            let (command_tx, _command_rx) =
+                v2_io_command_channel(1, 1, 1, 1, Arc::clone(&admission));
+            command_tx
+                .try_send(V2IoCommand::Shutdown)
+                .expect("fill the sole physical queue position");
+            let key = RecoveredDecisionApplyDispatchKeyV1::for_test(11, 3);
+            admission.retain_completion(Instant::now(), true, Some(11), Some(key));
+            command_tx.queue.lock().recovered_decision_applies.insert(
+                key,
+                V2IoTrackedRecoveredDecisionApplyV1 {
+                    state: V2IoWorkState::CompletionPending,
+                },
+            );
+            let completion_before = admission
+                .completion_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .owned
+                .iter()
+                .map(|owner| {
+                    (
+                        owner.retained_at,
+                        owner.service_debt,
+                        owner.requires_runtime_capacity,
+                        owner.runtime_lifecycle_ordinal,
+                        owner.recovered_decision_apply,
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            assert!(matches!(
+                command_tx
+                    .queue
+                    .retry_recovered_decision_apply(RecoveredDecisionApplyRetryTaskFixtureV1(key)),
+                Err(RecoveredDecisionApplyRetryQueueErrorV1::Unavailable(
+                    RecoveredDecisionApplyRetryTaskFixtureV1(returned)
+                )) if returned == key
+            ));
+
+            let state = command_tx.queue.lock();
+            assert_eq!(
+                state
+                    .recovered_decision_applies
+                    .get(&key)
+                    .map(|work| work.state),
+                Some(V2IoWorkState::CompletionPending)
+            );
+            assert_eq!(state.commands.len(), 1);
+            assert!(matches!(
+                state.commands.front(),
+                Some(V2IoCommand::Shutdown)
+            ));
+            drop(state);
+            assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
+            assert_eq!(
+                admission
+                    .completion_state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .owned
+                    .iter()
+                    .map(|owner| {
+                        (
+                            owner.retained_at,
+                            owner.service_debt,
+                            owner.requires_runtime_capacity,
+                            owner.runtime_lifecycle_ordinal,
+                            owner.recovered_decision_apply,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                completion_before
+            );
+        }
+
+        let (service, keys) = fixture_with_block_payload();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let request = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let requester = request.request().requester.clone();
+        let (command_tx, _command_rx, admission) = test_io_command_channel(2);
+        let barrier = command_tx
+            .prepare_serve(CertifiedServeOwnerKey::Roster(requester), request)
+            .expect("reserve an unclaimed Serve placeholder")
+            .lifecycle_id;
+        let key = RecoveredDecisionApplyDispatchKeyV1::for_test(13, 4);
+        admission.retain_completion(Instant::now(), true, Some(13), Some(key));
+        command_tx.queue.lock().recovered_decision_applies.insert(
+            key,
+            V2IoTrackedRecoveredDecisionApplyV1 {
+                state: V2IoWorkState::CompletionPending,
+            },
+        );
+        let completion_before = admission
+            .completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .owned
+            .iter()
+            .map(|owner| {
+                (
+                    owner.retained_at,
+                    owner.service_debt,
+                    owner.requires_runtime_capacity,
+                    owner.runtime_lifecycle_ordinal,
+                    owner.recovered_decision_apply,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert!(matches!(
+            command_tx
+                .queue
+                .retry_recovered_decision_apply(RecoveredDecisionApplyRetryTaskFixtureV1(key)),
+            Err(RecoveredDecisionApplyRetryQueueErrorV1::Unavailable(
+                RecoveredDecisionApplyRetryTaskFixtureV1(returned)
+            )) if returned == key
+        ));
+
+        let state = command_tx.queue.lock();
+        assert_eq!(
+            state
+                .recovered_decision_applies
+                .get(&key)
+                .map(|work| work.state),
+            Some(V2IoWorkState::CompletionPending)
+        );
+        assert_eq!(state.serve_barrier, Some(barrier));
+        assert_eq!(
+            state.serves.get(&barrier).map(|serve| serve.state),
+            Some(V2IoServeState::Reserved)
+        );
+        assert!(!state.pending_serve_requests.contains_key(&barrier));
+        assert_eq!(state.commands.len(), 1);
+        assert!(matches!(
+            state.commands.front(),
+            Some(V2IoCommand::Serve { lifecycle_id, .. }) if *lifecycle_id == barrier
+        ));
+        drop(state);
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(
+            admission
+                .completion_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .owned
+                .iter()
+                .map(|owner| {
+                    (
+                        owner.retained_at,
+                        owner.service_debt,
+                        owner.requires_runtime_capacity,
+                        owner.runtime_lifecycle_ordinal,
+                        owner.recovered_decision_apply,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            completion_before
+        );
+    }
+
+    #[test]
     fn orphan_chunk_budget_obeys_encoded_payload_ceiling() {
         let maximum = wire::DataAvailabilityLayout {
             encoding: wire::PayloadEncoding::ReedSolomon16,
@@ -18677,6 +21156,408 @@ pub(super) mod tests {
             Arc::clone(&admission),
         );
         (sender, receiver, admission)
+    }
+
+    /// Exact test-only worker ownership retained behind a production service.
+    #[must_use = "the exact test I/O fixture must remain alive with its service"]
+    pub(in crate::sumeragi) struct LifecyclePlannerIoFixture {
+        command_rx: V2IoCommandReceiver,
+        _body_store: V2BodyStore,
+    }
+
+    impl LifecyclePlannerIoFixture {
+        /// Count exact queued certified-Fetch persistence commands.
+        pub(in crate::sumeragi) fn queued_certified_fetch_count(&self) -> usize {
+            self.command_rx
+                .queue
+                .lock()
+                .commands
+                .iter()
+                .filter(|command| matches!(command, V2IoCommand::PersistCertifiedFetchBody(_)))
+                .count()
+        }
+
+        /// Fill the exact Consensus threshold with control predecessors.
+        pub(in crate::sumeragi) fn saturate_consensus_prefix(
+            &self,
+            services: &ProductionV2Services,
+        ) {
+            let io = services
+                .io
+                .as_ref()
+                .expect("manual lifecycle planner I/O remains installed");
+            assert!(
+                Arc::ptr_eq(&self.command_rx.queue, &io.command_tx.queue),
+                "the service must retain this fixture's exact queue"
+            );
+            for _ in 0..io.admission.consensus_limit {
+                io.command_tx
+                    .try_send(V2IoCommand::Shutdown)
+                    .expect("control reserve admits the bounded test predecessor");
+            }
+        }
+
+        /// Release one exact synthetic predecessor through the real receiver.
+        pub(in crate::sumeragi) fn release_one_predecessor(&self) {
+            assert!(matches!(
+                self.command_rx.try_recv(),
+                Ok(V2IoCommand::Shutdown)
+            ));
+        }
+
+        /// Replace only the manual service's output guard for identity tests.
+        pub(in crate::sumeragi) fn install_output_guard_for_test(
+            &self,
+            services: &mut ProductionV2Services,
+            output_guard: Arc<ConsensusOutputGuard>,
+        ) {
+            let io = services
+                .io
+                .as_ref()
+                .expect("manual lifecycle planner I/O remains installed");
+            assert!(
+                Arc::ptr_eq(&self.command_rx.queue, &io.command_tx.queue),
+                "the output guard must change only on this exact test service"
+            );
+            services.output_guard = output_guard;
+        }
+
+        /// Retire the manual queue without invoking worker shutdown semantics.
+        pub(in crate::sumeragi) fn detach(self, services: &mut ProductionV2Services) {
+            services.lifecycle_body_store_identity = None;
+            drop(services.io.take());
+            drop(self);
+        }
+    }
+
+    /// Install the exact body store moved out of a lifecycle owner into one
+    /// bounded production-service queue for the owner transaction regression.
+    pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_test(
+        services: &mut ProductionV2Services,
+        context: wire::HeightContext,
+        output_guard: Arc<ConsensusOutputGuard>,
+        body_store: V2BodyStore,
+        identity: V2BodyStoreInstanceIdentity,
+        class_capacity: usize,
+    ) -> LifecyclePlannerIoFixture {
+        assert!(class_capacity > 0, "test I/O capacity must be non-zero");
+        assert!(
+            body_store.instance_identity().same_instance(&identity),
+            "the worker identity must come from the moved exact store"
+        );
+        let admission = Arc::new(
+            V2IoAdmission::new(class_capacity, class_capacity)
+                .expect("bounded lifecycle planner I/O admission"),
+        );
+        let (command_tx, command_rx) = v2_io_command_channel(
+            admission.capacity(),
+            context.roster.len(),
+            class_capacity,
+            class_capacity,
+            Arc::clone(&admission),
+        );
+        let (_completion_tx, completion_rx) = mpsc::sync_channel(admission.capacity());
+        services.context = context.clone();
+        services.local_peer = context.roster[0].validator.clone();
+        services.local_validator = Some(0);
+        services.active_tag = EventTag::new(context.height, 0, Generation::new(context.height));
+        services.output_guard = output_guard;
+        services.lifecycle_body_store_identity = Some(identity);
+        services.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission,
+        });
+        LifecyclePlannerIoFixture {
+            command_rx,
+            _body_store: body_store,
+        }
+    }
+
+    #[test]
+    fn lifecycle_capacity_reservation_freezes_fifo_tail_and_rolls_back_under_lock() {
+        let (service, _) = fixture();
+        let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
+        let capacity = admission.capacity();
+        let (sender, receiver) = v2_io_command_channel(capacity, 1, 1, 1, Arc::clone(&admission));
+        sender
+            .try_send(V2IoCommand::Shutdown)
+            .expect("queue one exact predecessor");
+        let queue = Arc::clone(&sender.queue);
+        let output_guard = ConsensusOutputGuard::isolated();
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .expect("open fail-stop operation");
+        let target = LifecycleIngressIoTargetSeal::for_test(
+            &service.context,
+            LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
+            7,
+        );
+        let V2IoLifecycleCapacityCapture::Reserved(reservation) = queue
+            .capture_lifecycle_capacity(operation, Arc::clone(&output_guard), target)
+            .expect("reserve consensus target behind one predecessor")
+        else {
+            panic!("consensus target must own its exact FIFO position");
+        };
+        assert_eq!(reservation.predecessor_debt, 1);
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 2);
+
+        let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+        let producer = std::thread::spawn(move || {
+            let result = sender.try_send(V2IoCommand::Shutdown);
+            done_tx
+                .send(result.is_ok())
+                .expect("report producer result");
+        });
+        assert!(matches!(
+            done_rx.recv_timeout(Duration::from_millis(20)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+
+        reservation.cancel_before_plan_for_test();
+        assert!(done_rx.recv().expect("producer resumes after rollback"));
+        producer.join().expect("producer thread exits");
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 2);
+        assert!(matches!(receiver.try_recv(), Ok(V2IoCommand::Shutdown)));
+        assert!(matches!(receiver.try_recv(), Ok(V2IoCommand::Shutdown)));
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
+    }
+
+    #[test]
+    fn lifecycle_capacity_unfinished_reservation_closes_output_fail_stop() {
+        let (service, _) = fixture();
+        let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
+        let (sender, _receiver) =
+            v2_io_command_channel(admission.capacity(), 1, 1, 1, Arc::clone(&admission));
+        let output_guard = ConsensusOutputGuard::isolated();
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .expect("open fail-stop operation");
+        let target = LifecycleIngressIoTargetSeal::for_test(
+            &service.context,
+            LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
+            8,
+        );
+        let V2IoLifecycleCapacityCapture::Reserved(reservation) = sender
+            .queue
+            .capture_lifecycle_capacity(operation, Arc::clone(&output_guard), target)
+            .expect("reserve one exact consensus slot")
+        else {
+            panic!("empty consensus suffix must reserve");
+        };
+
+        drop(reservation);
+
+        assert!(output_guard.restart_required());
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
+    }
+
+    #[test]
+    fn lifecycle_capacity_uses_hierarchical_class_and_release_generation() {
+        let (service, _) = fixture();
+        let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
+        let capacity = admission.capacity();
+        let (sender, _receiver) = v2_io_command_channel(capacity, 1, 1, 1, Arc::clone(&admission));
+        assert!(admission.try_reserve(V2IoAdmissionClass::Auxiliary));
+        let output_guard = ConsensusOutputGuard::isolated();
+
+        let auxiliary = LifecycleIngressIoTargetSeal::for_test(
+            &service.context,
+            LifecycleIngressIoTargetKind::CertifiedServe,
+            11,
+        );
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .expect("open fail-stop operation");
+        let V2IoLifecycleCapacityCapture::Unavailable(wait) = sender
+            .queue
+            .capture_lifecycle_capacity(operation, Arc::clone(&output_guard), auxiliary)
+            .expect("full auxiliary prefix yields a generation wait")
+        else {
+            panic!("Serve must not borrow consensus-reserved capacity");
+        };
+        assert!(Arc::ptr_eq(&wait.queue, &sender.queue));
+        assert_eq!(wait.observed_generation, 0);
+        assert_eq!(
+            wait.target.kind(),
+            LifecycleIngressIoTargetKind::CertifiedServe
+        );
+
+        let consensus = LifecycleIngressIoTargetSeal::for_test(
+            &service.context,
+            LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
+            12,
+        );
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .expect("second fail-stop operation");
+        let V2IoLifecycleCapacityCapture::Reserved(reservation) = sender
+            .queue
+            .capture_lifecycle_capacity(operation, Arc::clone(&output_guard), consensus)
+            .expect("consensus suffix remains available")
+        else {
+            panic!("certified-Fetch persistence owns consensus capacity");
+        };
+        reservation.cancel_before_plan_for_test();
+        assert_eq!(admission.lifecycle_capacity_generation(), 1);
+        assert!(admission.lifecycle_capacity_generation() > wait.observed_generation);
+        admission.release();
+    }
+
+    #[test]
+    fn lifecycle_capacity_wait_classifies_live_release_and_terminal_service_loss() {
+        let (mut service, _) = fixture();
+        let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
+        let (sender, _receiver) =
+            v2_io_command_channel(admission.capacity(), 1, 1, 1, Arc::clone(&admission));
+        let output_guard = ConsensusOutputGuard::isolated();
+        let wait = LifecycleIoCapacityWait {
+            queue: Arc::clone(&sender.queue),
+            output_guard: Arc::clone(&output_guard),
+            target: LifecycleIngressIoTargetSeal::for_test(
+                &service.context,
+                LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
+                14,
+            ),
+            observed_generation: 0,
+        };
+        let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
+        service.output_guard = Arc::clone(&output_guard);
+        service.io = Some(V2IoHandle {
+            command_tx: sender,
+            completion_rx,
+            join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission: Arc::clone(&admission),
+        });
+
+        assert_eq!(
+            wait.status(&service),
+            LifecycleIoCapacityWaitStatus::SamePending
+        );
+        assert!(admission.try_reserve(V2IoAdmissionClass::Consensus));
+        admission.release();
+        assert_eq!(
+            wait.status(&service),
+            LifecycleIoCapacityWaitStatus::Released
+        );
+
+        admission
+            .lifecycle_capacity_generation
+            .store(u64::MAX, AtomicOrdering::Release);
+        admission
+            .lifecycle_capacity_generation_exhausted
+            .store(true, AtomicOrdering::Release);
+        assert_eq!(
+            wait.status(&service),
+            LifecycleIoCapacityWaitStatus::GenerationExhausted
+        );
+
+        output_guard.activate_restart_required();
+        assert_eq!(
+            wait.status(&service),
+            LifecycleIoCapacityWaitStatus::ForeignOrDisconnected
+        );
+        drop(service.io.take());
+        assert_eq!(
+            wait.status(&service),
+            LifecycleIoCapacityWaitStatus::ForeignOrDisconnected
+        );
+    }
+
+    #[test]
+    fn lifecycle_capacity_generation_exhaustion_never_wraps() {
+        let (service, _) = fixture();
+        let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded I/O admission"));
+        let capacity = admission.capacity();
+        let (sender, _receiver) = v2_io_command_channel(capacity, 1, 1, 1, Arc::clone(&admission));
+        assert!(admission.try_reserve(V2IoAdmissionClass::Auxiliary));
+        admission
+            .lifecycle_capacity_generation
+            .store(u64::MAX, AtomicOrdering::Release);
+        admission.release();
+        assert_eq!(admission.lifecycle_capacity_generation(), u64::MAX);
+        assert!(admission.lifecycle_capacity_generation_exhausted());
+
+        let output_guard = ConsensusOutputGuard::isolated();
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .expect("open fail-stop operation");
+        let target = LifecycleIngressIoTargetSeal::for_test(
+            &service.context,
+            LifecycleIngressIoTargetKind::CertifiedServe,
+            13,
+        );
+        let Err((failure, restored)) =
+            sender
+                .queue
+                .capture_lifecycle_capacity(operation, Arc::clone(&output_guard), target)
+        else {
+            panic!("exhausted generation must fail closed");
+        };
+        assert_eq!(
+            failure,
+            LifecycleIoCapacityCaptureFailure::GenerationExhausted
+        );
+        assert_eq!(
+            restored.kind(),
+            LifecycleIngressIoTargetKind::CertifiedServe
+        );
+        assert!(output_guard.restart_required());
+    }
+
+    #[test]
+    fn lifecycle_capacity_rejects_repeat_fetch_while_work_is_completion_pending() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let work_id = EffectWorkId::for_test(21);
+        let durable = DurableBodyReceipt::for_test(
+            service.context.id(),
+            proposal.round,
+            proposal.subject,
+            HashOf::new(&proposal.manifest),
+        );
+        let (sender, receiver, admission) = test_io_command_channel(2);
+        sender
+            .try_send(V2IoCommand::Validate(BodyValidationTask::for_test(
+                21, durable,
+            )))
+            .expect("install one exact in-flight work owner");
+        assert!(matches!(receiver.try_recv(), Ok(V2IoCommand::Validate(_))));
+        receiver.complete_work(work_id);
+        assert_eq!(
+            sender.queue.lock().work[&work_id].state,
+            V2IoWorkState::CompletionPending
+        );
+
+        let output_guard = ConsensusOutputGuard::isolated();
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .expect("open fail-stop operation");
+        let target = LifecycleIngressIoTargetSeal::for_test(
+            &service.context,
+            LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
+            work_id.get(),
+        );
+        let V2IoLifecycleCapacityCapture::Reserved(reservation) = sender
+            .queue
+            .capture_lifecycle_capacity(operation, Arc::clone(&output_guard), target)
+            .expect("the service can reserve while the prior owner is active")
+        else {
+            panic!("repeat preflight needs one locked capacity reservation");
+        };
+        assert!(!reservation.preflight_selected_target_work_absent());
+        reservation.cancel_before_plan_for_test();
+        assert_eq!(
+            sender.queue.lock().work[&work_id].state,
+            V2IoWorkState::CompletionPending
+        );
+        sender.acknowledge_completion(work_id);
+        assert!(sender.queue.lock().work.is_empty());
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
     }
 
     /// Build an empty Serve gate together with its exact actor-global ordinal source.
@@ -19804,6 +22685,7 @@ pub(super) mod tests {
             kura,
             chunk_root: PathBuf::new(),
             io: None,
+            lifecycle_body_store_identity: None,
             fetches: BTreeMap::new(),
             fetch_by_manifest: BTreeMap::new(),
             orphan_chunks: BTreeMap::new(),
@@ -24953,7 +27835,7 @@ pub(super) mod tests {
         assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
         assert!(matches!(
             command_tx.try_send(V2IoCommand::Validate(conflicting)),
-            Err(V2IoTrySendError::ConflictingWorkId { work_id })
+            Err(V2IoTrySendError::ConflictingWorkId { work_id, .. })
                 if work_id == EffectWorkId::for_test(8)
         ));
 
@@ -25023,7 +27905,7 @@ pub(super) mod tests {
         assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
         assert!(matches!(
             command_tx.try_send(V2IoCommand::Apply(conflicting)),
-            Err(V2IoTrySendError::ConflictingWorkId { work_id })
+            Err(V2IoTrySendError::ConflictingWorkId { work_id, .. })
                 if work_id == EffectWorkId::for_test(7)
         ));
 
@@ -30169,6 +33051,24 @@ pub(super) mod tests {
 
         assert!(!output_guard.restart_required());
         assert!(output_guard.acquire().is_some());
+    }
+
+    #[test]
+    fn unconsumed_certified_fetch_persistence_closes_output() {
+        let abandoned_output = ConsensusOutputGuard::isolated();
+        drop(CertifiedFetchBodyPersistenceDropGuard::new(Arc::clone(
+            &abandoned_output,
+        )));
+        assert!(abandoned_output.restart_required());
+        assert!(abandoned_output.acquire().is_none());
+
+        let transferred_output = ConsensusOutputGuard::isolated();
+        let mut transferred =
+            CertifiedFetchBodyPersistenceDropGuard::new(Arc::clone(&transferred_output));
+        transferred.disarm();
+        drop(transferred);
+        assert!(!transferred_output.restart_required());
+        assert!(transferred_output.acquire().is_some());
     }
 
     #[test]

@@ -9,10 +9,10 @@ use iroha_crypto::HashOf;
 use iroha_data_model::block::consensus_v2 as wire;
 
 use super::{
-    LifecycleCoordinator,
+    LifecycleCoordinator, LifecycleWorkRegistryHolder,
     ingress_position::{
-        FairIngressQueueCut, FairIngressQueuePositions, PendingFairIngressIdentity,
-        PreparedFairIngressQueueWitness,
+        FairIngressQueueCut, FairIngressQueueCutError, FairIngressQueuePositions,
+        PendingFairIngressIdentity, PreparedFairIngressQueueWitness,
     },
     projection::{
         certified_fetch_lifecycle_key, certified_fetch_wait_source, pending_effect_causal_root,
@@ -22,20 +22,23 @@ use super::{
         LifecycleState, LifecycleWorkClass, ReadyEvent, WaitSource,
     },
     work_registry::{
-        CertifiedFetchCompletionError, CertifiedFetchReplacementLocation,
+        CertifiedFetchCompletionError, CertifiedFetchWaitingLocation,
         ConcreteLifecycleWorkRegistry, PreparedCertifiedFetchCompletion,
     },
 };
 use crate::sumeragi::{
-    FairV2Ingress, FairV2IngressClass, FairV2IngressQueueGateVerdict, FairV2IngressSourceClass,
-    InboundBlockMessage,
+    FairV2Ingress, FairV2IngressClass, FairV2IngressDequeueDisposition,
+    FairV2IngressQueueGateVerdict, FairV2IngressSourceClass, InboundBlockMessage,
     message::BlockMessage,
+    v2_body_store::{DurableCertifiedFetchBodyReceipt, V2BodyStore, V2BodyStoreError},
     v2_effects::{
         CertifiedResponsePriorityCandidate, CertifiedResponsePriorityProbe, EffectTransportError,
-        V2EffectExecutor,
+        EffectWorkId, V2EffectExecutor,
     },
     v2_runtime::SerializedV2Runtime,
+    v2_transport::AuthenticatedCertifiedBodyResponse,
     v2_transport::V2TransportError,
+    v2_worker::{PreparedCertifiedFetchBodyPersistenceCompletion, ProductionV2Services},
 };
 
 #[cfg(test)]
@@ -115,6 +118,302 @@ pub(crate) enum LifecycleIngressSelectorError {
     InvalidCensus,
 }
 
+/// Opaque exact identity of one bounded certified-Fetch persistence command.
+///
+/// The physical queue identity remains nested and cannot be reconstructed from
+/// a work id, response hash, or caller-supplied ordinal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) struct CertifiedFetchBodyPersistenceId {
+    ingress_identity: PendingFairIngressIdentity,
+    work_id: EffectWorkId,
+}
+
+/// Move-only storage-worker command prepared from one consumed selector.
+///
+/// It owns the sole retained [`AuthenticatedCertifiedBodyResponse`] minted by
+/// the winning executor probe and deliberately retains no queue witness.
+#[derive(Debug)]
+#[must_use = "the exact authenticated response must be persisted or returned"]
+pub(in crate::sumeragi) struct CertifiedFetchBodyPersistenceTask {
+    id: CertifiedFetchBodyPersistenceId,
+    authenticated: AuthenticatedCertifiedBodyResponse,
+}
+
+impl CertifiedFetchBodyPersistenceTask {
+    /// Return the exact indexed command identity used by the bounded I/O FIFO.
+    pub(in crate::sumeragi) const fn id(&self) -> CertifiedFetchBodyPersistenceId {
+        self.id
+    }
+
+    /// Return whether this command came from the exact queue-selected carrier.
+    pub(in crate::sumeragi) const fn matches_ingress_identity(
+        &self,
+        identity: PendingFairIngressIdentity,
+    ) -> bool {
+        self.id.ingress_identity == identity
+    }
+
+    /// Return the existing executor work id; this does not allocate a runtime ordinal.
+    pub(in crate::sumeragi) const fn work_id(&self) -> EffectWorkId {
+        self.id.work_id
+    }
+
+    /// Hash the complete response for the existing exact-command descriptor.
+    pub(in crate::sumeragi) fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
+        HashOf::new(self.authenticated.response())
+    }
+
+    /// Persist through the one height-local body-store owner.
+    ///
+    /// Failure returns this whole move-only task. Success carries the exact
+    /// queue identity and authenticated response forward beside the sealed
+    /// durable receipt, but never carries the stale selector witness.
+    pub(in crate::sumeragi) fn persist(
+        self,
+        body_store: &mut V2BodyStore,
+    ) -> Result<CertifiedFetchBodyPersistenceCompletion, (V2BodyStoreError, Self)> {
+        let receipt =
+            match body_store.persist_authenticated_certified_fetch_response(&self.authenticated) {
+                Ok(receipt) => receipt,
+                Err(error) => return Err((error, self)),
+            };
+        Ok(CertifiedFetchBodyPersistenceCompletion {
+            id: self.id,
+            authenticated: self.authenticated,
+            receipt,
+        })
+    }
+}
+
+/// Move-only ordinary I/O completion for one exact persisted response body.
+///
+/// This value is the only input to the fresh-selector Phase-B transaction. It
+/// exposes neither response parts nor a receipt constructor.
+#[derive(Debug)]
+#[must_use = "the durable response must enter the fresh-selector transaction"]
+pub(crate) struct CertifiedFetchBodyPersistenceCompletion {
+    id: CertifiedFetchBodyPersistenceId,
+    authenticated: AuthenticatedCertifiedBodyResponse,
+    receipt: DurableCertifiedFetchBodyReceipt,
+}
+
+impl CertifiedFetchBodyPersistenceCompletion {
+    /// Return the exact indexed command identity for completion acknowledgement.
+    pub(in crate::sumeragi) const fn id(&self) -> CertifiedFetchBodyPersistenceId {
+        self.id
+    }
+
+    /// Return the existing executor work id without exposing queue coordinates.
+    pub(in crate::sumeragi) const fn work_id(&self) -> EffectWorkId {
+        self.id.work_id
+    }
+
+    /// Hash the complete authenticated response for exact command acknowledgement.
+    pub(in crate::sumeragi) fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
+        HashOf::new(self.authenticated.response())
+    }
+}
+
+/// Why a selector could not be consumed into one storage-worker command.
+#[derive(Debug)]
+#[allow(variant_size_differences)]
+pub(crate) enum CertifiedFetchBodyPersistencePreparationFailure {
+    /// The selected occurrence did not retain exact certified-Fetch authority.
+    Selector(CertifiedFetchReadyPublicationError),
+    /// The executor changed before the selector's final equality re-probe.
+    Executor(EffectTransportError),
+}
+
+/// Ownership-preserving Phase-A preparation failure.
+#[must_use = "the unchanged selector remains available for retry or drop"]
+pub(crate) struct CertifiedFetchBodyPersistencePreparationError {
+    failure: CertifiedFetchBodyPersistencePreparationFailure,
+    prepared: PreparedLifecycleIngressSelector,
+}
+
+impl CertifiedFetchBodyPersistencePreparationError {
+    /// Return the closed failure classification.
+    pub(crate) const fn failure(&self) -> &CertifiedFetchBodyPersistencePreparationFailure {
+        &self.failure
+    }
+
+    /// Recover the complete unchanged selector preparation.
+    pub(crate) fn into_prepared(self) -> PreparedLifecycleIngressSelector {
+        self.prepared
+    }
+}
+
+/// Retryable failure before the LedgerV1 publication call begins.
+#[derive(Debug)]
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+enum CertifiedFetchBodyPersistenceRetryFailure {
+    FreshSelector(LifecycleIngressSelectorError),
+    Selector(CertifiedFetchReadyPublicationError),
+    CompletionIdentity,
+    Executor(EffectTransportError),
+    CoordinatorStutter,
+    Registry(CertifiedFetchCompletionError),
+    Service(String),
+    OutputClosed,
+}
+
+/// Ownership-preserving failure from the pre-LedgerV1 half of Phase B.
+///
+/// The only recovery surface returns the complete opaque ordinary-completion
+/// outcome. It never exposes the authenticated response, receipt, work ack,
+/// queue coordinates, or decomposed response parts.
+#[must_use = "the persisted response still owns its exact retry authority"]
+pub(crate) struct CertifiedFetchBodyPersistenceRetryError {
+    failure: CertifiedFetchBodyPersistenceRetryFailure,
+    completion: PreparedCertifiedFetchBodyPersistenceCompletion,
+}
+
+impl CertifiedFetchBodyPersistenceRetryError {
+    /// Stable diagnostic category for the retryable pre-ledger rejection.
+    pub(crate) const fn reason(&self) -> &'static str {
+        match &self.failure {
+            CertifiedFetchBodyPersistenceRetryFailure::FreshSelector(_) => "fresh selector",
+            CertifiedFetchBodyPersistenceRetryFailure::Selector(_) => "selector authority",
+            CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity => {
+                "persistence completion identity"
+            }
+            CertifiedFetchBodyPersistenceRetryFailure::Executor(_) => "executor preflight",
+            CertifiedFetchBodyPersistenceRetryFailure::CoordinatorStutter => "coordinator mutation",
+            CertifiedFetchBodyPersistenceRetryFailure::Registry(_) => "registry preflight",
+            CertifiedFetchBodyPersistenceRetryFailure::Service(_) => "service preflight",
+            CertifiedFetchBodyPersistenceRetryFailure::OutputClosed => "consensus output closed",
+        }
+    }
+
+    /// Recover the whole move-only completion for a later fresh-selector retry.
+    pub(crate) fn into_completion(self) -> PreparedCertifiedFetchBodyPersistenceCompletion {
+        self.completion
+    }
+
+    /// Preserve the underlying typed error for diagnostics without exposing it.
+    pub(crate) fn detail(&self) -> String {
+        match &self.failure {
+            CertifiedFetchBodyPersistenceRetryFailure::FreshSelector(error) => {
+                format!("{error:?}")
+            }
+            CertifiedFetchBodyPersistenceRetryFailure::Selector(error) => format!("{error:?}"),
+            CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity => {
+                "persisted completion differs from the fresh exact selector".to_owned()
+            }
+            CertifiedFetchBodyPersistenceRetryFailure::Executor(error) => error.to_string(),
+            CertifiedFetchBodyPersistenceRetryFailure::CoordinatorStutter => {
+                "waiting Fetch did not stage one new Ready successor".to_owned()
+            }
+            CertifiedFetchBodyPersistenceRetryFailure::Registry(error) => format!("{error:?}"),
+            CertifiedFetchBodyPersistenceRetryFailure::Service(error) => error.clone(),
+            CertifiedFetchBodyPersistenceRetryFailure::OutputClosed => {
+                "consensus output admission is closed".to_owned()
+            }
+        }
+    }
+}
+
+/// Exact fresh queue witness retained after LedgerV1 may have advanced.
+struct PreparedCertifiedFetchExactDequeue {
+    context: LifecycleContext,
+    ingress_identity: PendingFairIngressIdentity,
+    queue_witness: PreparedFairIngressQueueWitness,
+}
+
+impl PreparedCertifiedFetchExactDequeue {
+    const fn physical_admission_ordinal(&self) -> u64 {
+        self.ingress_identity.physical_admission_ordinal()
+    }
+
+    fn commit(
+        self,
+        ingress: &FairV2Ingress,
+    ) -> Result<CertifiedFetchDequeuedResponse, (FairIngressQueueCutError, Self)> {
+        let Self {
+            context,
+            ingress_identity,
+            queue_witness,
+        } = self;
+        match queue_witness.commit_exact_dequeue_retaining(
+            ingress,
+            context,
+            ingress_identity.physical_admission_ordinal(),
+        ) {
+            Ok((inbound, disposition)) => Ok(CertifiedFetchDequeuedResponse {
+                ingress_identity,
+                inbound,
+                disposition,
+            }),
+            Err((error, queue_witness)) => Err((
+                error,
+                Self {
+                    context,
+                    ingress_identity,
+                    queue_witness,
+                },
+            )),
+        }
+    }
+}
+
+/// Restart-only failure after LedgerV1 publication was invoked.
+#[derive(Debug)]
+#[allow(variant_size_differences)]
+enum CertifiedFetchBodyPersistenceRestartFailure {
+    Ledger(String),
+    Queue(FairIngressQueueCutError),
+}
+
+/// Sealed post-ledger authority which may never be retried in-process.
+///
+/// Both the still-indexed I/O completion and fresh exact queue witness remain
+/// owned for diagnostics and destruction. The fail-stop operation has already
+/// closed output before this value can reach its caller.
+#[must_use = "post-ledger failure requires process restart"]
+pub(crate) struct CertifiedFetchBodyPersistenceRestartError {
+    failure: CertifiedFetchBodyPersistenceRestartFailure,
+    completion: PreparedCertifiedFetchBodyPersistenceCompletion,
+    exact_dequeue: PreparedCertifiedFetchExactDequeue,
+}
+
+impl CertifiedFetchBodyPersistenceRestartError {
+    /// Stable diagnostic category for the restart-only boundary.
+    pub(crate) const fn reason(&self) -> &'static str {
+        match &self.failure {
+            CertifiedFetchBodyPersistenceRestartFailure::Ledger(_) => "LedgerV1 publication",
+            CertifiedFetchBodyPersistenceRestartFailure::Queue(_) => "post-ledger queue CAS",
+        }
+    }
+
+    /// Preserve the exact post-ledger error for restart diagnostics.
+    pub(crate) fn detail(&self) -> String {
+        match &self.failure {
+            CertifiedFetchBodyPersistenceRestartFailure::Ledger(error) => error.clone(),
+            CertifiedFetchBodyPersistenceRestartFailure::Queue(error) => format!("{error:?}"),
+        }
+    }
+
+    /// Return the still-indexed existing executor work identity.
+    pub(crate) const fn work_id(&self) -> EffectWorkId {
+        self.completion.work_id()
+    }
+
+    /// Return the retained fresh physical queue occurrence for diagnostics.
+    pub(crate) const fn physical_admission_ordinal(&self) -> u64 {
+        self.exact_dequeue.physical_admission_ordinal()
+    }
+}
+
+/// Closed Phase-B status split at the LedgerV1 durability boundary.
+#[must_use = "retryable and restart-only failures have different ownership rules"]
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+pub(crate) enum CertifiedFetchBodyPersistenceCompletionError {
+    /// No ledger publication was invoked; the whole completion may be retried.
+    Retry(CertifiedFetchBodyPersistenceRetryError),
+    /// Ledger publication was invoked; output is closed and retry is forbidden.
+    RestartRequired(CertifiedFetchBodyPersistenceRestartError),
+}
+
 /// Typed reason an authenticated selected response could not wake its exact
 /// existing certified-Fetch record.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,7 +465,7 @@ enum CertifiedFetchReadyPublication {
 struct PreparedCertifiedFetchReadyMutation<'a> {
     target: &'a mut LifecycleCoordinator,
     next: LifecycleCoordinator,
-    location: CertifiedFetchReplacementLocation,
+    location: CertifiedFetchWaitingLocation,
 }
 
 impl PreparedCertifiedFetchReadyMutation<'_> {
@@ -177,6 +476,10 @@ impl PreparedCertifiedFetchReadyMutation<'_> {
 
     fn commit(self) {
         *self.target = self.next;
+    }
+
+    fn persist_exact_staged_successor(&self) -> Result<(), super::ledger::LifecycleLedgerError> {
+        self.target.persist_exact_staged_successor(&self.next)
     }
 }
 
@@ -234,6 +537,35 @@ struct CertifiedFetchReadyAuthority {
     request_hash: HashOf<wire::CertifiedBodyRequest>,
     key: LifecycleKey,
     causal_root: CausalRoot,
+}
+
+/// Exact response owner returned only by the consuming queue witness.
+///
+/// The registry may inspect this sealed carrier, but no sibling can construct
+/// it from a cloned envelope or caller-supplied queue coordinates.
+#[derive(Debug)]
+#[must_use = "the dequeued response must enter the exact registry completion"]
+pub(super) struct CertifiedFetchDequeuedResponse {
+    ingress_identity: PendingFairIngressIdentity,
+    inbound: InboundBlockMessage,
+    disposition: FairV2IngressDequeueDisposition,
+}
+
+impl CertifiedFetchDequeuedResponse {
+    /// Return the queue-minted identity transferred by checked dequeue.
+    pub(super) const fn ingress_identity(&self) -> PendingFairIngressIdentity {
+        self.ingress_identity
+    }
+
+    /// Borrow the exact owned authenticated wire carrier.
+    pub(super) fn inbound(&self) -> &InboundBlockMessage {
+        &self.inbound
+    }
+
+    /// Return the frozen ordinary dequeue disposition.
+    pub(super) const fn disposition(&self) -> FairV2IngressDequeueDisposition {
+        self.disposition
+    }
 }
 
 impl CertifiedFetchReadyAuthority {
@@ -299,24 +631,201 @@ impl CertifiedFetchCompletionAuthority<'_> {
 
 /// Borrow-free exact selector preparation from one validated queue/executor cut.
 ///
-/// This value is deliberately not a `SchedulerInputs` mint. Returning it drops
-/// the queue service guard and executor borrow, so the future composite factory
-/// must reacquire its output permit, revalidate and commit the exact queue
-/// occurrence, then atomically claim the response family and reserve runtime
-/// and service capacity. Before entering the sealed queue mutation tail it
-/// must consume this whole value and release every retained family `Arc` after
-/// its final candidate probe; checked dequeue requires exclusive ownership of
-/// the selected envelope. Those mutating seams remain intentionally unavailable.
-#[must_use = "the prepared selector still requires the unavailable atomic transaction"]
+/// This value is not `SchedulerInputs` or rank authority. Phase A consumes it
+/// into one bounded persistence command; Phase B captures a new instance and
+/// consumes it inside the LedgerV1/output-permitted transaction. Both paths
+/// release every retained family `Arc` after the final candidate probe so an
+/// exact checked dequeue can recover exclusive ownership of the envelope.
+#[must_use = "the prepared selector must enter one consuming lifecycle transaction"]
 pub(crate) struct PreparedLifecycleIngressSelector {
     context: LifecycleContext,
     request_fence_active: bool,
     queue_witness: PreparedFairIngressQueueWitness,
+    io_target: PreparedLifecycleIngressIoTarget,
     verdicts: BTreeMap<u64, LifecycleIngressOccurrenceVerdict>,
     priority_owners: BTreeSet<u64>,
     claimed_response_families:
         BTreeMap<HashOf<wire::CertifiedBodyRequest>, PreparedClaimedResponseFamily>,
     selector_debt: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreparedLifecycleIngressIoTarget {
+    CertifiedServe { request: LifecycleDigest },
+    CertifiedFetchBodyPersistence,
+    Unsupported,
+}
+
+/// Closed I/O command family derived from one authenticated selected carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LifecycleIngressIoTargetKind {
+    /// Serve one durably admitted certified-body request on the auxiliary lane.
+    CertifiedServe,
+    /// Persist one authenticated certified-Fetch response on the consensus lane.
+    CertifiedFetchBodyPersistence,
+}
+
+/// Opaque binding between a selected fair-ingress occurrence and its I/O target.
+///
+/// No constructor or scalar debt accessor is exposed. The production service
+/// may use the seal only to reserve the matching hierarchical FIFO class, and
+/// the lifecycle owner may use it only to bind the exact Ready row.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LifecycleIngressIoTargetSeal {
+    context: LifecycleContext,
+    ingress_identity: PendingFairIngressIdentity,
+    kind: LifecycleIngressIoTargetKind,
+    certified_serve_request: Option<LifecycleDigest>,
+    certified_fetch_work_id: Option<EffectWorkId>,
+    _linearity: LifecycleIngressIoTargetSealLinearity,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct LifecycleIngressIoTargetSealLinearity;
+
+impl Drop for LifecycleIngressIoTargetSealLinearity {
+    fn drop(&mut self) {}
+}
+
+impl LifecycleIngressIoTargetSeal {
+    /// Construct a closed target around fixture-owned height coordinates.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        context: &wire::HeightContext,
+        kind: LifecycleIngressIoTargetKind,
+        physical_admission_ordinal: u64,
+    ) -> Self {
+        let context = lifecycle_context_from_wire(context);
+        Self {
+            context,
+            ingress_identity: PendingFairIngressIdentity::for_test(
+                context,
+                LifecycleDigest::new([0xA7; 32]),
+                physical_admission_ordinal,
+            ),
+            kind,
+            certified_serve_request: None,
+            certified_fetch_work_id: matches!(
+                kind,
+                LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence
+            )
+            .then(|| EffectWorkId::for_test(physical_admission_ordinal)),
+            _linearity: LifecycleIngressIoTargetSealLinearity,
+        }
+    }
+
+    /// Construct a fixture-only Serve target carrying the selector-derived
+    /// exact signed-request digest and no Fetch identity.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_certified_serve_test(
+        context: &wire::HeightContext,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+        physical_admission_ordinal: u64,
+    ) -> Self {
+        let context = lifecycle_context_from_wire(context);
+        let mut digest = [0_u8; 32];
+        digest.copy_from_slice(request_hash.as_ref());
+        Self {
+            context,
+            ingress_identity: PendingFairIngressIdentity::for_test(
+                context,
+                LifecycleDigest::new(digest),
+                physical_admission_ordinal,
+            ),
+            kind: LifecycleIngressIoTargetKind::CertifiedServe,
+            certified_serve_request: Some(LifecycleDigest::new(digest)),
+            certified_fetch_work_id: None,
+            _linearity: LifecycleIngressIoTargetSealLinearity,
+        }
+    }
+
+    /// Return the immutable height context authenticated by the selector.
+    pub(in crate::sumeragi) const fn context(&self) -> LifecycleContext {
+        self.context
+    }
+
+    /// Return the selected queue-minted occurrence identity.
+    pub(in crate::sumeragi) const fn ingress_identity(&self) -> PendingFairIngressIdentity {
+        self.ingress_identity
+    }
+
+    /// Return the closed command family authenticated by the carrier.
+    pub(in crate::sumeragi) const fn kind(&self) -> LifecycleIngressIoTargetKind {
+        self.kind
+    }
+
+    /// Return whether a tracked executor id is the selected Fetch command id.
+    ///
+    /// This comparison keeps the sealed id opaque: the service may reject an
+    /// existing owner but cannot extract or reconstruct the underlying value.
+    pub(in crate::sumeragi) fn matches_certified_fetch_work_id(
+        &self,
+        candidate: EffectWorkId,
+    ) -> bool {
+        self.kind == LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence
+            && self.certified_fetch_work_id == Some(candidate)
+    }
+
+    /// Return whether this selector-owned target names one exact signed
+    /// Certified-Serve request. The stored digest remains opaque and no reply
+    /// route or queue position is reconstructed.
+    pub(in crate::sumeragi) fn matches_certified_serve_request(
+        &self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+    ) -> bool {
+        let mut digest = [0_u8; 32];
+        digest.copy_from_slice(request_hash.as_ref());
+        self.kind == LifecycleIngressIoTargetKind::CertifiedServe
+            && self.certified_serve_request == Some(LifecycleDigest::new(digest))
+            && self.certified_fetch_work_id.is_none()
+    }
+}
+
+/// Failure to derive an I/O command family from the selected ingress carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LifecycleIngressIoTargetError {
+    /// The selected carrier does not dispatch through the ordered I/O worker.
+    UnsupportedCarrier,
+    /// A certified-Fetch response lost its exact authenticated family binding.
+    InvalidCertifiedFetch,
+}
+
+/// Failure to join the selected Fetch family to its exact waiting coordinator
+/// row and concrete registry incumbent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LifecycleIngressSchedulerCarrierError {
+    /// The selected I/O family is not a certified-Fetch persistence target.
+    UnsupportedCarrier,
+    /// Selector or coordinator authority rejected the waiting Fetch identity.
+    InvalidWaitingFetch,
+    /// The concrete registry incumbent did not match the waiting Fetch slot.
+    InvalidRegistryIncumbent,
+}
+
+/// Opaque exact Waiting-Fetch generation transition authenticated by the
+/// selector, coordinator, and concrete registry together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct LifecycleIngressSchedulerFetchSeal {
+    ordinal: u128,
+    wake_generation: (WaitSource, u64),
+    post_submit_wait: super::WaitToken,
+}
+
+impl LifecycleIngressSchedulerFetchSeal {
+    /// Return the exact waiting Fetch ordinal.
+    pub(super) const fn ordinal(self) -> u128 {
+        self.ordinal
+    }
+
+    /// Return the authenticated prospective-ready generation advancement.
+    pub(super) const fn wake_generation(self) -> (WaitSource, u64) {
+        self.wake_generation
+    }
+
+    /// Return the same-source fence installed after reserved submission.
+    pub(super) const fn post_submit_wait(self) -> super::WaitToken {
+        self.post_submit_wait
+    }
 }
 
 impl PreparedLifecycleIngressSelector {
@@ -338,6 +847,135 @@ impl PreparedLifecycleIngressSelector {
     /// Return the queue-minted selected physical identity.
     pub(super) const fn selected_identity(&self) -> &PendingFairIngressIdentity {
         self.queue_witness.selected_identity()
+    }
+
+    /// Seal the selected carrier's exact I/O command family without exposing
+    /// an admission class, queue depth, or caller-constructible identity.
+    pub(crate) fn take_lifecycle_io_target(
+        &mut self,
+    ) -> Result<LifecycleIngressIoTargetSeal, LifecycleIngressIoTargetError> {
+        let (kind, certified_serve_request, certified_fetch_work_id) = match self.io_target {
+            PreparedLifecycleIngressIoTarget::CertifiedServe { request } => (
+                LifecycleIngressIoTargetKind::CertifiedServe,
+                Some(request),
+                None,
+            ),
+            PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence => {
+                let ready = self
+                    .selected_certified_fetch_ready_authority()
+                    .map_err(|_| LifecycleIngressIoTargetError::InvalidCertifiedFetch)?;
+                let work_id = self
+                    .claimed_response_families
+                    .get(&ready.request_hash)
+                    .map(|family| family.candidate.work_id())
+                    .ok_or(LifecycleIngressIoTargetError::InvalidCertifiedFetch)?;
+                (
+                    LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence,
+                    None,
+                    Some(work_id),
+                )
+            }
+            PreparedLifecycleIngressIoTarget::Unsupported => {
+                return Err(LifecycleIngressIoTargetError::UnsupportedCarrier);
+            }
+        };
+        let target = LifecycleIngressIoTargetSeal {
+            context: self.context,
+            ingress_identity: *self.selected_identity(),
+            kind,
+            certified_serve_request,
+            certified_fetch_work_id,
+            _linearity: LifecycleIngressIoTargetSealLinearity,
+        };
+        self.io_target = PreparedLifecycleIngressIoTarget::Unsupported;
+        Ok(target)
+    }
+
+    /// Restore a one-shot target after the service rejected the atomic capture
+    /// before acquiring capacity. The seal must still name this exact selector;
+    /// no scalar reconstruction path exists.
+    pub(in crate::sumeragi) fn restore_lifecycle_io_target(
+        &mut self,
+        target: LifecycleIngressIoTargetSeal,
+    ) -> Result<(), LifecycleIngressIoTargetSeal> {
+        if !matches!(
+            self.io_target,
+            PreparedLifecycleIngressIoTarget::Unsupported
+        ) || target.context != self.context
+            || target.ingress_identity != *self.selected_identity()
+        {
+            return Err(target);
+        }
+        self.io_target = match target.kind {
+            LifecycleIngressIoTargetKind::CertifiedServe => {
+                let Some(request) = target.certified_serve_request else {
+                    return Err(target);
+                };
+                if target.certified_fetch_work_id.is_some() {
+                    return Err(target);
+                }
+                PreparedLifecycleIngressIoTarget::CertifiedServe { request }
+            }
+            LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence => {
+                if target.certified_serve_request.is_some()
+                    || target.certified_fetch_work_id.is_none()
+                {
+                    return Err(target);
+                }
+                PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence
+            }
+        };
+        Ok(())
+    }
+
+    /// Prove that this selected response names the exact waiting Fetch row and
+    /// its installed concrete registry incumbent without changing either.
+    pub(super) fn attest_scheduler_fetch_carrier(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        registry: &mut LifecycleWorkRegistryHolder,
+    ) -> Result<LifecycleIngressSchedulerFetchSeal, LifecycleIngressSchedulerCarrierError> {
+        if !matches!(
+            self.io_target,
+            PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence
+        ) {
+            return Err(LifecycleIngressSchedulerCarrierError::UnsupportedCarrier);
+        }
+        let authority = self
+            .selected_certified_fetch_ready_authority()
+            .map_err(|_| LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
+        let location = coordinator
+            .certified_fetch_current_location(authority)
+            .map_err(|_| LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
+        let wait = match coordinator
+            .records
+            .get(&location.ordinal())
+            .map(|record| record.state)
+        {
+            Some(LifecycleState::Waiting(wait)) => wait,
+            Some(
+                LifecycleState::Ready | LifecycleState::Claimed(_) | LifecycleState::Terminal(_),
+            )
+            | None => return Err(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch),
+        };
+        let next_generation = certified_fetch_scheduler_generation(wait)
+            .ok_or(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
+        let prepared = self
+            .prepare_selected_certified_fetch_completion(registry.registry_mut(), location)
+            .map_err(|error| match error {
+                CertifiedFetchCompletionPreparationError::ReadyAuthority(_) => {
+                    LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch
+                }
+                CertifiedFetchCompletionPreparationError::Registry(_) => {
+                    LifecycleIngressSchedulerCarrierError::InvalidRegistryIncumbent
+                }
+            })?;
+        drop(prepared);
+        Ok(LifecycleIngressSchedulerFetchSeal {
+            ordinal: location.ordinal(),
+            wake_generation: (wait.source(), next_generation),
+            post_submit_wait: super::WaitToken::new(wait.source(), next_generation),
+        })
     }
 
     /// Derive a sealed wake authority only when the queue-selected occurrence
@@ -417,6 +1055,78 @@ impl PreparedLifecycleIngressSelector {
         })
     }
 
+    fn persisted_family(
+        &self,
+        id: CertifiedFetchBodyPersistenceId,
+        authenticated: &AuthenticatedCertifiedBodyResponse,
+    ) -> Result<&PreparedClaimedResponseFamily, CertifiedFetchBodyPersistenceRetryFailure> {
+        let ready = self
+            .selected_certified_fetch_ready_authority()
+            .map_err(CertifiedFetchBodyPersistenceRetryFailure::Selector)?;
+        if ready.ingress_identity != id.ingress_identity
+            || self.queue_witness.selected_disposition() != FairV2IngressDequeueDisposition::Admit
+        {
+            return Err(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity);
+        }
+        let family = self
+            .claimed_response_families
+            .get(&ready.request_hash)
+            .ok_or(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity)?;
+        let (response, responder) = family
+            .authenticated_response()
+            .ok_or(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity)?;
+        if family.ingress_identity != id.ingress_identity
+            || family.candidate.work_id() != id.work_id
+            || response != authenticated.response()
+            || !family
+                .candidate
+                .matches_authenticated_response(response, responder)
+        {
+            return Err(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity);
+        }
+        Ok(family)
+    }
+
+    fn into_exact_certified_fetch_dequeue(
+        self,
+        executor: &V2EffectExecutor<SerializedV2Runtime>,
+        id: CertifiedFetchBodyPersistenceId,
+        authenticated: &AuthenticatedCertifiedBodyResponse,
+    ) -> Result<PreparedCertifiedFetchExactDequeue, CertifiedFetchBodyPersistenceRetryFailure> {
+        let revalidated = {
+            let family = self.persisted_family(id, authenticated)?;
+            let (response, responder) = family
+                .authenticated_response()
+                .ok_or(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity)?;
+            executor
+                .revalidate_certified_response_priority_candidate(
+                    family.candidate.as_ref(),
+                    response,
+                    responder,
+                )
+                .map_err(CertifiedFetchBodyPersistenceRetryFailure::Executor)?
+        };
+        if !revalidated {
+            return Err(CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity);
+        }
+        let Self {
+            context,
+            request_fence_active: _,
+            queue_witness,
+            io_target: _,
+            verdicts: _,
+            priority_owners: _,
+            claimed_response_families,
+            selector_debt: _,
+        } = self;
+        drop(claimed_response_families);
+        Ok(PreparedCertifiedFetchExactDequeue {
+            context,
+            ingress_identity: id.ingress_identity,
+            queue_witness,
+        })
+    }
+
     /// Mint the sole concrete-registry preflight capability from the selected
     /// authenticated family winner.
     fn selected_certified_fetch_completion_authority(
@@ -457,25 +1167,23 @@ impl PreparedLifecycleIngressSelector {
     /// exact equality checks.
     ///
     /// This method intentionally neither consumes the selector nor exposes a
-    /// queue commit. A future output-permitted composite transaction must first
-    /// persist the authenticated body, then recapture a fresh selector/queue
-    /// cut, use this preflight while the retained family `Arc` is available,
-    /// and bind the result to that sealed durability receipt. Only the resulting
+    /// queue commit. Phase A uses it before the locked capacity reservation is
+    /// planned and submitted. Phase B recaptures a fresh selector/queue cut,
+    /// repeats this preflight while the retained family `Arc` is available, and
+    /// binds the result to the sealed durability receipt. Only the resulting
     /// receipt-bound registry token may consume the later exact checked-dequeue
     /// result.
     #[allow(dead_code)]
     fn prepare_selected_certified_fetch_completion<'a>(
         &self,
         registry: &'a mut ConcreteLifecycleWorkRegistry,
-        location: CertifiedFetchReplacementLocation,
+        location: CertifiedFetchWaitingLocation,
     ) -> Result<PreparedCertifiedFetchCompletion<'a>, CertifiedFetchCompletionPreparationError>
     {
         let authority = self
             .selected_certified_fetch_completion_authority()
             .map_err(CertifiedFetchCompletionPreparationError::ReadyAuthority)?;
-        if location.owner().causal_root() != authority.causal_root()
-            || location.replacement_digest() != authority.ingress_identity().digest()
-        {
+        if location.owner().causal_root() != authority.causal_root() {
             return Err(CertifiedFetchCompletionPreparationError::ReadyAuthority(
                 CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement,
             ));
@@ -545,14 +1253,8 @@ impl PreparedLifecycleIngressSelector {
         let slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
         let address = ConcreteWorkAddress::new(owner, ordinal, slot)
             .ok_or_else(|| "exact Fetch registry address was invalid".to_owned())?;
-        let location = CertifiedFetchReplacementLocation::new(
-            owner,
-            ordinal,
-            slot,
-            incumbent_digest,
-            ready.ingress_identity.digest(),
-        )
-        .ok_or_else(|| "exact Fetch replacement location was invalid".to_owned())?;
+        let location = CertifiedFetchWaitingLocation::new(owner, ordinal, slot, incumbent_digest)
+            .ok_or_else(|| "exact Fetch incumbent location was invalid".to_owned())?;
         let mut registry = ConcreteLifecycleWorkRegistry::default();
         registry
             .install(address, incumbent_digest, incumbent)
@@ -620,32 +1322,251 @@ impl PreparedLifecycleIngressSelector {
     }
 }
 
+fn certified_fetch_scheduler_generation(wait: super::WaitToken) -> Option<u64> {
+    wait.observed_generation()
+        .checked_add(1)
+        .filter(|next| *next != u64::MAX)
+}
+
 impl LifecycleCoordinator {
-    /// Publish one exact certified response into the original waiting Fetch
-    /// record without consuming the prepared selector or changing queue,
-    /// response-claim, concrete-registry, runtime, or service ownership. The
-    /// logical row does stage the response's same-slot physical digest, which
-    /// is why this method remains private until the registry swap joins it.
+    /// Complete one persisted certified-Fetch response across every exact owner.
     ///
-    /// This inert seam deliberately borrows the full preparation. The future
-    /// output-permitted transaction must still consume it while committing the
-    /// family claim, capacity reservations, and exact queue dequeue together.
-    // TODO: Fold this publication into the unavailable output-permitted
-    // response-claim/runtime/service/queue-CAS transaction.
-    #[allow(dead_code)]
-    fn publish_selected_certified_fetch_ready(
+    /// All selector, executor, registry, service, address, and durable-receipt
+    /// checks finish before the LedgerV1 publication call. Once that call is
+    /// invoked, every error is restart-only: the fresh queue witness and still
+    /// indexed I/O completion remain sealed in the returned authority while
+    /// the fail-stop output operation closes admission. A successful ledger
+    /// cut is followed by the checked dequeue and an assertion-only registry,
+    /// coordinator, executor, service, and work-index commit tail.
+    #[allow(clippy::too_many_arguments, clippy::result_large_err)]
+    pub(crate) fn complete_certified_fetch_body_persistence(
         &mut self,
-        prepared: &PreparedLifecycleIngressSelector,
-    ) -> Result<CertifiedFetchReadyPublication, CertifiedFetchReadyPublicationError> {
-        let authority = prepared.selected_certified_fetch_ready_authority()?;
-        self.publish_certified_fetch_ready_authority(authority)
+        registry: &mut LifecycleWorkRegistryHolder,
+        executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+        services: &mut ProductionV2Services,
+        ingress: &FairV2Ingress,
+        persisted: PreparedCertifiedFetchBodyPersistenceCompletion,
+    ) -> Result<(), CertifiedFetchBodyPersistenceCompletionError> {
+        let (completion, work_ack) = persisted.into_parts();
+        let CertifiedFetchBodyPersistenceCompletion {
+            id,
+            authenticated,
+            receipt,
+        } = completion;
+        macro_rules! retry {
+            ($failure:expr, $receipt:expr) => {
+                return Err(CertifiedFetchBodyPersistenceCompletionError::Retry(
+                    CertifiedFetchBodyPersistenceRetryError {
+                        failure: $failure,
+                        completion: PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(
+                            CertifiedFetchBodyPersistenceCompletion {
+                                id,
+                                authenticated,
+                                receipt: $receipt,
+                            },
+                            work_ack,
+                        ),
+                    },
+                ))
+            };
+        }
+
+        let selector = match executor.prepare_lifecycle_ingress_selector(
+            ingress,
+            id.ingress_identity.physical_admission_ordinal(),
+        ) {
+            Ok(selector) => selector,
+            Err(error) => retry!(
+                CertifiedFetchBodyPersistenceRetryFailure::FreshSelector(error),
+                receipt
+            ),
+        };
+        let ready_authority = match selector.selected_certified_fetch_ready_authority() {
+            Ok(authority) => authority,
+            Err(error) => retry!(
+                CertifiedFetchBodyPersistenceRetryFailure::Selector(error),
+                receipt
+            ),
+        };
+        let location = match self.certified_fetch_current_location(ready_authority) {
+            Ok(location) => location,
+            Err(error) => retry!(
+                CertifiedFetchBodyPersistenceRetryFailure::Selector(error),
+                receipt
+            ),
+        };
+        let registry_prepared = match selector
+            .prepare_selected_certified_fetch_completion(registry.registry_mut(), location)
+        {
+            Ok(prepared) => prepared,
+            Err(CertifiedFetchCompletionPreparationError::ReadyAuthority(error)) => retry!(
+                CertifiedFetchBodyPersistenceRetryFailure::Selector(error),
+                receipt
+            ),
+            Err(CertifiedFetchCompletionPreparationError::Registry(error)) => retry!(
+                CertifiedFetchBodyPersistenceRetryFailure::Registry(error),
+                receipt
+            ),
+        };
+        let durable_registry = match registry_prepared.bind_durable_body_receipt(receipt) {
+            Ok(prepared) => prepared,
+            Err((error, receipt)) => retry!(
+                CertifiedFetchBodyPersistenceRetryFailure::Registry(error),
+                receipt
+            ),
+        };
+        let ready = match self.prepare_certified_fetch_ready_projection(
+            ready_authority,
+            durable_registry.ready_projection(),
+        ) {
+            Ok(transition @ PreparedCertifiedFetchReadyTransition::Mutation(_)) => transition,
+            Ok(PreparedCertifiedFetchReadyTransition::Stutter(_)) => retry!(
+                CertifiedFetchBodyPersistenceRetryFailure::CoordinatorStutter,
+                durable_registry.abort_before_dequeue()
+            ),
+            Err(error) => retry!(
+                CertifiedFetchBodyPersistenceRetryFailure::Selector(error),
+                durable_registry.abort_before_dequeue()
+            ),
+        };
+        let family = match selector.persisted_family(id, &authenticated) {
+            Ok(family) => family,
+            Err(error) => {
+                let receipt = durable_registry.abort_before_dequeue();
+                retry!(error, receipt);
+            }
+        };
+        let executor_prepared = match executor
+            .prepare_lifecycle_certified_fetch_completion(family.candidate.as_ref(), &authenticated)
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let receipt = durable_registry.abort_before_dequeue();
+                retry!(
+                    CertifiedFetchBodyPersistenceRetryFailure::Executor(error),
+                    receipt
+                );
+            }
+        };
+        let output_guard = services.lifecycle_output_guard();
+        let service_prepared =
+            match services.prepare_certified_body_fetch_owner_removal(executor_prepared.task()) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    let receipt = durable_registry.abort_before_dequeue();
+                    retry!(
+                        CertifiedFetchBodyPersistenceRetryFailure::Service(error),
+                        receipt
+                    );
+                }
+            };
+        let selected_response_matches = {
+            let family = match selector.persisted_family(id, &authenticated) {
+                Ok(family) => family,
+                Err(error) => {
+                    let receipt = durable_registry.abort_before_dequeue();
+                    retry!(error, receipt);
+                }
+            };
+            durable_registry.matches_selected_response(
+                family.ingress_identity,
+                family.inbound.as_ref(),
+                selector.queue_witness.selected_disposition(),
+            )
+        };
+        if !selected_response_matches {
+            let receipt = durable_registry.abort_before_dequeue();
+            retry!(
+                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity,
+                receipt
+            );
+        }
+        let exact_dequeue =
+            match selector.into_exact_certified_fetch_dequeue(executor, id, &authenticated) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    let receipt = durable_registry.abort_before_dequeue();
+                    retry!(error, receipt);
+                }
+            };
+        let Some(operation) = output_guard.begin_fail_stop_operation() else {
+            let receipt = durable_registry.abort_before_dequeue();
+            retry!(
+                CertifiedFetchBodyPersistenceRetryFailure::OutputClosed,
+                receipt
+            );
+        };
+
+        if let PreparedCertifiedFetchReadyTransition::Mutation(ready_mutation) = &ready
+            && let Err(error) = ready_mutation.persist_exact_staged_successor()
+        {
+            let receipt = durable_registry.abort_before_dequeue();
+            return Err(
+                CertifiedFetchBodyPersistenceCompletionError::RestartRequired(
+                    CertifiedFetchBodyPersistenceRestartError {
+                        failure: CertifiedFetchBodyPersistenceRestartFailure::Ledger(
+                            error.to_string(),
+                        ),
+                        completion: PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(
+                            CertifiedFetchBodyPersistenceCompletion {
+                                id,
+                                authenticated,
+                                receipt,
+                            },
+                            work_ack,
+                        ),
+                        exact_dequeue,
+                    },
+                ),
+            );
+        }
+        let dequeued = match exact_dequeue.commit(ingress) {
+            Ok(dequeued) => dequeued,
+            Err((error, exact_dequeue)) => {
+                let receipt = durable_registry.abort_before_dequeue();
+                return Err(
+                    CertifiedFetchBodyPersistenceCompletionError::RestartRequired(
+                        CertifiedFetchBodyPersistenceRestartError {
+                            failure: CertifiedFetchBodyPersistenceRestartFailure::Queue(error),
+                            completion: PreparedCertifiedFetchBodyPersistenceCompletion::from_parts(
+                                CertifiedFetchBodyPersistenceCompletion {
+                                    id,
+                                    authenticated,
+                                    receipt,
+                                },
+                                work_ack,
+                            ),
+                            exact_dequeue,
+                        },
+                    ),
+                );
+            }
+        };
+
+        durable_registry.commit_after_exact_dequeue(dequeued);
+        match ready {
+            PreparedCertifiedFetchReadyTransition::Mutation(ready) => ready.commit(),
+            PreparedCertifiedFetchReadyTransition::Stutter(_) => {}
+        }
+        executor.commit_lifecycle_certified_fetch_completion(executor_prepared, &authenticated);
+        let _disposition = service_prepared.commit(operation.permit());
+        work_ack.commit();
+        operation.complete();
+        Ok(())
     }
 
+    /// Exercise the pure logical Ready reducer in coordinator unit tests.
+    #[cfg(test)]
     fn publish_certified_fetch_ready_authority(
         &mut self,
         authority: CertifiedFetchReadyAuthority,
     ) -> Result<CertifiedFetchReadyPublication, CertifiedFetchReadyPublicationError> {
-        match self.prepare_certified_fetch_ready_authority(authority)? {
+        let projection = super::replay_authority::tests::durable_certified_fetch_projection_fixture(
+            self.active_context,
+            authority.causal_root,
+            u8::try_from(authority.key.round().view()).expect("fixture Fetch view fits u8"),
+        );
+        match self.prepare_certified_fetch_ready_projection(authority, &projection)? {
             PreparedCertifiedFetchReadyTransition::Mutation(prepared) => {
                 prepared.commit();
                 Ok(CertifiedFetchReadyPublication::Published)
@@ -654,9 +1575,76 @@ impl LifecycleCoordinator {
         }
     }
 
-    fn prepare_certified_fetch_ready_authority(
+    /// Resolve one exact Fetch address without deriving a replacement digest.
+    fn certified_fetch_current_location(
+        &self,
+        authority: CertifiedFetchReadyAuthority,
+    ) -> Result<CertifiedFetchWaitingLocation, CertifiedFetchReadyPublicationError> {
+        if self.fault.is_some() {
+            return Err(CertifiedFetchReadyPublicationError::CoordinatorFaulted);
+        }
+        if authority.ingress_identity.context() != self.active_context
+            || authority.ingress_identity.physical_admission_ordinal() == 0
+            || authority.key.context() != self.active_context.id()
+            || authority.key.round().height() != self.active_context.height()
+            || authority.key.phase() != LifecyclePhase::Fetch
+        {
+            return Err(CertifiedFetchReadyPublicationError::ForeignContext);
+        }
+        let ordinal = self
+            .key_index
+            .get(&authority.key)
+            .copied()
+            .ok_or(CertifiedFetchReadyPublicationError::MissingLifecycleKey)?;
+        let record = self
+            .records
+            .get(&ordinal)
+            .ok_or(CertifiedFetchReadyPublicationError::InvalidCoordinatorIndex)?;
+        if record.ordinal != ordinal
+            || record.key != authority.key
+            || record.owner.causal_root() != authority.causal_root
+            || self.owner_index.get(&authority.causal_root) != Some(&record.owner)
+            || record.work_class != LifecycleWorkClass::Fetch
+            || self.ready_index.contains(&ordinal) != matches!(record.state, LifecycleState::Ready)
+        {
+            return Err(CertifiedFetchReadyPublicationError::InvalidCoordinatorIndex);
+        }
+        match record.state {
+            LifecycleState::Waiting(wait) => {
+                if wait.source() != authority.wait_source()
+                    || self.observed_generation.get(&wait.source())
+                        != Some(&wait.observed_generation())
+                    || self.records.iter().any(|(candidate_ordinal, candidate)| {
+                        *candidate_ordinal != ordinal
+                            && matches!(
+                                candidate.state,
+                                LifecycleState::Waiting(candidate_wait)
+                                    if candidate_wait.source() == wait.source()
+                            )
+                    })
+                {
+                    return Err(CertifiedFetchReadyPublicationError::WrongWaitGeneration);
+                }
+            }
+            LifecycleState::Ready => {}
+            LifecycleState::Claimed(_) => {
+                return Err(CertifiedFetchReadyPublicationError::ClaimedRecord);
+            }
+            LifecycleState::Terminal(_) => {
+                return Err(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement);
+            }
+        }
+        let (slot, incumbent_digest) = self
+            .exact_fetch_physical_slot(record)
+            .ok_or(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement)?;
+        CertifiedFetchWaitingLocation::new(record.owner, ordinal, slot, incumbent_digest)
+            .ok_or(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement)
+    }
+
+    fn prepare_certified_fetch_ready_projection(
         &mut self,
         authority: CertifiedFetchReadyAuthority,
+        projection: &super::replay_authority::DurableCertifiedFetchReplayProjectionV1,
     ) -> Result<PreparedCertifiedFetchReadyTransition<'_>, CertifiedFetchReadyPublicationError>
     {
         if self.fault.is_some() {
@@ -740,7 +1728,18 @@ impl LifecycleCoordinator {
                 let Some((_, installed_digest)) = self.exact_fetch_physical_slot(record) else {
                     return Err(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement);
                 };
-                if installed_digest != authority.ingress_identity.digest() {
+                if installed_digest != projection.completion_digest()
+                    || !self.durable_records.get(&ordinal).is_some_and(|metadata| {
+                        projection.exactly_matches_durable_record(
+                            self.active_context,
+                            record.key,
+                            record.owner.causal_root(),
+                            metadata.payload,
+                            metadata.reconstruction_source,
+                            &metadata.replay_authority,
+                        )
+                    })
+                {
                     return Err(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement);
                 }
                 return Ok(PreparedCertifiedFetchReadyTransition::Stutter(
@@ -784,7 +1783,7 @@ impl LifecycleCoordinator {
         let Some((slot, incumbent_digest)) = self.exact_fetch_physical_slot(record) else {
             return Err(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement);
         };
-        let replacement_digest = authority.ingress_identity.digest();
+        let replacement_digest = projection.completion_digest();
         if replacement_digest == incumbent_digest {
             return Err(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement);
         }
@@ -801,6 +1800,12 @@ impl LifecycleCoordinator {
         if next.fault.is_some() {
             return Err(CertifiedFetchReadyPublicationError::CoordinatorFaulted);
         }
+        let Some(metadata) = next.durable_records.get_mut(&ordinal) else {
+            return Err(CertifiedFetchReadyPublicationError::InvalidCoordinatorIndex);
+        };
+        if !projection.rebind_waiting_fetch_metadata(self.active_context, record.key, metadata) {
+            return Err(CertifiedFetchReadyPublicationError::InvalidCandidateBinding);
+        }
         debug_assert_eq!(
             next.records.get(&ordinal).map(|record| record.state),
             Some(LifecycleState::Ready)
@@ -815,14 +1820,8 @@ impl LifecycleCoordinator {
                 .and_then(|record| record.physical_slots.get(&slot)),
             Some(&replacement_digest)
         );
-        let location = CertifiedFetchReplacementLocation::new(
-            owner,
-            ordinal,
-            slot,
-            incumbent_digest,
-            replacement_digest,
-        )
-        .ok_or(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement)?;
+        let location = CertifiedFetchWaitingLocation::new(owner, ordinal, slot, incumbent_digest)
+            .ok_or(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement)?;
         Ok(PreparedCertifiedFetchReadyTransition::Mutation(
             PreparedCertifiedFetchReadyMutation {
                 target: self,
@@ -897,11 +1896,108 @@ impl LifecycleCoordinator {
 }
 
 impl V2EffectExecutor<SerializedV2Runtime> {
+    /// Consume one exact selected family into a bounded body-store command.
+    ///
+    /// The final equality re-probe runs while the immutable family carrier and
+    /// queue witness are still retained. Success then moves the candidate's
+    /// unique authenticated-response token into the command and drops the
+    /// entire stale selector, including every inbound `Arc` and queue witness.
+    /// Failure returns the byte-for-byte preparation and mutates no executor,
+    /// queue, tracker, registry, coordinator, or service state.
+    pub(crate) fn prepare_certified_fetch_body_persistence(
+        &self,
+        mut prepared: PreparedLifecycleIngressSelector,
+    ) -> Result<CertifiedFetchBodyPersistenceTask, CertifiedFetchBodyPersistencePreparationError>
+    {
+        let ready = match prepared.selected_certified_fetch_ready_authority() {
+            Ok(ready) => ready,
+            Err(failure) => {
+                return Err(CertifiedFetchBodyPersistencePreparationError {
+                    failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(failure),
+                    prepared,
+                });
+            }
+        };
+        let revalidated = {
+            let Some(family) = prepared.claimed_response_families.get(&ready.request_hash) else {
+                return Err(CertifiedFetchBodyPersistencePreparationError {
+                    failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
+                        CertifiedFetchReadyPublicationError::SelectedOccurrenceNotClaimedResponse,
+                    ),
+                    prepared,
+                });
+            };
+            let Some((response, responder)) = family.authenticated_response() else {
+                return Err(CertifiedFetchBodyPersistencePreparationError {
+                    failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
+                        CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
+                    ),
+                    prepared,
+                });
+            };
+            self.revalidate_certified_response_priority_candidate(
+                family.candidate.as_ref(),
+                response,
+                responder,
+            )
+        };
+        match revalidated {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(CertifiedFetchBodyPersistencePreparationError {
+                    failure: CertifiedFetchBodyPersistencePreparationFailure::Selector(
+                        CertifiedFetchReadyPublicationError::InvalidCandidateBinding,
+                    ),
+                    prepared,
+                });
+            }
+            Err(failure) => {
+                return Err(CertifiedFetchBodyPersistencePreparationError {
+                    failure: CertifiedFetchBodyPersistencePreparationFailure::Executor(failure),
+                    prepared,
+                });
+            }
+        }
+
+        let family = prepared
+            .claimed_response_families
+            .remove(&ready.request_hash)
+            .expect("revalidated selected response family remains present");
+        assert_eq!(family.ingress_identity, ready.ingress_identity);
+        let PreparedClaimedResponseFamily {
+            ingress_identity,
+            inbound,
+            candidate,
+        } = family;
+        let work_id = candidate.work_id();
+        let authenticated = candidate.into_authenticated_response();
+        drop(inbound);
+        let PreparedLifecycleIngressSelector {
+            context: _,
+            request_fence_active: _,
+            queue_witness,
+            io_target: _,
+            verdicts: _,
+            priority_owners: _,
+            claimed_response_families,
+            selector_debt: _,
+        } = prepared;
+        drop(queue_witness);
+        drop(claimed_response_families);
+
+        Ok(CertifiedFetchBodyPersistenceTask {
+            id: CertifiedFetchBodyPersistenceId {
+                ingress_identity,
+                work_id,
+            },
+            authenticated,
+        })
+    }
+
     /// Prepare one opaque complete selector census from an exact queue target.
     ///
-    /// This is the sole crate-visible mint. It deliberately returns an inert,
-    /// borrow-free token rather than rank authority; the future synchronous
-    /// output-permitted transaction must consume and revalidate that token.
+    /// This is the sole crate-visible mint. It returns borrow-free census state,
+    /// never rank authority; Phase A or Phase B must consume and revalidate it.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn prepare_lifecycle_ingress_selector(
         &self,
@@ -920,11 +2016,9 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     /// authentication and body reconstruction. Producer appends may proceed;
     /// the final read-only queue recheck rejects any pre-cut mutation. Returning
     /// the borrow-free preparation releases that guard without removing a row.
-    /// This tranche never claims a response, reserves runtime capacity, or
-    /// publishes selector debt as scheduler authority.
-    // TODO: Consume this preparation only from the future synchronous factory
-    // which holds the consensus-output permit and can atomically validate and
-    // remove the exact queue occurrence while committing response ownership.
+    /// Classification never claims a response or publishes selector debt as
+    /// scheduler authority; only the consuming persistence/completion surfaces
+    /// may transfer ownership.
     pub(super) fn capture_lifecycle_ingress_selector(
         &self,
         cut: FairIngressQueueCut<'_>,
@@ -963,6 +2057,8 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             .keys()
             .copied()
             .collect::<BTreeSet<_>>();
+        let selected_ordinal = cut.selected_identity().physical_admission_ordinal();
+        let mut io_target = PreparedLifecycleIngressIoTarget::Unsupported;
         let mut verdicts = BTreeMap::new();
         let mut response_candidates = BTreeMap::new();
         for occurrence in cut.selector_occurrences() {
@@ -990,6 +2086,22 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                         &message.payload,
                         wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
                     );
+                    if ordinal == selected_ordinal && drainable {
+                        io_target = match &message.payload {
+                            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) => {
+                                let request_hash = HashOf::new(request);
+                                let mut digest = [0_u8; 32];
+                                digest.copy_from_slice(request_hash.as_ref());
+                                PreparedLifecycleIngressIoTarget::CertifiedServe {
+                                    request: LifecycleDigest::new(digest),
+                                }
+                            }
+                            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
+                                PreparedLifecycleIngressIoTarget::CertifiedFetchBodyPersistence
+                            }
+                            _ => PreparedLifecycleIngressIoTarget::Unsupported,
+                        };
+                    }
                     let request_fenced_completion = drainable
                         && request_fence_active
                         && lifecycle_ingress_resource_is_untrusted(
@@ -1138,6 +2250,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             context,
             request_fence_active,
             queue_witness,
+            io_target,
             verdicts,
             priority_owners,
             claimed_response_families,
@@ -1281,7 +2394,7 @@ mod tests {
             causal_root,
             LifecycleWorkClass::Fetch,
             LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent),
-            InitialLifecycleState::Waiting(wait),
+            InitialLifecycleState::Ready,
             causal_root.digest(),
             DurablePayloadReference::None,
             replay.authority,
@@ -1295,6 +2408,13 @@ mod tests {
             panic!("sealed certified-Fetch fixture must admit")
         };
         assert_eq!(owner.causal_root(), causal_root);
+        coordinator.ready_index.remove(&ordinal);
+        coordinator
+            .records
+            .get_mut(&ordinal)
+            .expect("admitted Fetch row")
+            .state = LifecycleState::Waiting(wait);
+        coordinator.observed_generation.insert(source, generation);
         let authority = CertifiedFetchReadyAuthority {
             ingress_identity: PendingFairIngressIdentity::for_test(context, digest(0xA2), 11),
             request_hash,
@@ -1405,13 +2525,17 @@ mod tests {
             .expect("one exact Fetch slot")
             .0;
         let incumbent_digest = coordinator.records[&ordinal].physical_slots[&slot];
+        let projection =
+            super::super::replay_authority::tests::durable_certified_fetch_projection_fixture(
+                context, root, 3,
+            );
         let slot_universe = coordinator.records[&ordinal].episode.slot_universe.clone();
         let consumed_slots = coordinator.records[&ordinal].episode.consumed_slots.clone();
         assert_ne!(incumbent_digest, authority.ingress_identity.digest());
 
         let before = coordinator.clone();
         let PreparedCertifiedFetchReadyTransition::Mutation(prepared) = coordinator
-            .prepare_certified_fetch_ready_authority(authority)
+            .prepare_certified_fetch_ready_projection(authority, &projection)
             .expect("exact response prepares one logical replacement")
         else {
             panic!("waiting Fetch preparation cannot stutter")
@@ -1420,10 +2544,6 @@ mod tests {
         assert_eq!(prepared.location.ordinal(), ordinal);
         assert_eq!(prepared.location.slot(), slot);
         assert_eq!(prepared.location.incumbent_digest(), incumbent_digest);
-        assert_eq!(
-            prepared.location.replacement_digest(),
-            authority.ingress_identity.digest()
-        );
         assert_rejection_preserved(&before, prepared.target_for_test());
         assert_eq!(prepared.target_for_test().capacity_used, capacity_used);
         prepared.commit();
@@ -1444,7 +2564,7 @@ mod tests {
         assert_eq!(coordinator.records[&ordinal].physical_slots.len(), 1);
         assert_eq!(
             coordinator.records[&ordinal].physical_slots[&slot],
-            authority.ingress_identity.digest()
+            projection.completion_digest()
         );
         assert_eq!(
             coordinator
@@ -1461,10 +2581,11 @@ mod tests {
         let key = fetch_key(context, 4);
         let (mut coordinator, authority, ordinal) =
             waiting_fetch(context, key, CausalRoot::new(digest(5)), request_hash(6), 0);
-        let (&slot, &incumbent_digest) = coordinator.records[&ordinal]
+        let (&slot, _) = coordinator.records[&ordinal]
             .physical_slots
             .first_key_value()
             .expect("one exact Fetch slot");
+        let incumbent_digest = coordinator.records[&ordinal].physical_slots[&slot];
         assert_eq!(
             coordinator.publish_certified_fetch_ready_authority(authority),
             Ok(CertifiedFetchReadyPublication::Published)
@@ -1522,23 +2643,30 @@ mod tests {
         let key = fetch_key(context, 6);
         let (coordinator, authority, ordinal) =
             waiting_fetch(context, key, CausalRoot::new(digest(7)), request_hash(8), 1);
-        let (&slot, &incumbent_digest) = coordinator.records[&ordinal]
+        let (&slot, &_incumbent_digest) = coordinator.records[&ordinal]
             .physical_slots
             .first_key_value()
             .expect("one exact Fetch slot");
 
-        let mut same_digest = authority;
-        same_digest.ingress_identity = PendingFairIngressIdentity::for_test(
-            context,
-            incumbent_digest,
-            authority.ingress_identity.physical_admission_ordinal(),
-        );
         let mut trial = coordinator.clone();
+        let projection =
+            super::super::replay_authority::tests::durable_certified_fetch_projection_fixture(
+                context,
+                authority.causal_root,
+                6,
+            );
+        trial
+            .records
+            .get_mut(&ordinal)
+            .expect("one exact Fetch row")
+            .physical_slots
+            .insert(slot, projection.completion_digest());
+        let before = trial.clone();
         assert_eq!(
-            trial.publish_certified_fetch_ready_authority(same_digest),
+            trial.publish_certified_fetch_ready_authority(authority),
             Err(CertifiedFetchReadyPublicationError::InvalidPhysicalReplacement)
         );
-        assert_rejection_preserved(&coordinator, &trial);
+        assert_rejection_preserved(&before, &trial);
 
         let mut missing_universe = coordinator.clone();
         missing_universe
@@ -1771,6 +2899,27 @@ mod tests {
     }
 
     #[test]
+    fn scheduler_fetch_generation_stays_below_the_terminal_wait_value() {
+        let source = WaitSource::External(digest(0xF4));
+        assert_eq!(
+            certified_fetch_scheduler_generation(WaitToken::new(source, 7)),
+            Some(8)
+        );
+        assert_eq!(
+            certified_fetch_scheduler_generation(WaitToken::new(source, u64::MAX - 2)),
+            Some(u64::MAX - 1)
+        );
+        assert_eq!(
+            certified_fetch_scheduler_generation(WaitToken::new(source, u64::MAX - 1)),
+            None
+        );
+        assert_eq!(
+            certified_fetch_scheduler_generation(WaitToken::new(source, u64::MAX)),
+            None
+        );
+    }
+
+    #[test]
     fn ambiguous_certified_fetch_source_and_generation_overflow_reject_unchanged() {
         let context = context(0x41);
         let key = fetch_key(context, 9);
@@ -1919,21 +3068,44 @@ mod tests {
     }
 
     #[test]
-    fn inert_selector_source_contains_no_claim_or_completion_commit() {
+    fn certified_fetch_completion_source_keeps_the_durable_cut_ordered() {
         let source = include_str!("v2_lifecycle_selector.rs");
-        let forbidden = [
-            [".claim_", "authenticated_response("].concat(),
-            [".plan_", "fetch_completion("].concat(),
-            [".commit_", "fetch_completion("].concat(),
-            [".accept_", "certified_body_response("].concat(),
-            ["commit_after_exact_", "dequeue"].concat(),
+        let transaction = source
+            .split("pub(crate) fn complete_certified_fetch_body_persistence(")
+            .nth(1)
+            .expect("one consuming certified-Fetch completion transaction")
+            .split("fn publish_certified_fetch_ready_authority(")
+            .next()
+            .expect("test-only reducer helper follows the transaction");
+        let ordered = [
+            "prepare_lifecycle_ingress_selector(",
+            "certified_fetch_current_location(",
+            "prepare_selected_certified_fetch_completion(",
+            "bind_durable_body_receipt(receipt)",
+            "prepare_certified_fetch_ready_projection(",
+            "prepare_lifecycle_certified_fetch_completion(",
+            "prepare_certified_body_fetch_owner_removal(",
+            "matches_selected_response(",
+            "into_exact_certified_fetch_dequeue(",
+            "begin_fail_stop_operation()",
+            "persist_exact_staged_successor()",
+            "exact_dequeue.commit(ingress)",
+            "commit_after_exact_dequeue(dequeued)",
+            "ready.commit()",
+            "commit_lifecycle_certified_fetch_completion",
+            "service_prepared.commit(operation.permit())",
+            "work_ack.commit()",
+            "operation.complete()",
         ];
-        for forbidden in &forbidden {
-            assert!(
-                !source.contains(forbidden),
-                "inert selector unexpectedly contains mutating seam {forbidden}"
-            );
+        let mut cursor = 0;
+        for required in ordered {
+            let relative = transaction[cursor..]
+                .find(required)
+                .unwrap_or_else(|| panic!("completion transaction omitted {required}"));
+            cursor += relative + required.len();
         }
+        assert!(!transaction.contains("runtime_lifecycle_ordinal"));
+        assert!(!transaction.contains("BodyAvailableReservation"));
     }
 
     #[test]

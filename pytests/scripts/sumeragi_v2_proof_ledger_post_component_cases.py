@@ -6,6 +6,7 @@ def copy_serviced_candidate_production_fixture(tmp_path: Path) -> None:
 
     for relative in (
         Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        Path("crates/iroha_core/src/sumeragi/safety_wal.rs"),
         Path("crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),

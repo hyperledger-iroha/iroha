@@ -8,8 +8,12 @@ use std::collections::BTreeMap;
 
 use iroha_crypto::{Algorithm, Hash};
 use iroha_data_model::{
-    NetworkId, block::consensus_v2 as wire, isi::RegisterBox, nexus::PublicLaneValidatorStatus,
-    peer::PeerId, transaction::Executable,
+    NetworkId,
+    block::{SignedBlock, consensus_v2 as wire},
+    isi::RegisterBox,
+    nexus::PublicLaneValidatorStatus,
+    peer::PeerId,
+    transaction::Executable,
 };
 use iroha_genesis::GenesisBlock;
 use mv::storage::StorageReadOnly;
@@ -28,10 +32,55 @@ use crate::state::{
 
 /// Verified height-one inputs retained until the production reducer opens its
 /// safety WAL.
-#[derive(Clone)]
 pub struct GenesisV2Bootstrap {
     verified_context: VerifiedHeightContext,
     staged_nexus_amx_context: StagedGenesisNexusAmxContext,
+    authenticated_genesis: AuthenticatedGenesisBodyV1,
+}
+
+/// Move-only signed genesis body authenticated by the height-one bootstrap.
+///
+/// The signed block is copied only while [`freeze_staged_genesis_v2`] still
+/// owns the validated genesis wrapper. Production recovery then moves this
+/// seal into the lifecycle launch; no raw signed block can be substituted at
+/// that boundary.
+#[must_use = "authenticated genesis must remain sealed until lifecycle launch"]
+pub(in crate::sumeragi) struct AuthenticatedGenesisBodyV1 {
+    signed_block: SignedBlock,
+    authority: iroha_crypto::PublicKey,
+}
+
+impl AuthenticatedGenesisBodyV1 {
+    fn authenticate(genesis: &GenesisBlock) -> Result<Self, V2GenesisBootstrapError> {
+        let mut transactions = genesis.0.external_transactions();
+        let first = transactions
+            .next()
+            .ok_or(V2GenesisBootstrapError::MissingGenesisAuthority)?;
+        let authority = first
+            .authority()
+            .try_signatory()
+            .cloned()
+            .ok_or(V2GenesisBootstrapError::NonCanonicalGenesisAuthority)?;
+        if transactions
+            .any(|transaction| transaction.authority().try_signatory() != Some(&authority))
+        {
+            return Err(V2GenesisBootstrapError::NonCanonicalGenesisAuthority);
+        }
+        Ok(Self {
+            signed_block: genesis.0.clone(),
+            authority,
+        })
+    }
+
+    /// Borrow the exact authenticated body for executor installation.
+    pub(in crate::sumeragi) const fn signed_block(&self) -> &SignedBlock {
+        &self.signed_block
+    }
+
+    /// Compare the retained canonical genesis authority with recovery's key.
+    pub(in crate::sumeragi) fn authorizes(&self, authority: &iroha_crypto::PublicKey) -> bool {
+        &self.authority == authority
+    }
 }
 
 /// Non-forgeable proof that one Nexus/AMX projection was recomputed from the
@@ -65,8 +114,18 @@ impl GenesisV2Bootstrap {
         self.verified_context.context()
     }
 
-    pub(crate) fn into_parts(self) -> (VerifiedHeightContext, StagedGenesisNexusAmxContext) {
-        (self.verified_context, self.staged_nexus_amx_context)
+    pub(in crate::sumeragi) fn into_parts(
+        self,
+    ) -> (
+        VerifiedHeightContext,
+        StagedGenesisNexusAmxContext,
+        AuthenticatedGenesisBodyV1,
+    ) {
+        (
+            self.verified_context,
+            self.staged_nexus_amx_context,
+            self.authenticated_genesis,
+        )
     }
 }
 
@@ -159,7 +218,7 @@ pub(crate) fn validate_staged_genesis_v2_authority(
             execution_policy_hash: *context.execution_policy_hash.as_ref(),
         },
     )?;
-    let (verified, _) = expected.into_parts();
+    let (verified, _, _) = expected.into_parts();
     if verified.context() != context || verified.proofs_of_possession() != validator_set_pops {
         return Err(V2GenesisBootstrapError::FinalityVotingAuthorityMismatch);
     }
@@ -178,6 +237,7 @@ pub fn freeze_staged_genesis_v2(
     signed_parameters: wire::SumeragiV2GenesisContextParameters,
 ) -> Result<GenesisV2Bootstrap, V2GenesisBootstrapError> {
     signed_parameters.validate()?;
+    let authenticated_genesis = AuthenticatedGenesisBodyV1::authenticate(genesis)?;
     let staged_world = staged.world();
     let signed_pops = signed_genesis_validator_pops(genesis)?;
     if signed_pops.is_empty() {
@@ -265,6 +325,7 @@ pub fn freeze_staged_genesis_v2(
         staged_nexus_amx_context: StagedGenesisNexusAmxContext {
             hash: staged_nexus_amx_context_hash,
         },
+        authenticated_genesis,
     })
 }
 
@@ -381,6 +442,12 @@ fn verify_staged_execution_policy_hash(
 /// Failure to derive an exact fresh-genesis reducer bootstrap.
 #[derive(Debug, Error)]
 pub enum V2GenesisBootstrapError {
+    /// Signed genesis omitted the canonical root transaction authority.
+    #[error("Sumeragi v2 genesis has no canonical root authority")]
+    MissingGenesisAuthority,
+    /// Signed genesis transactions do not share one canonical single-key authority.
+    #[error("Sumeragi v2 genesis root authority is not one canonical single key")]
+    NonCanonicalGenesisAuthority,
     /// A genesis transaction uses an executable form that cannot define the
     /// deterministic bootstrap roster.
     #[error("Sumeragi v2 genesis transactions must contain instruction batches")]
@@ -904,6 +971,27 @@ mod tests {
             None,
             None,
         ))
+    }
+
+    #[test]
+    fn authenticated_genesis_body_retains_exact_block_and_authority() {
+        let voter = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::BlsNormal)
+            .expect("deterministic BLS voter");
+        let genesis = signed_roster_genesis(std::slice::from_ref(&voter), false, false);
+        let authority =
+            KeyPair::try_from_seed(b"v2-context-genesis-authority".to_vec(), Algorithm::Ed25519)
+                .expect("deterministic genesis authority");
+        let foreign = KeyPair::try_from_seed(
+            b"v2-context-foreign-genesis-authority".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("deterministic foreign authority");
+
+        let authenticated = AuthenticatedGenesisBodyV1::authenticate(&genesis)
+            .expect("validated genesis seals its exact signed body");
+        assert_eq!(authenticated.signed_block(), &genesis.0);
+        assert!(authenticated.authorizes(authority.public_key()));
+        assert!(!authenticated.authorizes(foreign.public_key()));
     }
 
     #[test]

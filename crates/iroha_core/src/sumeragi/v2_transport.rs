@@ -236,7 +236,7 @@ impl AuthenticatedCertifiedBodyRequest {
 }
 
 /// Certified-body response admitted for one outstanding exact request.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[must_use]
 pub(crate) struct AuthenticatedCertifiedBodyResponse {
     response: wire::CertifiedBodyResponse,
@@ -574,7 +574,7 @@ impl PreparedCertifiedBodyResponseClaim<'_> {
     /// Commit the already validated family claim without another lookup that
     /// can reject. Any violated assertion is an internal fail-stop invariant,
     /// never a retryable post-queue error.
-    fn commit(self) -> CertifiedBodyResponseClaimDisposition {
+    pub(in crate::sumeragi) fn commit(self) -> CertifiedBodyResponseClaimDisposition {
         assert!(
             self.tracker.requests.contains_key(&self.request_hash),
             "prepared response claim retains its exact outstanding request"

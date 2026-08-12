@@ -1,6 +1,6 @@
     #[test]
     fn certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier() {
-        let source = include_str!("v2_lifecycle_work_registry.rs");
+        let source = include_str!("../v2_lifecycle_work_registry.rs");
         let production = source
             .split("\n#[cfg(test)]\nmod tests {")
             .next()
@@ -15,14 +15,15 @@
             .expect("Store carrier follows certified Fetch completion");
         for required in [
             "replay_evidence: CertifiedFetchReplayEvidenceV1",
-            "dequeued_certified_response(&self.dequeued)",
-            ".exactly_matches_fetch(",
+            "durable_receipt: DurableBodyReceipt",
+            ".project_durable_ready_fetch(",
         ] {
             assert!(
                 fetch.contains(required),
                 "certified Fetch carrier omitted {required}"
             );
         }
+        assert!(!fetch.contains("CertifiedFetchDequeuedResponse"));
 
         let store = production
             .split("struct DurableStoreBody {")

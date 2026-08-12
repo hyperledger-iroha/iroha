@@ -230,6 +230,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path("crates/iroha_core/src/sumeragi/v2.rs"): (
         Path("tests/v2_adapter_activation_context.rs"),
         Path("tests/v2_adapter_04_wal_recovery.rs"),
+        Path("tests/v2_adapter_04b_lifecycle_startup.rs"),
         Path("tests/v2_adapter_05_direct_lifecycle.rs"),
         Path("tests/v2_adapter_01_replay_and_registry.rs"),
         Path("tests/v2_adapter_02_view_and_lock_progress.rs"),
@@ -246,8 +247,10 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path("crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"): (
         Path("v2_lifecycle_work_registry_validate_recovery.rs"),
         Path("tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs"),
+        Path("tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs"),
         Path("tests/v2_lifecycle_work_registry_durable_store_and_validate_cases.rs"),
         Path("tests/v2_lifecycle_work_registry_exact_registry_cases.rs"),
+        Path("tests/v2_lifecycle_work_registry_recovery_surface_cases.rs"),
         Path("tests/v2_lifecycle_work_registry_replay_evidence_cases.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"): (

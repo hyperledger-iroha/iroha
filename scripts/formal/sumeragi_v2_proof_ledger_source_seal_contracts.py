@@ -510,6 +510,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     "crates/iroha_core/src/sumeragi/v2.rs": (
         "tests/v2_adapter_activation_context.rs",
         "tests/v2_adapter_04_wal_recovery.rs",
+        "tests/v2_adapter_04b_lifecycle_startup.rs",
         "tests/v2_adapter_05_direct_lifecycle.rs",
         "tests/v2_adapter_01_replay_and_registry.rs",
         "tests/v2_adapter_02_view_and_lock_progress.rs",
@@ -526,8 +527,10 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs": (
         "v2_lifecycle_work_registry_validate_recovery.rs",
         "tests/v2_lifecycle_work_registry_validate_dispatch_cases.rs",
+        "tests/v2_lifecycle_work_registry_validate_dispatch_execution_cases.rs",
         "tests/v2_lifecycle_work_registry_durable_store_and_validate_cases.rs",
         "tests/v2_lifecycle_work_registry_exact_registry_cases.rs",
+        "tests/v2_lifecycle_work_registry_recovery_surface_cases.rs",
         "tests/v2_lifecycle_work_registry_replay_evidence_cases.rs",
     ),
     "crates/iroha_core/src/sumeragi/v2_runtime.rs": (
@@ -1448,7 +1451,7 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
         "c867fbfccf0d45fff2757bfbec97655de382b225ce9adada9f451e01c3e38e8d"
     ),
     "runner::run_inner": (
-        "ab23dad98c55d25f940f2da39ba7c053e6a20fa3d27fa7ed87900a0dd31ee0fe"
+        "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca"
     ),
     "runner::drain_v2_ingress": (
         _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256
@@ -1990,7 +1993,7 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 854
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 88
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "df90ef7d94284bc805ff55ead6c6d938ba0f681a1d39e7b929fc275e8019aefa"
+    "07da36398f20bccca0d535ebad55cf21c1239e1773369ba063af7bed643eb9bf"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
     "d581ede7aed449c27f24b27be9ef88cc7ef640e3d5149ba9070fcc99d5cf6fed"
@@ -3058,7 +3061,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
 }
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
-    "run_inner": "ab23dad98c55d25f940f2da39ba7c053e6a20fa3d27fa7ed87900a0dd31ee0fe",
+    "run_inner": "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca",
     "claim_runner_lifecycle_process_generation": "b4bb67413cbfce25355d34b5342d81a96ad7674614e4134b48f7c74cd49af315",
     # Approved together with the exact-output alias after the focused
     # non-descent and handoff mutations passed against the reconciled component.
@@ -3268,7 +3271,7 @@ _EXACT_SERVE_RUNTIME_EPISODE_RUNNER_ITEM_SHA256 = {
         "065cad68c50e4271298c681772d42e7d823bdd253ee2dc848597194f8490ca26"
     ),
     # Bound after the observe-before-claim ordering mutation was rejected.
-    "run_inner": "ab23dad98c55d25f940f2da39ba7c053e6a20fa3d27fa7ed87900a0dd31ee0fe",
+    "run_inner": "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca",
 }
 
 _EXACT_SERVE_RUNTIME_EPISODE_RESTORE_ITEM_SHA256 = {
@@ -3421,7 +3424,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
 }
 
 _PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    "run_inner": "ab23dad98c55d25f940f2da39ba7c053e6a20fa3d27fa7ed87900a0dd31ee0fe",
+    "run_inner": "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca",
     "service_certified_serve_barrier_liveness_turn": (
         "d6afb60b54ec1b0a482ac76cdcc4f14469dbd39930a21ae26904c1a2d4cacb88"
     ),
@@ -3829,7 +3832,7 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     # drain_v2_ingress was approved separately after its three-mode drain
     # mutations passed.
-    "run_inner": "ab23dad98c55d25f940f2da39ba7c053e6a20fa3d27fa7ed87900a0dd31ee0fe",
+    "run_inner": "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca",
     "drain_v2_ingress": (
         "9a218b6c25e62bb63fe0ced59d5a0a4ab65576d8dd692485068da8e02541e704"
     ),
@@ -4004,7 +4007,7 @@ _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256 = {
         "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
     ),
     "runner::run_inner": (
-        "ab23dad98c55d25f940f2da39ba7c053e6a20fa3d27fa7ed87900a0dd31ee0fe"
+        "5aae6e0abc3740b47c3bc4b003c37098de4fa7384218b797316301e5c0180eca"
     ),
     "test::retained_response_certificate_escape_is_charged_only_once": (
         "e02e3d3dcd687669c86ec284919831836d03986292eab84974d6f3896d0d0aca"

@@ -98,7 +98,10 @@ use super::{
         check_production_in_flight_first_release_transition,
     },
     v2_effects::VerifiedPendingGenesisNexusAmxContext,
-    v2_worker::{DurableExactOutputHandoffReceipt, DurableExactOutputTransportOwner},
+    v2_worker::{
+        DurableExactOutputHandoffReceipt, DurableExactOutputServiceOwner,
+        DurableExactOutputTransportOwner, ExactFanoutOwnership, ProductionV2Services,
+    },
 };
 use crate::{
     block::BlockBuilder,
@@ -3310,6 +3313,8 @@ pub(crate) struct V2LaneWorkAdapter {
     merge_qc_preflight_checks: usize,
     completed_merge_sidecars: BTreeSet<HashOf<MergeLedgerEntry>>,
     rejected_merge_sidecars: BTreeMap<HashOf<MergeLedgerEntry>, String>,
+    recovered_apply_sidecar_waits: BTreeSet<HashOf<MergeLedgerEntry>>,
+    rejected_recovered_apply_sidecars: BTreeMap<HashOf<MergeLedgerEntry>, String>,
     closed_sidecar_prefixes: BTreeMap<PeerId, CertifiedMergeSidecarClosedPrefix>,
     sidecar_effects: VecDeque<V2LaneWorkEffect>,
     sidecar_effect_keys: BTreeSet<Hash>,
@@ -3328,6 +3333,116 @@ pub(crate) struct V2LaneWorkAdapter {
 }
 
 impl V2LaneWorkAdapter {
+    /// Compare the exact process-local dependencies used by lifecycle-owned work.
+    ///
+    /// This fixed oracle exposes no dependency parts. It prevents a recovered
+    /// Apply deferral from registering or waking through a foreign height,
+    /// State, Kura instance, or consensus output corridor.
+    pub(in crate::sumeragi) fn matches_lifecycle_dependencies(
+        &self,
+        context: &wire::HeightContext,
+        state: &Arc<State>,
+        kura: &Arc<Kura>,
+        output_guard: &Arc<ConsensusOutputGuard>,
+        local_peer: &PeerId,
+        exact_output_owner: &DurableExactOutputServiceOwner,
+    ) -> bool {
+        self.context == *context
+            && Arc::ptr_eq(&self.state, state)
+            && Arc::ptr_eq(&self.kura, kura)
+            && Arc::ptr_eq(&self.output_guard, output_guard)
+            && self.local_peer == *local_peer
+            && exact_output_owner.is_bound_to_transport_owner(&self.exact_output_handoff_owner)
+    }
+
+    /// Dispatch only the next fair request for one retained decided sidecar wait.
+    ///
+    /// An unrelated next effect remains untouched so the ordinary runner can
+    /// advance it first. The method never scans past fair FIFO order, and an
+    /// exact request is returned to the same sidecar lane if the service
+    /// corridor retains source ownership under backpressure.
+    pub(in crate::sumeragi) fn dispatch_next_recovered_apply_sidecar_request(
+        &mut self,
+        services: &ProductionV2Services,
+        reference: &CertifiedMergeLedgerReference,
+    ) -> Result<(), V2LaneWorkError> {
+        if !services.matches_lifecycle_lane_work(self) {
+            return Err(V2LaneWorkError::InvalidContext(
+                "recovered Apply sidecar request belongs to another service/lane owner".to_owned(),
+            ));
+        }
+        let Some(next) = self.next_effect() else {
+            return Ok(());
+        };
+        let V2LaneWorkEffect::PostCertifiedMergeSidecar {
+            peer,
+            reply_routes: None,
+            message,
+        } = &next
+        else {
+            return Ok(());
+        };
+        let CertifiedMergeSidecarMessage::Request(request) = message.as_ref() else {
+            return Ok(());
+        };
+        let holders = certified_merge_sidecar_holders(reference)
+            .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?;
+        if request.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1
+            || request.request_id != request.canonical_request_id()
+            || request.entry_hash != reference.entry_hash
+            || request.encoded_len != reference.encoded_len
+            || request.epoch_id != reference.epoch_id
+            || request.reference_digest != certified_merge_reference_digest(reference)
+            || request.requester != self.local_peer
+            || request.responder != *peer
+            || !holders.contains(peer)
+        {
+            return Ok(());
+        }
+        if !services
+            .can_retain_lane_work_effect(&next)
+            .map_err(V2LaneWorkError::InvalidContext)?
+        {
+            return Ok(());
+        }
+        let expected_key = lane_work_effect_key(&next);
+        let Some(drained) = self.drain_effects(1).pop() else {
+            return Err(V2LaneWorkError::RestartRequired);
+        };
+        if lane_work_effect_key(&drained) != expected_key {
+            return Err(V2LaneWorkError::RestartRequired);
+        }
+        let V2LaneWorkEffect::PostCertifiedMergeSidecar {
+            peer,
+            reply_routes,
+            message,
+        } = drained
+        else {
+            return Err(V2LaneWorkError::RestartRequired);
+        };
+        match services
+            .post_certified_merge_sidecar_with_reply_routes(
+                peer.clone(),
+                reply_routes.clone(),
+                Arc::clone(&message),
+            )
+            .map_err(V2LaneWorkError::InvalidContext)?
+        {
+            ExactFanoutOwnership::Owned => Ok(()),
+            ExactFanoutOwnership::SourceRetained => {
+                if self.requeue_effect(V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                    peer,
+                    reply_routes,
+                    message,
+                }) {
+                    Ok(())
+                } else {
+                    Err(V2LaneWorkError::RestartRequired)
+                }
+            }
+        }
+    }
+
     #[cfg(test)]
     fn claim_autonomous_lifecycle_process_generation_for_test(
         context: &wire::HeightContext,
@@ -3783,6 +3898,8 @@ impl V2LaneWorkAdapter {
             merge_qc_preflight_checks: 0,
             completed_merge_sidecars: BTreeSet::new(),
             rejected_merge_sidecars: BTreeMap::new(),
+            recovered_apply_sidecar_waits: BTreeSet::new(),
+            rejected_recovered_apply_sidecars: BTreeMap::new(),
             closed_sidecar_prefixes: BTreeMap::new(),
             sidecar_effects: VecDeque::new(),
             sidecar_effect_keys: BTreeSet::new(),
@@ -9856,7 +9973,7 @@ impl V2LaneWorkAdapter {
         subject: wire::BlockSubject,
         reference: CertifiedMergeLedgerReference,
     ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
-        self.defer_missing_merge_sidecar_with_priority(round, subject, reference, false)
+        self.defer_missing_merge_sidecar_with_priority(round, subject, reference, false, false)
     }
 
     /// Register a decided Apply dependency using transport capacity reserved
@@ -9867,7 +9984,39 @@ impl V2LaneWorkAdapter {
         subject: wire::BlockSubject,
         reference: CertifiedMergeLedgerReference,
     ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
-        self.defer_missing_merge_sidecar_with_priority(round, subject, reference, true)
+        self.defer_missing_merge_sidecar_with_priority(round, subject, reference, true, false)
+    }
+
+    /// Register the exact decided sidecar owned by one recovered Apply carrier.
+    ///
+    /// A terminal full-entry rejection is retained in a dedicated owner class
+    /// so the ordinary executor recovery drain cannot consume it first.
+    pub(in crate::sumeragi) fn defer_missing_recovered_decision_apply_sidecar(
+        &mut self,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        reference: CertifiedMergeLedgerReference,
+    ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
+        if let Some(reason) = self
+            .rejected_recovered_apply_sidecars
+            .get(&reference.entry_hash)
+        {
+            return Ok(MergeSidecarDeferralDisposition::Rejected(reason.clone()));
+        }
+        let entry_hash = reference.entry_hash;
+        let disposition =
+            self.defer_missing_merge_sidecar_with_priority(round, subject, reference, true, true)?;
+        match disposition {
+            MergeSidecarDeferralDisposition::Fetching
+            | MergeSidecarDeferralDisposition::RetryLater => {
+                self.recovered_apply_sidecar_waits.insert(entry_hash);
+            }
+            MergeSidecarDeferralDisposition::Available
+            | MergeSidecarDeferralDisposition::Rejected(_) => {
+                self.recovered_apply_sidecar_waits.remove(&entry_hash);
+            }
+        }
+        Ok(disposition)
     }
 
     fn defer_missing_merge_sidecar_with_priority(
@@ -9876,12 +10025,19 @@ impl V2LaneWorkAdapter {
         subject: wire::BlockSubject,
         reference: CertifiedMergeLedgerReference,
         decided: bool,
+        lifecycle_owned: bool,
     ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
             .ok_or(V2LaneWorkError::RestartRequired)?;
-        let result = self.defer_missing_merge_sidecar_guarded(round, subject, reference, decided);
+        let result = self.defer_missing_merge_sidecar_guarded(
+            round,
+            subject,
+            reference,
+            decided,
+            lifecycle_owned,
+        );
         if result.is_ok() {
             operation.complete();
         }
@@ -9894,6 +10050,7 @@ impl V2LaneWorkAdapter {
         subject: wire::BlockSubject,
         reference: CertifiedMergeLedgerReference,
         decided: bool,
+        lifecycle_owned: bool,
     ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
         let Some(parent_hash) = subject.parent_block_hash else {
             return Ok(MergeSidecarDeferralDisposition::Rejected(
@@ -9911,13 +10068,6 @@ impl V2LaneWorkAdapter {
                     .to_owned(),
             ));
         }
-        // No transport progress is possible until the reserved outbound queue
-        // drains. Avoid repeating a protocol-sized QC/PoP verification twice
-        // per runner iteration while the exact deferral remains queued.
-        if self.sidecar_effect_slots() == 0 {
-            return Ok(MergeSidecarDeferralDisposition::RetryLater);
-        }
-
         match self.kura.merge_entry_by_hash(reference.entry_hash) {
             Ok(Some(entry)) => {
                 if !reference.matches_entry(&entry) {
@@ -9946,12 +10096,30 @@ impl V2LaneWorkAdapter {
             }
         }
 
+        // No transport progress is possible until the reserved outbound queue
+        // drains. Probe authenticated local durability first so an already
+        // installed exact sidecar can wake its retained owner even while the
+        // outbound effect lane is full.
+        if self.sidecar_effect_slots() == 0 {
+            return Ok(MergeSidecarDeferralDisposition::RetryLater);
+        }
+
         if let Err(error) = self.authenticate_merge_sidecar_reference(&reference) {
             return Ok(MergeSidecarDeferralDisposition::Rejected(error));
         }
         let committed_height = u64::try_from(self.state.committed_height())
             .map_err(|_| V2LaneWorkError::StateHeightMismatch)?;
-        let deferred = if decided {
+        let deferred = if lifecycle_owned {
+            self.merge_sidecars.defer_lifecycle_decided_block(
+                subject.block_hash,
+                round.height,
+                reference.merge_qc.view,
+                reference,
+                &self.local_peer,
+                committed_height,
+                Instant::now(),
+            )
+        } else if decided {
             self.merge_sidecars.defer_decided_block(
                 subject.block_hash,
                 round.height,
@@ -11712,7 +11880,12 @@ impl V2LaneWorkAdapter {
             if !affected.is_empty() {
                 self.rejected_merge_sidecars
                     .entry(entry_hash)
-                    .or_insert(error);
+                    .or_insert(error.clone());
+                if self.recovered_apply_sidecar_waits.remove(&entry_hash) {
+                    self.rejected_recovered_apply_sidecars
+                        .entry(entry_hash)
+                        .or_insert(error);
+                }
             }
             return Ok(V2LaneIngressOutcome::Rejected);
         }
@@ -11725,9 +11898,15 @@ impl V2LaneWorkAdapter {
                 .discard_invalid(entry_hash)
                 .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
             if !affected.is_empty() {
+                let reason = error.to_string();
                 self.rejected_merge_sidecars
                     .entry(entry_hash)
-                    .or_insert_with(|| error.to_string());
+                    .or_insert_with(|| reason.clone());
+                if self.recovered_apply_sidecar_waits.remove(&entry_hash) {
+                    self.rejected_recovered_apply_sidecars
+                        .entry(entry_hash)
+                        .or_insert(reason);
+                }
             }
             return Ok(V2LaneIngressOutcome::Rejected);
         }
@@ -19695,6 +19874,54 @@ pub(super) mod tests {
             adapter.merge_qc_preflight_checks, checks_before_backpressure,
             "the deferred exact reference reuses the bounded positive QC authentication cache"
         );
+
+        let source = include_str!("v2_lane_work.rs");
+        let deferral = source
+            .split_once("fn defer_missing_merge_sidecar_guarded(")
+            .expect("merge-sidecar deferral remains present")
+            .1
+            .split_once("fn authenticate_merge_sidecar_reference(")
+            .expect("deferral stays bounded before reference authentication")
+            .0;
+        let local_probe = deferral.find("self.kura.merge_entry_by_hash").unwrap();
+        let outbound_capacity = deferral.find("self.sidecar_effect_slots() == 0").unwrap();
+        assert!(
+            local_probe < outbound_capacity,
+            "an already-durable exact sidecar must wake despite outbound backpressure"
+        );
+    }
+
+    #[test]
+    fn lifecycle_dependency_oracle_rejects_foreign_process_instances() {
+        let (adapter, _) = fixture(wire::ConsensusMode::Permissioned);
+        let service_owner = adapter.exact_output_handoff_owner.paired_service_for_test();
+        assert!(adapter.matches_lifecycle_dependencies(
+            &adapter.context,
+            &adapter.state,
+            &adapter.kura,
+            &adapter.output_guard,
+            &adapter.local_peer,
+            &service_owner,
+        ));
+
+        let (foreign, _) = fixture(wire::ConsensusMode::Permissioned);
+        let foreign_service_owner = foreign.exact_output_handoff_owner.paired_service_for_test();
+        assert!(!adapter.matches_lifecycle_dependencies(
+            &foreign.context,
+            &foreign.state,
+            &foreign.kura,
+            &foreign.output_guard,
+            &foreign.local_peer,
+            &foreign_service_owner,
+        ));
+        assert!(!adapter.matches_lifecycle_dependencies(
+            &adapter.context,
+            &adapter.state,
+            &adapter.kura,
+            &adapter.output_guard,
+            &adapter.local_peer,
+            &foreign_service_owner,
+        ));
     }
 
     #[test]

@@ -15315,12 +15315,23 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
     module = load_checker()
     for relative in (
         "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "crates/iroha_core/src/sumeragi/mod.rs",
         "crates/iroha_core/src/sumeragi/status.rs",
         "crates/iroha_core/src/sumeragi/v2.rs",
         "crates/iroha_core/src/sumeragi/v2_runtime.rs",
         "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
         "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+        "crates/iroha_core/src/sumeragi/v2_context.rs",
+        "crates/iroha_core/src/sumeragi/v2_body_store.rs",
+        "crates/iroha_core/src/sumeragi/safety_wal.rs",
+        "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+        "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
+        "crates/iroha_core/src/kura.rs",
         "scripts/run_sumeragi_v2_release_gates.sh",
     ):
         destination = tmp_path / relative
@@ -15335,7 +15346,7 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
     run_inner = run_inner_items[0]
     owner_binding = (
         "let mut pending_successor_activation = recovered_successor_activation\n"
-        "        .map(PendingSuccessorActivation::recovered)\n"
+        "        .map(|authority| PendingSuccessorActivation::recovered(authority, &common_config.key_pair))\n"
         "        .transpose()?;"
     )
     assert run_inner.source.count(owner_binding) == 1
@@ -15371,6 +15382,219 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
 @pytest.mark.parametrize(
     ("relative_path", "region_marker", "old", "new", "error_fragment"),
     (
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn exactly_matches_successor_owner(",
+            ".validate_authenticated_cut(&owner.serve_payloads)",
+            ".validate_authenticated_cut_for_mutation(&owner.serve_payloads)",
+            "CompleteTip canonical predecessor store join omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
+            "pub(super) fn into_serve_payloads(self)",
+            "pub(super) fn into_serve_payloads(self)",
+            "pub(super) fn into_unsealed_payloads(self)",
+            "CompleteTip bodyless completion promotion guard omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+            "pub(super) fn validate_authenticated_cut(",
+            "let observed = self.reload_payload_census_strict()?;",
+            "let observed = BTreeMap::new();",
+            "CompleteTip body-independent Completed metadata authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+            "fn reload_payload_census_strict(",
+            "fs::read_dir(&self.directory)",
+            "fs::read_dir(temporary_path_for_mutation)",
+            "CompleteTip Serve payload directory census must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+            "fn reload_payload_census_strict(",
+            "fs::symlink_metadata(&self.directory)",
+            "fs::metadata(&self.directory)",
+            "CompleteTip Serve payload directory census must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+            "fn reload_payload_census_strict(",
+            "self.load_path(&path, metadata.len())?",
+            "return Ok(payloads);",
+            "CompleteTip Serve payload directory census must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
+            "pub(crate) struct ProductionLifecycleOwnerV1",
+            "serve_payloads: crate::sumeragi::v2_certified_serve_payload_store::AuthenticatedCertifiedServePayloadRecoveryCut,",
+            "serve_payloads: (),",
+            "production lifecycle owner retained Serve census omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
+            "fn run_complete_tip_retirement_release_regressions()",
+            "ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_binds_only_the_exact_unlaunched_successor_owner();",
+            "let _ = ();",
+            "production lifecycle owner retained Serve census omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/status.rs",
+            "fn complete_tip_retirement_and_successor_owner_bind_are_release_bound()",
+            "crate::sumeragi::v2_lifecycle_coordinator::run_complete_tip_retirement_release_regressions",
+            "crate::sumeragi::v2_lifecycle_coordinator::skip_complete_tip_retirement_release_regressions",
+            "CompleteTip retirement release wrapper omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "pub(in crate::sumeragi) struct BoundRecoveredCompleteTipSuccessorOwnerV1 {",
+            "#[cfg(test)]\nimpl BoundRecoveredCompleteTipSuccessorOwnerV1 {",
+            "impl BoundRecoveredCompleteTipSuccessorOwnerV1 {\n"
+            "    pub(in crate::sumeragi) fn into_owner(self) -> ProductionLifecycleOwnerV1 { self.owner }\n"
+            "}\n\n"
+            "#[cfg(test)]\nimpl BoundRecoveredCompleteTipSuccessorOwnerV1 {",
+            "CompleteTip exact H+1 owner bind must use the opaque checked-transition gate",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+            "pub(in crate::sumeragi) fn authorizes(\n        self,",
+            "self.kura_identity.matches(kura)",
+            "true",
+            "recovered lifecycle storage authority handoff omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn mint_from_recovered_height(",
+            "assert!(permit.authorizes(kura, verified, signature_policy, genesis_account));",
+            "assert!(true);",
+            "recovery-minted lifecycle storage authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) struct ProductionLifecycleLaunchInputsV1 {",
+            "authenticated_genesis: Option<AuthenticatedGenesisBodyV1>,",
+            "authenticated_genesis: Option<AuthenticatedGenesisBodyV1>,\n    genesis_account: AccountId,",
+            "move-only authenticated genesis launch input must use the opaque checked-transition gate",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn launch(\n        mut self,",
+            "binding.matches_kura(inputs.kura.as_ref())",
+            "true",
+            "Kura-bound production lifecycle launch must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(crate) fn open_production_lifecycle_owner_v1(",
+            "self.adapter.wal.matches_path(&storage.wal_path)",
+            "true",
+            "canonical Kura-bound lifecycle-owner factory must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn prepare_leader_wire_launch(",
+            "adapter.wal.matches_path(expected_wal_path)",
+            "true",
+            "sealed adapter leader-wire launch projection omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/safety_wal.rs",
+            "fn publish_atomic(&self, frame: &[u8], maximum: u64",
+            "let durable = rustix::fs::statat(",
+            "let durable = promoted;",
+            "opened safety-WAL directory authority omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+            "pub(crate) fn open_with_safety_wal_authority(",
+            "storage: SafetyWalLeaderWireStoreAuthority",
+            "storage: SafetyWalServicedCandidateStoreAuthority",
+            "typed WAL-adjacent production stores omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn prepare_leader_wire_launch(",
+            "*leader_wire_launch_prepared = true;",
+            "let _ = leader_wire_launch_prepared;",
+            "sealed adapter leader-wire launch projection omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "pub(in crate::sumeragi) fn open_gate(",
+            "body_store\n            .recovery_catalog()",
+            "BTreeMap::new()",
+            "sealed adapter leader-wire launch projection omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn launch(\n        mut self,",
+            "leader_wire_launch.restored_producer_ordinal_high_watermark()",
+            "None",
+            "Kura-bound production lifecycle launch must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn launch(\n        mut self,",
+            "leader_wire_restore.scheduler_ordinal_high_watermark()",
+            "0",
+            "Kura-bound production lifecycle launch must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "fn retire(&mut self) -> Result<(), String>",
+            "self.ingress.unbind_leader_wire_lifecycle_gate(gate)?",
+            "self.gate = None;",
+            "sealed leader-wire launch binding omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_context.rs",
+            "pub fn freeze_staged_genesis_v2(",
+            "let authenticated_genesis = AuthenticatedGenesisBodyV1::authenticate(genesis)?;",
+            "let authenticated_genesis = forged_authenticated_genesis;",
+            "signed genesis bootstrap seal mint omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_context.rs",
+            "pub struct GenesisV2Bootstrap {",
+            "pub struct GenesisV2Bootstrap {",
+            "#[derive(Debug, Clone)]\npub struct GenesisV2Bootstrap {",
+            "move-only authenticated genesis bootstrap must use the opaque checked-transition gate",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "pub struct GenesisWithPubKey {",
+            "pub struct GenesisWithPubKey {",
+            "#[derive(Debug, Clone)]\npub struct GenesisWithPubKey {",
+            "move-only genesis runner bundle must use the opaque checked-transition gate",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+            "pub(crate) fn recover_active_height_with_plan(",
+            "if !authenticated_genesis.authorizes(&genesis_public_key) {",
+            "if false {",
+            "recovery-sealed fresh genesis handoff omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+            "pub(crate) fn recover_active_height_with_plan(",
+            "authenticated_genesis: Some(authenticated_genesis),",
+            "authenticated_genesis: None,",
+            "recovery-sealed fresh genesis handoff omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+            "pub(in crate::sumeragi) fn launch(\n        mut self,",
+            "authenticated_genesis.signed_block()",
+            "forged_genesis_body_for_mutation",
+            "move-only authenticated genesis launch input omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn exactly_matches_successor_owner(",
+            ".authorizes_successor_kura(owner.kura_binding.as_ref())",
+            ".authorizes_successor_kura(None)",
+            "CompleteTip canonical predecessor store join omits production refinement tokens",
+        ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
             "fn open_ingress_for_active_height(",
@@ -15672,12 +15896,23 @@ def test_successor_production_source_mapping_mutations_fail_closed(
     module = load_checker()
     for source_name in (
         "crates/iroha_core/src/sumeragi/v2_runner.rs",
+        "crates/iroha_core/src/sumeragi/mod.rs",
         "crates/iroha_core/src/sumeragi/status.rs",
         "crates/iroha_core/src/sumeragi/v2.rs",
         "crates/iroha_core/src/sumeragi/v2_runtime.rs",
         "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
         "crates/iroha_core/src/sumeragi/v2_effects.rs",
         "crates/iroha_core/src/sumeragi/v2_recovery.rs",
+        "crates/iroha_core/src/sumeragi/v2_context.rs",
+        "crates/iroha_core/src/sumeragi/v2_body_store.rs",
+        "crates/iroha_core/src/sumeragi/safety_wal.rs",
+        "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+        "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
+        "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs",
+        "crates/iroha_core/src/kura.rs",
         "scripts/run_sumeragi_v2_release_gates.sh",
     ):
         destination = tmp_path / source_name
@@ -29515,6 +29750,61 @@ def test_serviced_candidate_production_contract_is_complete(
 @pytest.mark.parametrize(
     ("relative", "old", "new", "expected_error"),
     (
+        (
+            Path("crates/iroha_core/src/sumeragi/safety_wal.rs"),
+            "let linked = fs::symlink_metadata(self.expected_path.join(name))?;",
+            "let linked = fs::metadata(self.expected_path.join(name))?;",
+            "non-Unix basic WAL operations must reject a symlinked leaf before mutation",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/safety_wal.rs"),
+            """        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = expected;
+            Err(SafetyWalError::UnsupportedStorageBinding {
+                path: self.path.clone(),
+                reason: "descriptor-relative adjacent storage is unavailable",
+            })
+        }
+    }
+
+    /// Mint the sole fixed leader-wire lifecycle sibling authority.""",
+            """        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = expected;
+            Err(SafetyWalError::FailedClosed {
+                path: self.path.clone(),
+                reason: "descriptor-relative adjacent storage is unavailable",
+            })
+        }
+    }
+
+    /// Mint the sole fixed leader-wire lifecycle sibling authority.""",
+            "non-Unix serviced-candidate authority mint must fail before creating an authority",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/safety_wal.rs"),
+            """        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = (frame, maximum);
+            Err(format!(
+                "{label} snapshot storage is unsupported on this platform: {}",
+                self.display_path.display()
+            ))
+        }
+    }
+
+    fn retire(self, maximum: u64, label: &str) -> Result<(), String> {""",
+            """        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        {
+            let _ = maximum;
+            fs::write(&self.display_path, frame).map_err(|error| error.to_string())
+        }
+    }
+
+    fn retire(self, maximum: u64, label: &str) -> Result<(), String> {""",
+            "non-Unix adjacent storage operation cannot fall back to path I/O",
+        ),
         (
             Path(
                 "crates/iroha_core/src/sumeragi/"

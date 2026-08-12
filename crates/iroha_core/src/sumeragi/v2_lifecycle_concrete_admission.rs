@@ -12,9 +12,11 @@ use super::{
         ConcreteLifecycleWorkRegistry, ConcreteWorkAddress, DurableValidateCompletionAuthority,
         DurableValidateCompletionPublication, DurableValidateCompletionPublicationError,
         DurableValidateDispatch, DurableValidateExecutionError, ExecutedDurableValidateDispatch,
-        OpenedRecoveredWalValidateLedger, PublishedDurableValidateCompletion,
-        ReadyValidateCarrierError, RecoveredWalParentFactoryError, RegistryError,
-        RegistryPublicationError, reconstruct_recovered_wal_validate_parent,
+        OpenedRecoveredWalValidateLedger, PreparedRecoveredDecisionApplyDispatch,
+        PublishedDurableValidateCompletion, ReadyRecoveredDecisionApplyAttestation,
+        ReadyRecoveredDecisionApplyAttestationError, ReadyValidateCarrierError,
+        RecoveredDecisionApplyDispatchProjectionError, RecoveredWalParentFactoryError,
+        RegistryError, RegistryPublicationError, reconstruct_recovered_wal_validate_parent,
     },
 };
 use crate::sumeragi::{
@@ -37,6 +39,70 @@ impl LifecycleWorkRegistryHolder {
         Self {
             registry: ConcreteLifecycleWorkRegistry::default(),
         }
+    }
+
+    /// Borrow the concrete map only for one coordinator-owned composite transaction.
+    pub(super) fn registry_mut(&mut self) -> &mut ConcreteLifecycleWorkRegistry {
+        &mut self.registry
+    }
+
+    /// Bind the exact Ready Apply row to its sealed recovered-Decision carrier.
+    ///
+    /// The holder exposes neither its registry nor the carrier. The returned
+    /// attestation contains only the registry-authenticated service demand.
+    pub(super) fn attest_ready_recovered_decision_apply(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ordinal: u128,
+    ) -> Result<ReadyRecoveredDecisionApplyAttestation, ReadyRecoveredDecisionApplyAttestationError>
+    {
+        self.registry
+            .attest_ready_recovered_decision_apply(coordinator, ordinal)
+    }
+
+    /// Project the exact claimed recovered Decision Apply into its dedicated worker task.
+    ///
+    /// The holder keeps the concrete registry private and returns only the
+    /// move-only task emitted by the registry's fixed carrier projection.
+    pub(super) fn prepare_recovered_decision_apply_dispatch(
+        &mut self,
+        coordinator: &LifecycleCoordinator,
+        lease: &TurnLease,
+    ) -> Result<
+        PreparedRecoveredDecisionApplyDispatch<'_>,
+        RecoveredDecisionApplyDispatchProjectionError,
+    > {
+        self.registry
+            .prepare_recovered_decision_apply_dispatch(coordinator, lease)
+    }
+
+    /// Bind one guarded worker completion to the exact claimed Apply carrier.
+    pub(super) fn prepare_recovered_decision_apply_terminal_transition(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        lease: &TurnLease,
+        completion: &crate::sumeragi::v2_apply::RecoveredDecisionApplyCompletionV1,
+    ) -> Option<(
+        super::work_registry::PreparedRecoveredDecisionApplyTerminalTransitionV1,
+        crate::sumeragi::v2::RecoveredDecisionApplyAdapterCompletionAuthorityV1,
+    )> {
+        self.registry
+            .prepare_recovered_decision_apply_terminal_transition(coordinator, lease, completion)
+    }
+
+    /// Publish one recovered Apply terminal and remove its carrier after fsync.
+    pub(super) fn publish_recovered_decision_apply_terminal_transition<T, E>(
+        &mut self,
+        prepared: super::work_registry::PreparedRecoveredDecisionApplyTerminalTransitionV1,
+        current: &LifecycleCoordinator,
+        staged: &LifecycleCoordinator,
+        lease: &TurnLease,
+        publish: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, super::work_registry::RecoveredDecisionApplyTerminalPublicationError<E>> {
+        self.registry
+            .publish_recovered_decision_apply_terminal_transition(
+                prepared, current, staged, lease, publish,
+            )
     }
 
     /// Reconstruct one storage-authenticated recovered Validate parent without a scheduler lease.

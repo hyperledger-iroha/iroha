@@ -8,6 +8,7 @@ def _serviced_candidate_production_source_fidelity_errors(
     base = repo_root / "crates" / "iroha_core" / "src" / "sumeragi"
     paths = {
         "module": base / "mod.rs",
+        "safety_wal": base / "safety_wal.rs",
         "store": base / "serviced_candidate_store.rs",
         "adapter": base / "v2.rs",
         "runtime": base / "v2_runtime.rs",
@@ -16,6 +17,7 @@ def _serviced_candidate_production_source_fidelity_errors(
     }
     descriptions = {
         "module": "serviced-candidate module registration",
+        "safety_wal": "opened safety-WAL directory capability",
         "store": "V3/V4 serviced-candidate durable store",
         "adapter": "producer-continuation adapter ownership",
         "runtime": "producer-continuation serialized runtime",
@@ -415,6 +417,564 @@ def _serviced_candidate_production_source_fidelity_errors(
                 f"{paths[source_key]}:{item.line}: {description} must retain "
                 "the exact reviewed order"
             )
+
+    def require_item_monotone_order(
+        source_key: str,
+        items: dict[str, RustItem | None],
+        key: str,
+        sequences: tuple[str, ...],
+        description: str,
+    ) -> None:
+        item = items.get(key)
+        if item is None:
+            return
+        tokens = rust_code_tokens(item.body)
+        cursor = 0
+        for sequence in sequences:
+            sequence_tokens = rust_code_tokens(sequence)
+            positions = _token_sequence_positions(tokens, sequence_tokens)
+            position = next((found for found in positions if found >= cursor), None)
+            if position is None:
+                errors.append(
+                    f"{paths[source_key]}:{item.line}: {description} must retain "
+                    "the exact reviewed order"
+                )
+                return
+            cursor = position + len(sequence_tokens)
+
+    def select_item(
+        source_key: str,
+        item_name: str,
+        discriminator: str,
+        description: str,
+    ) -> RustItem | None:
+        discriminator_tokens = rust_code_tokens(discriminator)
+        items = [
+            item
+            for item in rust_function_items_from_structural(
+                sources[source_key], structural[source_key], item_name
+            )
+            if _token_sequence_count(
+                rust_code_tokens(item.source), discriminator_tokens
+            )
+            == 1
+        ]
+        if len(items) != 1:
+            errors.append(
+                f"{paths[source_key]}: require exactly one parsed {description} "
+                f"function named {item_name}; found {len(items)}"
+            )
+            return None
+        return items[0]
+
+    for wrapper_name in (
+        "SafetyWalServicedCandidateStoreAuthority",
+        "SafetyWalLeaderWireStoreAuthority",
+    ):
+        wrappers = rust_struct_items(sources["safety_wal"], wrapper_name)
+        if len(wrappers) != 1:
+            errors.append(
+                f"{paths['safety_wal']}: require exactly one move-only "
+                f"{wrapper_name}; found {len(wrappers)}"
+            )
+            continue
+        wrapper = wrappers[0]
+        _require_rust_token_sequence(
+            paths["safety_wal"],
+            wrapper,
+            "entry: BoundSafetyWalAdjacentEntry",
+            f"{wrapper_name} must seal the private fixed-entry owner",
+            errors,
+        )
+        wrapper_offset = sources["safety_wal"].find(wrapper.source)
+        attributes = _leading_rust_attributes(
+            sources["safety_wal"], structural["safety_wal"], wrapper_offset
+        )
+        if not any(attribute == "#[derive(Debug)]" for attribute in attributes) or any(
+            "Clone" in attribute or "Copy" in attribute for attribute in attributes
+        ):
+            errors.append(
+                f"{paths['safety_wal']}:{wrapper.line}: {wrapper_name} must "
+                "remain a distinct move-only capability"
+            )
+    for forbidden in (
+        "impl Clone for SafetyWalServicedCandidateStoreAuthority",
+        "impl Clone for SafetyWalLeaderWireStoreAuthority",
+        "impl Copy for SafetyWalServicedCandidateStoreAuthority",
+        "impl Copy for SafetyWalLeaderWireStoreAuthority",
+    ):
+        if _token_sequence_count(
+            rust_code_tokens(sources["safety_wal"]), rust_code_tokens(forbidden)
+        ):
+            errors.append(
+                f"{paths['safety_wal']}: safety-WAL sibling capability "
+                f"must remain move-only; found {forbidden}"
+            )
+
+    safety_items = {
+        "bind": select_item(
+            "safety_wal",
+            "bind",
+            "direct_lexical_directory_metadata(expected_path)",
+            "opened-directory binding",
+        ),
+        "verify_linked": select_item(
+            "safety_wal",
+            "verify_linked",
+            "open_canonical_directory_nofollow(&canonical_path)",
+            "opened-directory revalidation",
+        ),
+        "open_wal_leaf": select_item(
+            "safety_wal",
+            "open_wal_leaf",
+            "existing_identity",
+            "WAL-leaf open",
+        ),
+        "verify_leaf": select_item(
+            "safety_wal",
+            "verify_leaf",
+            "fs::symlink_metadata(self.expected_path.join(name))",
+            "non-Unix WAL-leaf revalidation",
+        ),
+        "safety_open": select_item(
+            "safety_wal",
+            "open",
+            "BoundSafetyWalDirectory::bind(&parent)",
+            "SafetyWal open",
+        ),
+        "adjacent_read": select_item(
+            "safety_wal",
+            "read_bounded",
+            "rustix::fs::statat(&self.directory.directory",
+            "bounded adjacent read",
+        ),
+        "adjacent_publish": select_item(
+            "safety_wal",
+            "publish_atomic",
+            "let frame_len = u64::try_from(frame.len())",
+            "bounded adjacent publication",
+        ),
+        "adjacent_retire": select_item(
+            "safety_wal",
+            "retire",
+            "rustix::fs::unlinkat(&self.directory.directory",
+            "bounded adjacent retirement",
+        ),
+        "append_write": select_item(
+            "safety_wal",
+            "write_all",
+            "self.directory.verify_leaf(self.file, self.wal_name)",
+            "bound WAL append write",
+        ),
+        "append_sync": select_item(
+            "safety_wal",
+            "sync_data",
+            "self.directory.verify_leaf(self.file, self.wal_name)",
+            "bound WAL append sync",
+        ),
+        "mint_serviced": select_item(
+            "safety_wal",
+            "mint_serviced_candidate_store_authority",
+            "serviced_candidate_authority_minted.swap(true, Ordering::AcqRel)",
+            "serviced-candidate authority mint",
+        ),
+        "mint_leader": select_item(
+            "safety_wal",
+            "mint_leader_wire_store_authority",
+            "leader_wire_authority_minted.swap(true, Ordering::AcqRel)",
+            "leader-wire authority mint",
+        ),
+    }
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "bind",
+        (
+            "direct_lexical_directory_metadata(expected_path)",
+            "fs::canonicalize(expected_path)",
+            "open_canonical_directory_nofollow(&canonical_path)",
+            "unix_file_identity(&lexical_metadata) != identity",
+        ),
+        "initial WAL-directory bind must reject a final symlink and join the opened identity",
+    )
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "verify_linked",
+        (
+            "direct_lexical_directory_metadata(&self.expected_path)",
+            "fs::canonicalize(&self.expected_path)",
+            "canonical_path != self.canonical_path",
+            "open_canonical_directory_nofollow(&canonical_path)",
+            "unix_file_identity(&linked_metadata) != self.identity",
+        ),
+        "every bound operation must rejoin the lexical final directory and retained identity",
+    )
+    for key, sequence, description in (
+        (
+            "bind",
+            """
+let metadata = fs::symlink_metadata(expected_path)?;
+if metadata.file_type().is_symlink() || !metadata.is_dir()
+""",
+            "non-Unix basic WAL bind must reject a symlinked immediate parent",
+        ),
+        (
+            "verify_linked",
+            """
+fs::symlink_metadata(&self.expected_path).and_then(|metadata| {
+    if !metadata.file_type().is_symlink() && metadata.is_dir()
+""",
+            "non-Unix basic WAL operations must revalidate a direct immediate parent",
+        ),
+        (
+            "verify_leaf",
+            """
+let linked = fs::symlink_metadata(self.expected_path.join(name))?;
+if !opened.is_file()
+    || linked.file_type().is_symlink()
+    || !linked.is_file()
+""",
+            "non-Unix basic WAL operations must reject a symlinked leaf before mutation",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["safety_wal"], safety_items[key], sequence, description, errors
+        )
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "open_wal_leaf",
+        (
+            "self.verify_linked()?",
+            "rustix::fs::statat(",
+            "Some((stat.st_dev as u64, stat.st_ino as u64))",
+            "rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL",
+            "rustix::fs::openat(",
+            "unix_file_identity(&opened) != expected_identity",
+            "self.verify_leaf(&file, name)?",
+            "self.verify_linked()?",
+        ),
+        "WAL leaf open must bind both existing and exclusive-create identities",
+    )
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "adjacent_read",
+        (
+            "self.directory.verify_linked()",
+            "rustix::fs::statat(",
+            "rustix::fs::openat(",
+            "let opened_before = file.metadata()",
+            "read_to_end(&mut bytes)",
+            "let opened_after = file.metadata()",
+            "let linked_after = rustix::fs::statat(",
+            "self.directory.verify_linked()",
+            "unix_metadata_revision_unchanged(&opened_before, &opened_after)",
+            "opened_after.len() != bytes_len",
+        ),
+        "adjacent recovery read must retain descriptor, revision, and exact length",
+    )
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "adjacent_publish",
+        (
+            "frame_len > maximum",
+            "self.directory.verify_linked()",
+            "self.remove_stale_temporary(&temporary, label)?",
+            "self.ensure_replaceable_target(label)?",
+            "rustix::fs::openat(",
+            "rustix::fs::OFlags::CREATE | rustix::fs::OFlags::EXCL",
+            "file.write_all(frame)?",
+            "file.sync_all()?",
+            "self.directory.verify_linked()?",
+            "synced.len() != frame_len",
+            "rustix::fs::renameat(",
+            "u64::try_from(promoted.st_size).unwrap_or(u64::MAX) != frame_len",
+            "self.directory.sync()?",
+            "let durable = rustix::fs::statat(",
+            "u64::try_from(durable.st_size).unwrap_or(u64::MAX) != frame_len",
+            "self.directory.verify_linked()",
+        ),
+        "adjacent publication must revalidate its promoted identity after directory sync",
+    )
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "adjacent_retire",
+        (
+            "self.directory.verify_linked()",
+            "rustix::fs::statat(",
+            "rustix::fs::openat(",
+            "file.sync_all()",
+            "self.directory.verify_linked()",
+            "let linked_after = rustix::fs::statat(",
+            "rustix::fs::unlinkat(",
+            "self.directory.sync()",
+        ),
+        "adjacent retirement must unlink and sync only the descriptor-bound entry",
+    )
+    for key, sequence, description in (
+        (
+            "append_write",
+            "self.directory.verify_leaf(self.file, self.wal_name)?; self.file.write_all(bytes)",
+            "WAL append must verify its bound leaf immediately before writing",
+        ),
+        (
+            "append_sync",
+            "self.file.sync_data()?; self.directory.verify_leaf(self.file, self.wal_name)",
+            "WAL append must verify its bound leaf after synchronization",
+        ),
+        (
+            "mint_serviced",
+            "self.verify_expected_binding(expected)?; if self.serviced_candidate_authority_minted.swap(true, Ordering::AcqRel)",
+            "serviced-candidate authority mint must be one-shot and path-bound",
+        ),
+        (
+            "mint_leader",
+            "self.verify_expected_binding(expected)?; if self.leader_wire_authority_minted.swap(true, Ordering::AcqRel)",
+            "leader-wire authority mint must be one-shot and path-bound",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["safety_wal"], safety_items[key], sequence, description, errors
+        )
+    for key, suffix, description in (
+        (
+            "mint_serviced",
+            'BoundSafetyWalAdjacentEntry::from_wal(Arc::clone(&self.directory), &self.path, ".serviced-candidates")',
+            "serviced-candidate mint must select only its fixed sibling entry",
+        ),
+        (
+            "mint_leader",
+            'BoundSafetyWalAdjacentEntry::from_wal(Arc::clone(&self.directory), &self.path, ".leader-wire-lifecycles")',
+            "leader-wire mint must select only its fixed sibling entry",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["safety_wal"], safety_items[key], suffix, description, errors
+        )
+    for key, description in (
+        (
+            "mint_serviced",
+            "non-Unix serviced-candidate authority mint must fail before creating an authority",
+        ),
+        (
+            "mint_leader",
+            "non-Unix leader-wire authority mint must fail before creating an authority",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["safety_wal"],
+            safety_items[key],
+            """
+#[cfg(not(all(unix, not(target_os = "espidf"))))]
+{
+    let _ = expected;
+    Err(SafetyWalError::UnsupportedStorageBinding {
+""",
+            description,
+            errors,
+        )
+    for key in ("adjacent_read", "adjacent_publish", "adjacent_retire"):
+        _require_rust_token_sequence(
+            paths["safety_wal"],
+            safety_items[key],
+            """
+#[cfg(not(all(unix, not(target_os = "espidf"))))]
+{
+""",
+            "non-Unix adjacent storage operation must remain an explicit fail-closed branch",
+            errors,
+        )
+        if "snapshot storage is unsupported on this platform" not in safety_items[key].source:
+            errors.append(
+                f"{paths['safety_wal']}:{safety_items[key].line}: non-Unix adjacent "
+                "storage operation cannot fall back to path I/O"
+            )
+    safety_open = safety_items["safety_open"]
+    require_item_monotone_order(
+        "safety_wal",
+        safety_items,
+        "safety_open",
+        (
+            "fs::create_dir_all(&parent)",
+            "BoundSafetyWalDirectory::bind(&parent)",
+            "directory.open_wal_leaf(&wal_name)",
+            "directory.verify_leaf(&file, &wal_name)",
+            "let read_metadata_before = file.metadata()",
+            "file.read_to_end(&mut bytes)",
+            "let read_metadata_after = file.metadata()",
+            "wal_metadata_revision_unchanged(&read_metadata_before, &read_metadata_after)",
+            "recover_wal_file(&bytes, identity, &frame_hash)",
+        ),
+        "SafetyWal recovery must bind before opening and bracket exact bytes with revisions",
+    )
+    for sequence, description in (
+        (
+            "wal_metadata_revision_unchanged(&read_metadata_before, &read_metadata_after) || read_metadata_after.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)",
+            "WAL recovery must reject revision or exact-length drift",
+        ),
+        (
+            "file.set_len(valid_prefix_len).and_then(|()| file.sync_data())",
+            "crash-tail truncation must synchronize before reopening append state",
+        ),
+    ):
+        _require_rust_token_sequence(
+            paths["safety_wal"], safety_open, sequence, description, errors
+        )
+
+    for struct_name, storage_type in (
+        ("ServicedCandidateStore", "SafetyWalServicedCandidateStoreAuthority"),
+        ("LeaderWireLifecycleStoreGate", "SafetyWalLeaderWireStoreAuthority"),
+    ):
+        structs = rust_struct_items(sources["store"], struct_name)
+        if len(structs) != 1:
+            errors.append(
+                f"{paths['store']}: require exactly one sealed {struct_name}; "
+                f"found {len(structs)}"
+            )
+            continue
+        _require_rust_token_sequence(
+            paths["store"],
+            structs[0],
+            f"storage: {storage_type}",
+            f"{struct_name} must retain its typed safety-WAL sibling authority",
+            errors,
+        )
+
+    production_store_open = select_item(
+        "store",
+        "open_with_safety_wal_authority",
+        "storage: SafetyWalServicedCandidateStoreAuthority",
+        "production serviced-candidate open",
+    )
+    production_gate_open = select_item(
+        "store",
+        "open_with_safety_wal_authority",
+        "storage: SafetyWalLeaderWireStoreAuthority",
+        "production leader-wire gate open",
+    )
+    raw_store_open = select_item(
+        "store",
+        "open",
+        "SafetyWalServicedCandidateStoreAuthority::for_test_path",
+        "test-only raw serviced-candidate open",
+    )
+    raw_gate_open = select_item(
+        "store",
+        "open",
+        "SafetyWalLeaderWireStoreAuthority::for_test_path",
+        "test-only raw leader-wire gate open",
+    )
+    for item, description in (
+        (production_store_open, "production serviced-candidate open"),
+        (production_gate_open, "production leader-wire gate open"),
+    ):
+        if item is None:
+            continue
+        item_offset = sources["store"].find(item.source)
+        attributes = _leading_rust_attributes(
+            sources["store"], structural["store"], item_offset
+        )
+        if any("cfg(test)" in attribute for attribute in attributes):
+            errors.append(
+                f"{paths['store']}:{item.line}: {description} cannot be test-gated"
+            )
+        if _token_sequence_count(
+            rust_code_tokens(item.source), rust_code_tokens("safety_wal_path: &Path")
+        ):
+            errors.append(
+                f"{paths['store']}:{item.line}: {description} cannot accept a raw path"
+            )
+    for item, description in (
+        (raw_store_open, "raw serviced-candidate open"),
+        (raw_gate_open, "raw leader-wire gate open"),
+    ):
+        if item is None:
+            continue
+        item_offset = sources["store"].find(item.source)
+        attributes = _leading_rust_attributes(
+            sources["store"], structural["store"], item_offset
+        )
+        if "#[cfg(test)]" not in attributes:
+            errors.append(
+                f"{paths['store']}:{item.line}: {description} must remain test-only"
+            )
+    for item, sequence, description in (
+        (
+            production_store_open,
+            "Self::open_with_storage_and_capacities(storage, context_id, height, owner, record_capacity, record_capacity)",
+            "production serviced-candidate open must consume the typed storage authority",
+        ),
+        (
+            production_gate_open,
+            "Self::open_with_storage(storage, context_id, height, owner, roster, capacity, max_chunk_count, recovery_authority, producer_terminals, durable_bodies)",
+            "production leader-wire gate open must consume the typed storage authority",
+        ),
+    ):
+        _require_rust_token_sequence(paths["store"], item, sequence, description, errors)
+    _require_rust_token_sequence(
+        paths["store"],
+        store_items.get("store_load"),
+        "self.storage.read_bounded(self.max_frame_bytes)?",
+        "serviced-candidate recovery must read only through its retained authority",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        store_items.get("store_persist_with_producer_continuations"),
+        "self.storage.publish_atomic(&frame, self.max_frame_bytes)",
+        "serviced-candidate publication must use only its retained authority",
+        errors,
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        store_items.get("leader_wire_load_and_reconcile"),
+        "self.storage.read_bounded(self.max_frame_bytes)?",
+        "leader-wire recovery must read only through its retained authority",
+        errors,
+    )
+    gate_persist = select_item(
+        "store",
+        "persist_locked",
+        "encode_leader_wire_frame(&snapshot, self.max_frame_bytes)",
+        "leader-wire gate publication",
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        gate_persist,
+        "self.storage.publish_atomic(&frame, self.max_frame_bytes)",
+        "leader-wire publication must use only its retained authority",
+        errors,
+    )
+    store_retire = select_item(
+        "store",
+        "retire",
+        "self.storage.retire(self.max_frame_bytes)",
+        "serviced-candidate store retirement",
+    )
+    _require_rust_token_sequence(
+        paths["store"],
+        store_retire,
+        "self.storage.retire(self.max_frame_bytes)",
+        "serviced-candidate retirement must use only its retained authority",
+        errors,
+    )
+
+    require_item_monotone_order(
+        "adapter",
+        adapter_items,
+        "open_with_aggregator_and_publication_with_capacity",
+        (
+            "let wal = SafetyWal::open(",
+            "wal.mint_serviced_candidate_store_authority(&wal_path)?",
+            "ServicedCandidateStore::open_with_safety_wal_authority(",
+            "let entries = wal.recovered_records()",
+        ),
+        "adapter recovery must bind SafetyWal before restoring serviced-candidate state",
+    )
 
     require_item_sequence(
         "store",
@@ -1410,14 +1970,15 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
 """,
         "leader-wire completion must retain exact runtime ordinal and causal key",
     )
-    require_item_order(
+    require_item_monotone_order(
         "runner",
         runner_items,
         "run_inner",
         (
             "adapter.restored_producer_continuation_ordinal_high_watermark()",
             "lifecycle_ordinals.advance_past(high_watermark)",
-            "LeaderWireLifecycleStoreGate::open",
+            "adapter.mint_leader_wire_store_authority(&wal_path)?",
+            "LeaderWireLifecycleStoreGate::open_with_safety_wal_authority",
             "lifecycle_ordinals.advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())",
             "LeaderWireIngressBinding::bind",
             "SerializedV2Runtime::new_with_lifecycle_ordinals",
@@ -1430,6 +1991,7 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
         inventory: dict[str, str],
         long_tests: set[str] = set(),
         unix_tests: set[str] = set(),
+        strict_unix_tests: set[str] = set(),
     ) -> dict[str, RustItem]:
         sealed: dict[str, RustItem] = {}
         test_module_offset = structural[source_key].find("mod tests")
@@ -1452,12 +2014,16 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
             sealed[name] = item
             item_offset = sources[source_key].find(item.source)
             expected = (
-                ("#[cfg(unix)]", "#[test]")
-                if name in unix_tests
+                ("#[cfg(all(unix, not(target_os = \"espidf\")))]", "#[test]")
+                if name in strict_unix_tests
                 else (
-                    ("#[test]", "#[allow(clippy::too_many_lines)]")
-                    if name in long_tests
-                    else ("#[test]",)
+                    ("#[cfg(unix)]", "#[test]")
+                    if name in unix_tests
+                    else (
+                        ("#[test]", "#[allow(clippy::too_many_lines)]")
+                        if name in long_tests
+                        else ("#[test]",)
+                    )
                 )
             )
             observed_attributes = _leading_rust_attributes(
@@ -1481,10 +2047,21 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
         return sealed
 
     seal_regressions(
+        "safety_wal",
+        _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256,
+        strict_unix_tests=set(
+            _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256
+        ),
+    )
+    seal_regressions(
         "store",
         _SERVICED_CANDIDATE_V4_STORE_REGRESSION_TEST_SHA256,
         unix_tests={
             "snapshot_load_and_retire_never_follow_substituted_symlinks"
+        },
+        strict_unix_tests={
+            "serviced_candidate_recovery_rejects_substituted_wal_directory",
+            "leader_wire_gate_rejects_substituted_wal_directory",
         },
     )
     adapter_regressions = seal_regressions(
@@ -1514,7 +2091,7 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
         _SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256,
     )
 
-    for source_key in ("store", "adapter", "runtime", "runner", "worker"):
+    for source_key in ("safety_wal", "store", "adapter", "runtime", "runner", "worker"):
         executable = structural[source_key]
         for forbidden in ("std::env", "var_os", "serde_json"):
             if forbidden in executable:

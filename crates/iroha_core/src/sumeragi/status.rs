@@ -60,9 +60,9 @@ use super::{
         ProductionRecoveredSuccessorTraceProjection,
         ProductionSuccessorPredecessorBindingProjection, ProductionSuccessorSnapshotProjection,
         ProductionSuccessorStartupLifecycleProjection, SUCCESSOR_AUTHORITY_APPLIED,
-        SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP, SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP,
-        SUCCESSOR_LIFECYCLE_BEGIN, SUCCESSOR_LIFECYCLE_FAIL, SUCCESSOR_MARKER_ACTIVATED,
-        SUCCESSOR_STAGE_COMPLETE, SUCCESSOR_STAGE_QUEUED, SUCCESSOR_STAGE_RUNNING,
+        SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP, SUCCESSOR_LIFECYCLE_BEGIN,
+        SUCCESSOR_LIFECYCLE_FAIL, SUCCESSOR_MARKER_ACTIVATED, SUCCESSOR_STAGE_COMPLETE,
+        SUCCESSOR_STAGE_QUEUED, SUCCESSOR_STAGE_RUNNING,
         check_production_applied_successor_transition,
         check_production_recovered_successor_transition,
         check_production_successor_startup_lifecycle_transition,
@@ -900,8 +900,8 @@ pub(crate) enum V2SuccessorActivationError {
     /// witness or binds that witness to another reducer incarnation.
     #[error("prepared Sumeragi v2 successor lacks its exact activation marker")]
     SuccessorMarkerMismatch,
-    /// Complete-tip recovery attempted to replace a status which should have
-    /// remained unpublished throughout successor startup.
+    /// Audited snapshot recovery attempted to replace a status which should
+    /// have remained unpublished throughout successor startup.
     #[error("recovered Sumeragi v2 successor found an already published height {0}")]
     RecoveredStatusAlreadyPublished(u64),
     /// Primitive successor fields failed the shared production/Verus decision kernel.
@@ -1151,24 +1151,9 @@ fn activate_v2_successor_height_at(
     Ok(())
 }
 
-fn activate_recovered_v2_successor_height_at(
-    authority: DurableSuccessorActivationAuthority,
-    successor: SumeragiV2Status,
-    now: Instant,
-) -> Result<(), V2SuccessorActivationError> {
-    let (predecessor, expected_successor_context_id) = authority.into_parts();
-    publish_recovered_v2_successor_height_at(
-        SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP,
-        predecessor.refinement_projection(),
-        CanonicalIdentityProjection::zero(),
-        0,
-        CanonicalIdentityProjection::zero(),
-        expected_successor_context_id,
-        successor,
-        now,
-    )
-}
-
+// Snapshot bootstrap is the sole caller of this projection-shaped helper.
+// CompleteTip has no status bridge until the canonical successor lifecycle
+// owner consumes its post-retirement token.
 fn publish_recovered_v2_successor_height_at(
     authority_kind: u8,
     predecessor: ProductionDurablePredecessorIdentityProjection,
@@ -1237,27 +1222,10 @@ pub(crate) fn activate_v2_successor_height(
     activate_v2_successor_height_at(expected_predecessor, authority, successor, Instant::now())
 }
 
-/// Publish a complete-tip restart's recovered successor at the same live
-/// boundary as an uninterrupted handoff.
-///
-/// Startup clears the process-local registry, while Kura/WSV recovery proves
-/// the finalized parent. Therefore no predecessor snapshot is available to
-/// retag; any unexpectedly published status is a fail-closed contract error.
-pub(crate) fn activate_recovered_v2_successor_height(
-    authority: DurableSuccessorActivationAuthority,
-    successor: SumeragiV2Status,
-) -> Result<(), V2SuccessorActivationError> {
-    activate_recovered_v2_successor_height_at(authority, successor, Instant::now())
-}
-
-/// Publish the authenticated first executable height after an audited snapshot.
-///
-/// This shares the empty process-local status boundary used by complete-tip
-/// restart, but deliberately names snapshot authority separately: the imported
-/// anchor is not a historical CommitQC or Kura finality receipt.
-pub(crate) fn activate_snapshot_bootstrap_v2_height(
+fn activate_snapshot_bootstrap_v2_height_at(
     authority: SnapshotSuccessorActivationAuthority,
     successor: SumeragiV2Status,
+    now: Instant,
 ) -> Result<(), V2SuccessorActivationError> {
     let (snapshot_record_hash, snapshot_height, snapshot_block_hash, expected_successor_context_id) =
         authority.into_parts();
@@ -1269,8 +1237,20 @@ pub(crate) fn activate_snapshot_bootstrap_v2_height(
         super::v2_recovery::successor_block_refinement_projection(snapshot_block_hash),
         expected_successor_context_id,
         successor,
-        Instant::now(),
+        now,
     )
+}
+
+/// Publish the authenticated first executable height after an audited snapshot.
+///
+/// This is the empty process-local status publication path for audited snapshot
+/// bootstrap; the imported anchor is not a historical CommitQC or Kura finality
+/// receipt.
+pub(crate) fn activate_snapshot_bootstrap_v2_height(
+    authority: SnapshotSuccessorActivationAuthority,
+    successor: SumeragiV2Status,
+) -> Result<(), V2SuccessorActivationError> {
+    activate_snapshot_bootstrap_v2_height_at(authority, successor, Instant::now())
 }
 
 /// Register the live bounded transport-to-runner ingress for status overlays.
@@ -2346,9 +2326,9 @@ mod v2_liveness_watchdog_tests {
         consensus_v2::{
             BlockSubject, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode,
             ConsensusRound, DualQuorum, ExecutionCommitment, GlobalPhase, HeightContext,
-            HeightContextId, PROTOCOL_VERSION, QuorumCertificateRef, SumeragiV2BodyState,
-            SumeragiV2HeightContextStatus, SumeragiV2LivenessBlocker, SumeragiV2LocalWorkStage,
-            SumeragiV2OutboundIntentKind, SumeragiV2OutboundIntentStage,
+            HeightContextId, PROTOCOL_VERSION, QuorumCertificateRef, SnapshotV2BootstrapRecord,
+            SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2LivenessBlocker,
+            SumeragiV2LocalWorkStage, SumeragiV2OutboundIntentKind, SumeragiV2OutboundIntentStage,
             SumeragiV2OutboundIntentStatus, SumeragiV2ProgressTransition,
             SumeragiV2ProgressTransitionStatus, SumeragiV2QueueKind, SumeragiV2QueueStatus,
             SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2TimeoutQuorumStatus,
@@ -2358,13 +2338,14 @@ mod v2_liveness_watchdog_tests {
     use iroha_data_model::peer::PeerId;
 
     use super::{
-        EffectExecutorStatus, PendingKuraApplyRecoveryStage, V2IoCompletionQueueObserver,
-        V2LivenessWatchdog, V2LivenessWatchdogTransition, V2SuccessorActivationError,
-        activate_recovered_v2_successor_height_at, activate_v2_successor_height_at,
-        begin_v2_successor_activation, classify_v2_liveness_blocker, clear_v2_status,
-        mark_v2_restart_required, overlay_v2_effect_status, set_v2_effect_completion_observer,
-        set_v2_effect_status, set_v2_network_ingress, set_v2_status_at,
-        update_v2_successor_work_stage_at, v2_status_at, v2_status_with_restart_required,
+        EffectExecutorStatus, PendingKuraApplyRecoveryStage, SnapshotSuccessorActivationAuthority,
+        V2IoCompletionQueueObserver, V2LivenessWatchdog, V2LivenessWatchdogTransition,
+        V2SuccessorActivationError, activate_snapshot_bootstrap_v2_height_at,
+        activate_v2_successor_height_at, begin_v2_successor_activation,
+        classify_v2_liveness_blocker, clear_v2_status, mark_v2_restart_required,
+        overlay_v2_effect_status, set_v2_effect_completion_observer, set_v2_effect_status,
+        set_v2_network_ingress, set_v2_status_at, update_v2_successor_work_stage_at, v2_status_at,
+        v2_status_with_restart_required,
     };
     use crate::sumeragi::{
         BlockMessage, FairV2Ingress, InboundBlockMessage,
@@ -3465,8 +3446,15 @@ mod v2_liveness_watchdog_tests {
         clear_v2_status();
     }
 
+    #[cfg(feature = "bls")]
     #[test]
-    fn complete_tip_recovery_publishes_one_exact_live_successor_boundary() {
+    fn complete_tip_retirement_and_successor_owner_bind_are_release_bound() {
+        crate::sumeragi::v2_lifecycle_coordinator::run_complete_tip_retirement_release_regressions(
+        );
+    }
+
+    #[test]
+    fn snapshot_recovery_publishes_one_exact_live_successor_boundary() {
         let _guard = super::rbc_status_test_guard();
         clear_v2_status();
         let started_at = Instant::now();
@@ -3480,14 +3468,24 @@ mod v2_liveness_watchdog_tests {
             2,
             SumeragiV2ProgressTransition::SuccessorHeightActivated,
         );
-        let predecessor = test_predecessor(7, b"status recovered successor");
+        let snapshot_record_hash = HashOf::<SnapshotV2BootstrapRecord>::from_untyped_unchecked(
+            Hash::new(b"status snapshot bootstrap record"),
+        );
+        let snapshot_block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"status snapshot bootstrap block",
+        ));
 
-        activate_recovered_v2_successor_height_at(
-            test_successor_authority(predecessor, successor.height_context_id),
+        activate_snapshot_bootstrap_v2_height_at(
+            SnapshotSuccessorActivationAuthority::for_test(
+                snapshot_record_hash,
+                7,
+                snapshot_block_hash,
+                successor.height_context_id,
+            ),
             successor.clone(),
             started_at,
         )
-        .expect("publish recovered successor only after startup");
+        .expect("publish snapshot successor only after startup");
         let active = v2_status_at(started_at + Duration::from_secs(2)).expect("active successor");
         assert_eq!(active.height, 8);
         assert_eq!(active.last_committed_height, 7);
@@ -3501,8 +3499,13 @@ mod v2_liveness_watchdog_tests {
         ));
 
         assert_eq!(
-            activate_recovered_v2_successor_height_at(
-                test_successor_authority(predecessor, successor.height_context_id),
+            activate_snapshot_bootstrap_v2_height_at(
+                SnapshotSuccessorActivationAuthority::for_test(
+                    snapshot_record_hash,
+                    7,
+                    snapshot_block_hash,
+                    successor.height_context_id,
+                ),
                 successor,
                 started_at + Duration::from_secs(3),
             ),

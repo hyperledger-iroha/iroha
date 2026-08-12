@@ -2361,7 +2361,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::finalized_rollover_closes_ingress_before_successor_replay
   sumeragi::v2_runner::tests::synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff
   sumeragi::v2_runner::tests::successor_activation_is_published_only_after_ingress_is_open
-  sumeragi::v2_runner::tests::complete_tip_recovery_uses_the_same_live_successor_boundary
+  sumeragi::v2_runner::tests::complete_tip_recovery_requires_authenticated_predecessor_retirement
   sumeragi::v2_runner::tests::successor_startup_failure_stays_running_and_fails_closed_without_activation
   sumeragi::v2_runner::tests::status_guard_retains_failure_snapshot_and_clears_clean_shutdown
   sumeragi::v2_runner::tests::unsupported_storage_platform_rejects_runner_voter_and_admits_observer
@@ -2521,7 +2521,7 @@ required_production_liveness_tests=(
   sumeragi::status::v2_liveness_watchdog_tests::live_effect_completion_observer_survives_stopped_runner_and_clears_stale_depth
   sumeragi::status::v2_liveness_watchdog_tests::successor_handoff_is_visible_until_the_exact_successor_becomes_active_once
   sumeragi::status::v2_liveness_watchdog_tests::completed_predecessor_work_alone_never_claims_successor_activation
-  sumeragi::status::v2_liveness_watchdog_tests::complete_tip_recovery_publishes_one_exact_live_successor_boundary
+  sumeragi::status::v2_liveness_watchdog_tests::complete_tip_retirement_and_successor_owner_bind_are_release_bound
   sumeragi::status::v2_liveness_watchdog_tests::rejected_successor_activation_never_mutates_or_replaces_the_predecessor
   sumeragi::status::v2_liveness_watchdog_tests::successor_handoff_rejects_every_incomplete_predecessor_witness
   sumeragi::status::v2_liveness_watchdog_tests::successor_startup_overlays_never_cross_the_height_context_boundary
