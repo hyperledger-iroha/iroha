@@ -2051,36 +2051,21 @@ fn encoded_instruction_pair_payload(instr: &InstructionBox) -> Option<(&'static 
 }
 
 fn encoded_instruction_pair_len(instr: &InstructionBox) -> Option<usize> {
-    #[cfg(feature = "packed-struct")]
-    {
-        // `packed-struct` selects the derive's alternate exact-size formula at
-        // compile time, while `Instruction::dyn_encode_into` emits the canonical
-        // adaptive payload and records its actual layout flags. Measure that
-        // payload before exposing an exact length so the wrapper never promotes
-        // an alternate-layout capacity estimate into a byte-exact contract.
-        let payload = encoded_instruction_payload(instr)?;
-        encoded_instruction_tuple_len(payload.name, payload.framed_payload_len)
+    let inner = peel_instruction_box(&**instr);
+    if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
+        return encoded_instruction_tuple_len(opaque.wire_id, opaque.framed_payload.len());
     }
-
-    #[cfg(not(feature = "packed-struct"))]
-    {
-        let inner = peel_instruction_box(&**instr);
-        if let Some(opaque) = inner.as_any().downcast_ref::<OpaqueInstruction>() {
-            return encoded_instruction_tuple_len(opaque.wire_id, opaque.framed_payload.len());
-        }
-        let type_name = Instruction::id(inner);
-        let entry = {
-            let registry = instruction_registry();
-            registry.entry_for_type_name(type_name)?
-        };
-        let payload_len = {
-            let _guard =
-                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-            Instruction::dyn_encoded_len(inner)?
-        };
-        let framed_payload_len = (entry.frame_len)(payload_len)?;
-        encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
-    }
+    let type_name = Instruction::id(inner);
+    let entry = {
+        let registry = instruction_registry();
+        registry.entry_for_type_name(type_name)?
+    };
+    let payload_len = {
+        let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        Instruction::dyn_encoded_len(inner)?
+    };
+    let framed_payload_len = (entry.frame_len)(payload_len)?;
+    encoded_instruction_tuple_len(entry.wire_id, framed_payload_len)
 }
 
 fn encoded_instruction_pair_hint(instr: &InstructionBox) -> Option<usize> {

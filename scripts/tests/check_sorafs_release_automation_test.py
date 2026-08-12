@@ -465,11 +465,23 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/build_sorafs_topology_qualification_envelope.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
             '- "scripts/sorafs_software_signer_receipt.py"',
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
             '- "scripts/sorafs_topology_qualification.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/sorafs_evidence_json.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/sorafs_response_args.py"',
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
@@ -482,6 +494,22 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         (
             ".github/workflows/sorafs-cli-release.yml",
             '- "scripts/tests/sorafs_topology_qualification_test.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/tests/sorafs_evidence_json_test.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/tests/sorafs_response_args_test.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/examples/sorafs_l1_topology_qualification_envelope.md"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "specs/sorafs/l1_deployment_qualification.md"',
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
@@ -1821,6 +1849,20 @@ def test_main_emits_schema_closed_summary(capsys: pytest.CaptureFixture[str]) ->
     assert json.loads(capsys.readouterr().out) == automation.validate_release_automation(
         REPO_ROOT
     )
+
+
+def test_cli_release_gate_runs_topology_envelope_adversarial_suites() -> None:
+    """The strict release gate cannot omit topology signing or safe-I/O tests."""
+
+    source = (REPO_ROOT / "ci/check_sorafs_cli_release.sh").read_text(
+        encoding="utf-8"
+    )
+    for relative in (
+        "scripts/tests/sorafs_evidence_json_test.py",
+        "scripts/tests/sorafs_response_args_test.py",
+        "scripts/tests/sorafs_topology_qualification_test.py",
+    ):
+        assert source.count(relative) == 1
 
 
 def test_release_workflow_script_dependencies_are_exactly_pinned() -> None:

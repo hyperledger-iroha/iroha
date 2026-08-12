@@ -119,8 +119,8 @@ sumeragi_v2_ensure_source_bound_localnet_binaries() {
         --features test-network-message-control || exit $?
     ) || exit $?
 
-    # Keep the mandatory process snapshot outside redirected stdout so the
-    # exact version transcript contains only the tool's bytes.
+    # Redirect only Cargo stdout so the exact version transcript contains only
+    # the authenticated tool's bytes; policy failures remain on stderr.
     run_cargo --version >"$prebuilt_cargo_version_file" || exit $?
     command rustc -vV >"$prebuilt_rustc_version_file" || exit $?
 

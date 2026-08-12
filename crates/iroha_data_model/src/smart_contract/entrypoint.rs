@@ -230,14 +230,7 @@ struct DecodedEntrypointValueTypeV1 {
 
 impl<'de> NoritoDeserialize<'de> for EntrypointValueTypeV1 {
     fn schema_hash() -> [u8; 16] {
-        #[cfg(feature = "schema-structural")]
-        {
-            norito::core::schema_hash_structural::<Self>()
-        }
-        #[cfg(not(feature = "schema-structural"))]
-        {
-            norito::core::type_name_schema_hash::<Self>()
-        }
+        norito::core::type_name_schema_hash::<Self>()
     }
 
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {

@@ -2,7 +2,7 @@
 
 _Last refreshed via `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`_
 
-Total references: **787** · Unique variables: **201**
+Total references: **785** · Unique variables: **200**
 
 ## ANDROID_SDK_ROOT (prod: 1)
 
@@ -71,7 +71,7 @@ Total references: **787** · Unique variables: **201**
 ## CARGO_BUILD_TARGET (tool: 2)
 
 - tool: xtask/src/poseidon_bench.rs:89 — `.unwrap_or_else(|_| std::env::var("CARGO_BUILD_TARGET").unwrap_or_default()),`
-- tool: xtask/src/stage1_bench.rs:69 — `.unwrap_or_else(|_| std::env::var("CARGO_BUILD_TARGET").unwrap_or_default()),`
+- tool: xtask/src/stage1_bench.rs:63 — `.unwrap_or_else(|_| std::env::var("CARGO_BUILD_TARGET").unwrap_or_default()),`
 
 ## CARGO_CFG_FEATURE (prod: 1)
 
@@ -82,7 +82,7 @@ Total references: **787** · Unique variables: **201**
 - prod: crates/iroha_crypto/src/bin/sm_perf_check.rs:707 — `let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| env::consts::ARCH.to_owned());`
 - prod: crates/iroha_crypto/src/bin/sm_perf_check.rs:743 — `let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| env::consts::ARCH.to_owned());`
 - tool: xtask/src/poseidon_bench.rs:90 — `arch: std::env::var("CARGO_CFG_TARGET_ARCH")`
-- tool: xtask/src/stage1_bench.rs:70 — `arch: std::env::var("CARGO_CFG_TARGET_ARCH")`
+- tool: xtask/src/stage1_bench.rs:64 — `arch: std::env::var("CARGO_CFG_TARGET_ARCH")`
 
 ## CARGO_CFG_TARGET_OS (build: 4, prod: 2, tool: 2)
 
@@ -93,7 +93,7 @@ Total references: **787** · Unique variables: **201**
 - build: crates/ivm/build.rs:299 — `let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();`
 - build: crates/norito/accelerators/jsonstage1_cuda/build.rs:37 — `let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();`
 - tool: xtask/src/poseidon_bench.rs:92 — `os: std::env::var("CARGO_CFG_TARGET_OS")`
-- tool: xtask/src/stage1_bench.rs:72 — `os: std::env::var("CARGO_CFG_TARGET_OS")`
+- tool: xtask/src/stage1_bench.rs:66 — `os: std::env::var("CARGO_CFG_TARGET_OS")`
 
 ## CARGO_FEATURE_CUDA (build: 2)
 
@@ -121,7 +121,7 @@ Total references: **787** · Unique variables: **201**
 
 - build: crates/iroha_core/build.rs:26 — `if env::var_os("CARGO_FEATURE_KAGEMUSHA_CANDIDATE_SOURCE_SEAL").is_some() {`
 
-## CARGO_MANIFEST_DIR (bench: 2, build: 6, example: 1, prod: 56, test: 264, tool: 6)
+## CARGO_MANIFEST_DIR (bench: 2, build: 6, example: 1, prod: 55, test: 264, tool: 6)
 
 - prod: crates/build-support/src/lib.rs:108 — `let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").ok()?);`
 - prod: crates/connect_norito_bridge/src/bin/swift_parity_regen.rs:314 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
@@ -262,7 +262,6 @@ Total references: **787** · Unique variables: **201**
 - test: crates/iroha_js_host/src/lib.rs:15462 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_js_host/src/lib.rs:18597 — `let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - prod: crates/iroha_kagami/samples/codec/generate.rs:13 — `let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("samples/codec");`
-- prod: crates/iroha_kagami/samples/codec/src/main.rs:35 — `let dir = Path::new(env!("CARGO_MANIFEST_DIR"));`
 - test: crates/iroha_kagami/src/codec.rs:407 — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha_kagami/src/genesis/generate.rs:940 — `let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");`
 - test: crates/iroha_kagami/src/genesis/sign.rs:1618 — `let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");`
@@ -487,7 +486,7 @@ Total references: **787** · Unique variables: **201**
 - prod: crates/iroha_sccp/src/bin/sccp_release_evidence.rs:706 — `crate_version: env!("CARGO_PKG_VERSION"),`
 - prod: crates/iroha_sccp/src/bin/sccp_release_evidence.rs:721 — `crate_version: env!("CARGO_PKG_VERSION").to_owned(),`
 - prod: crates/iroha_sccp/src/bin/sccp_release_evidence.rs:788 — `|| identity.crate_version != env!("CARGO_PKG_VERSION")`
-- test: crates/iroha_telemetry/src/metrics.rs:5632 — `version: env!("CARGO_PKG_VERSION").to_owned(),`
+- test: crates/iroha_telemetry/src/metrics.rs:5600 — `version: env!("CARGO_PKG_VERSION").to_owned(),`
 - prod: crates/iroha_telemetry/src/ws.rs:267 — `env!("CARGO_PKG_VERSION")`
 - prod: crates/irohad/src/main.rs:1229 — `version = env!("CARGO_PKG_VERSION"),`
 - prod: crates/irohad/src/main.rs:16438 — `version = env!("CARGO_PKG_VERSION"),`
@@ -497,10 +496,6 @@ Total references: **787** · Unique variables: **201**
 - prod: crates/sorafs_orchestrator/src/bin/sorafs_cli.rs:140 — `const SORAFS_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");`
 - tool: tools/sora-vpn-helper/src/main.rs:75 — `const VERSION: &str = env!("CARGO_PKG_VERSION");`
 - tool: tools/telemetry-schema-diff/src/main.rs:252 — `tool_version: format!("telemetry_schema_diff {}", env!("CARGO_PKG_VERSION")),`
-
-## CARGO_PRIMARY_PACKAGE (build: 1)
-
-- build: crates/soranet_pq/build.rs:6 — `if std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some() {`
 
 ## CARGO_TARGET_DIR (prod: 5, test: 7, tool: 2)
 
@@ -669,7 +664,7 @@ Total references: **787** · Unique variables: **201**
 
 ## IROHA_DPN_VALIDATOR_RELEASE_COMMIT (test: 1)
 
-- test: crates/iroha_telemetry/src/metrics.rs:5636 — `dpn_validator_release_commit: option_env!("IROHA_DPN_VALIDATOR_RELEASE_COMMIT")`
+- test: crates/iroha_telemetry/src/metrics.rs:5604 — `dpn_validator_release_commit: option_env!("IROHA_DPN_VALIDATOR_RELEASE_COMMIT")`
 
 ## IROHA_DUMP_MANIFEST_JSON (test: 1)
 
@@ -738,7 +733,7 @@ Total references: **787** · Unique variables: **201**
 
 ## IROHA_METRICS_PANIC_ON_DUPLICATE (test: 2)
 
-- test: crates/iroha_telemetry/src/metrics.rs:14607 — `std::env::var("IROHA_METRICS_PANIC_ON_DUPLICATE")`
+- test: crates/iroha_telemetry/src/metrics.rs:14575 — `std::env::var("IROHA_METRICS_PANIC_ON_DUPLICATE")`
 - test: crates/iroha_torii/tests/metrics_registry.rs:34 — `std::env::var("IROHA_METRICS_PANIC_ON_DUPLICATE").unwrap_or_else(|_| "0".to_string());`
 
 ## IROHA_PRIVATE_KEY (prod: 1)
@@ -994,7 +989,7 @@ Total references: **787** · Unique variables: **201**
 
 ## IVM_DEBUG_METAL_SELFTEST (debug: 1)
 
-- debug: crates/ivm/src/vector.rs:1204 — `std::env::var("IVM_DEBUG_METAL_SELFTEST")`
+- debug: crates/ivm/src/vector.rs:744 — `std::env::var("IVM_DEBUG_METAL_SELFTEST")`
 
 ## IVM_DEBUG_RATIO (test: 1)
 
@@ -1027,7 +1022,7 @@ Total references: **787** · Unique variables: **201**
 
 ## IVM_FORCE_METAL_SELFTEST_FAIL (debug: 1)
 
-- debug: crates/ivm/src/vector.rs:1191 — `std::env::var("IVM_FORCE_METAL_SELFTEST_FAIL")`
+- debug: crates/ivm/src/vector.rs:731 — `std::env::var("IVM_FORCE_METAL_SELFTEST_FAIL")`
 
 ## IVM_TOOL_BIN (test: 1)
 
@@ -1126,7 +1121,7 @@ Total references: **787** · Unique variables: **201**
 
 ## NORITO_CPU_INFO (tool: 1)
 
-- tool: xtask/src/stage1_bench.rs:74 — `cpu: std::env::var("NORITO_CPU_INFO").ok(),`
+- tool: xtask/src/stage1_bench.rs:68 — `cpu: std::env::var("NORITO_CPU_INFO").ok(),`
 
 ## NORITO_CRC64_CUDA_REQUIRE (test: 1)
 
@@ -1304,7 +1299,7 @@ Total references: **787** · Unique variables: **201**
 - build: crates/iroha_sccp/build.rs:28 — `let target = env::var("TARGET").expect("Cargo must provide the exact target triple");`
 - build: crates/ivm/build.rs:28 — `if let Ok(target) = env::var("TARGET") {`
 - tool: xtask/src/poseidon_bench.rs:88 — `target: std::env::var("TARGET")`
-- tool: xtask/src/stage1_bench.rs:68 — `target: std::env::var("TARGET")`
+- tool: xtask/src/stage1_bench.rs:62 — `target: std::env::var("TARGET")`
 
 ## TEST_LOG_FILTER (prod: 1)
 
@@ -1362,18 +1357,18 @@ Total references: **787** · Unique variables: **201**
 
 ## VERGEN_CARGO_FEATURES (test: 2)
 
-- test: crates/iroha_telemetry/src/metrics.rs:5639 — `cargo_features: option_env!("VERGEN_CARGO_FEATURES")`
+- test: crates/iroha_telemetry/src/metrics.rs:5607 — `cargo_features: option_env!("VERGEN_CARGO_FEATURES")`
 - test: crates/irohad/src/main.rs:21388 — `const VERGEN_CARGO_FEATURES: &str = match option_env!("VERGEN_CARGO_FEATURES") {`
 
 ## VERGEN_CARGO_TARGET_TRIPLE (prod: 1, test: 1)
 
-- test: crates/iroha_telemetry/src/metrics.rs:5642 — `target_triple: option_env!("VERGEN_CARGO_TARGET_TRIPLE")`
+- test: crates/iroha_telemetry/src/metrics.rs:5610 — `target_triple: option_env!("VERGEN_CARGO_TARGET_TRIPLE")`
 - prod: crates/iroha_telemetry/src/ws.rs:262 — `let vergen_target = option_env!("VERGEN_CARGO_TARGET_TRIPLE").unwrap_or("unknown");`
 
 ## VERGEN_GIT_SHA (prod: 2, test: 2)
 
 - prod: crates/iroha_cli/src/main_shared.rs:64 — `const VERGEN_GIT_SHA: &str = match option_env!("VERGEN_GIT_SHA") {`
-- test: crates/iroha_telemetry/src/metrics.rs:5633 — `git_commit_sha: option_env!("VERGEN_GIT_SHA")`
+- test: crates/iroha_telemetry/src/metrics.rs:5601 — `git_commit_sha: option_env!("VERGEN_GIT_SHA")`
 - prod: crates/iroha_telemetry/src/ws.rs:261 — `let vergen_git_sha = option_env!("VERGEN_GIT_SHA").unwrap_or("unknown");`
 - test: crates/irohad/src/main.rs:21383 — `const VERGEN_GIT_SHA: &str = match option_env!("VERGEN_GIT_SHA") {`
 

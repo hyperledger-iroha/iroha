@@ -67,9 +67,9 @@ not immutable-candidate execution or release receipts.
   a source partition only; no fresh TLC, Apalache, TLAPS, Verus, trace-replay,
   mutation, or cross-tool certificate is claimed.
 - Mutable source-budget checks report within their configured bounds. The
-  reviewed Rust include topology contains 32 parents and 204 direct entries;
+  reviewed Rust include topology contains 37 parents and 226 direct entries;
   its canonical payload SHA-256 is
-  `91b0135673b9e36ffe7965d16cc9213e6a9edc48cd9d3e1f56e02d9b36a173fc`.
+  `6689c2ef7d6004b99a93afa73933bc2e01f5c9c7759e9c51786911363359ccdb`.
   The SDK closure resolver and complete transitive manifests are mutable
   development inputs, not release evidence.
 - Typed status/diagnostics SDK surfaces, including the browser JavaScript
@@ -1688,13 +1688,13 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 4, Kotlin 6, and Java 5 tests. The current mutable source closure enumerates
-1,344 grouped and 1,347 diagnostics records. The checked-in grouped fixture has
+1,348 grouped and 1,347 diagnostics records. The checked-in grouped fixture has
 SHA-256
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
 the grouped and diagnostics suite-source SHA-256 values are
-`8291673cb69a9634300ae0d80b53b7b00f64ada700fc67628b38e25669baf11b`
+`86dd4b10f7e5274567ced410c1008681213b9de98f44186e7e9e94a47fa4a8d3`
 and
-`dadee234bbafdf62a19e2cbfd82a1415e992488e0f3e1f89c4a3aa34e9f5b10e`.
+`79ebd39ff5a534079b9c62daa1d45d8d78b7546d48601d6a0008948f604cb378`.
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
@@ -1967,15 +1967,15 @@ controls. The diagnostics inventory is Rust `14`, Python `121`, JavaScript
 source/distribution `88`, Swift `17`, Kotlin `26`, and Java `24`. The recursive
 source-closure design covers every transitive production input, including the
 browser JavaScript distribution, Kotlin/Java Native models, grouped JSON, and
-wire TSV; the mutable closure enumerates 1,344 grouped and 1,347 diagnostics
+wire TSV; the mutable closure enumerates 1,348 grouped and 1,347 diagnostics
 records. The current grouped JSON and wire TSV SHA-256 values are
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`
 and
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The grouped and diagnostics suite-source SHA-256 values are
-`8291673cb69a9634300ae0d80b53b7b00f64ada700fc67628b38e25669baf11b`
+`86dd4b10f7e5274567ced410c1008681213b9de98f44186e7e9e94a47fa4a8d3`
 and
-`dadee234bbafdf62a19e2cbfd82a1415e992488e0f3e1f89c4a3aa34e9f5b10e`.
+`79ebd39ff5a534079b9c62daa1d45d8d78b7546d48601d6a0008948f604cb378`.
 
 Those are development-source inventories, not SDK results. The JavaScript
 source and distribution trees match in this mutable checkout. The five OpenAPI
@@ -1987,10 +1987,22 @@ execution, parity hash, or archived result is claimed, so `G-SDK` remains Open.
 
 **Evidence:** Open.
 
-Before every Cargo invocation, record
-`ps -axo pid,etime,command` and wait naturally while Cargo, rustc, or rustfmt is
-active. Use only `cargo +1.93.1`, `--locked --offline -j1`, and a fresh isolated
-`CARGO_TARGET_DIR`. Run focused crate tests, SDK parity suites, formal runners,
+Both PR and production first reproduce one clean committed identity in an
+independent no-local/no-hardlink/no-alternates clone. Before any build child,
+copy the reviewed runtime and caller Cargo-cache inputs to inode-independent
+private roots, bind canonical path-withheld input/output inventories, and keep
+private HOME, temporary, cache, Rustup, target, and artifact roots. PR is
+disposable developer validation and identity-cleans the whole invocation on
+every terminal path. Production validates the receipt with the protected
+archived validator, requires its no-clobber acknowledgment, then prunes all
+runtime/cache/target state and retains only the authenticated source,
+receipt/identity, and exact retained inventory/result.
+
+Before every Cargo invocation, acquire the invocation-local owner-private
+directory lock below the authenticated external artifact root and fail closed
+if that lock is held; never inspect or log unrelated processes. Use only the
+authenticated absolute Cargo 1.93.1 executable, `--locked --offline -j1`, and a
+fresh isolated `CARGO_TARGET_DIR`. Run focused crate tests, SDK parity suites, formal runners,
 `cargo build --workspace`, full `cargo test --workspace`, strict workspace
 Clippy, formatting check, and
 `scripts/check_no_legacy_codec.sh`. The release record must contain commands,
@@ -2074,6 +2086,24 @@ before release. Generic consensus TODOs remain out of scope as recorded below.
   reservation, autonomous lane QC, merge carrier, Native participant
   application, autoscale frontier, or retirement decision. It is therefore
   outside this multilane ledger.
+- **Generic lifecycle-coordinator cutover:** the TODO above
+  `v2_lifecycle_coordinator` in
+  `crates/iroha_core/src/sumeragi/mod.rs` and the source-coupled record in
+  [Sumeragi lifecycle simplification](sumeragi_v2_lifecycle_simplification.md)
+  describe a follow-on replacement of the generic Serve, witness, latch, and
+  producer-episode scheduling authority. The staged module is compiled and
+  non-test source imports sealed admission, replay, and recovery helpers, but
+  the coordinator is not wired into production services: production selection,
+  the all-or-nothing queue/registry/output-permit transaction, publication,
+  runner execution, and final scheduler cutover remain unavailable or
+  intentionally unwired, and the existing scheduler authority remains in
+  place. Completing that architectural cutover is distinct from the automatic
+  lane create, drain, archive, destruction, and recreation semantics mapped by
+  `ML-LIFE-01` through `ML-LIFE-05`; it is not an `ML-*` closure condition.
+  This disposition applies only to completion of the cutover. It does not
+  remove currently referenced helpers from source closure or ordinary
+  compile/test coverage, and it advances no Implementation, Closure, Evidence,
+  or `G-*` state.
 - **Fee sponsorship:** the TODO in
   `ensure_global_fee_sponsor_asset` in
   `crates/iroha_core/src/smartcontracts/isi/world.rs` concerns propagating

@@ -11,6 +11,7 @@ readonly native_file="integration_tests/tests/native_amx_routing.rs"
 readonly native_recovery_file="$native_file"
 readonly launcher="scripts/run_nexus_cross_dataspace_atomic_swap.sh"
 readonly release_runner="scripts/run_sumeragi_v2_release_gates.sh"
+readonly cargo_cache_copier="scripts/copy_sumeragi_v2_release_cargo_cache.py"
 readonly grouped_parity_harness="ci/run_native_amx_v2_grouped_sdk_parity.sh"
 readonly sdk_diagnostics_harness="ci/run_sumeragi_v2_sdk_diagnostics.sh"
 readonly js_sdk_diagnostics_test="javascript/iroha_js/test/sumeragiDiagnosticsContract.test.js"
@@ -287,7 +288,8 @@ python3 -I -S - \
   "$release_receipt_component" \
   "$release_receipt_corridor_component" \
   "$canonical_production_test_count" \
-  "$process_policy" <<'PY'
+  "$process_policy" \
+  "$cargo_cache_copier" <<'PY'
 from __future__ import annotations
 
 import ast
@@ -309,6 +311,36 @@ receipt_corridor_component_source = receipt_corridor_component.read_text(encodin
 canonical_production_test_count = int(sys.argv[5])
 process_policy = Path(sys.argv[6])
 process_policy_source = process_policy.read_text(encoding="utf-8")
+cargo_cache_copier = Path(sys.argv[7])
+cargo_cache_source = cargo_cache_copier.read_text(encoding="utf-8")
+
+for token, count in (
+    ("# RELEASE_CARGO_CACHE_COPY_HELPER_V1", 1),
+    ("MAXIMUM_RECORDS = 250_000", 1),
+    ("MAXIMUM_FILE_BYTES = 4 * 1024 * 1024 * 1024", 1),
+    ("MAXIMUM_TOTAL_BYTES = 64 * 1024 * 1024 * 1024", 1),
+    ("MAXIMUM_DEPTH = 128", 1),
+    ("MAXIMUM_PATH_BYTES = 4096", 1),
+    ('FINAL_FORMAT = "iroha-sumeragi-v2-cargo-cache-final"', 1),
+    ('"source_read_semantics": "read-only; host filesystem may update access time"', 1),
+    ("or (copied.st_dev, copied.st_ino) == (opened.st_dev, opened.st_ino)", 1),
+    ("cache symlink escapes its cache root", 1),
+    ("cache entry is a forbidden special file", 2),
+    ("source, private Cargo home, and inventory must be disjoint", 1),
+    ("def snapshot_cache(", 1),
+    ("_rename_noreplace_at(destination_parent_fd, stage_name, destination_name)", 1),
+    ("_rename_noreplace_at(parent_fd, temporary, inventory_path.name)", 1),
+    ("inventory parent must be owner-owned with mode 0700", 1),
+    ('"source_cargo_home_disclosure": "withheld"', 1),
+    ("def copy_runtime(", 1),
+    ("def seal_release_result(", 1),
+    ("receipt-validation-ack.json", 3),
+    ("receipt validation acknowledgment contract is not exact", 1),
+):
+    if cargo_cache_source.count(token) != count:
+        raise SystemExit(
+            f"{cargo_cache_copier}: private cache-copy contract token is not exact: {token!r}"
+        )
 
 if "_prebuilt_workspace_target" in receipt_source:
     raise SystemExit(
@@ -391,11 +423,25 @@ expected_receipt_component_symbols = (
     "_formal_artifacts",
 )
 expected_receipt_corridor_component_symbols = (
+    "_cargo_cache_relative_path",
+    "_cargo_cache_final_relative_path",
+    "_cargo_cache_octal_mode",
+    "_cargo_cache_integer",
+    "_cargo_cache_unchanged",
+    "_cargo_cache_names",
+    "_cargo_cache_stat",
+    "_cargo_cache_open_regular",
+    "_cargo_cache_tree",
+    "_validate_cargo_cache_input",
     "_sdk_suite_source_manifest",
     "_test_count_from_log",
     "_prebuilt_artifact_root",
     "_prebuilt_release_roots",
     "_prebuilt_directory",
+    "_publish_receipt_validation_ack",
+    "_receipt_validation_ack_arguments",
+    "_receipt_validation_ack",
+    "_owned_unlink_name",
     "_corridor_legs",
 )
 parent_component_symbols = tuple(
@@ -583,32 +629,49 @@ expected_policy_source = (
 )
 if source.count(expected_policy_source) != 1:
     reject("release runner must source the one reviewed process policy")
-if "wait_for_external_cargo() {" in source or "run_cargo() {" in source:
+if any(
+    definition in source
+    for definition in (
+        "acquire_invocation_cargo_lock() {",
+        "release_invocation_cargo_lock() {",
+        "run_cargo() {",
+    )
+):
     reject("release runner must not shadow the shared process policy")
-if process_policy_source.count("wait_for_external_cargo() {") != 1:
-    reject("shared process policy must define one Cargo quiescence guard")
+if process_policy_source.count("acquire_invocation_cargo_lock() {") != 1:
+    reject("shared process policy must define one invocation-local Cargo lock")
+if process_policy_source.count("release_invocation_cargo_lock() {") != 1:
+    reject("shared process policy must define one Cargo lock release")
 if process_policy_source.count("run_cargo() {") != 1:
     reject("shared process policy must define one Cargo wrapper")
-if process_policy_source.count("ps -axo pid,etime,command") != 1:
-    reject("shared process policy must capture exactly one ps snapshot per loop")
 for token in (
-    'printf \'%s\\n\' "$process_snapshot" >&2',
-    'printf \'%s\\n\' "$process_snapshot" | awk',
-    'executable == "cargo"',
-    'executable == "rustc"',
-    'executable == "rustfmt"',
+    "lock.mkdir(mode=0o700)",
     'pinned_arguments=("$subcommand" -j1)',
     'pinned_arguments+=("$@")',
     'local RUSTUP_AUTO_INSTALL=0',
     'export RUSTUP_AUTO_INSTALL',
     'run_cargo forbids caller-owned rustup auto-install policy',
-    'command cargo +1.93.1 "${pinned_arguments[@]}"',
+    'run_cargo requires IROHA_RELEASE_CARGO_BIN',
+    'if "$IROHA_RELEASE_CARGO_BIN" "$@"; then',
+    '_release_scoped_invocation_cargo_lock() {',
+    'trap _release_scoped_invocation_cargo_lock RETURN EXIT',
+    'os.rmdir(lock.name, dir_fd=root_fd)',
+    'if ((cargo_prefix)) && [[ "$argument" == "--" ]]; then',
+    '--target-dir|--target-dir=*|--manifest-path|--manifest-path=*|--config|--config=*',
     "require_disjoint_release_roots() {",
     "build|test|run|clippy|verus)",
     'b\'{"reason":"operator-request","schema_version":1}\\n\'',
 ):
     if process_policy_source.count(token) != 1:
         reject(f"shared process policy lacks exact required token: {token}")
+if process_policy_source.count("lock.rmdir()") != 1:
+    reject("shared process policy must clean only a partially-acquired private lock")
+if process_policy_source.count(
+    'lock_path="${artifact_root}/.sumeragi-v2-cargo.lock"'
+) != 2:
+    reject("shared process policy must bind acquire and release to the exact lock path")
+if process_policy_source.count("release_invocation_cargo_lock || return $?") != 1:
+    reject("shared process policy must release its lock after natural completion")
 for forbidden in (
     "SIGSTOP",
     "SIGTERM",
@@ -619,9 +682,18 @@ for forbidden in (
     "start_new_session",
     ".terminate(",
     ".kill(",
+    "wait_for_external_cargo",
+    "ps -",
+    "pgrep",
+    "/proc/",
+    "process_snapshot",
+    "sleep ",
 ):
     if forbidden in process_policy_source:
-        reject(f"shared process policy contains forbidden process control: {forbidden}")
+        reject(
+            "shared process policy contains forbidden process control or "
+            f"observation: {forbidden}"
+        )
 
 native_amx_parity_inventory = """\
   native_amx_grouped_parity_surfaces=(
@@ -646,9 +718,9 @@ if source.count(native_amx_parity_inventory) != 1:
         "must remain paired in canonical order"
     )
 
-# Command descriptions beginning with `cargo` are source-sealed evidence, not
-# execution. Reject every direct shell execution form in the runner; the sole
-# literal Cargo execution lives in the shared policy checked above.
+# Command descriptions containing the authenticated Cargo path are
+# source-sealed evidence, not execution. Reject every direct shell execution
+# form in the runner; the sole Cargo execution lives in the shared policy.
 direct_cargo_patterns = (
     re.compile(r"^\s*cargo(?:\s|$)"),
     re.compile(r"^\s*command\s+cargo(?:\s|$)"),
@@ -745,11 +817,25 @@ if (
         "receipt writer may validate Cargo only from the policy-captured transcript"
     )
 
-# Both authenticated toolchain-version probes use the same pinned wrapper.
-release_probe = exact_line('  release_cargo_version="$(run_cargo --version)" || {')
+# The outer release probes the authenticated bootstrap alias directly before
+# policy loading; the sealed corridor uses the pinned cooperative wrapper.
+release_cargo_binding = exact_line(
+    '  export IROHA_RELEASE_CARGO_BIN="$release_cargo_bin"'
+)
+release_probe = exact_line(
+    '  release_cargo_version="$("$release_cargo_bin" --version)" || {'
+)
 corridor_probe = exact_line('  corridor_cargo_version="$(run_cargo --version)"')
-if not release_probe < corridor_probe:
-    reject("pinned Cargo version probes are missing or reordered")
+if not (
+    release_cargo_binding
+    < release_probe
+    < corridor_probe
+):
+    reject("authenticated Cargo binding/version probes are missing or reordered")
+if source.count(
+    '  corridor_cargo_path="$(canonical_path "$IROHA_RELEASE_CARGO_BIN")"'
+) != 1:
+    reject("corridor receipt does not bind the exact Cargo executable used")
 resolved_probe_pattern = re.compile(
     r'"\$\("\$[A-Za-z_][A-Za-z0-9_]*cargo[A-Za-z0-9_]*"\s+--version\)"'
 )
@@ -758,8 +844,8 @@ resolved_probes = [
     for index, line in enumerate(lines)
     if resolved_probe_pattern.search(line)
 ]
-if resolved_probes:
-    reject("resolved Cargo version probes must route through run_cargo")
+if resolved_probes != [(release_probe, lines[release_probe])]:
+    reject("only the authenticated outer Cargo alias may bypass run_cargo for --version")
 variable_cargo_execution_pattern = re.compile(
     r'(?:^|[;&|]|\$\()\s*(?:command\s+)?'
     r'(?:"\$\{?([A-Za-z_][A-Za-z0-9_]*cargo[A-Za-z0-9_]*)\}?"|'
@@ -774,7 +860,9 @@ for index, line in enumerate(lines):
         variable_cargo_executions.append(
             (index, match.group(1) or match.group(2), match.group(3))
         )
-if variable_cargo_executions:
+if variable_cargo_executions != [
+    (release_probe, "release_cargo_bin", "--version")
+]:
     reject("resolved Cargo execution bypasses the pinned shared wrapper")
 
 policy_source_line = exact_line(
@@ -860,27 +948,27 @@ source_sealed_blocks = (
     """\
   run_corridor_leg \\
     source-sealed-workspace-build command 0 \\
-    "cargo +1.93.1 build -j1 --locked --offline --workspace" \\
+    "${IROHA_RELEASE_CARGO_BIN} build -j1 --locked --offline --workspace" \\
     run_cargo build --locked --offline --workspace""",
     """\
   run_corridor_leg \\
     source-sealed-workspace-tests command 0 \\
-    "cargo +1.93.1 test -j1 --locked --offline --workspace" \\
+    "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline --workspace" \\
     run_cargo test --locked --offline --workspace""",
     """\
   run_corridor_leg \\
     source-sealed-irohad-tests command 0 \\
-    "cargo +1.93.1 test -j1 --locked --offline -p irohad --bin irohad --features test-network-message-control" \\
+    "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline -p irohad --bin irohad --features test-network-message-control" \\
     run_cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control""",
     """\
   run_corridor_leg \\
     source-sealed-workspace-clippy command 0 \\
-    "cargo +1.93.1 clippy -j1 --locked --offline --workspace --all-targets -- -D warnings" \\
+    "${IROHA_RELEASE_CARGO_BIN} clippy -j1 --locked --offline --workspace --all-targets -- -D warnings" \\
     run_cargo clippy --locked --offline --workspace --all-targets -- -D warnings""",
     """\
   run_corridor_leg \\
     source-sealed-workspace-format command 0 \\
-    "cargo +1.93.1 fmt --all -- --check" \\
+    "${IROHA_RELEASE_CARGO_BIN} fmt --all -- --check" \\
     run_cargo fmt --all -- --check""",
     """\
   run_corridor_leg \\
@@ -1084,9 +1172,9 @@ for token in (
     'nexus_cross_completion_path_file="${IROHA_RELEASE_ARTIFACT_ROOT}/nexus-cross-dataspace-completion-path"',
     'release_gate_boundary "corridor-completion:before-publication"',
     'release_gate_boundary "corridor-completion:after-publication"',
-    'release_gate_boundary "aggregate-receipt:before-publication"',
-    'release_gate_boundary "aggregate-receipt:after-publication"',
-    'verify_release_identity "after aggregate release receipt publication"',
+    'release_gate_boundary "child-result:before-publication"',
+    'release_gate_boundary "child-result:after-publication"',
+    'verify_release_identity "after protected child-result publication"',
 ):
     if source.count(token) != 1:
         reject(f"release publication contract token is missing or duplicated: {token!r}")
@@ -1105,17 +1193,26 @@ corridor_after = exact_line(
 if not corridor_before < corridor_move < corridor_after:
     reject("corridor completion publication is not bracketed by gate boundaries")
 
-aggregate_before = exact_line(
-    'release_gate_boundary "aggregate-receipt:before-publication" || exit $?'
+child_result_before = exact_line(
+    'release_gate_boundary "child-result:before-publication" || exit $?'
 )
+child_result_after = exact_line(
+    'release_gate_boundary "child-result:after-publication" || {'
+)
+if not publish_completion < child_result_before < child_result_after:
+    reject("bounded child-result publication is not bracketed by gate boundaries")
+outer_child_status = exact_line("  sealed_status=$?")
 aggregate_writer = exact_line(
-    '"$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/write_sumeragi_v2_release_receipt.py \\'
+    '      "$sealed_repo_root/scripts/write_sumeragi_v2_release_receipt.py" \\'
 )
-aggregate_after = exact_line(
-    'release_gate_boundary "aggregate-receipt:after-publication" \\'
+protected_validator = exact_line(
+    '    "$release_python_bin" -I -S "$release_bootstrap_evidence_dir/validate-receipt.py" \\'
 )
-if not aggregate_before < aggregate_writer < aggregate_after:
-    reject("aggregate receipt publication is not bracketed by gate boundaries")
+result_seal = exact_line('      --seal-release-result \\')
+if not outer_child_status < aggregate_writer < protected_validator < result_seal:
+    reject("protected outer receipt/ack/seal validation is reordered")
+if '"$sealed_repo_root/scripts/validate_sumeragi_v2_release_bootstrap.py"' in source:
+    reject("candidate sealed validator must not be terminal receipt authority")
 PY
 
 python3 -I -S - \
@@ -1130,6 +1227,7 @@ python3 -I -S - \
   "$taira_runner" \
   "$launcher" \
   "$release_receipt_writer" \
+  "$cargo_cache_copier" \
   "$prebuilt_bundle_shell" \
   "$prebuilt_bundle_helper" \
   "$process_policy" \
@@ -1166,6 +1264,11 @@ expected_edges = (
         ".github/workflows/pr.yml",
         "ci/check_nexus_cross_lane_proofs.sh",
         "run: bash ci/check_nexus_cross_lane_proofs.sh",
+    ),
+    (
+        "scripts/run_sumeragi_v2_release_gates.sh",
+        "scripts/copy_sumeragi_v2_release_cargo_cache.py",
+        'pr_clone_helper="$pr_source_root/scripts/copy_sumeragi_v2_release_cargo_cache.py"',
     ),
     (
         "scripts/run_sumeragi_v2_release_gates.sh",
@@ -1300,7 +1403,7 @@ expected_edges = (
     (
         "scripts/run_sumeragi_v2_release_gates.sh",
         "scripts/write_sumeragi_v2_release_receipt.py",
-        '"$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/write_sumeragi_v2_release_receipt.py',
+        '"$sealed_repo_root/scripts/write_sumeragi_v2_release_receipt.py"',
     ),
     (
         "scripts/run_sumeragi_v2_formal_release.sh",
@@ -1349,13 +1452,40 @@ guarded_cargo_scripts = (
     "ci/check_nexus_cross_lane_proofs.sh",
 )
 policy = sources["scripts/sumeragi_v2_release_process_policy.sh"]
-if policy.count("wait_for_external_cargo() {") != 1:
-    reject("shared process policy lacks its one Cargo/rustc/rustfmt guard")
+if policy.count("acquire_invocation_cargo_lock() {") != 1:
+    reject("shared process policy lacks its one invocation-local Cargo lock")
+if policy.count("release_invocation_cargo_lock() {") != 1:
+    reject("shared process policy lacks its one Cargo lock release")
 if policy.count("run_cargo() {") != 1:
     reject("shared process policy lacks its one pinned Cargo wrapper")
-if policy.count("ps -axo pid,etime,command") != 1:
-    reject("shared process policy does not classify exactly one captured snapshot")
-if policy.count('command cargo +1.93.1 "${pinned_arguments[@]}"') != 1:
+for token, count in (
+    ('lock_path="${artifact_root}/.sumeragi-v2-cargo.lock"', 2),
+    ("lock.mkdir(mode=0o700)", 1),
+    ("lock.rmdir()", 1),
+    ("os.rmdir(lock.name, dir_fd=root_fd)", 1),
+    ("acquire_invocation_cargo_lock || return $?", 1),
+    ("release_invocation_cargo_lock || return $?", 1),
+    ("trap _release_scoped_invocation_cargo_lock RETURN EXIT", 1),
+):
+    if policy.count(token) != count:
+        reject(
+            "shared process policy lacks exact invocation-local lock contract "
+            f"{token!r} x{count}"
+        )
+for forbidden in (
+    "wait_for_external_cargo",
+    "ps -",
+    "pgrep",
+    "/proc/",
+    "process_snapshot",
+    "sleep ",
+):
+    if forbidden in policy:
+        reject(
+            "shared process policy observes or polls ambient processes via "
+            f"{forbidden!r}"
+        )
+if policy.count('if "$IROHA_RELEASE_CARGO_BIN" "$@"; then') != 1:
     reject("shared process policy does not own the sole pinned Cargo execution")
 if 'pinned_arguments=("$subcommand" -j1)' not in policy or 'pinned_arguments+=("$@")' not in policy:
     reject("shared process policy does not impose the one global -j1 bound")
@@ -1394,7 +1524,14 @@ if re.search(r"\b(?:rm|unlink)\b[^\n]*cancel", predicate):
     reject("shared root predicate must never delete an operator marker")
 for script in guarded_cargo_scripts:
     source = sources[script]
-    if "wait_for_external_cargo() {" in source or "run_cargo() {" in source:
+    if any(
+        definition in source
+        for definition in (
+            "acquire_invocation_cargo_lock() {",
+            "release_invocation_cargo_lock() {",
+            "run_cargo() {",
+        )
+    ):
         reject(f"{script} shadows the shared process policy")
     if "sumeragi_v2_release_process_policy.sh" not in source:
         reject(f"{script} does not source the shared process policy")
@@ -1641,7 +1778,7 @@ main_root_guards = [
         r'require_disjoint_release_roots "\$repo_root"', release
     )
 ]
-if len(main_root_guards) != 4 or main_root_guards[-1] >= main_entry:
+if len(main_root_guards) != 3 or main_root_guards[-1] >= main_entry:
     reject("every main-runner path must validate roots before its entry boundary")
 if "--no-skip-build" in release:
     reject("release runner may not request reentrant localnet builds")

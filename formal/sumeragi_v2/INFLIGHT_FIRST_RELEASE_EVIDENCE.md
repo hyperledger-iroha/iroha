@@ -191,18 +191,21 @@ validators outside the lane committee have no actor bit in this model and are
 not claimed as `FanoutFromProducer` actions. Autonomous late-body response
 publication consumes exact certified Kura evidence at its fresh insertion
 boundary. Exact queued duplicates are classified before either token is minted
-and remain stutters. Four named model actions remain open: `Crash`, `Recover`,
-`RecoverReservationSnapshot`, and `RehydrateLocalKuraCustody`. `Crash`,
-`Recover`, and local Kura custody rehydration remain unextracted.
-For `RecoverReservationSnapshot`, the source contract now binds the primitive
-V5 snapshot transition, exact owner/record/release normalization, ordered
-coverage root, post-open file-content revalidation, move-only Queue install and
-planning receipts, and the final publication gate. Its parametric Verus lemma
-only proves that a valid primitive snapshot replay is a stutter for any
-independently valid composed state; it neither fabricates nor recovers that
-composed state. The action therefore remains an explicit open obligation, and
-the certificate must not treat it as fully extracted, unreachable, or an
-unconditionally constructed composed stutter.
+and remain stutters. The four formerly open model actions, `Crash`, `Recover`,
+`RecoverReservationSnapshot`, and `RehydrateLocalKuraCustody`, now have named
+source-extraction seams through signed lifecycle bootstrap, generation
+takeover, Queue snapshot recovery, local Kura rehydration, drain-queue
+installation, and one-shot activation revalidation. The registered open-action
+tuple is empty.
+
+For `RecoverReservationSnapshot`, the source contract binds the primitive V5
+snapshot transition, exact owner/record/release normalization, ordered coverage
+root, post-open file-content revalidation, move-only Queue install and planning
+receipts, and the final publication gate. Its parametric Verus lemma proves
+noninterference for an independently valid composed state, while the production
+bridge supplies the checked transition and exact authorization source. That
+source partition does not itself prove that every concrete replay execution
+refines the abstract transition.
 
 `RehydrateLocalKuraCustody` is now a separate first-release action instead of
 being inferred from `Recover` or late-body service. Its shared Rust/Verus/TLA+
@@ -211,21 +214,17 @@ ownership and missing volatile body custody. It adds only that actor's body,
 revives producer liveness only for the frozen producer, preserves READY
 authorization and every durable/economic fact, and rejects retired,
 post-application, or terminal work. The source contract includes positive,
-guard-omission, READY-tampering, and terminal-resurrection controls. No runtime
-startup consumer yet extracts or authorizes the action, so it remains in the
-open production-action inventory.
+guard-omission, READY-tampering, and terminal-resurrection controls. The
+startup consumer now derives and consumes the checked custody transition at
+the production rehydration boundary.
 
-The remaining exact blocker is a machine-checked extraction from every other
-Rust QueuePlan journal V4 and reservation journal V5 transition, Kura, recovery,
-filesystem-error, restart, remaining READY/input recovery and lane-decision paths,
-atomic WSV application, post-carrier cleanup, and the remaining Queue
-PrepareRelease/CompleteRelease/FIFO/ForgetRelease transitions into
-`InFlightFirstReleaseSpec`, plus a backward ownership projection for every
-concrete terminal Commit/Release outcome into the implemented reverse
-terminal-owner projection.
-Neither TLAPS nor Apalache consumes Rust operational semantics, and the
-repository has no verified Rust semantics or trace-extraction theorem. The
-fixed-width composed state/action relation is therefore not evidence for the
-missing production trace-extraction theorem. Do not upgrade
-`proof_coverage.json` or release status until that extraction is implemented
-and checked at the production linearization points.
+The remaining blocker is formal operational correspondence and fresh evidence,
+not a missing name in the structural action partition. Neither TLAPS nor
+Apalache consumes Rust operational semantics, and the repository has no
+verified Rust operational semantics or production trace-extraction theorem.
+The fixed-width composed state/action relation and source-bound transition
+checks therefore do not prove that every concrete execution refines
+`InFlightFirstReleaseSpec`, nor do they replace immutable-candidate TLC,
+Apalache, TLAPS, Verus, mutation, trace-replay, and cross-tool receipts. Do not
+upgrade `proof_coverage.json` or release status until those obligations are
+executed and archived against one immutable candidate.

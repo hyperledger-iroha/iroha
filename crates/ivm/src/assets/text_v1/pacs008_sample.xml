@@ -1,0 +1,47 @@
+
+<DataEnvelope xmlns="urn:sample:iso">
+  <Body>
+    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+      <Fr><FIId><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></Fr>
+      <To><FIId><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></To>
+      <BizMsgIdr>ISO-SAMPLE-008</BizMsgIdr>
+      <MsgDefIdr>pacs.008.001.08</MsgDefIdr>
+      <BizSvc>IPS</BizSvc>
+      <CreDt>2025-11-11T09:34:09Z</CreDt>
+    </AppHdr>
+    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
+      <FIToFICstmrCdtTrf>
+        <GrpHdr>
+          <MsgId>ISO-008-GRP</MsgId>
+          <CreDtTm>2025-11-11T09:34:09</CreDtTm>
+          <BtchBookg>false</BtchBookg>
+          <NbOfTxs>1</NbOfTxs>
+          <SttlmInf><SttlmMtd>CLRG</SttlmMtd></SttlmInf>
+        </GrpHdr>
+        <CdtTrfTxInf>
+          <PmtId>
+            <InstrId>SAMPLE-INSTR-008</InstrId>
+            <EndToEndId>SAMPLE-E2E-008</EndToEndId>
+            <TxId>SAMPLE-TX-008</TxId>
+          </PmtId>
+          <PmtTpInf>
+            <ClrChanl>RTNS</ClrChanl>
+            <SvcLvl><Prtry>0100</Prtry></SvcLvl>
+            <LclInstrm><Prtry>CTAA</Prtry></LclInstrm>
+            <CtgyPurp><Prtry>005</Prtry></CtgyPurp>
+          </PmtTpInf>
+          <IntrBkSttlmAmt Ccy="USD">1400.00</IntrBkSttlmAmt>
+          <IntrBkSttlmDt>2025-11-11</IntrBkSttlmDt>
+          <ChrgBr>SLEV</ChrgBr>
+          <Dbtr><Nm>Example Debtor</Nm></Dbtr>
+          <DbtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></DbtrAcct>
+          <DbtrAgt><FinInstnId><BICFI>ALPHGB2L</BICFI></FinInstnId></DbtrAgt>
+          <CdtrAgt><FinInstnId><ClrSysMmbId><MmbId>OMEGGB2L</MmbId></ClrSysMmbId></FinInstnId></CdtrAgt>
+          <Cdtr><Nm>Example Creditor</Nm></Cdtr>
+          <CdtrAcct><Id><IBAN>GB33BUKB20201555555555</IBAN></Id></CdtrAcct>
+          <InstrForNxtAgt><InstrInf>/INFO/Example note</InstrInf></InstrForNxtAgt>
+        </CdtTrfTxInf>
+      </FIToFICstmrCdtTrf>
+    </Document>
+  </Body>
+</DataEnvelope>

@@ -6,6 +6,14 @@ deterministic lifecycle coordinator. It is not proof-ledger promotion evidence
 and must not be refreshed merely because the replacement changes a sealed
 source.
 
+Completion of this architectural replacement is explicitly outside the current
+`ML-*` Production Multilane Finish scope; see the closure ledger's
+[TODO classification](sumeragi_v2_multilane_closure_ledger.md#explicitly-out-of-scope).
+The staged module is compiled and supplies sealed helper surfaces, but the
+coordinator does not own production service scheduling and the final atomic
+cutover remains unwired. This scope statement advances no ledger row or gate
+and does not exempt the staged source from ordinary build and test coverage.
+
 ## Frozen starting tree
 
 The baseline was captured at `2026-08-09T23:10:45+09:00`, before the new

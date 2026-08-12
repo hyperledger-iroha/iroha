@@ -1951,13 +1951,14 @@ These newest tests pin local typed retirement, ownership, and fail-closed
 behavior; they do not claim end-to-end relay/application acknowledgement or
 unbounded broadcast admission. The integration filter remains a five-test
 module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
-lane-certificate contracts bring the aggregate pre-network corridor to 61
-legs. That set needs fresh discovery and execution plus its clean source-sealed
-release rerun; the full PR corridor is not claimed passed.
+lane-certificate contracts brought that historical aggregate pre-network
+corridor to 61 legs. The current source-bound inventory is the separately
+audited 88-leg, 854-production-test corridor plus 525 G-UNIT tests; execution
+against a signed clean candidate remains required before release promotion.
 
 The current reconnect changes supersede older mutable-tree diagnostics that
 assumed writer continuity across connection tenure. Fresh focused worker,
-sidecar, lane, and transport-route tests plus the complete detached
+sidecar, lane, and transport-route tests plus the complete independently mirrored
 source-sealed pre-network corridor remain required before release evidence may
 be promoted.
 
@@ -1971,23 +1972,25 @@ inconsistent counters, invalid provisional evidence, and inconsistent status
 classifications. They validate the release machinery; they are not substitutes
 for the 24-hour validator soak.
 
-Both profiles compute the canonical tracked/untracked checkout manifest before
-their first Cargo command, bind the ignored workspace `Cargo.lock` as an
-explicit build input, and reject unresolved index entries and every active
-merge, cherry-pick, revert, mailbox-apply, rebase, sequencer, or bisect
-operation. Administrative paths are resolved through `git rev-parse
---git-path`, so an operation in one linked worktree is not mistaken for an
-operation in another. The PR profile may still record intentionally dirty
-tracked or non-ignored untracked source; its exact bytes remain part of the
-manifest. It exports that digest to the network matrix and uses it as the
-build-root identity. The seed runner
-compares that parent digest after test inventory, before and after every
-scenario, and on both sides of completion publication; the PR profile also
-recomputes it after the formal harness. Any drift leaves only partial evidence
-and fails the corridor.
+Both profiles require one clean committed source identity before their first
+Cargo command, bind the ignored workspace `Cargo.lock` as an explicit build
+input, and reject unresolved index entries and every active merge,
+cherry-pick, revert, mailbox-apply, rebase, sequencer, or bisect operation.
+Administrative paths are resolved through `git rev-parse --git-path`, so an
+operation in one linked worktree is not mistaken for an operation in another.
+Each outer invocation reproduces the identity in an independent clone made
+with no local object sharing, hardlinks, or alternates, then runs build-capable
+children only from that clone with private target, Cargo-home, home, temporary,
+cache, and artifact roots. The PR profile is developer validation rather than
+signed release evidence; production additionally requires the authenticated
+bootstrap, source seal, signatures, and aggregate receipt. The seed runner
+compares the cloned source digest after test inventory, before and after every
+scenario, and on both sides of completion publication; PR also recomputes it
+after the formal harness. Any drift leaves only partial evidence and fails the
+corridor.
 
-Before any network attempt, the gate requires exactly 30 source-manifest and
-seal contract tests to pass. They cover content and ordering, deletions,
+Before any network attempt, the gate requires the complete source-manifest and
+seal contract suite to pass. It covers content and ordering, deletions,
 symlinks, executable modes, ignored `Cargo.lock` drift, unresolved entries,
 every active Git operation, linked-worktree locality, clean HEAD/index/worktree
 identity, missing or symlinked lockfiles, detached-source reproduction, and a
@@ -2015,25 +2018,31 @@ leaves its evidence lock for operator inspection.
 
 The matrix pins the integration harness's bounded build, subprocess, network
 permit, startup, synchronization, status, and shutdown waits. Repository
-process-safety policy forbids an outer watchdog from signalling Cargo, rustc,
-or validator process groups, so it cannot promise a wall-clock bound if an
-execution path escapes all of those internal deadlines. Such a pathological
+process-safety policy neither observes or logs ambient process state nor
+signals or controls unrelated Cargo, rustc, or validator processes. It
+serializes only this invocation's Cargo calls with an owner-private directory
+lock below the authenticated external artifact root and fails closed on lock
+contention. Without an outer watchdog it cannot promise a wall-clock bound if
+an execution path escapes all of those internal deadlines. Such a pathological
 run may remain active, but it remains fail-closed evidence because it cannot
 publish `COMPLETED.tsv`; it must be inspected and resolved before retrying.
 
 The production corridor accepts only one clean committed candidate: HEAD and
 its tree must resolve, the index tree must equal HEAD, tracked files must be
 unchanged, and no non-ignored untracked path may exist. It recreates that exact
-commit in a unique detached worktree, copies and re-hashes the ignored
-`Cargo.lock`, and requires the detached pre-seal identity to equal the original
-candidate identity. It then redirects `target`, temporary files, caches,
-evidence, and retained localnets outside the detached source and removes source
-write permission before re-entering the complete release script. This chmod
+commit in an independent local clone made with no local object sharing, no
+hardlinks, and no alternates; verifies that the mirror shares no Git-object
+inode with the candidate; copies and re-hashes the ignored `Cargo.lock`; and
+requires the pre-seal mirror identity to equal the original candidate identity.
+It rechecks the original identity after mirror creation, redirects `target`,
+temporary files, caches, evidence, and retained localnets outside the source,
+and removes source write permission before re-entering the complete release
+script. No linked-worktree metadata is created in the candidate. This chmod
 seal makes ordinary editor, build-tool, and accidental writes fail; it is a
 cooperative integrity control, not an adversarial same-UID security boundary.
 The owning UID can chmod, write, and restore modes between checkpoints.
-Identity and seal checks run after each major leg, while the detached committed
-worktree removes the caller's mutable checkout from the execution path.
+Identity and seal checks run after each major leg, while the independent
+committed mirror removes the caller's mutable checkout from the execution path.
 
 For every enumerated file or symlink entry, the checkout manifest includes all
 permission bits. Directory modes are checked by the separate source-seal walk;
@@ -2048,12 +2057,33 @@ index tree, and `Cargo.lock` digest.
 The production corridor clears Git resolution overrides, replacement refs,
 Rust compiler/wrapper/flag overrides, Cargo target/profile runner and linker
 overrides, inherited libtest capture/color controls, and then fixes uncolored
-transcripts. It resolves the repository-pinned Cargo 1.93.1 and rustc 1.93.1
-binaries through rustup, records their paths, versions, and hashes, uses an
+transcripts. The authenticated bootstrap runner-tool manifest supplies the
+repository-pinned Cargo 1.93.1 and rustc 1.93.1 binaries directly; the corridor
+records their paths, versions, and hashes without reopening rustup discovery, uses an
 isolated `CARGO_HOME` without external configuration, and permits only the
-source-bound `.cargo/config.toml`; registry and Git caches remain a cooperative
-host prerequisite for offline execution. Java, Git, Python, Node, Bash, TLAPM,
+source-bound `.cargo/config.toml`. Registry and Git cache inputs are copied to
+new private inodes after race-checked traversal; contained relative symlinks are
+preserved, while absolute, escaping, and special-file entries fail closed. A
+canonical input inventory and digest outside the mutable Cargo home bind that
+snapshot. After the last Cargo command, a second bounded canonical inventory
+binds every final cache entry and the receipt requires exact tree equality,
+including all Cargo-created additions; both snapshots reject configuration,
+hardlink, symlink, special-file, size, depth, and cardinality escapes. The
+release corridor never writes the caller's cache. Private cache, runtime, and
+scaling-bundle construction occurs before any candidate build child starts,
+inside a fresh owner-private invocation namespace. That quiescent construction
+boundary is required because portable POSIX interfaces do not provide a
+`mkdir` operation which also returns the created directory descriptor; the
+contract does not claim to tolerate an already-active same-UID writer racing
+the initial stage-directory creation. Once each staged root has been bound and
+published, descriptor-held identity and the post-child source/destination
+inventories cover the active build phase. Java, Git,
+Python, Node, Bash, TLAPM,
 TLA2Tools, Verus, and cargo-verus identities are likewise bound where used.
+Reading cache files can still update access time under host filesystem policy;
+the runner deliberately does not attempt a non-portable or racy atime restore,
+and it verifies that content, namespace, identity, mode, ownership, link count,
+size, modification time, and change time remain stable while copying.
 
 The production corridor raises the real-network matrix to 32 seeds per
 scenario, requires fresh source-bound TLAPS/TLC/Verus and trace-replay evidence,
@@ -2186,17 +2216,21 @@ and rejects certificate-authority, SSH-certificate, `valid-after`, and
 the trusted inputs, authenticates the candidate's exact signed commit and
 release identity, and publishes `BOOTSTRAP_COMPLETED.json` before it launches
 the signed runner under a closed environment. Its `PATH` contains only the
-archived protected tools and a private `runner-bin` directory. Every additional
-executable must be named in the protected canonical manifest with one absolute
-source path and SHA-256 digest; the bootstrap rejects writable or untrusted
-ancestors and creates an exact-target symlink in `runner-bin` so platform code
-signatures remain valid without reopening ambient path lookup. The runner
-independently
+archived protected tools and a reviewed runner-tool closure. Every additional
+executable must be named in the protected canonical manifest with one protected
+record identifier, mode, size, and SHA-256 digest; the bootstrap rejects
+writable or untrusted ancestors. Before candidate build code runs, the outer
+runner copies the named language/tool runtime closures to new private inodes and binds exact
+path-withheld source and private-destination inventories. The runner independently
 validates that marker at entry, after sealing, and at every release-identity
 checkpoint before it executes another candidate helper. The bootstrap imposes
 no outer runtime or output-capture limit on the runner and never signals its
 process group; a runner which escapes its internal deadlines remains visibly
 incomplete and cannot publish either completion marker.
+
+Shell harness core utilities are still resolved from the admitted host system
+directories. Those binaries remain a release-host image prerequisite until
+they are added to the protected private-runtime inventory.
 
 Runner stdout and stderr are inherited regular files created directly under
 the private evidence directory, mode `0600` while active and `0400` after a
@@ -2205,9 +2239,8 @@ runner. If the bootstrap process alone is interrupted, it does not signal the
 runner and preserves the active logs and evidence directory for diagnosis;
 without terminal validation it cannot publish external completion.
 
-On success, the runner publishes exactly
-`release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
-evidence directory. That receipt binds the 88 pre-network corridor legs and
+On success, the private invocation publishes its exact aggregate receipt. That
+receipt binds the 88 pre-network corridor legs and
 their exact 854-test production inventory, the separate 525-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
@@ -2241,22 +2274,22 @@ legacy, symlinked, reordered, path-escaping, or content-mismatched evidence
 fails closed.
 
 The receipt is a canonical owner-owned, single-link, mode-`0400` file. Its
-writer uses an exclusive staged inode, complete-write loops, no-clobber
-linking, and cleanup which removes only its own inode. Before publication it
+writer uses an exclusive fully synced staged inode, complete-write loops, and
+one no-replace rename to the final name. Before publication it
 revalidates and synchronizes every bound evidence file, then the complete
 evidence-directory closure bottom-up; after publication it repeats that
 closure with the terminal receipt included. Any file, directory, or `fsync`
 failure is fail-closed. There is no mutable pointer file. The successful runner
 retains its sealed source root and sealed identity instead of deleting the code
-which produced the evidence. Once the runner returns success, the external
-bootstrap validates that retained root, re-synchronizes and re-attests its
-permission-aware manifest, then invokes the separately protected archived
-receipt validator in exact `--verify-existing` mode against that root. Only
-after the protected replay succeeds does it create the separate no-clobber
-`BOOTSTRAP_RELEASE_COMPLETED.json` marker. That external marker binds the
-terminal receipt, sealed source identity, protected validator, and sealed
-runner-log digests. Runner failure is returned unchanged and cannot publish
-external completion.
+which produced the evidence. The protected outer runner first invokes the
+separately archived receipt validator in exact `--verify-existing` mode. Only
+that validator may publish the canonical no-clobber acknowledgment; only after
+the acknowledgment exists may the protected runtime helper prune runtime,
+Cargo cache, target, home, and temporary state and publish the exact retained
+inventory/result. The external bootstrap authenticates all three records, the
+terminal receipt, sealed source identity, validator provenance, and sealed
+runner-log digests before `BOOTSTRAP_RELEASE_COMPLETED.json`. Runner or
+validator failure cannot publish external completion.
 
 This authenticates the signed candidate and runner relative to the operator's
 protected inputs; it is not remote host attestation. The release-host image,

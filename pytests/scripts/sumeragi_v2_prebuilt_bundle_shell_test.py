@@ -74,7 +74,6 @@ def _run_harness(repo: Path, env: dict[str, str], body: str) -> subprocess.Compl
 source {shlex_quote(str(PROCESS_POLICY))}
 require_external_private_directory() {{ :; }}
 source {shlex_quote(str(SHELL_HELPER))}
-wait_for_external_cargo() {{ :; }}
 run_cargo() {{
   if [[ "${{1-}}" == --version ]]; then
     command cargo --version

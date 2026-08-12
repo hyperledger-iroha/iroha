@@ -1709,7 +1709,8 @@ launches the bound runner under a closed environment. It imposes no outer
 runner timeout or output-capture bound and never signals the runner process
 group.
 
-The runner reproduces the candidate in a detached read-only worktree and
+The runner reproduces the candidate in an independent clone made with no local
+object sharing, hardlinks, or alternates, then seals that clone read-only and
 records both the original checkout manifest and the permission-aware sealed
 manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
@@ -1719,8 +1720,10 @@ binds original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and the exact
 854-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
-pointer; after success the external bootstrap independently validates it and
-publishes a separate no-clobber completion marker. The complete operator
+pointer. The protected archived validator first publishes a no-clobber
+acknowledgment; the protected helper then prunes disposable runtime state and
+publishes the exact retained result/inventory. The external bootstrap
+authenticates those records before a separate no-clobber completion marker. The complete operator
 contract is documented in
 [`../../source/sumeragi_v2_liveness.md`](../../source/sumeragi_v2_liveness.md).
 
@@ -1729,10 +1732,12 @@ protected inputs, but is not remote host attestation. The host image,
 pre-Python dynamic loader, same UID, trusted ancestor owners, and correct
 storage `fsync` semantics remain external prerequisites. Malformed, incomplete,
 cross-source, semantically mismatched, or digest-mismatched evidence is
-rejected. Cargo/rustc are
-resolved to the repository-pinned 1.93.1 toolchain, run with sanitized semantic
-environment overrides and an isolated configuration-free `CARGO_HOME`, and
-their exact paths, versions, and hashes are retained in the corridor receipt.
+rejected. Cargo/rustc are resolved to the repository-pinned 1.93.1 toolchain,
+copied with their complete selected toolchain to private inodes before child
+launch, run with sanitized semantic environment overrides and an isolated
+private `CARGO_HOME`, and bound by path-withheld input plus private-runtime
+inventories in the corridor receipt. Shell core utilities remain an explicit
+admitted-host-image prerequisite pending inclusion in that protected inventory.
 Java resolution rejects a non-working launcher such as the macOS
 `/usr/bin/java` stub, honors an explicit `JAVA_BIN` only when it executes, and
 otherwise selects a canonical working JDK from `JAVA_HOME`, `PATH`, the macOS

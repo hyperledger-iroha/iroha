@@ -2212,10 +2212,6 @@ pub mod test_utils {
     #[allow(unused_imports)]
     use super::*;
 
-    #[cfg(feature = "iroha_zkp_halo2")]
-    const HALO2_N_IN: u8 = 1;
-    #[cfg(feature = "iroha_zkp_halo2")]
-    const HALO2_N_OUT: u8 = 1;
     const HALO2_PROOF_BYTES_LEN: usize = 64;
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -2967,37 +2963,6 @@ pub mod test_utils {
         bytes
     }
 
-    #[cfg(feature = "iroha_zkp_halo2")]
-    fn halo2_proof_payload(public_inputs: &[u8]) -> Vec<u8> {
-        use iroha_zkp_halo2::{
-            FLAG_LOOKUPS, Halo2ProofEnvelope, Halo2ProofEnvelopeHeader, PUBLIC_INPUT_STRIDE,
-        };
-
-        let stride = PUBLIC_INPUT_STRIDE;
-        let arrays = public_inputs
-            .chunks(stride)
-            .map(|chunk| {
-                let mut arr = [0u8; PUBLIC_INPUT_STRIDE];
-                arr.copy_from_slice(chunk);
-                arr
-            })
-            .collect::<Vec<_>>();
-        let expected =
-            Halo2ProofEnvelopeHeader::expected_pi_count(HALO2_N_IN, HALO2_N_OUT) as usize;
-        debug_assert_eq!(arrays.len(), expected);
-        Halo2ProofEnvelope::new(
-            18,
-            HALO2_N_IN,
-            HALO2_N_OUT,
-            FLAG_LOOKUPS,
-            arrays,
-            vec![0xAB; HALO2_PROOF_BYTES_LEN],
-        )
-        .expect("construct Halo2 envelope fixture")
-        .to_bytes()
-    }
-
-    #[cfg(not(feature = "iroha_zkp_halo2"))]
     fn halo2_proof_payload(_public_inputs: &[u8]) -> Vec<u8> {
         vec![0xAB; HALO2_PROOF_BYTES_LEN]
     }

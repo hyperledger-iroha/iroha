@@ -9,6 +9,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPTS_DIR) not in sys.path:
@@ -17,6 +19,9 @@ if str(SCRIPTS_DIR) not in sys.path:
 from sorafs_evidence_json import (  # noqa: E402
     decode_evidence_json,
     EvidenceFileTooLargeError,
+    EVIDENCE_FILE_CHANGED_DIAGNOSTIC,
+    EVIDENCE_FILE_HARDLINK_DIAGNOSTIC,
+    EVIDENCE_FILE_PATH_CHANGED_DIAGNOSTIC,
     EVIDENCE_JSON_LOAD_DIAGNOSTIC,
     EVIDENCE_JSON_READ_DIAGNOSTIC,
     evidence_read_open_flags,
@@ -96,7 +101,7 @@ def test_read_evidence_bytes_uses_no_follow_open_flags(
     captured: dict[str, int] = {}
 
     def open_path(path: Path, flags: int, *args, **kwargs):
-        if path == evidence:
+        if path == evidence.name and kwargs.get("dir_fd") is not None:
             captured["flags"] = flags
         return original_open(path, flags, *args, **kwargs)
 
@@ -106,6 +111,8 @@ def test_read_evidence_bytes_uses_no_follow_open_flags(
     assert captured["flags"] == evidence_read_open_flags()
     if hasattr(os, "O_NOFOLLOW"):
         assert captured["flags"] & os.O_NOFOLLOW
+    if hasattr(os, "O_NONBLOCK"):
+        assert captured["flags"] & os.O_NONBLOCK
 
 
 def test_load_evidence_json_with_sha256_or_record_error_records_failure(
@@ -274,6 +281,114 @@ def test_read_evidence_bytes_rejects_directory_before_open(tmp_path: Path) -> No
         raise AssertionError("expected directory evidence read to fail")
 
 
+def test_read_evidence_bytes_rejects_hardlinked_file(tmp_path: Path) -> None:
+    source = tmp_path / "source.json"
+    evidence = tmp_path / "evidence.json"
+    source.write_text('{"schema":"test"}', encoding="utf-8")
+    os.link(source, evidence)
+
+    try:
+        read_evidence_bytes(evidence, 1024)
+    except ValueError as error:
+        assert str(error) == EVIDENCE_FILE_HARDLINK_DIAGNOSTIC
+    else:
+        raise AssertionError("expected hardlinked evidence read to fail")
+
+
+def test_read_evidence_bytes_rejects_same_inode_mutation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    evidence = tmp_path / "evidence.json"
+    raw = b'{"schema":"test"}'
+    evidence.write_bytes(raw)
+    original_read = os.read
+    mutated = False
+
+    def read_and_mutate(descriptor: int, size: int) -> bytes:
+        nonlocal mutated
+        chunk = original_read(descriptor, size)
+        if chunk and not mutated:
+            mutated = True
+            evidence.write_bytes(raw + b" ")
+        return chunk
+
+    monkeypatch.setattr(os, "read", read_and_mutate)
+
+    try:
+        read_evidence_bytes(evidence, 1024)
+    except ValueError as error:
+        assert str(error) == EVIDENCE_FILE_CHANGED_DIAGNOSTIC
+    else:
+        raise AssertionError("expected changing evidence bytes to fail")
+
+
+def test_read_evidence_bytes_rejects_ancestor_rebinding(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    evidence_root = tmp_path / "evidence-root"
+    evidence_root.mkdir()
+    evidence = evidence_root / "evidence.json"
+    raw = b'{"schema":"test"}'
+    evidence.write_bytes(raw)
+    displaced_root = tmp_path / "displaced-root"
+    original_read = os.read
+    rebound = False
+
+    def read_and_rebind(descriptor: int, size: int) -> bytes:
+        nonlocal rebound
+        chunk = original_read(descriptor, size)
+        if chunk and not rebound:
+            rebound = True
+            evidence_root.rename(displaced_root)
+            evidence_root.mkdir()
+            (evidence_root / evidence.name).write_bytes(raw)
+        return chunk
+
+    monkeypatch.setattr(os, "read", read_and_rebind)
+
+    try:
+        read_evidence_bytes(evidence, 1024)
+    except ValueError as error:
+        assert str(error) == EVIDENCE_FILE_PATH_CHANGED_DIAGNOSTIC
+    else:
+        raise AssertionError("expected rebound evidence path to fail")
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO creation unavailable")
+def test_read_evidence_bytes_fifo_swap_cannot_block(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text('{"schema":"test"}', encoding="utf-8")
+    original_open = os.open
+    swapped = False
+
+    def swap_leaf_before_open(path: str | Path, flags: int, *args, **kwargs):
+        nonlocal swapped
+        if (
+            not swapped
+            and path == evidence.name
+            and kwargs.get("dir_fd") is not None
+            and not flags & getattr(os, "O_DIRECTORY", 0)
+        ):
+            swapped = True
+            evidence.unlink()
+            os.mkfifo(evidence, 0o600)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", swap_leaf_before_open)
+
+    try:
+        read_evidence_bytes(evidence, 1024)
+    except ValueError as error:
+        assert str(error) == EVIDENCE_FILE_CHANGED_DIAGNOSTIC
+    else:
+        raise AssertionError("FIFO-swapped evidence input was accepted")
+
+
 def test_load_evidence_json_with_sha256_or_record_error_rejects_parent_symlink(
     tmp_path: Path,
 ) -> None:
@@ -330,7 +445,7 @@ def test_load_evidence_json_with_sha256_or_record_error_records_runtime_failure(
     original_open = os.open
 
     def open_path(path: Path, flags: int, *args, **kwargs):
-        if path == evidence:
+        if path == evidence.name and kwargs.get("dir_fd") is not None:
             raise RuntimeError("evidence read denied")
         return original_open(path, flags, *args, **kwargs)
 

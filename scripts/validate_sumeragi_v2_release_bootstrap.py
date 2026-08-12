@@ -61,6 +61,8 @@ _TRUSTED_INPUT_KEYS = {
     "manifest_helper",
     "python",
     "receipt_validator",
+    "receipt_validator_support",
+    "runtime_helper",
     "revocation",
     "runner_tool_manifest",
     "ssh_keygen",
@@ -74,6 +76,8 @@ _TRUSTED_ARCHIVE_NAMES = {
     "manifest_helper": "compute-manifest.py",
     "python": "python3",
     "receipt_validator": "validate-receipt.py",
+    "receipt_validator_support": "sumeragi_v2_localnet_manifest.py",
+    "runtime_helper": "copy-release-runtime.py",
     "revocation": "bootstrap-revocation",
     "runner_tool_manifest": "runner-tool-manifest.json",
     "ssh_keygen": "ssh-keygen",
@@ -1303,6 +1307,8 @@ def _environment_contract(
         }
     )
     policy = {
+        "SUMERAGI_V2_RELEASE_RUNTIME_HELPER": str(archives["runtime_helper"].path),
+        "SUMERAGI_V2_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256": archives["runtime_helper"].sha256,
         "SUMERAGI_V2_RELEASE_SSH_KEYGEN_BIN": str(archives["ssh_keygen"].path),
         "SUMERAGI_V2_RELEASE_EXPECTED_GIT_SHA256": archives["git"].sha256,
         "SUMERAGI_V2_RELEASE_EXPECTED_SSH_KEYGEN_SHA256": archives["ssh_keygen"].sha256,
@@ -1322,6 +1328,10 @@ def _environment_contract(
         for key, item in policy.items()
         if key.startswith("SUMERAGI_V2_RELEASE_BOOTSTRAP_")
     }
+    aliases.update({
+        "IROHA_RELEASE_RUNTIME_HELPER": str(archives["runtime_helper"].path),
+        "IROHA_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256": archives["runtime_helper"].sha256,
+    })
     expected.update(policy)
     expected.update(aliases)
     allowed_keys = set(expected) | _RUNNER_EXTRA_ENV
@@ -1381,8 +1391,15 @@ def _inventory(evidence: DirectorySnapshot, checkpoint: str) -> None:
     except OSError as error:
         raise ValidationError("bootstrap evidence inventory is unavailable") from error
     permitted = set(required)
+    retained = {
+        "RELEASE_COMPLETED.json",
+        "receipt-validation-ack.json",
+        "sealed-identity.json",
+        "release-retained-inventory.json",
+        "release-runner-result.json",
+    }
     if checkpoint == "sealed":
-        permitted.add("release-runner")
+        permitted.update(retained if "release-runner-result.json" in observed else {"release-runner"})
     if observed != permitted:
         raise ValidationError("bootstrap evidence directory has an unexpected top-level inventory")
     for name in ("home", "tmp", "runner-bin"):
@@ -1402,7 +1419,7 @@ def _inventory(evidence: DirectorySnapshot, checkpoint: str) -> None:
             or stat.S_IMODE(item.st_mode) != 0o600
         ):
             raise ValidationError(f"bootstrap {name} is not one active private log")
-    if checkpoint == "sealed":
+    if checkpoint == "sealed" and "release-runner" in observed:
         item = os.stat("release-runner", dir_fd=evidence.descriptor, follow_symlinks=False)
         if (
             not stat.S_ISDIR(item.st_mode)
@@ -1410,6 +1427,66 @@ def _inventory(evidence: DirectorySnapshot, checkpoint: str) -> None:
             or stat.S_IMODE(item.st_mode) != _DIRECTORY_MODE
         ):
             raise ValidationError("sealed release-runner subtree is not one private directory")
+    for name in retained & observed:
+        item = os.stat(name, dir_fd=evidence.descriptor, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(item.st_mode)
+            or item.st_uid != os.getuid()
+            or item.st_nlink != 1
+            or stat.S_IMODE(item.st_mode) != 0o400
+        ):
+            raise ValidationError(f"retained release evidence {name} is unsafe")
+
+
+def _sealed_release_root(evidence: DirectorySnapshot) -> tuple[Path, Snapshot | None]:
+    result_path = evidence.path / "release-runner-result.json"
+    if not result_path.exists() and not result_path.is_symlink():
+        return evidence.path / "release-runner" / "source", None
+    snapshot = _read_path(
+        result_path,
+        "protected outer release result",
+        maximum_bytes=_MAX_EVIDENCE_BYTES,
+        expected_mode=0o400,
+    )
+    value = _exact_dict(
+        _parse_canonical(snapshot, "protected outer release result"),
+        {
+            "format", "schema_version", "invocation_root", "source_root",
+            "source_manifest_sha256", "sealed_identity", "receipt", "inventory",
+            "receipt_validation",
+        },
+        "protected outer release result",
+    )
+    if value["format"] != "iroha-sumeragi-v2-retained-release-evidence" or value["schema_version"] != 1:
+        raise ValidationError("protected outer release result schema is not exact")
+    invocation = _canonical_existing(Path(_string(value["invocation_root"], "retained invocation root")), "retained invocation root")
+    source = _canonical_existing(Path(_string(value["source_root"], "retained source root")), "retained source root")
+    if source != invocation / "source" or invocation == evidence.path or invocation in evidence.path.parents or evidence.path in invocation.parents:
+        raise ValidationError("retained release source is not external and exact")
+    _digest(_string(value["source_manifest_sha256"], "retained source digest"), "retained source digest")
+    for field, local_path, name in (
+        ("receipt", invocation / "output" / "release" / "RELEASE_COMPLETED.json", "RELEASE_COMPLETED.json"),
+        ("sealed_identity", invocation / "sealed-identity.json", "sealed-identity.json"),
+        ("inventory", invocation / "retained-evidence-inventory.json", "release-retained-inventory.json"),
+        ("receipt_validation", invocation / "receipt-validation-ack.json", "receipt-validation-ack.json"),
+    ):
+        record = _exact_dict(value[field], {"path", "sha256", "size", "protected_path"}, f"retained {field}")
+        protected = _read_path(evidence.path / name, f"protected retained {field}", maximum_bytes=256 * 1024 * 1024, expected_mode=0o400)
+        local = _read_path(
+            local_path,
+            f"retained {field}",
+            maximum_bytes=256 * 1024 * 1024,
+            expected_mode=0o400,
+        )
+        if (
+            Path(_string(record["path"], f"retained {field} path")) != local.path
+            or Path(_string(record["protected_path"], f"retained {field} protected path")) != protected.path
+            or _digest(_string(record["sha256"], f"retained {field} digest"), f"retained {field} digest") != protected.sha256
+            or _strict_int(record["size"], f"retained {field} size") != protected.size
+            or local.data != protected.data
+        ):
+            raise ValidationError(f"protected retained {field} binding changed")
+    return source, snapshot
 
 
 def validate(args: argparse.Namespace) -> None:
@@ -1542,7 +1619,7 @@ def validate(args: argparse.Namespace) -> None:
                 raise ValidationError("entry validator is not the candidate script")
             current_validator = expected_validator
         else:
-            sealed_root = evidence.path / "release-runner" / "source"
+            sealed_root, release_result_snapshot = _sealed_release_root(evidence)
             if current_validator_path != (
                 sealed_root / "scripts" / "validate_sumeragi_v2_release_bootstrap.py"
             ):
@@ -1582,6 +1659,8 @@ def validate(args: argparse.Namespace) -> None:
             *runner_tool_sources,
             *unique_records.values(),
         ]
+        if args.checkpoint == "sealed" and release_result_snapshot is not None:
+            all_snapshots.append(release_result_snapshot)
         if current_validator.path != expected_validator.path:
             all_snapshots.append(current_validator)
         if sealed_runner is not None:

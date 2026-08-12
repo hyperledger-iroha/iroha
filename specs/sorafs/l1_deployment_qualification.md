@@ -88,6 +88,42 @@ well-shaped. It is not a lane summary, is not accepted by the aggregate
 promotion gate, and cannot replace the signed nine-prerequisite envelope or any
 of the 17 genuine payload-free evidence summaries.
 
+## Independently sign the exact qualification
+
+Construct the signed companion with the public no-private-key workflow in
+`scripts/build_sorafs_topology_qualification_envelope.py`. `prepare` revalidates
+the exact summary, the Taira chain binding, all four ordered validator
+identities, the review clock, and the external software-signer trust tuple. It
+then emits a schema-closed prepared object and the domain-separated bytes for
+the independently administered Ed25519 signer. `finalize` replays every signed
+topology, trust, and review field and re-evaluates freshness under its supplied
+clock and maximum-age policy before it accepts the signer's 64 raw detached
+signature bytes. `verify` replays the summary and trust tuple again and emits
+only the authenticated public binding.
+
+The complete command sequence is in
+[`scripts/examples/sorafs_l1_topology_qualification_envelope.md`](../../scripts/examples/sorafs_l1_topology_qualification_envelope.md).
+The tool has no private-key, seed, or secret option and rejects such arguments,
+including after response-file expansion. Use it only in an owner-controlled,
+mode-0700 runtime directory. Outputs are owner-only, exclusively created, and
+may not be symlinks or hardlinks. Run `verify` twice with the same explicit
+clock and compare the results byte-for-byte before supplying the envelope to a
+lane or aggregate runner.
+
+For `prepare`, the prepared JSON is published first and the signing payload is
+published last as the completion marker. A handled error rolls both back. An
+abrupt host or process failure can leave the prepared JSON without its payload;
+that incomplete state is not signable and must be removed before a fresh run.
+The standalone `verify` command authenticates only the topology envelope and
+does not claim promotion readiness: the foundational and aggregate readiness
+flows additionally enforce signer-key and administrator separation from the
+resilience, lane, and promotion domains.
+
+Repository-root `artifacts/*` is ignored, so Git status cannot reveal an old
+topology artifact. Never treat an existing ignored summary or envelope as
+current. Regenerate and revalidate both from the exact reviewed manifest in a
+protected runtime evidence directory for every release evidence collection.
+
 The summary binds two manifest digests. `manifest_sha256` hashes the exact
 reviewed manifest bytes, including their JSON formatting.
 `canonical_manifest_sha256` hashes the schema-closed manifest after

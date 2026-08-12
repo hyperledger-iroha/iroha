@@ -1,0 +1,315 @@
+{
+  "format_version": 1,
+  "source_commit": "dd10f01c8e2f38819eaf2fbc794b600e3c86815e",
+  "source_slice_hash_scope": "line-count-pinned Rust extraction span including trailing LF",
+  "assets": [
+    {
+      "path": "metal_vadd64.metal",
+      "byte_length": 408,
+      "sha256": "1abd74cf194ec9ee022892afffacefbbf950fe4c321bd11d103d65a08eb18550",
+      "layout": "UTF-8 Metal source bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../vector.rs",
+          "start_line": 602,
+          "physical_lines": 10,
+          "sha256": "425d4a6b3d37d539491e63792f5b0b5a2c545df4dc6df138eb0d6f0bab74d591"
+        }
+      ]
+    },
+    {
+      "path": "metal_vadd32.metal",
+      "byte_length": 405,
+      "sha256": "edf90a97967d45033021841d62483b3653513831bb98a082f0270f3679d93ca8",
+      "layout": "UTF-8 Metal source bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../vector.rs",
+          "start_line": 620,
+          "physical_lines": 10,
+          "sha256": "b49838f1f906278788a5ccee8dd133977113428257414bf94e6470dd3464c644"
+        }
+      ]
+    },
+    {
+      "path": "metal_sha256_compress.metal",
+      "byte_length": 3167,
+      "sha256": "7daa22b815cf326b71a58f2238033840678fd9f6405314d1119f54e07dd747cf",
+      "layout": "UTF-8 Metal source bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../vector.rs",
+          "start_line": 666,
+          "physical_lines": 66,
+          "sha256": "7df299d25ec9a364753ff91956ac8fe368d36754724ce351ab7d2d1c5b3110aa"
+        }
+      ]
+    },
+    {
+      "path": "metal_sha256_leaves.metal",
+      "byte_length": 3215,
+      "sha256": "2238aaf20ccf00ee815f3f3c99fbd65ea13dd64df1e9dee21759bed747d2175c",
+      "layout": "UTF-8 Metal source bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../vector.rs",
+          "start_line": 741,
+          "physical_lines": 56,
+          "sha256": "1fe9a6c6830235506fc3de048435fb0eff6fddaa06e348de51c1da9ccfbf3eda"
+        }
+      ]
+    },
+    {
+      "path": "metal_sha256_pairs_reduce.metal",
+      "byte_length": 4693,
+      "sha256": "6df1d2906aa94899901208b4469e05b7ad8d02473d5c1d0a2d1ce18062f5f51b",
+      "layout": "UTF-8 Metal source bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../vector.rs",
+          "start_line": 805,
+          "physical_lines": 86,
+          "sha256": "f98600b56de2c0ef2ca5a37042e2e05f89ca7e449c7948804e01c584b32f479b"
+        }
+      ]
+    },
+    {
+      "path": "metal_keccak_f1600.metal",
+      "byte_length": 3117,
+      "sha256": "da90c40e308a1553febefdaba1a6da723438070066b999a77050431e6dd9cae6",
+      "layout": "UTF-8 Metal source bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../vector.rs",
+          "start_line": 899,
+          "physical_lines": 63,
+          "sha256": "f1a67fd320217a658d5b631a103789fcb2cc4c9b01d99815429929005e67e0be"
+        }
+      ]
+    },
+    {
+      "path": "metal_aes_rounds.metal",
+      "byte_length": 10772,
+      "sha256": "f4cf944ac2f4d385c16279ca98eaab83439d4d4debdc47e49b98f5cd0d1dfd7a",
+      "layout": "UTF-8 Metal source bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../vector.rs",
+          "start_line": 971,
+          "physical_lines": 176,
+          "sha256": "0d49d28a90b187591c2ee22d6766403eaf8557b23532dc4bd68424358dc2b24b"
+        }
+      ]
+    },
+    {
+      "path": "pacs008_sample.xml",
+      "byte_length": 2026,
+      "sha256": "60d2d80972d3bc33a9368d73ec2a59fdbeee43923b5f4f322184b3da6d4895b0",
+      "layout": "UTF-8 ISO 20022 XML fixture bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../iso20022.rs",
+          "start_line": 4468,
+          "physical_lines": 48,
+          "sha256": "3e63f67250a4a2778c2f0963c2af95bfc297e6c8021b4d31665a15afb0dd3ce9"
+        }
+      ]
+    },
+    {
+      "path": "pacs004_sample.xml",
+      "byte_length": 2956,
+      "sha256": "8ca44dd403899e3375f2b6047b6d560bc02b22cf2a69775d395d4743e888fdc6",
+      "layout": "UTF-8 ISO 20022 XML fixture bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../iso20022.rs",
+          "start_line": 4517,
+          "physical_lines": 63,
+          "sha256": "dcb96a966567e590924c2062ba735776b2f05a749c78cc65fcd0ba4cd7b53a91"
+        }
+      ]
+    },
+    {
+      "path": "pacs009_sample.xml",
+      "byte_length": 766,
+      "sha256": "5d4bf6849d3361006a3060755c8cbfd426ea487c431c3a37b00aa6136452dc58",
+      "layout": "UTF-8 ISO 20022 XML fixture bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../iso20022.rs",
+          "start_line": 4581,
+          "physical_lines": 21,
+          "sha256": "dd6f66c1a635a85b69d7f7f2e3f89c001c37c6648114a96ee2e3b0b378475037"
+        }
+      ]
+    },
+    {
+      "path": "pacs009_envelope.xml",
+      "byte_length": 955,
+      "sha256": "39714e33b200bde675a44ec5fb20706acd303ca322def3550f1ad1f2d23cb2f8",
+      "layout": "UTF-8 ISO 20022 XML fixture bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../iso20022.rs",
+          "start_line": 4603,
+          "physical_lines": 26,
+          "sha256": "52b06162140abf52b0cc4ea9a90d62d44206c865c6c0205d9093a42b262a3e79"
+        }
+      ]
+    },
+    {
+      "path": "pacs002_status.xml",
+      "byte_length": 1411,
+      "sha256": "2f5aafb807f72fe0a1b1e0e0fc61e85f172c5e30e815e1827d2ab442181c786a",
+      "layout": "UTF-8 ISO 20022 XML fixture bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../iso20022.rs",
+          "start_line": 4630,
+          "physical_lines": 38,
+          "sha256": "6dbdaefcfadbb1eba1105e60b57b2afad49a2f09eace5a6807106eeddeafbcd0"
+        }
+      ]
+    },
+    {
+      "path": "pacs002_auth.xml",
+      "byte_length": 882,
+      "sha256": "fff0c6a24b36f98eeb94ba2414adb46c6eebed6e81012037c1e067ca1f24a417",
+      "layout": "UTF-8 ISO 20022 XML fixture bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../iso20022.rs",
+          "start_line": 4669,
+          "physical_lines": 27,
+          "sha256": "e684ce56dde12a5a0596015debfd474621a99504825bf0f8b307e06e354eae71"
+        }
+      ]
+    },
+    {
+      "path": "camt052_sample.xml",
+      "byte_length": 1239,
+      "sha256": "1e5a8dca46f37d9ceebf1ac9cae7da86b1a1302af00f605df0f45928475966a4",
+      "layout": "UTF-8 ISO 20022 XML fixture bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../iso20022.rs",
+          "start_line": 4697,
+          "physical_lines": 38,
+          "sha256": "37c0aefc20d0c8e56383e2913822ed518b710ffb404fe40f919b45ebd440deac"
+        }
+      ]
+    },
+    {
+      "path": "camt056_sample.xml",
+      "byte_length": 1926,
+      "sha256": "1f5a7c50899125bdbfc0cbba2e22edfc39e0f13d6534a9ac4299ec48fe9ad1ba",
+      "layout": "UTF-8 ISO 20022 XML fixture bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../iso20022.rs",
+          "start_line": 4736,
+          "physical_lines": 41,
+          "sha256": "afa7344816d3700489c180fd68206bcf306eeb8e90d62eadc63e92511a4ea20f"
+        }
+      ]
+    },
+    {
+      "path": "head001_envelope.xml",
+      "byte_length": 787,
+      "sha256": "e8f954e473af196b0484eab64813a7919293d56bd867b086dd2b9a8b7ed9b654",
+      "layout": "UTF-8 ISO 20022 XML fixture bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../iso20022.rs",
+          "start_line": 5278,
+          "physical_lines": 33,
+          "sha256": "0bf2ae176e69a237b6557c400be6bb8e79fd996a526c7cc5e9895e86bac8fb3f"
+        }
+      ]
+    },
+    {
+      "path": "pacs008_proxy.xml",
+      "byte_length": 839,
+      "sha256": "cf2b990a9a111d4af8717d254ebaf7ceda3f5a90018a15de7c4cb514ca76dc0e",
+      "layout": "UTF-8 ISO 20022 XML fixture bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../iso20022.rs",
+          "start_line": 5333,
+          "physical_lines": 37,
+          "sha256": "52a59fb5236762f3857f2d0d2daae23bf2a78ac11917cfbd27123e6a85d974f1"
+        }
+      ]
+    },
+    {
+      "path": "pacs002_wrong_root.xml",
+      "byte_length": 171,
+      "sha256": "854a59153b0df0354d2d5b06b91e46a1b42b196e09459969bff36f7feffb1c11",
+      "layout": "UTF-8 ISO 20022 XML fixture bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../iso20022.rs",
+          "start_line": 5481,
+          "physical_lines": 7,
+          "sha256": "8c6eea3ac4e9d2c89ad59fde2f6ea998b1825ceea37bfca8d0190d594fbd9ed8"
+        }
+      ]
+    },
+    {
+      "path": "pacs002_missing_root.xml",
+      "byte_length": 79,
+      "sha256": "f330fd5f1b2d948d9c57dc17cfabaa1eb9e0a3536d64514795dd88eff20416dc",
+      "layout": "UTF-8 ISO 20022 XML fixture bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../iso20022.rs",
+          "start_line": 5497,
+          "physical_lines": 4,
+          "sha256": "50fe4da6a25d7e0bee2e40a8f9099b57e4090a067057984edf691fd8d72e7301"
+        }
+      ]
+    },
+    {
+      "path": "sese024_status.xml",
+      "byte_length": 301,
+      "sha256": "1f3bf9576c8dad6dfb578770c3fa3215d62be03544e8047732d9ddcf5c3841c0",
+      "layout": "UTF-8 ISO 20022 XML fixture bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../iso20022.rs",
+          "start_line": 6119,
+          "physical_lines": 12,
+          "sha256": "31c93b2d2ad54389e8e427aa5904c2728bf9803b3e5d62db4bef7ae47b566d12"
+        }
+      ]
+    },
+    {
+      "path": "camt029_resolution.xml",
+      "byte_length": 729,
+      "sha256": "b26b02848ac805edec0bd6203418ddfa319329520367ce34f4515ab54b78ac22",
+      "layout": "UTF-8 ISO 20022 XML fixture bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../iso20022.rs",
+          "start_line": 6203,
+          "physical_lines": 27,
+          "sha256": "6385613f5aa39b79a1e6264265fb13fb3ede82130ea02d1886c31102d6b35efc"
+        }
+      ]
+    },
+    {
+      "path": "pacs008_signature.xml",
+      "byte_length": 1342,
+      "sha256": "34e2da3328efe3c93ff7aa8ec02242925022952607f20d60fe301ffe6a4cca2b",
+      "layout": "UTF-8 ISO 20022 XML fixture bytes, preserved verbatim",
+      "source_preimages": [
+        {
+          "path": "../../iso20022.rs",
+          "start_line": 6818,
+          "physical_lines": 31,
+          "sha256": "ada8fdf39f18fb46c05905d81dbb9d25e39f44e800572d9b568d98fc3b5c86c8"
+        }
+      ]
+    }
+  ]
+}

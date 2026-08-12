@@ -415,10 +415,6 @@ pub mod multisig {
 
     /// Native ledger value for a multisig account state entry.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
-    )]
     pub struct MultisigAccountState {
         /// Canonical multisig account id for this state entry.
         pub account_id: AccountId,
@@ -447,10 +443,6 @@ pub mod multisig {
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
-    )]
     pub struct MultisigProposalState {
         /// Canonical multisig account id that owns this proposal.
         pub multisig_account_id: AccountId,
@@ -470,10 +462,6 @@ pub mod multisig {
 
     /// Terminal lifecycle states persisted for top-level multisig proposals.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
-    )]
     pub enum MultisigProposalTerminalStatus {
         /// Proposal executed after reaching quorum.
         Finalized,
@@ -486,10 +474,6 @@ pub mod multisig {
     /// Native ledger value for a persisted terminal multisig proposal entry.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
     )]
     pub struct MultisigProposalTerminalState {
         /// Canonical multisig account id that owns this proposal.
@@ -512,10 +496,6 @@ pub mod multisig {
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
-    )]
     pub struct MultisigProposalTerminalExecutionStateV1 {
         /// Terminal proposal payload captured at execution time.
         pub terminal: MultisigProposalTerminalState,
@@ -533,10 +513,6 @@ pub mod multisig {
 
     /// Whether one successful multisig approval entrypoint executed its proposal.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
-    )]
     pub enum MultisigApprovalOutcomeStatusV1 {
         /// The approval reached quorum and executed the concrete proposal instructions.
         Executed,
@@ -547,10 +523,6 @@ pub mod multisig {
     /// Immutable transaction-bound classification of one successful multisig approval.
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
     )]
     pub struct MultisigApprovalOutcomeV1 {
         /// Exact account identifier carried by the signed approval instruction.
@@ -571,10 +543,6 @@ pub mod multisig {
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
-    )]
     pub struct MultisigSpec {
         /// List of signatories and their relative weights of responsibility for the multisig account
         pub signatories: BTreeMap<AccountId, Weight>,
@@ -587,10 +555,6 @@ pub mod multisig {
     /// Metadata value for a multisig transaction proposal
     #[derive(
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
     )]
     pub struct MultisigProposalValue {
         /// Proposal contents

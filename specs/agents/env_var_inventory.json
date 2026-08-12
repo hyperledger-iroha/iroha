@@ -1,9 +1,9 @@
 {
   "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
-  "generated_at": "2026-08-11T19:16:23Z",
+  "generated_at": "2026-08-12T02:34:01Z",
   "root": "iroha",
-  "total_refs": 787,
-  "unique_vars": 201,
+  "total_refs": 785,
+  "unique_vars": 200,
   "variables": {
     "ANDROID_SDK_ROOT": {
       "counts": {
@@ -293,7 +293,7 @@
         },
         {
           "context": ".unwrap_or_else(|_| std::env::var(\"CARGO_BUILD_TARGET\").unwrap_or_default()),",
-          "line": 69,
+          "line": 63,
           "path": "xtask/src/stage1_bench.rs",
           "scope": "tool"
         }
@@ -338,7 +338,7 @@
         },
         {
           "context": "arch: std::env::var(\"CARGO_CFG_TARGET_ARCH\")",
-          "line": 70,
+          "line": 64,
           "path": "xtask/src/stage1_bench.rs",
           "scope": "tool"
         }
@@ -395,7 +395,7 @@
         },
         {
           "context": "os: std::env::var(\"CARGO_CFG_TARGET_OS\")",
-          "line": 72,
+          "line": 66,
           "path": "xtask/src/stage1_bench.rs",
           "scope": "tool"
         }
@@ -496,7 +496,7 @@
         "bench": 2,
         "build": 6,
         "example": 1,
-        "prod": 56,
+        "prod": 55,
         "test": 264,
         "tool": 6
       },
@@ -1333,12 +1333,6 @@
           "context": "let out_dir = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"samples/codec\");",
           "line": 13,
           "path": "crates/iroha_kagami/samples/codec/generate.rs",
-          "scope": "prod"
-        },
-        {
-          "context": "let dir = Path::new(env!(\"CARGO_MANIFEST_DIR\"));",
-          "line": 35,
-          "path": "crates/iroha_kagami/samples/codec/src/main.rs",
           "scope": "prod"
         },
         {
@@ -2657,7 +2651,7 @@
         },
         {
           "context": "version: env!(\"CARGO_PKG_VERSION\").to_owned(),",
-          "line": 5632,
+          "line": 5600,
           "path": "crates/iroha_telemetry/src/metrics.rs",
           "scope": "test"
         },
@@ -2714,19 +2708,6 @@
           "line": 252,
           "path": "tools/telemetry-schema-diff/src/main.rs",
           "scope": "tool"
-        }
-      ]
-    },
-    "CARGO_PRIMARY_PACKAGE": {
-      "counts": {
-        "build": 1
-      },
-      "paths": [
-        {
-          "context": "if std::env::var_os(\"CARGO_PRIMARY_PACKAGE\").is_some() {",
-          "line": 6,
-          "path": "crates/soranet_pq/build.rs",
-          "scope": "build"
         }
       ]
     },
@@ -3389,7 +3370,7 @@
       "paths": [
         {
           "context": "dpn_validator_release_commit: option_env!(\"IROHA_DPN_VALIDATOR_RELEASE_COMMIT\")",
-          "line": 5636,
+          "line": 5604,
           "path": "crates/iroha_telemetry/src/metrics.rs",
           "scope": "test"
         }
@@ -3652,7 +3633,7 @@
       "paths": [
         {
           "context": "std::env::var(\"IROHA_METRICS_PANIC_ON_DUPLICATE\")",
-          "line": 14607,
+          "line": 14575,
           "path": "crates/iroha_telemetry/src/metrics.rs",
           "scope": "test"
         },
@@ -4651,7 +4632,7 @@
       "paths": [
         {
           "context": "std::env::var(\"IVM_DEBUG_METAL_SELFTEST\")",
-          "line": 1204,
+          "line": 744,
           "path": "crates/ivm/src/vector.rs",
           "scope": "debug"
         }
@@ -4774,7 +4755,7 @@
       "paths": [
         {
           "context": "std::env::var(\"IVM_FORCE_METAL_SELFTEST_FAIL\")",
-          "line": 1191,
+          "line": 731,
           "path": "crates/ivm/src/vector.rs",
           "scope": "debug"
         }
@@ -5127,7 +5108,7 @@
       "paths": [
         {
           "context": "cpu: std::env::var(\"NORITO_CPU_INFO\").ok(),",
-          "line": 74,
+          "line": 68,
           "path": "xtask/src/stage1_bench.rs",
           "scope": "tool"
         }
@@ -5842,7 +5823,7 @@
         },
         {
           "context": "target: std::env::var(\"TARGET\")",
-          "line": 68,
+          "line": 62,
           "path": "xtask/src/stage1_bench.rs",
           "scope": "tool"
         }
@@ -6047,7 +6028,7 @@
       "paths": [
         {
           "context": "cargo_features: option_env!(\"VERGEN_CARGO_FEATURES\")",
-          "line": 5639,
+          "line": 5607,
           "path": "crates/iroha_telemetry/src/metrics.rs",
           "scope": "test"
         },
@@ -6067,7 +6048,7 @@
       "paths": [
         {
           "context": "target_triple: option_env!(\"VERGEN_CARGO_TARGET_TRIPLE\")",
-          "line": 5642,
+          "line": 5610,
           "path": "crates/iroha_telemetry/src/metrics.rs",
           "scope": "test"
         },
@@ -6093,7 +6074,7 @@
         },
         {
           "context": "git_commit_sha: option_env!(\"VERGEN_GIT_SHA\")",
-          "line": 5633,
+          "line": 5601,
           "path": "crates/iroha_telemetry/src/metrics.rs",
           "scope": "test"
         },

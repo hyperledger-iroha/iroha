@@ -435,11 +435,16 @@ def test_openapi_cargo_and_owner_surfaces_obey_release_process_policy() -> None:
     )
     assert wrapper_before < wrapper_receipt < wrapper_after
 
-    assert 'process_snapshot="$(ps -axo pid,etime,command)"' in policy
-    assert 'executable == "cargo"' in policy
-    assert 'executable == "rustc"' in policy
-    assert 'executable == "rustfmt"' in policy
-    assert 'command cargo +1.93.1 "${pinned_arguments[@]}"' in policy
+    assert policy.count("acquire_invocation_cargo_lock() {") == 1
+    assert policy.count("release_invocation_cargo_lock() {") == 1
+    assert 'lock_path="${artifact_root}/.sumeragi-v2-cargo.lock"' in policy
+    assert "lock.mkdir(mode=0o700)" in policy
+    assert "wait_for_external_cargo" not in policy
+    assert "ps -" not in policy
+    assert "pgrep" not in policy
+    assert "/proc/" not in policy
+    assert "process_snapshot" not in policy
+    assert '"$IROHA_RELEASE_CARGO_BIN" "${pinned_arguments[@]}"' in policy
     assert 'pinned_arguments=("$subcommand" -j1)' in policy
     assert 'pinned_arguments+=("$@")' in policy
     assert "local status" not in policy

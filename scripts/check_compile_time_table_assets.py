@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify versioned binary assets decoded into Rust constants at compile time."""
+"""Verify versioned static assets consumed by Rust at compile time."""
 
 from __future__ import annotations
 
@@ -22,10 +22,15 @@ MANIFEST_PATHS = (
     Path("crates/iroha_core/src/privacy_engines/zk_x509/assets/manifest.json"),
     Path("crates/iroha_sccp/src/assets/manifest.json"),
     Path("crates/ivm/src/assets/manifest.json"),
+    Path("crates/ivm/src/assets/text_v1/manifest.json"),
     Path("crates/fastpq_isi/src/assets/manifest.json"),
+    Path("crates/iroha_cli/src/soracloud/templates/v1/static/manifest.json"),
+    Path("crates/iroha_torii/src/sorafs/assets/evidence_viewer_v1/manifest.json"),
 )
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+DECLARATION_HASH_SCOPE = "complete Rust constant declaration including trailing LF"
+LINE_SPAN_HASH_SCOPE = "line-count-pinned Rust extraction span including trailing LF"
 CONST_DECLARATION_RE = re.compile(
     r"\bconst\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*:"
 )
@@ -34,6 +39,10 @@ INCLUDE_BYTES_RE = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*\s*:\s*&\s*\[\s*u8\s*;\s*"
     r"(?P<length>[0-9_]+)\s*\]\s*=\s*include_bytes!\(\s*"
     r'"(?P<path>[^"\r\n]+)"\s*\)',
+    re.MULTILINE,
+)
+INCLUDE_STR_RE = re.compile(
+    r'include_str!\(\s*"(?P<path>[^"\r\n]+)"\s*\)',
     re.MULTILINE,
 )
 MANIFEST_FIELDS = frozenset(
@@ -48,13 +57,16 @@ MANIFEST_FIELDS = frozenset(
 ASSET_FIELDS = frozenset(
     {"path", "byte_length", "sha256", "layout", "source_preimages"}
 )
-PREIMAGE_FIELDS = frozenset(
-    {"path", "constant", "physical_lines", "sha256"}
+DECLARATION_PREIMAGE_FIELDS = frozenset(
+    {"path", "constant", "physical_lines", "sha256", "source_commit"}
+)
+LINE_SPAN_PREIMAGE_FIELDS = frozenset(
+    {"path", "start_line", "physical_lines", "sha256", "source_commit"}
 )
 
 
 class AssetError(ValueError):
-    """One compile-time table asset failed its sealed contract."""
+    """One compile-time static asset failed its sealed contract."""
 
 
 @dataclass(frozen=True)
@@ -65,6 +77,15 @@ class AuditCounts:
     assets: int
     bytes: int
     source_preimages: int
+
+
+@dataclass(frozen=True)
+class IncludeConsumer:
+    """One compile-time Rust include of a manifest asset."""
+
+    source: Path
+    macro: str
+    declared_length: int | None
 
 
 def parse_args() -> argparse.Namespace:
@@ -153,6 +174,35 @@ def declaration_slice(source: bytes, constant: str, physical_lines: int) -> byte
     return declaration
 
 
+def line_span_slice(source: bytes, start_line: int, physical_lines: int) -> bytes:
+    """Return an exact line-count-pinned span from a historical source blob."""
+
+    lines = source.splitlines(keepends=True)
+    start = start_line - 1
+    end = start + physical_lines
+    if start < 0 or end > len(lines):
+        raise AssetError(
+            f"historical Rust span {start_line}+{physical_lines} exceeds source bounds"
+        )
+    span = b"".join(lines[start:end])
+    if not span.endswith(b"\n"):
+        raise AssetError("line-count-pinned Rust extraction span does not end with LF")
+    return span
+
+
+def rust_raw_string_payload(source_slice: bytes) -> bytes:
+    """Extract the payload of one `r#"..."#` literal from a sealed Rust span."""
+
+    start = source_slice.find(b'r#"')
+    if start < 0:
+        raise AssetError("sealed Rust extraction span has no r# raw string literal")
+    start += 3
+    end = source_slice.find(b'"#', start)
+    if end < 0:
+        raise AssetError("sealed Rust extraction span has no raw string terminator")
+    return source_slice[start:end]
+
+
 def _git_blob(root: Path, commit: str, relative: str) -> bytes:
     try:
         return subprocess.check_output(
@@ -176,8 +226,8 @@ def _crate_root(path: Path, repository_root: Path) -> Path:
     raise AssetError(f"asset manifest is not inside a Cargo package: {path}")
 
 
-def _include_consumers(crate_root: Path) -> dict[Path, list[tuple[Path, int]]]:
-    consumers: dict[Path, list[tuple[Path, int]]] = {}
+def _include_consumers(crate_root: Path) -> dict[Path, list[IncludeConsumer]]:
+    consumers: dict[Path, list[IncludeConsumer]] = {}
     for source in sorted((crate_root / "src").rglob("*.rs")):
         if source.is_symlink() or not source.is_file():
             continue
@@ -185,7 +235,14 @@ def _include_consumers(crate_root: Path) -> dict[Path, list[tuple[Path, int]]]:
         for match in INCLUDE_BYTES_RE.finditer(text):
             included = (source.parent / match.group("path")).resolve()
             length = int(match.group("length").replace("_", ""))
-            consumers.setdefault(included, []).append((source, length))
+            consumers.setdefault(included, []).append(
+                IncludeConsumer(source, "include_bytes", length)
+            )
+        for match in INCLUDE_STR_RE.finditer(text):
+            included = (source.parent / match.group("path")).resolve()
+            consumers.setdefault(included, []).append(
+                IncludeConsumer(source, "include_str", None)
+            )
     return consumers
 
 
@@ -212,7 +269,7 @@ def _verify_canonical_file(
 
 
 def audit_repository(root: Path) -> AuditCounts:
-    """Verify every checked-in compile-time table manifest and consumer."""
+    """Verify every checked-in compile-time static manifest and consumer."""
 
     root = root.resolve()
     assets_seen: set[Path] = set()
@@ -239,7 +296,7 @@ def audit_repository(root: Path) -> AuditCounts:
             manifest.get("source_slice_hash_scope"),
             f"{relative_manifest}.source_slice_hash_scope",
         )
-        if scope != "complete Rust constant declaration including trailing LF":
+        if scope not in {DECLARATION_HASH_SCOPE, LINE_SPAN_HASH_SCOPE}:
             raise AssetError(f"{relative_manifest}: unsupported source hash scope")
         if "canonical_ron" in manifest:
             _verify_canonical_file(
@@ -265,8 +322,10 @@ def audit_repository(root: Path) -> AuditCounts:
                 _string(row.get("path"), f"{context}.path"),
                 f"{context}.path",
             )
-            if asset.parent != manifest_path.parent or asset.suffix != ".bin":
-                raise AssetError(f"{context}.path must name a sibling .bin file")
+            if asset.parent != manifest_path.parent:
+                raise AssetError(f"{context}.path must name a sibling asset file")
+            if asset.name in {"manifest.json", "README.md"}:
+                raise AssetError(f"{context}.path names manifest metadata, not an asset")
             if asset in assets_seen or asset in manifest_assets:
                 raise AssetError(f"duplicate asset path: {asset.relative_to(root)}")
             if not asset.is_file() or asset.is_symlink():
@@ -292,15 +351,30 @@ def audit_repository(root: Path) -> AuditCounts:
             asset_consumers = consumers.get(asset, [])
             if len(asset_consumers) != 1:
                 raise AssetError(
-                    f"{asset.relative_to(root)} must have exactly one fixed-size "
-                    f"include_bytes! consumer; found {len(asset_consumers)}"
+                    f"{asset.relative_to(root)} must have exactly one compile-time "
+                    f"include consumer; found {len(asset_consumers)}"
                 )
-            consumer_path, consumer_length = asset_consumers[0]
-            if consumer_length != expected_length:
+            consumer = asset_consumers[0]
+            expected_macro = "include_bytes" if asset.suffix == ".bin" else "include_str"
+            if consumer.macro != expected_macro:
                 raise AssetError(
-                    f"{consumer_path.relative_to(root)} declares {consumer_length} bytes "
-                    f"for {asset.name}, expected {expected_length}"
+                    f"{consumer.source.relative_to(root)} uses {consumer.macro}! for "
+                    f"{asset.name}; expected {expected_macro}!"
                 )
+            if consumer.macro == "include_bytes":
+                if consumer.declared_length != expected_length:
+                    raise AssetError(
+                        f"{consumer.source.relative_to(root)} declares "
+                        f"{consumer.declared_length} bytes for {asset.name}, "
+                        f"expected {expected_length}"
+                    )
+            else:
+                try:
+                    data.decode("utf-8")
+                except UnicodeDecodeError as error:
+                    raise AssetError(
+                        f"{asset.relative_to(root)} is not valid UTF-8 for include_str!"
+                    ) from error
 
             preimages = row.get("source_preimages")
             if not isinstance(preimages, list) or not preimages:
@@ -308,7 +382,12 @@ def audit_repository(root: Path) -> AuditCounts:
             for preimage_index, raw_preimage in enumerate(preimages):
                 preimage_context = f"{context}.source_preimages[{preimage_index}]"
                 preimage = _object(raw_preimage, preimage_context)
-                _exact_fields(preimage, PREIMAGE_FIELDS, preimage_context)
+                preimage_fields = (
+                    DECLARATION_PREIMAGE_FIELDS
+                    if scope == DECLARATION_HASH_SCOPE
+                    else LINE_SPAN_PREIMAGE_FIELDS
+                )
+                _exact_fields(preimage, preimage_fields, preimage_context)
                 historical_path = _safe_path(
                     root,
                     manifest_path.parent,
@@ -316,9 +395,6 @@ def audit_repository(root: Path) -> AuditCounts:
                     f"{preimage_context}.path",
                 )
                 relative_source = historical_path.relative_to(root).as_posix()
-                constant = _string(
-                    preimage.get("constant"), f"{preimage_context}.constant"
-                )
                 physical_lines = _positive_int(
                     preimage.get("physical_lines"),
                     f"{preimage_context}.physical_lines",
@@ -329,15 +405,41 @@ def audit_repository(root: Path) -> AuditCounts:
                 if SHA256_RE.fullmatch(expected_preimage_sha) is None:
                     raise AssetError(
                         f"{preimage_context}.sha256 is not canonical lowercase SHA-256"
-                    )
-                historical = _git_blob(root, commit, relative_source)
-                declaration = declaration_slice(
-                    historical, constant, physical_lines
                 )
-                observed_preimage_sha = _sha256(declaration)
+                preimage_commit = preimage.get("source_commit", commit)
+                if not isinstance(preimage_commit, str) or COMMIT_RE.fullmatch(
+                    preimage_commit
+                ) is None:
+                    raise AssetError(
+                        f"{preimage_context}.source_commit is not a full Git id"
+                    )
+                historical = _git_blob(root, preimage_commit, relative_source)
+                if scope == DECLARATION_HASH_SCOPE:
+                    constant = _string(
+                        preimage.get("constant"), f"{preimage_context}.constant"
+                    )
+                    source_slice = declaration_slice(
+                        historical, constant, physical_lines
+                    )
+                    source_label = f"::{constant}"
+                else:
+                    start_line = _positive_int(
+                        preimage.get("start_line"),
+                        f"{preimage_context}.start_line",
+                    )
+                    source_slice = line_span_slice(
+                        historical, start_line, physical_lines
+                    )
+                    source_label = f":{start_line}+{physical_lines}"
+                    if rust_raw_string_payload(source_slice) != data:
+                        raise AssetError(
+                            f"historical {relative_source}{source_label} raw string "
+                            f"does not equal {asset.relative_to(root)}"
+                        )
+                observed_preimage_sha = _sha256(source_slice)
                 if observed_preimage_sha != expected_preimage_sha:
                     raise AssetError(
-                        f"historical {relative_source}::{constant} SHA-256 "
+                        f"historical {relative_source}{source_label} SHA-256 "
                         f"{observed_preimage_sha} != {expected_preimage_sha}"
                     )
                 total_preimages += 1
@@ -347,7 +449,11 @@ def audit_repository(root: Path) -> AuditCounts:
             total_bytes += len(data)
 
         actual_assets: set[Path] = set()
-        for path in manifest_path.parent.glob("*.bin"):
+        for path in manifest_path.parent.iterdir():
+            if path.name in {"manifest.json", "README.md"}:
+                continue
+            if path.is_dir() and not path.is_symlink():
+                continue
             if path.is_symlink() or not path.is_file():
                 raise AssetError(
                     f"{path.relative_to(root)} must be a regular non-symlink asset"
@@ -357,7 +463,7 @@ def audit_repository(root: Path) -> AuditCounts:
             missing = sorted(path.name for path in manifest_assets - actual_assets)
             extra = sorted(path.name for path in actual_assets - manifest_assets)
             raise AssetError(
-                f"{relative_manifest}: binary inventory mismatch; "
+                f"{relative_manifest}: asset inventory mismatch; "
                 f"missing={missing}, extra={extra}"
             )
 
@@ -374,10 +480,10 @@ def main() -> int:
     try:
         counts = audit_repository(args.root)
     except (AssetError, OSError, json.JSONDecodeError) as error:
-        print(f"compile-time table asset check failed: {error}", file=sys.stderr)
+        print(f"compile-time static asset check failed: {error}", file=sys.stderr)
         return 1
     print(
-        "compile-time table assets: "
+        "compile-time static assets: "
         f"manifests={counts.manifests} assets={counts.assets} "
         f"bytes={counts.bytes} source_preimages={counts.source_preimages}"
     )

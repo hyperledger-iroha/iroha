@@ -24,7 +24,7 @@ repository. By default the output is <run>/artifacts/<stage>, the artifacts
 parent is the authenticated artifact root, and cancellation is
 <run>/cancel-request.json. Cargo loads the package-local authority through a
 live Torii router from a fresh, hard-link-free, sealed clone at the caller's
-exact clean HEAD through the shared +1.93.1/--locked/--offline/-j1 process
+exact clean HEAD through the authenticated Cargo 1.93.1/--locked/--offline/-j1 process
 policy.
 EOF
   exit 2

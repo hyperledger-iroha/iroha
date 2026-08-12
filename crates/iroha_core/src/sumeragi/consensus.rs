@@ -53,9 +53,6 @@ pub fn qc_signer_count(qc: &Qc) -> usize {
         .sum()
 }
 
-#[cfg(feature = "sumeragi-multiproof")]
-pub use iroha_data_model::block::consensus::{BlockMultiproof, ReadNode, TxReadSpan, WriteEntry};
-
 /// Build the canonical preimage for a QC vote signature under the given chain and mode tag.
 pub fn vote_preimage(network_id: &NetworkId, mode_tag: &str, v: &Vote) -> Vec<u8> {
     let mut out = Vec::with_capacity(32 + 32 * 4 + 8 * 6 + 3);
