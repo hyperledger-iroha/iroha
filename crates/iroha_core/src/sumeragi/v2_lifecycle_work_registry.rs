@@ -1846,19 +1846,12 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
                 parent: parent.repair.repair().parent().clone(),
                 child: parent.repair.repair().child().clone(),
                 parent_address: parent.validation.address,
-                child_address: self
-                    .address
-                    .owner
-                    .first_admission_ordinal()
-                    .checked_add(1)
-                    .and_then(|ordinal| {
-                        ConcreteWorkAddress::new(
-                            self.address.owner,
-                            ordinal,
-                            PhysicalSlotId::for_capacity(CapacityClass::Effect, 0),
-                        )
-                    })
-                    .unwrap_or(parent.validation.address),
+                child_address: ConcreteWorkAddress::new(
+                    self.address.owner,
+                    parent.repair.child_ordinal(),
+                    PhysicalSlotId::for_capacity(CapacityClass::Effect, 0),
+                )
+                .expect("durable recovered Sign ordinal retains a nonzero exact address"),
             },
             &self.broadcast,
         )
@@ -6036,6 +6029,103 @@ impl<'registry> DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registr
             }
         };
         self.install_recovered_sign(&store)
+    }
+}
+
+impl<'registry> DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair<'registry> {
+    /// Install the exact live Broadcast while retaining its complete phase-vote parent.
+    #[allow(clippy::result_large_err)]
+    fn install_recovered_broadcast(
+        self,
+        store: &super::ledger::LifecycleLedgerStoreV1,
+    ) -> Result<
+        InstalledRecoveredWalSignRegistryCut<'registry>,
+        RecoveredWalSignInstallError<'registry>,
+    > {
+        let Self {
+            repair,
+            validation,
+            reservation,
+            broadcast,
+            sign_address,
+            broadcast_address,
+        } = self;
+        let Ok(ledger) = store.load() else {
+            return Err(RecoveredWalSignInstallError {
+                failure: RecoveredWalSignInstallFailure::SignedBroadcast {
+                    _repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair {
+                        repair,
+                        validation,
+                        reservation,
+                        broadcast,
+                        sign_address,
+                        broadcast_address,
+                    },
+                },
+            });
+        };
+        let exact = detached_recovered_validation_is_exact(repair.repair(), &validation)
+            && repair.belongs_to_loaded(store, &ledger)
+            && ledger
+                .authenticate_recovered_phase_signed_broadcast(&repair_context(&repair), &repair)
+                .is_ok_and(|(recovered, parent, sign, child)| {
+                    parent == validation.address.ordinal
+                        && sign == sign_address.ordinal
+                        && child == broadcast_address.ordinal
+                        && recovered.exactly_matches(&broadcast)
+                })
+            && reservation.parent_address == validation.address
+            && reservation
+                .registry
+                .entries
+                .keys()
+                .all(|address| address.owner != broadcast_address.owner);
+        if !exact {
+            return Err(RecoveredWalSignInstallError {
+                failure: RecoveredWalSignInstallFailure::SignedBroadcast {
+                    _repair: DurableAuthenticatedRecoveredWalSignedBroadcastLifecycleRepair {
+                        repair,
+                        validation,
+                        reservation,
+                        broadcast,
+                        sign_address,
+                        broadcast_address,
+                    },
+                },
+            });
+        }
+        let verified = repair_verified_context(&repair);
+        let digest = broadcast.digest();
+        let parent = DurableRecoveredWalSignWork {
+            repair,
+            validation,
+            dispatch_key: None,
+        };
+        let work = ConcreteLifecycleWork {
+            digest,
+            kind: ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(
+                DurableRecoveredLifecycleSignedBroadcastWork {
+                    parent: DurableRecoveredLifecycleSignParentV1::PhaseVote(parent),
+                    broadcast,
+                    verified,
+                    address: broadcast_address,
+                },
+            ),
+        };
+        assert!(work.validates_at(broadcast_address));
+        let RecoveredWalValidateRegistryReservation {
+            registry,
+            parent_address,
+            child: _,
+        } = reservation;
+        let previous = registry.entries.insert(broadcast_address, work);
+        assert!(previous.is_none());
+        Ok(InstalledRecoveredWalSignRegistryCut {
+            registry,
+            parent_address,
+            child_address: broadcast_address,
+            child_digest: digest,
+        })
     }
 }
 
