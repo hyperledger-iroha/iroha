@@ -111,7 +111,10 @@ use super::{
         CertifiedFetchBodyPersistenceId, CertifiedFetchBodyPersistenceTask,
         LifecycleIngressIoTargetKind, LifecycleIngressIoTargetSeal,
         PreparedLifecycleIngressSelector, PreparedRecoveredDecisionApplyDispatch,
-        ProductionV2CompletionObserverActivationPermitV1, RecoveredDecisionApplyDispatchKeyV1,
+        PreparedRecoveredLifecycleSignDispatch, ProductionV2CompletionObserverActivationPermitV1,
+        RecoveredDecisionApplyDispatchKeyV1, RecoveredDecisionFetchBodyPersistenceCompletionV1,
+        RecoveredDecisionFetchBodyPersistenceTaskV1, RecoveredDecisionFetchDispatchKeyV1,
+        RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1,
     },
     v2_runtime::{
         ExactServePredecessorCompletionEvidence, ExactServePredecessorEpisodeWitness,
@@ -119,7 +122,7 @@ use super::{
         SerializedV2Runtime,
     },
     v2_transport::{
-        AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk,
+        AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk, V2TransportError,
         authenticate_certified_body_request_identity,
         authenticate_certified_body_request_with_validator_pops,
     },
@@ -289,6 +292,389 @@ pub(crate) fn reliable_flush_trace_projection(
     })
 }
 
+/// Move-only exact Sign command projected from one closed recovered carrier.
+///
+/// Construction consumes a registry-minted identity and rehashes the complete
+/// tag/request pair against its installed Effect digest. A Prepare vote also
+/// retains its exact future `PreparedCandidateBody` marker. The task exposes
+/// no raw request, marker, signature, outbound payload, runtime binding, or
+/// generic work identifier outside this worker module.
+#[must_use = "a recovered Sign task must enter its dedicated worker reservation"]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignTaskV1 {
+    identity: RecoveredLifecycleSignDispatchIdentityV1,
+    tag: EventTag,
+    request: super::v2::SignRequest,
+    prepared_candidate: Option<PreparedCandidateBody>,
+}
+
+impl RecoveredLifecycleSignTaskV1 {
+    /// Seal exact carrier-derived material under its registry identity.
+    pub(in crate::sumeragi) fn from_registry_projection(
+        identity: RecoveredLifecycleSignDispatchIdentityV1,
+        tag: EventTag,
+        request: super::v2::SignRequest,
+    ) -> Option<Self> {
+        let prepared_candidate = match &request {
+            super::v2::SignRequest::Vote(vote) if vote.phase == wire::GlobalPhase::Prepare => {
+                Some(PreparedCandidateBody {
+                    tag,
+                    subject: vote.subject,
+                })
+            }
+            super::v2::SignRequest::Proposal(_)
+            | super::v2::SignRequest::Vote(_)
+            | super::v2::SignRequest::TimeoutVote(_) => None,
+        };
+        identity.authorizes_request(tag, &request).then_some(Self {
+            identity,
+            tag,
+            request,
+            prepared_candidate,
+        })
+    }
+
+    /// Return the dedicated class-sensitive queue key.
+    pub(in crate::sumeragi) const fn dispatch_key(&self) -> RecoveredLifecycleSignDispatchKeyV1 {
+        self.identity.key()
+    }
+
+    #[cfg(test)]
+    fn for_test(
+        ordinal: u128,
+        tag: EventTag,
+        request: super::v2::SignRequest,
+        class: super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1,
+    ) -> Self {
+        let identity =
+            RecoveredLifecycleSignDispatchIdentityV1::for_test(ordinal, tag, &request, class)
+                .expect("recovered Sign fixture retains one exact class and effect digest");
+        Self::from_registry_projection(identity, tag, request)
+            .expect("registry fixture identity revalidates its exact Sign material")
+    }
+}
+
+/// Move-only carrier-derived authority for one recovered Decision Fetch request.
+///
+/// Construction requires the registry-minted identity still sealed in the
+/// recovered WAL carrier. This type lives beside [`ProductionV2Services`] so
+/// its exact request material and the service's signer/context fields are
+/// joined by one private implementation with no raw-key permit surface.
+#[must_use = "recovered Decision Fetch authority must enter the fixed production service"]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchRequestAuthorityV1 {
+    identity: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchIdentityV1,
+    tag: EventTag,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    sources: Vec<PeerId>,
+    certificate: wire::QuorumCertificate,
+}
+
+impl RecoveredDecisionFetchRequestAuthorityV1 {
+    /// Seal exact carrier material under its registry-minted identity.
+    pub(in crate::sumeragi) fn from_registry_projection(
+        identity: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchIdentityV1,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        sources: Vec<PeerId>,
+        certificate: wire::QuorumCertificate,
+    ) -> Option<Self> {
+        identity
+            .authorizes_request(tag, round, subject, &sources, &certificate)
+            .then_some(Self {
+                identity,
+                tag,
+                round,
+                subject,
+                sources,
+                certificate,
+            })
+    }
+}
+
+/// Dedicated executor owner for one lifecycle-recovered certified request.
+///
+/// No public or crate-visible constructor exists: only the fixed production
+/// service method below can sign and authenticate the carrier-derived request.
+#[must_use = "a recovered Decision Fetch owner must enter its dedicated executor index"]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchRequestOwnerV1 {
+    key: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+    tag: EventTag,
+    sources: Vec<PeerId>,
+    authenticated: AuthenticatedCertifiedBodyRequest,
+    response_claim: Option<HashOf<wire::CertifiedBodyResponse>>,
+}
+
+impl RecoveredDecisionFetchRequestOwnerV1 {
+    /// Build one exact dedicated owner from an already authenticated request.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        key: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+        tag: EventTag,
+        sources: Vec<PeerId>,
+        authenticated: AuthenticatedCertifiedBodyRequest,
+    ) -> Self {
+        Self {
+            key,
+            tag,
+            sources,
+            authenticated,
+            response_claim: None,
+        }
+    }
+
+    /// Return the exact lifecycle request/response key.
+    pub(in crate::sumeragi) const fn dispatch_key(
+        &self,
+    ) -> super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1 {
+        self.key
+    }
+
+    /// Hash of the exact signed request family.
+    pub(in crate::sumeragi) fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
+        self.authenticated.request_hash()
+    }
+
+    /// Compare the private transport logical request identity.
+    pub(in crate::sumeragi) fn has_same_logical_identity(
+        &self,
+        request: &wire::CertifiedBodyRequest,
+    ) -> bool {
+        let owned = self.authenticated.request();
+        owned.round == request.round
+            && owned.subject == request.subject
+            && owned.requester == request.requester
+    }
+
+    /// Ask the ordinary tracker whether it already owns this private request identity.
+    pub(in crate::sumeragi) fn conflicts_with_ordinary_tracker(
+        &self,
+        tracker: &super::v2_transport::OutstandingCertifiedBodyRequests,
+    ) -> bool {
+        tracker.contains_authenticated_identity(&self.authenticated)
+    }
+
+    /// Compare body coordinates without exposing the retained signed request.
+    pub(in crate::sumeragi) fn matches_body_coordinates(
+        &self,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> bool {
+        self.authenticated.request().round == round
+            && self.authenticated.request().subject == subject
+    }
+
+    /// Recheck the exact dedicated executor height and requester.
+    pub(in crate::sumeragi) fn validates_exact_executor_context(
+        &self,
+        context: &wire::HeightContext,
+        requester: &PeerId,
+    ) -> bool {
+        let request = self.authenticated.request();
+        self.key.matches_height_context(context)
+            && self.tag.height() == context.height
+            && request.round.context_id == context.id()
+            && request.round.height == context.height
+            && &request.requester == requester
+            && self.request_hash() == HashOf::new(request)
+            && self.sources
+                == context
+                    .roster
+                    .iter()
+                    .map(|entry| entry.validator.clone())
+                    .collect::<Vec<_>>()
+    }
+
+    /// Authenticate one response against this exact request without exposing it.
+    pub(in crate::sumeragi) fn authenticate_response(
+        &self,
+        context: &wire::HeightContext,
+        response: wire::CertifiedBodyResponse,
+        authenticated_responder: &PeerId,
+    ) -> Result<super::v2_transport::AuthenticatedCertifiedBodyResponse, V2TransportError> {
+        self.authenticated
+            .authenticate_response(context, response, authenticated_responder)
+    }
+
+    /// Project only the immutable candidate coordinates needed by the selector.
+    pub(in crate::sumeragi) const fn candidate_projection(
+        &self,
+    ) -> RecoveredDecisionFetchOwnerCandidateProjectionV1 {
+        RecoveredDecisionFetchOwnerCandidateProjectionV1 {
+            tag: self.tag,
+            round: self.authenticated.request().round,
+            subject: self.authenticated.request().subject,
+            response_claim: self.response_claim,
+        }
+    }
+
+    /// Recheck the exact claimed response before post-publication owner retirement.
+    pub(in crate::sumeragi) fn matches_settlement(
+        &self,
+        key: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+        response_hash: HashOf<wire::CertifiedBodyResponse>,
+    ) -> bool {
+        self.key == key && self.response_claim == Some(response_hash)
+    }
+
+    /// Recheck the request-scoped response claim observed by a sealed selector candidate.
+    pub(in crate::sumeragi) const fn matches_response_claim_preflight(
+        &self,
+        response_hash: HashOf<wire::CertifiedBodyResponse>,
+        expected: super::v2_transport::CertifiedBodyResponseClaimPreflight,
+    ) -> bool {
+        match (self.response_claim, expected) {
+            (None, super::v2_transport::CertifiedBodyResponseClaimPreflight::Vacant) => true,
+            (
+                Some(claimed),
+                super::v2_transport::CertifiedBodyResponseClaimPreflight::ExactRetransmission,
+            ) => claimed == response_hash,
+            (Some(_), super::v2_transport::CertifiedBodyResponseClaimPreflight::Vacant)
+            | (
+                None,
+                super::v2_transport::CertifiedBodyResponseClaimPreflight::ExactRetransmission,
+            ) => false,
+        }
+    }
+
+    /// Install or coalesce only the exact response hash which was revalidated
+    /// immediately before the dedicated queue publication tail.
+    pub(in crate::sumeragi) fn commit_exact_response_claim(
+        &mut self,
+        response_hash: HashOf<wire::CertifiedBodyResponse>,
+    ) -> bool {
+        match self.response_claim {
+            None => {
+                self.response_claim = Some(response_hash);
+                true
+            }
+            Some(claimed) => claimed == response_hash,
+        }
+    }
+}
+
+/// Minimal immutable selector projection of a dedicated recovered request owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchOwnerCandidateProjectionV1 {
+    pub(in crate::sumeragi) tag: EventTag,
+    pub(in crate::sumeragi) round: wire::ConsensusRound,
+    pub(in crate::sumeragi) subject: wire::BlockSubject,
+    pub(in crate::sumeragi) response_claim: Option<HashOf<wire::CertifiedBodyResponse>>,
+}
+
+/// Closed signed output retained for the eventual restart-closed successor transaction.
+///
+/// The complete task remains inside this result, so the exact tag/request is
+/// transitively pinned to the carrier and queue key. Prepare-body successor
+/// material stays in that opaque task and Proposal payload bytes stay in this
+/// opaque result; neither is applied to services in this dispatch-only tranche.
+/// The raw signature likewise has no projection surface.
+struct RecoveredLifecycleSignWorkerResultV1 {
+    task: RecoveredLifecycleSignTaskV1,
+    signature: Vec<u8>,
+    outbound_payload: Option<EncodedV2Payload>,
+}
+
+/// Move-only worker proof consumed only by the recovered-Sign adapter preview.
+///
+/// The constructor stays private to this module and the material can be
+/// released only with the adapter-private one-shot permit. This keeps the raw
+/// request, signature, and restored Proposal payload out of lifecycle callers
+/// while still letting the sole serialized adapter replay `Signed` exactly.
+#[must_use = "recovered Sign material must enter the fixed adapter preview"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignAdapterCompletionAuthorityV1 {
+    key: RecoveredLifecycleSignDispatchKeyV1,
+    tag: EventTag,
+    request: super::v2::SignRequest,
+    signature: Vec<u8>,
+    outbound_payload: Option<EncodedV2Payload>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleSignAdapterCompletionAuthorityV1 {
+    /// Consume the worker proof through the adapter's private projection seam.
+    pub(in crate::sumeragi) fn consume_for_adapter(
+        self,
+        _permit: super::v2::RecoveredLifecycleSignAdapterCompletionPermitV1,
+    ) -> (
+        RecoveredLifecycleSignDispatchKeyV1,
+        EventTag,
+        super::v2::SignRequest,
+        Vec<u8>,
+        Option<EncodedV2Payload>,
+    ) {
+        (
+            self.key,
+            self.tag,
+            self.request,
+            self.signature,
+            self.outbound_payload,
+        )
+    }
+
+    /// Build exact guarded Sign material for adapter-preview behavior tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn for_test(
+        ordinal: u128,
+        tag: EventTag,
+        request: super::v2::SignRequest,
+        signature: Vec<u8>,
+        outbound_payload: Option<EncodedV2Payload>,
+        class: super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1,
+    ) -> Self {
+        let task = RecoveredLifecycleSignTaskV1::for_test(ordinal, tag, request, class);
+        Self {
+            key: task.dispatch_key(),
+            tag: task.tag,
+            request: task.request,
+            signature,
+            outbound_payload,
+        }
+    }
+}
+
+impl RecoveredLifecycleSignWorkerResultV1 {
+    const fn dispatch_key(&self) -> RecoveredLifecycleSignDispatchKeyV1 {
+        self.task.dispatch_key()
+    }
+
+    fn is_exact(&self) -> bool {
+        let expected_prepared = match &self.task.request {
+            super::v2::SignRequest::Vote(vote) if vote.phase == wire::GlobalPhase::Prepare => {
+                Some(PreparedCandidateBody {
+                    tag: self.task.tag,
+                    subject: vote.subject,
+                })
+            }
+            super::v2::SignRequest::Proposal(_)
+            | super::v2::SignRequest::Vote(_)
+            | super::v2::SignRequest::TimeoutVote(_) => None,
+        };
+        self.task
+            .identity
+            .authorizes_request(self.task.tag, &self.task.request)
+            && self.task.prepared_candidate == expected_prepared
+            && !self.signature.is_empty()
+            && match (&self.task.request, &self.outbound_payload) {
+                (super::v2::SignRequest::Proposal(proposal), Some(payload)) => {
+                    payload.manifest() == &proposal.manifest
+                }
+                (
+                    super::v2::SignRequest::Vote(_) | super::v2::SignRequest::TimeoutVote(_),
+                    None,
+                ) => true,
+                (
+                    super::v2::SignRequest::Proposal(_)
+                    | super::v2::SignRequest::Vote(_)
+                    | super::v2::SignRequest::TimeoutVote(_),
+                    _,
+                ) => false,
+            }
+    }
+}
+
+#[allow(variant_size_differences, clippy::large_enum_variant)]
 enum V2IoCommand {
     Sign {
         task: ConsensusSignTask,
@@ -296,9 +682,11 @@ enum V2IoCommand {
     },
     Store(BodyStoreTask),
     PersistCertifiedFetchBody(CertifiedFetchBodyPersistenceTask),
+    PersistRecoveredDecisionFetchBody(RecoveredDecisionFetchBodyPersistenceTaskV1),
     Validate(BodyValidationTask),
     Apply(ApplyTask),
     RecoveredDecisionApply(RecoveredDecisionApplyTaskV1),
+    RecoveredLifecycleSign(RecoveredLifecycleSignTaskV1),
     #[cfg(test)]
     RecoveredDecisionApplyFixture(RecoveredDecisionApplyDispatchKeyV1),
     Serve {
@@ -1198,9 +1586,11 @@ impl V2IoCommand {
             Self::Sign { .. }
             | Self::Store(_)
             | Self::PersistCertifiedFetchBody(_)
+            | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::Validate(_)
             | Self::Apply(_)
-            | Self::RecoveredDecisionApply(_) => V2IoAdmissionClass::Consensus,
+            | Self::RecoveredDecisionApply(_)
+            | Self::RecoveredLifecycleSign(_) => V2IoAdmissionClass::Consensus,
             #[cfg(test)]
             Self::RecoveredDecisionApplyFixture(_) => V2IoAdmissionClass::Consensus,
             Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => {
@@ -1217,6 +1607,8 @@ impl V2IoCommand {
             Self::Validate(task) => Some(task.id()),
             Self::Apply(task) => Some(task.id()),
             Self::RecoveredDecisionApply(_)
+            | Self::RecoveredLifecycleSign(_)
+            | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::Serve { .. }
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
@@ -1234,6 +1626,10 @@ impl V2IoCommand {
             Self::Validate(task) => Some(task.lifecycle_ordinal()),
             Self::Apply(task) => Some(task.lifecycle_ordinal()),
             Self::RecoveredDecisionApply(task) => Some(task.dispatch_key().lifecycle_ordinal()),
+            Self::RecoveredLifecycleSign(task) => Some(task.dispatch_key().lifecycle_ordinal()),
+            Self::PersistRecoveredDecisionFetchBody(task) => {
+                Some(task.dispatch_key().lifecycle_ordinal())
+            }
             #[cfg(test)]
             Self::RecoveredDecisionApplyFixture(key) => Some(key.lifecycle_ordinal()),
             Self::PersistCertifiedFetchBody(_)
@@ -1250,9 +1646,11 @@ impl V2IoCommand {
             Self::Sign { .. }
             | Self::Store(_)
             | Self::PersistCertifiedFetchBody(_)
+            | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::Validate(_)
             | Self::Apply(_)
             | Self::RecoveredDecisionApply(_)
+            | Self::RecoveredLifecycleSign(_)
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
             | Self::Shutdown => None,
@@ -1268,7 +1666,9 @@ impl V2IoCommand {
             Self::Validate(_) => Some(V2IoCancellableKind::Validate),
             Self::Apply(_)
             | Self::RecoveredDecisionApply(_)
+            | Self::RecoveredLifecycleSign(_)
             | Self::PersistCertifiedFetchBody(_)
+            | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::Serve { .. }
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
@@ -1323,6 +1723,8 @@ impl V2IoCommand {
                 },
             )),
             Self::RecoveredDecisionApply(_)
+            | Self::RecoveredLifecycleSign(_)
+            | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::Serve { .. }
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
@@ -1340,12 +1742,52 @@ impl V2IoCommand {
             Self::Sign { .. }
             | Self::Store(_)
             | Self::PersistCertifiedFetchBody(_)
+            | Self::PersistRecoveredDecisionFetchBody(_)
             | Self::Validate(_)
             | Self::Apply(_)
+            | Self::RecoveredLifecycleSign(_)
             | Self::Serve { .. }
             | Self::LoadCandidate { .. }
             | Self::Retire(_)
             | Self::Shutdown => None,
+        }
+    }
+
+    const fn recovered_lifecycle_sign_key(&self) -> Option<RecoveredLifecycleSignDispatchKeyV1> {
+        match self {
+            Self::RecoveredLifecycleSign(task) => Some(task.dispatch_key()),
+            Self::Sign { .. }
+            | Self::Store(_)
+            | Self::PersistCertifiedFetchBody(_)
+            | Self::PersistRecoveredDecisionFetchBody(_)
+            | Self::Validate(_)
+            | Self::Apply(_)
+            | Self::RecoveredDecisionApply(_)
+            | Self::Serve { .. }
+            | Self::LoadCandidate { .. }
+            | Self::Retire(_)
+            | Self::Shutdown => None,
+            #[cfg(test)]
+            Self::RecoveredDecisionApplyFixture(_) => None,
+        }
+    }
+
+    const fn recovered_decision_fetch_key(&self) -> Option<RecoveredDecisionFetchDispatchKeyV1> {
+        match self {
+            Self::PersistRecoveredDecisionFetchBody(task) => Some(task.dispatch_key()),
+            Self::Sign { .. }
+            | Self::Store(_)
+            | Self::PersistCertifiedFetchBody(_)
+            | Self::Validate(_)
+            | Self::Apply(_)
+            | Self::RecoveredDecisionApply(_)
+            | Self::RecoveredLifecycleSign(_)
+            | Self::Serve { .. }
+            | Self::LoadCandidate { .. }
+            | Self::Retire(_)
+            | Self::Shutdown => None,
+            #[cfg(test)]
+            Self::RecoveredDecisionApplyFixture(_) => None,
         }
     }
 }
@@ -1420,6 +1862,8 @@ struct V2IoCompletionOwnership {
     requires_runtime_capacity: bool,
     runtime_lifecycle_ordinal: Option<u128>,
     recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,
+    recovered_lifecycle_sign: Option<RecoveredLifecycleSignDispatchKeyV1>,
+    recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,
 }
 
 #[derive(Debug, Default)]
@@ -1527,6 +1971,8 @@ impl V2IoAdmission {
         requires_runtime_capacity: bool,
         runtime_lifecycle_ordinal: Option<u128>,
         recovered_decision_apply: Option<RecoveredDecisionApplyDispatchKeyV1>,
+        recovered_lifecycle_sign: Option<RecoveredLifecycleSignDispatchKeyV1>,
+        recovered_decision_fetch: Option<RecoveredDecisionFetchDispatchKeyV1>,
     ) {
         let mut state = self
             .completion_state
@@ -1542,6 +1988,8 @@ impl V2IoAdmission {
             requires_runtime_capacity,
             runtime_lifecycle_ordinal,
             recovered_decision_apply,
+            recovered_lifecycle_sign,
+            recovered_decision_fetch,
         });
     }
 
@@ -1580,6 +2028,60 @@ impl V2IoAdmission {
                 && owned.recovered_decision_apply == Some(key)
         });
         matches.next().is_some() && matches.next().is_none()
+    }
+
+    fn transfer_recovered_lifecycle_sign_completion_at(
+        &self,
+        key: RecoveredLifecycleSignDispatchKeyV1,
+        position: usize,
+    ) -> bool {
+        let mut state = self
+            .completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(owner) = state.owned.get(position) else {
+            return false;
+        };
+        if !owner.requires_runtime_capacity
+            || owner.runtime_lifecycle_ordinal != Some(key.lifecycle_ordinal())
+            || owner.recovered_lifecycle_sign != Some(key)
+            || state
+                .owned
+                .iter()
+                .filter(|owned| owned.recovered_lifecycle_sign == Some(key))
+                .count()
+                != 1
+        {
+            return false;
+        }
+        state.owned.remove(position).is_some()
+    }
+
+    fn transfer_recovered_decision_fetch_completion_at(
+        &self,
+        key: RecoveredDecisionFetchDispatchKeyV1,
+        position: usize,
+    ) -> bool {
+        let mut state = self
+            .completion_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(owner) = state.owned.get(position) else {
+            return false;
+        };
+        if owner.requires_runtime_capacity
+            || owner.runtime_lifecycle_ordinal != Some(key.lifecycle_ordinal())
+            || owner.recovered_decision_fetch != Some(key)
+            || state
+                .owned
+                .iter()
+                .filter(|owned| owned.recovered_decision_fetch == Some(key))
+                .count()
+                != 1
+        {
+            return false;
+        }
+        state.owned.remove(position).is_some()
     }
 
     fn transfer_recovered_decision_apply_completion(
@@ -1688,6 +2190,18 @@ struct V2IoTrackedRecoveredDecisionApplyV1 {
     state: V2IoWorkState,
 }
 
+#[derive(Debug)]
+struct V2IoTrackedRecoveredLifecycleSignV1 {
+    state: V2IoWorkState,
+}
+
+#[derive(Debug)]
+struct V2IoTrackedRecoveredDecisionFetchBodyV1 {
+    id: super::v2_lifecycle_coordinator::RecoveredDecisionFetchBodyPersistenceIdV1,
+    response_hash: HashOf<wire::CertifiedBodyResponse>,
+    state: V2IoWorkState,
+}
+
 enum RecoveredDecisionApplyRetryQueueErrorV1<T> {
     Unavailable(T),
     InvalidOwner(T),
@@ -1776,6 +2290,10 @@ struct V2IoCommandQueueState {
     work: BTreeMap<EffectWorkId, V2IoTrackedWork>,
     recovered_decision_applies:
         BTreeMap<RecoveredDecisionApplyDispatchKeyV1, V2IoTrackedRecoveredDecisionApplyV1>,
+    recovered_lifecycle_signs:
+        BTreeMap<RecoveredLifecycleSignDispatchKeyV1, V2IoTrackedRecoveredLifecycleSignV1>,
+    recovered_decision_fetch_bodies:
+        BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>,
     serves: BTreeMap<CertifiedServeLifecycleId, V2IoTrackedServe>,
     serve_by_request: BTreeMap<HashOf<wire::CertifiedBodyRequest>, CertifiedServeLifecycleId>,
     /// One monotone high-watermark/lifecycle slot per signed requester and
@@ -2005,6 +2523,47 @@ impl LifecycleIoCapacityReservation<'_> {
         self.preflight_selected_target_work_absent() && state.work.get(&work_id).is_none()
     }
 
+    /// Verify that one recovered body persistence task owns this exact target
+    /// and has no queued, active, or completion-pending dedicated predecessor.
+    pub(in crate::sumeragi) fn preflight_recovered_decision_fetch_body_persistence(
+        &self,
+        task: &RecoveredDecisionFetchBodyPersistenceTaskV1,
+    ) -> bool {
+        let target = self
+            .target
+            .as_ref()
+            .expect("live reservation retains its one-shot target");
+        let state = self
+            .state
+            .as_ref()
+            .expect("live reservation retains the queue guard");
+        target.kind() == LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence
+            && task.matches_ingress_identity(target.ingress_identity())
+            && target.matches_recovered_decision_fetch_key(task.dispatch_key())
+            && !state
+                .recovered_decision_fetch_bodies
+                .contains_key(&task.dispatch_key())
+    }
+
+    /// Reject an exact recovered target already represented anywhere in its
+    /// dedicated queued/active/completion-pending index before consuming the selector.
+    pub(in crate::sumeragi) fn preflight_recovered_decision_fetch_target_absent(&self) -> bool {
+        let target = self
+            .target
+            .as_ref()
+            .expect("live reservation retains its one-shot target");
+        let state = self
+            .state
+            .as_ref()
+            .expect("live reservation retains the queue guard");
+        target.kind() == LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence
+            && !state
+                .recovered_decision_fetch_bodies
+                .keys()
+                .copied()
+                .any(|key| target.matches_recovered_decision_fetch_key(key))
+    }
+
     /// Abort before planning and restore the one-shot target into its exact
     /// selector while releasing capacity under the retained queue lock.
     pub(crate) fn abort_into_prepared(
@@ -2067,6 +2626,45 @@ impl LifecycleIoCapacityReservation<'_> {
         self.operation
             .take()
             .expect("committed reservation retains its fail-stop operation")
+            .complete();
+    }
+
+    /// Publish one exact recovered persistence command under its dedicated
+    /// lifecycle key. Preflight plus the retained queue mutex makes this tail
+    /// assertion-only after the executor response claim is installed.
+    pub(in crate::sumeragi) fn commit_recovered_decision_fetch_body_persistence(
+        mut self,
+        task: RecoveredDecisionFetchBodyPersistenceTaskV1,
+    ) {
+        assert!(
+            self.preflight_recovered_decision_fetch_body_persistence(&task),
+            "reserved recovered Decision Fetch persistence changed before publication"
+        );
+        let key = task.dispatch_key();
+        let tracked = V2IoTrackedRecoveredDecisionFetchBodyV1 {
+            id: task.id(),
+            response_hash: task.response_hash(),
+            state: V2IoWorkState::Queued,
+        };
+        let mut state = self
+            .state
+            .take()
+            .expect("committed reservation retains the queue guard");
+        assert!(
+            state
+                .recovered_decision_fetch_bodies
+                .insert(key, tracked)
+                .is_none(),
+            "exact preflight forbids duplicate recovered body persistence"
+        );
+        state
+            .commands
+            .push_back(V2IoCommand::PersistRecoveredDecisionFetchBody(task));
+        drop(state);
+        self.queue.ready.notify_all();
+        self.operation
+            .take()
+            .expect("committed recovered persistence retains its fail-stop operation")
             .complete();
     }
 
@@ -2212,6 +2810,146 @@ pub(in crate::sumeragi) enum RecoveredDecisionApplyCapacityCaptureErrorV1 {
     /// The exact queue position is not representable in the scheduler rank.
     PositionOverflow,
     /// The same closed carrier already owns queued, active, or pending work.
+    AlreadyDispatched,
+}
+
+/// Locked Consensus capacity for one exact lifecycle-owned recovered Sign.
+#[must_use = "the recovered Sign reservation must commit its prepared dispatch"]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignCapacityReservationV1<'a> {
+    queue: &'a V2IoCommandQueue,
+    state: Option<std::sync::MutexGuard<'a, V2IoCommandQueueState>>,
+    operation: Option<ConsensusFailStopOperation<'a>>,
+    key: RecoveredLifecycleSignDispatchKeyV1,
+    predecessor_debt: u64,
+    predecessor_ordinal: Option<u128>,
+}
+
+impl RecoveredLifecycleSignCapacityReservationV1<'_> {
+    /// Return frozen worker predecessor debt only to scheduler authority.
+    pub(in crate::sumeragi) const fn authenticated_predecessor_debt(
+        &self,
+        _factory: &AuthenticatedSchedulerInputsFactory,
+    ) -> u64 {
+        self.predecessor_debt
+    }
+
+    /// Recheck that the claimed registry projection names this reservation.
+    pub(in crate::sumeragi) fn preflight(
+        &self,
+        prepared: &PreparedRecoveredLifecycleSignDispatch<'_>,
+    ) -> bool {
+        let state = self
+            .state
+            .as_ref()
+            .expect("live recovered Sign reservation retains its queue cut");
+        prepared.dispatch_key() == self.key
+            && !state.recovered_lifecycle_signs.contains_key(&self.key)
+    }
+
+    /// Release an uncommitted queue cut after the caller proved no claim remains.
+    pub(in crate::sumeragi) fn cancel_uncommitted(mut self) {
+        self.operation
+            .take()
+            .expect("cancelled recovered Sign reservation retains its operation")
+            .complete();
+    }
+
+    /// Atomically arm the closed carrier and publish its dedicated command.
+    pub(in crate::sumeragi) fn commit(self, prepared: PreparedRecoveredLifecycleSignDispatch<'_>) {
+        assert!(
+            self.preflight(&prepared),
+            "reserved recovered Sign changed before queue publication"
+        );
+        let task = prepared.commit_for_worker();
+        self.publish_task(task);
+    }
+
+    /// Publish one exact test task through the production reservation state machine.
+    #[cfg(test)]
+    fn commit_for_test(self, task: RecoveredLifecycleSignTaskV1) {
+        self.publish_task(task);
+    }
+
+    fn publish_task(mut self, task: RecoveredLifecycleSignTaskV1) {
+        assert_eq!(
+            task.dispatch_key(),
+            self.key,
+            "registry projection returned another recovered Sign dispatch"
+        );
+        let mut state = self
+            .state
+            .take()
+            .expect("committed recovered Sign reservation retains its queue cut");
+        let replaced = state.recovered_lifecycle_signs.insert(
+            self.key,
+            V2IoTrackedRecoveredLifecycleSignV1 {
+                state: V2IoWorkState::Queued,
+            },
+        );
+        assert!(
+            replaced.is_none(),
+            "exact preflight forbids duplicate recovered Sign dispatch"
+        );
+        state
+            .commands
+            .push_back(V2IoCommand::RecoveredLifecycleSign(task));
+        drop(state);
+        self.queue.ready.notify_all();
+        self.operation
+            .take()
+            .expect("committed recovered Sign retains its fail-stop operation")
+            .complete();
+    }
+}
+
+impl Drop for RecoveredLifecycleSignCapacityReservationV1<'_> {
+    fn drop(&mut self) {
+        drop(self.operation.take());
+        if let Some(mut state) = self.state.take() {
+            self.queue.admission.release();
+            if let Some(predecessor_ordinal) = self.predecessor_ordinal {
+                let reservation = state
+                    .serve_ingress_reservation
+                    .as_mut()
+                    .expect("reserved recovered Sign predecessor retains its Serve ticket");
+                if let CertifiedServeRuntimeEpisodeState::Claimed {
+                    predecessor_ordinal: selected,
+                } = &mut reservation.runtime_episode
+                    && *selected == Some(predecessor_ordinal)
+                {
+                    *selected = None;
+                }
+            }
+            let materialized = self.queue.materialize_serve_barrier(&mut state);
+            drop(state);
+            if materialized {
+                self.queue.ready.notify_all();
+            }
+        }
+    }
+}
+
+/// Typed capacity result for the dedicated recovered Sign queue.
+#[must_use = "the recovered Sign capacity result must be consumed"]
+pub(in crate::sumeragi) enum RecoveredLifecycleSignCapacityCaptureV1<'a> {
+    /// Exact queue position is reserved for registry projection commit.
+    Reserved(RecoveredLifecycleSignCapacityReservationV1<'a>),
+    /// No Consensus position was available; no logical row was claimed.
+    Unavailable,
+}
+
+/// Failure before recovered Sign worker capacity can be retained.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum RecoveredLifecycleSignCapacityCaptureErrorV1 {
+    /// The dispatch key belongs to another immutable height context.
+    ForeignContext,
+    /// The height-local worker command corridor is closed.
+    Disconnected,
+    /// Canonical output admission already requires restart.
+    OutputClosed,
+    /// The exact queue position is not representable in scheduler rank.
+    PositionOverflow,
+    /// The same carrier already owns queued, active, or pending work.
     AlreadyDispatched,
 }
 
@@ -2977,6 +3715,8 @@ fn build_v2_io_command_channel(
             commands: VecDeque::with_capacity(capacity.min(1_024)),
             work: BTreeMap::new(),
             recovered_decision_applies: BTreeMap::new(),
+            recovered_lifecycle_signs: BTreeMap::new(),
+            recovered_decision_fetch_bodies: BTreeMap::new(),
             serves,
             serve_by_request,
             serve_by_family,
@@ -3542,6 +4282,9 @@ impl V2IoCommandQueue {
             LifecycleIngressIoTargetKind::CertifiedFetchBodyPersistence => {
                 V2IoAdmissionClass::Consensus
             }
+            LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence => {
+                V2IoAdmissionClass::Consensus
+            }
         };
         let state = self.lock();
         if !state.sender_open || !state.receiver_open {
@@ -3675,6 +4418,105 @@ impl V2IoCommandQueue {
         }
         Ok(RecoveredDecisionApplyCapacityCaptureV1::Reserved(
             RecoveredDecisionApplyCapacityReservationV1 {
+                queue: self.as_ref(),
+                state: Some(state),
+                operation: Some(operation),
+                key,
+                predecessor_debt,
+                predecessor_ordinal: exact_predecessor_ordinal,
+            },
+        ))
+    }
+
+    fn capture_recovered_lifecycle_sign_capacity<'a>(
+        self: &'a Arc<Self>,
+        operation: ConsensusFailStopOperation<'a>,
+        key: RecoveredLifecycleSignDispatchKeyV1,
+    ) -> Result<
+        RecoveredLifecycleSignCapacityCaptureV1<'a>,
+        RecoveredLifecycleSignCapacityCaptureErrorV1,
+    > {
+        let mut state = self.lock();
+        if !state.sender_open || !state.receiver_open {
+            operation.complete();
+            return Err(RecoveredLifecycleSignCapacityCaptureErrorV1::Disconnected);
+        }
+        if state.recovered_lifecycle_signs.contains_key(&key) {
+            operation.complete();
+            return Err(RecoveredLifecycleSignCapacityCaptureErrorV1::AlreadyDispatched);
+        }
+        let predecessor_debt = match u64::try_from(state.commands.len()) {
+            Ok(debt) => debt,
+            Err(_) => {
+                operation.complete();
+                return Err(RecoveredLifecycleSignCapacityCaptureErrorV1::PositionOverflow);
+            }
+        };
+        let command_ordinal = key.lifecycle_ordinal();
+        let exact_predecessor_ordinal =
+            state
+                .serve_ingress_reservation
+                .as_ref()
+                .and_then(|reservation| {
+                    if command_ordinal >= reservation.id.0 {
+                        return None;
+                    }
+                    match reservation.runtime_episode {
+                        CertifiedServeRuntimeEpisodeState::Claimed {
+                            predecessor_ordinal: None,
+                        } => Some(command_ordinal),
+                        CertifiedServeRuntimeEpisodeState::Claimed {
+                            predecessor_ordinal: Some(existing),
+                        } if existing == command_ordinal => Some(command_ordinal),
+                        CertifiedServeRuntimeEpisodeState::Ready
+                        | CertifiedServeRuntimeEpisodeState::Claimed { .. }
+                        | CertifiedServeRuntimeEpisodeState::Complete => None,
+                    }
+                });
+        let exact_target_active = state.serve_ingress_reservation.is_some()
+            || !state.serve_ingress_waiters.is_empty()
+            || state.serve_barrier.is_some();
+        if exact_target_active && exact_predecessor_ordinal.is_none() {
+            operation.complete();
+            return Ok(RecoveredLifecycleSignCapacityCaptureV1::Unavailable);
+        }
+        let suspended_target = exact_predecessor_ordinal.is_some()
+            && self.suspend_materialized_serve_barrier_for_runtime_predecessor(&mut state);
+        if state.commands.len() >= self.capacity
+            || !self.admission.try_reserve(V2IoAdmissionClass::Consensus)
+        {
+            if suspended_target {
+                assert!(
+                    self.materialize_serve_barrier(&mut state),
+                    "failed recovered Sign reservation must restore its Serve placeholder"
+                );
+            }
+            operation.complete();
+            return Ok(RecoveredLifecycleSignCapacityCaptureV1::Unavailable);
+        }
+        if let Some(predecessor_ordinal) = exact_predecessor_ordinal {
+            let reservation = state
+                .serve_ingress_reservation
+                .as_mut()
+                .expect("recovered Sign predecessor retains its exact Serve ticket");
+            match &mut reservation.runtime_episode {
+                CertifiedServeRuntimeEpisodeState::Claimed {
+                    predecessor_ordinal: selected,
+                } => match selected {
+                    Some(existing) => assert_eq!(
+                        *existing, predecessor_ordinal,
+                        "one Serve turn cannot admit two causal lifecycle owners"
+                    ),
+                    None => *selected = Some(predecessor_ordinal),
+                },
+                CertifiedServeRuntimeEpisodeState::Ready
+                | CertifiedServeRuntimeEpisodeState::Complete => {
+                    unreachable!("recovered Sign predecessor escaped its claimed Serve turn")
+                }
+            }
+        }
+        Ok(RecoveredLifecycleSignCapacityCaptureV1::Reserved(
+            RecoveredLifecycleSignCapacityReservationV1 {
                 queue: self.as_ref(),
                 state: Some(state),
                 operation: Some(operation),
@@ -6954,6 +7796,14 @@ impl V2IoCommandQueue {
         if let Some(key) = command.recovered_decision_apply_key() {
             return Err(V2IoTrySendError::UnreservedRecoveredDecisionApply { key, command });
         }
+        assert!(
+            command.recovered_lifecycle_sign_key().is_none(),
+            "recovered Sign commands require their locked lifecycle reservation"
+        );
+        assert!(
+            command.recovered_decision_fetch_key().is_none(),
+            "recovered Decision Fetch persistence requires its locked lifecycle reservation"
+        );
         let descriptor = command.work_descriptor();
         let mut state = self.lock();
         if !state.sender_open || !state.receiver_open {
@@ -7134,6 +7984,22 @@ impl V2IoCommandQueue {
                     assert_eq!(tracked.state, V2IoWorkState::Queued);
                     tracked.state = V2IoWorkState::Active;
                 }
+                if let Some(key) = command.recovered_lifecycle_sign_key() {
+                    let tracked = state
+                        .recovered_lifecycle_signs
+                        .get_mut(&key)
+                        .expect("queued recovered Sign must have an ownership record");
+                    assert_eq!(tracked.state, V2IoWorkState::Queued);
+                    tracked.state = V2IoWorkState::Active;
+                }
+                if let Some(key) = command.recovered_decision_fetch_key() {
+                    let tracked = state
+                        .recovered_decision_fetch_bodies
+                        .get_mut(&key)
+                        .expect("queued recovered Decision Fetch body must retain its owner");
+                    assert_eq!(tracked.state, V2IoWorkState::Queued);
+                    tracked.state = V2IoWorkState::Active;
+                }
                 if let Some(lifecycle_id) = command.serve_lifecycle_id() {
                     let tracked = state
                         .serves
@@ -7195,6 +8061,22 @@ impl V2IoCommandQueue {
             assert_eq!(tracked.state, V2IoWorkState::Queued);
             tracked.state = V2IoWorkState::Active;
         }
+        if let Some(key) = command.recovered_lifecycle_sign_key() {
+            let tracked = state
+                .recovered_lifecycle_signs
+                .get_mut(&key)
+                .expect("queued recovered Sign must have an ownership record");
+            assert_eq!(tracked.state, V2IoWorkState::Queued);
+            tracked.state = V2IoWorkState::Active;
+        }
+        if let Some(key) = command.recovered_decision_fetch_key() {
+            let tracked = state
+                .recovered_decision_fetch_bodies
+                .get_mut(&key)
+                .expect("queued recovered Decision Fetch body must retain its owner");
+            assert_eq!(tracked.state, V2IoWorkState::Queued);
+            tracked.state = V2IoWorkState::Active;
+        }
         if let Some(lifecycle_id) = command.serve_lifecycle_id() {
             let tracked = state
                 .serves
@@ -7231,6 +8113,52 @@ impl V2IoCommandQueue {
         if tracked.state != V2IoWorkState::Active || result.dispatch_key() != key {
             return Err(
                 "completed recovered Decision Apply changed its exact dispatch material".to_owned(),
+            );
+        }
+        tracked.state = V2IoWorkState::CompletionPending;
+        Ok(())
+    }
+
+    fn complete_recovered_lifecycle_sign(
+        &self,
+        key: RecoveredLifecycleSignDispatchKeyV1,
+        result: &RecoveredLifecycleSignWorkerResultV1,
+    ) -> Result<(), String> {
+        let mut state = self.lock();
+        let tracked = state
+            .recovered_lifecycle_signs
+            .get_mut(&key)
+            .ok_or_else(|| "completed recovered Sign lost its lifecycle owner".to_owned())?;
+        if tracked.state != V2IoWorkState::Active
+            || result.dispatch_key() != key
+            || !result.is_exact()
+        {
+            return Err("completed recovered Sign changed its exact dispatch material".to_owned());
+        }
+        tracked.state = V2IoWorkState::CompletionPending;
+        Ok(())
+    }
+
+    fn complete_recovered_decision_fetch_body(
+        &self,
+        key: RecoveredDecisionFetchDispatchKeyV1,
+        completion: &RecoveredDecisionFetchBodyPersistenceCompletionV1,
+    ) -> Result<(), String> {
+        let mut state = self.lock();
+        let tracked = state
+            .recovered_decision_fetch_bodies
+            .get_mut(&key)
+            .ok_or_else(|| {
+                "completed recovered Decision Fetch body lost its lifecycle owner".to_owned()
+            })?;
+        if tracked.state != V2IoWorkState::Active
+            || completion.dispatch_key() != key
+            || completion.id() != tracked.id
+            || completion.response_hash() != tracked.response_hash
+        {
+            return Err(
+                "completed recovered Decision Fetch body changed its exact persistence material"
+                    .to_owned(),
             );
         }
         tracked.state = V2IoWorkState::CompletionPending;
@@ -7380,6 +8308,23 @@ impl V2IoCommandQueue {
         })
     }
 
+    fn transfer_recovered_lifecycle_sign_completion(
+        self: &Arc<Self>,
+        key: RecoveredLifecycleSignDispatchKeyV1,
+        ownership_position: usize,
+    ) -> bool {
+        let state = self.lock();
+        let pending = state
+            .recovered_lifecycle_signs
+            .get(&key)
+            .is_some_and(|tracked| tracked.state == V2IoWorkState::CompletionPending);
+        if !pending {
+            return false;
+        }
+        self.admission
+            .transfer_recovered_lifecycle_sign_completion_at(key, ownership_position)
+    }
+
     fn acknowledge_recovered_decision_apply(&self, key: RecoveredDecisionApplyDispatchKeyV1) {
         let mut state = self.lock();
         let tracked = state
@@ -7387,6 +8332,31 @@ impl V2IoCommandQueue {
             .remove(&key)
             .expect("settled recovered Decision Apply must retain its exact command owner");
         assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
+    }
+
+    fn acknowledge_recovered_lifecycle_sign(&self, key: RecoveredLifecycleSignDispatchKeyV1) {
+        let mut state = self.lock();
+        let tracked = state
+            .recovered_lifecycle_signs
+            .remove(&key)
+            .expect("settled recovered Sign must retain its exact command owner");
+        assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
+    }
+
+    fn acknowledge_recovered_decision_fetch_body(
+        &self,
+        key: RecoveredDecisionFetchDispatchKeyV1,
+        id: super::v2_lifecycle_coordinator::RecoveredDecisionFetchBodyPersistenceIdV1,
+        response_hash: HashOf<wire::CertifiedBodyResponse>,
+    ) {
+        let mut state = self.lock();
+        let tracked = state
+            .recovered_decision_fetch_bodies
+            .remove(&key)
+            .expect("settled recovered Decision Fetch must retain its exact command owner");
+        assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
+        assert_eq!(tracked.id, id);
+        assert_eq!(tracked.response_hash, response_hash);
     }
 
     fn prepare_certified_fetch_body_persistence_ack(
@@ -7513,6 +8483,12 @@ impl V2IoCommandQueue {
             .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
         state
             .recovered_decision_applies
+            .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
+        state
+            .recovered_lifecycle_signs
+            .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
+        state
+            .recovered_decision_fetch_bodies
             .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
         for _ in 0..queued.saturating_add(active_serves) {
             self.admission.release();
@@ -7714,6 +8690,23 @@ impl V2IoCommandReceiver {
         self.queue.complete_recovered_decision_apply(key, result)
     }
 
+    fn complete_recovered_lifecycle_sign(
+        &self,
+        key: RecoveredLifecycleSignDispatchKeyV1,
+        result: &RecoveredLifecycleSignWorkerResultV1,
+    ) -> Result<(), String> {
+        self.queue.complete_recovered_lifecycle_sign(key, result)
+    }
+
+    fn complete_recovered_decision_fetch_body(
+        &self,
+        key: RecoveredDecisionFetchDispatchKeyV1,
+        completion: &RecoveredDecisionFetchBodyPersistenceCompletionV1,
+    ) -> Result<(), String> {
+        self.queue
+            .complete_recovered_decision_fetch_body(key, completion)
+    }
+
     fn complete_serve_response(
         &self,
         lifecycle_id: CertifiedServeLifecycleId,
@@ -7786,6 +8779,63 @@ struct GuardedCertifiedFetchBodyPersistenceCompletion {
     drop_guard: CertifiedFetchBodyPersistenceDropGuard,
 }
 
+struct RecoveredDecisionFetchBodyCompletionDropGuardV1 {
+    output_guard: Arc<ConsensusOutputGuard>,
+    armed: bool,
+}
+
+impl RecoveredDecisionFetchBodyCompletionDropGuardV1 {
+    fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
+        Self {
+            output_guard,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RecoveredDecisionFetchBodyCompletionDropGuardV1 {
+    fn drop(&mut self) {
+        if self.armed {
+            self.output_guard.close_admission_for_restart();
+        }
+    }
+}
+
+struct GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1 {
+    completion: Option<RecoveredDecisionFetchBodyPersistenceCompletionV1>,
+    drop_guard: RecoveredDecisionFetchBodyCompletionDropGuardV1,
+}
+
+impl GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1 {
+    fn new(
+        completion: RecoveredDecisionFetchBodyPersistenceCompletionV1,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> Self {
+        Self {
+            completion: Some(completion),
+            drop_guard: RecoveredDecisionFetchBodyCompletionDropGuardV1::new(output_guard),
+        }
+    }
+
+    fn completion(&self) -> &RecoveredDecisionFetchBodyPersistenceCompletionV1 {
+        self.completion
+            .as_ref()
+            .expect("armed recovered Decision Fetch completion retains its payload")
+    }
+
+    fn acknowledge_after_publication(mut self) {
+        let _completion = self
+            .completion
+            .take()
+            .expect("settled recovered Decision Fetch consumes its completion once");
+        self.drop_guard.disarm();
+    }
+}
+
 impl GuardedCertifiedFetchBodyPersistenceCompletion {
     fn new(
         completion: CertifiedFetchBodyPersistenceCompletion,
@@ -7842,6 +8892,57 @@ impl Drop for RecoveredDecisionApplyCompletionDropGuardV1 {
 struct GuardedRecoveredDecisionApplyWorkerResultV1 {
     result: Option<RecoveredDecisionApplyWorkerResultV1>,
     drop_guard: RecoveredDecisionApplyCompletionDropGuardV1,
+}
+
+struct RecoveredLifecycleSignCompletionDropGuardV1 {
+    output_guard: Arc<ConsensusOutputGuard>,
+    armed: bool,
+}
+
+impl RecoveredLifecycleSignCompletionDropGuardV1 {
+    fn new(output_guard: Arc<ConsensusOutputGuard>) -> Self {
+        Self {
+            output_guard,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RecoveredLifecycleSignCompletionDropGuardV1 {
+    fn drop(&mut self) {
+        if self.armed {
+            self.output_guard.close_admission_for_restart();
+        }
+    }
+}
+
+struct GuardedRecoveredLifecycleSignWorkerResultV1 {
+    result: RecoveredLifecycleSignWorkerResultV1,
+    drop_guard: RecoveredLifecycleSignCompletionDropGuardV1,
+}
+
+impl GuardedRecoveredLifecycleSignWorkerResultV1 {
+    fn new(
+        result: RecoveredLifecycleSignWorkerResultV1,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> Self {
+        Self {
+            result,
+            drop_guard: RecoveredLifecycleSignCompletionDropGuardV1::new(output_guard),
+        }
+    }
+
+    const fn result(&self) -> &RecoveredLifecycleSignWorkerResultV1 {
+        &self.result
+    }
+
+    fn acknowledge_after_publication(mut self) {
+        self.drop_guard.disarm();
+    }
 }
 
 impl GuardedRecoveredDecisionApplyWorkerResultV1 {
@@ -7934,6 +9035,119 @@ impl Drop for RecoveredDecisionApplyWorkAckV1 {
 pub(in crate::sumeragi) struct PreparedRecoveredDecisionApplyCompletionV1 {
     guarded: Box<GuardedRecoveredDecisionApplyWorkerResultV1>,
     work_ack: RecoveredDecisionApplyWorkAckV1,
+}
+
+/// Guarded lifecycle-owned recovered Sign completion parked for future settlement.
+///
+/// This token deliberately has no raw result, signature, payload, request,
+/// parts, acknowledgement, or settlement method. Its sole fixed projection
+/// mints an adapter-private preview authority while retaining the guarded
+/// result. Its queue `Arc` remains alive while the guarded completion drops,
+/// so abandonment closes output while the exact dedicated command owner is
+/// still representable for crash recovery.
+#[must_use = "recovered Sign completion remains guarded until restart-closed settlement exists"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignCompletionV1 {
+    guarded: Box<GuardedRecoveredLifecycleSignWorkerResultV1>,
+    queue: Arc<V2IoCommandQueue>,
+}
+
+/// Guarded durable recovered-Fetch body parked until restart-closed settlement exists.
+#[must_use = "recovered Decision Fetch persistence remains guarded and indexed"]
+pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchBodyCompletionV1 {
+    guarded: Box<GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1>,
+    queue: Arc<V2IoCommandQueue>,
+}
+
+impl PreparedRecoveredDecisionFetchBodyCompletionV1 {
+    fn new(
+        guarded: Box<GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1>,
+        queue: Arc<V2IoCommandQueue>,
+        ownership_position: usize,
+    ) -> Option<Self> {
+        let key = guarded.completion().dispatch_key();
+        let state_is_exact = {
+            let state = queue.lock();
+            state
+                .recovered_decision_fetch_bodies
+                .get(&key)
+                .is_some_and(|tracked| {
+                    tracked.state == V2IoWorkState::CompletionPending
+                        && tracked.id == guarded.completion().id()
+                        && tracked.response_hash == guarded.completion().response_hash()
+                })
+        };
+        (state_is_exact
+            && queue
+                .admission
+                .transfer_recovered_decision_fetch_completion_at(key, ownership_position))
+        .then_some(Self { guarded, queue })
+    }
+
+    /// Borrow the opaque durable completion for fixed settlement projections.
+    pub(in crate::sumeragi) fn completion(
+        &self,
+    ) -> &RecoveredDecisionFetchBodyPersistenceCompletionV1 {
+        self.guarded.completion()
+    }
+
+    /// Retire the exact command index and disarm restart closure after LedgerV1 publication.
+    pub(in crate::sumeragi) fn acknowledge_after_publication(self) {
+        let key = self.guarded.completion().dispatch_key();
+        let id = self.guarded.completion().id();
+        let response_hash = self.guarded.completion().response_hash();
+        self.queue
+            .acknowledge_recovered_decision_fetch_body(key, id, response_hash);
+        self.guarded.acknowledge_after_publication();
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl PreparedRecoveredLifecycleSignCompletionV1 {
+    fn new(
+        guarded: Box<GuardedRecoveredLifecycleSignWorkerResultV1>,
+        queue: Arc<V2IoCommandQueue>,
+        ownership_position: usize,
+    ) -> Option<Self> {
+        queue
+            .transfer_recovered_lifecycle_sign_completion(
+                guarded.result().dispatch_key(),
+                ownership_position,
+            )
+            .then_some(Self { guarded, queue })
+    }
+
+    /// Revalidate and clone the still-guarded worker result for adapter preview.
+    ///
+    /// The returned value exposes no fields and cannot be unpacked without the
+    /// adapter-private permit. The original guarded result remains parked until
+    /// the complete LedgerV1 publication transaction acknowledges it.
+    pub(in crate::sumeragi) fn project_adapter_completion_authority(
+        &self,
+    ) -> Option<RecoveredLifecycleSignAdapterCompletionAuthorityV1> {
+        let result = self.guarded.result();
+        if !result.is_exact() {
+            return None;
+        }
+        Some(RecoveredLifecycleSignAdapterCompletionAuthorityV1 {
+            key: result.dispatch_key(),
+            tag: result.task.tag,
+            request: result.task.request.clone(),
+            signature: result.signature.clone(),
+            outbound_payload: result.outbound_payload.clone(),
+        })
+    }
+
+    /// Retire the exact dedicated command owner and disarm restart closure.
+    ///
+    /// The lifecycle owner may call this only after LedgerV1 has durably
+    /// published the signed Broadcast successor and every volatile owner has
+    /// completed its assertion-only tail.
+    pub(in crate::sumeragi) fn acknowledge_after_publication(self) {
+        let key = self.guarded.result().dispatch_key();
+        self.queue.acknowledge_recovered_lifecycle_sign(key);
+        self.guarded.acknowledge_after_publication();
+    }
 }
 
 /// Result of atomically returning one guarded missing-sidecar Apply to the worker FIFO.
@@ -8029,9 +9243,13 @@ enum V2IoCompletion {
     },
     Stored(BodyStoreCompletion),
     CertifiedFetchBodyPersisted(GuardedCertifiedFetchBodyPersistenceCompletion),
+    RecoveredDecisionFetchBodyPersisted(
+        Box<GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1>,
+    ),
     Validated(BodyValidationCompletion),
     Applied(Box<DurableApplyCompletion>),
     RecoveredDecisionApply(Box<GuardedRecoveredDecisionApplyWorkerResultV1>),
+    RecoveredLifecycleSign(Box<GuardedRecoveredLifecycleSignWorkerResultV1>),
     ApplyDeferred {
         work_id: EffectWorkId,
         reference: CertifiedMergeLedgerReference,
@@ -8070,6 +9288,22 @@ impl V2IoCompletion {
         }
     }
 
+    fn recovered_lifecycle_sign_key(&self) -> Option<RecoveredLifecycleSignDispatchKeyV1> {
+        match self {
+            Self::RecoveredLifecycleSign(guarded) => Some(guarded.result().dispatch_key()),
+            _ => None,
+        }
+    }
+
+    fn recovered_decision_fetch_key(&self) -> Option<RecoveredDecisionFetchDispatchKeyV1> {
+        match self {
+            Self::RecoveredDecisionFetchBodyPersisted(guarded) => {
+                Some(guarded.completion().dispatch_key())
+            }
+            _ => None,
+        }
+    }
+
     // `false` variants never enqueue a reducer completion. They operate only
     // on non-reducer effect, network, or service state (or report a terminal
     // failure), so they may be serviced behind one retained runtime result
@@ -8082,6 +9316,7 @@ impl V2IoCompletion {
                 | Self::Validated(_)
                 | Self::Applied(_)
                 | Self::RecoveredDecisionApply(_)
+                | Self::RecoveredLifecycleSign(_)
         )
     }
 
@@ -8094,12 +9329,18 @@ impl V2IoCompletion {
             Self::CertifiedFetchBodyPersisted(_) => {
                 V2IoCompletionAcknowledgement::LifecycleWorkRetained
             }
+            Self::RecoveredDecisionFetchBodyPersisted(_) => {
+                V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained
+            }
             Self::Validated(completion) => {
                 V2IoCompletionAcknowledgement::Work(completion.work_id())
             }
             Self::Applied(completion) => V2IoCompletionAcknowledgement::Work(completion.work_id()),
             Self::RecoveredDecisionApply(_) => {
                 V2IoCompletionAcknowledgement::RecoveredDecisionApplyRetained
+            }
+            Self::RecoveredLifecycleSign(_) => {
+                V2IoCompletionAcknowledgement::RecoveredLifecycleSignRetained
             }
             Self::CertifiedResponse {
                 lifecycle_id,
@@ -8129,6 +9370,8 @@ enum V2IoCompletionAcknowledgement {
     Serve(Box<V2IoServeCompletionAcknowledgement>),
     LifecycleWorkRetained,
     RecoveredDecisionApplyRetained,
+    RecoveredLifecycleSignRetained,
+    RecoveredDecisionFetchRetained,
     Untracked,
 }
 
@@ -8224,6 +9467,36 @@ impl V2CompletionDrainOutcome {
 #[must_use = "a returned recovered Decision Apply completion must be settled by its owner"]
 pub(in crate::sumeragi) struct RecoveredDecisionApplyCompletionDrainV1 {
     completion: Option<PreparedRecoveredDecisionApplyCompletionV1>,
+}
+
+/// Owner-only drain of at most one guarded recovered Sign completion.
+#[must_use = "a recovered Sign drain remains parked under its lifecycle owner"]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignCompletionDrainV1 {
+    completion: Option<PreparedRecoveredLifecycleSignCompletionV1>,
+}
+
+/// Owner-only drain of at most one guarded recovered Fetch body completion.
+#[must_use = "a recovered Fetch completion must remain parked under its lifecycle owner"]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchBodyCompletionDrainV1 {
+    completion: Option<PreparedRecoveredDecisionFetchBodyCompletionV1>,
+}
+
+impl RecoveredDecisionFetchBodyCompletionDrainV1 {
+    /// Consume the drain result into its optional guarded persistence completion.
+    pub(in crate::sumeragi) fn into_completion(
+        self,
+    ) -> Option<PreparedRecoveredDecisionFetchBodyCompletionV1> {
+        self.completion
+    }
+}
+
+impl RecoveredLifecycleSignCompletionDrainV1 {
+    /// Consume the drain into its optional opaque guarded completion.
+    pub(in crate::sumeragi) fn into_completion(
+        self,
+    ) -> Option<PreparedRecoveredLifecycleSignCompletionV1> {
+        self.completion
+    }
 }
 
 impl RecoveredDecisionApplyCompletionDrainV1 {
@@ -8527,6 +9800,8 @@ impl V2IoHandle {
                 while let Ok(command) = command_rx.recv() {
                     let work_id = command.work_id();
                     let recovered_decision_apply_key = command.recovered_decision_apply_key();
+                    let recovered_lifecycle_sign_key = command.recovered_lifecycle_sign_key();
+                    let recovered_decision_fetch_key = command.recovered_decision_fetch_key();
                     let serve_lifecycle_id = command.serve_lifecycle_id();
                     let runtime_lifecycle_ordinal = command.runtime_lifecycle_ordinal();
                     match command {
@@ -8617,6 +9892,23 @@ impl V2IoHandle {
                                             )
                                         })
                                         .map_err(|(error, _task)| error.to_string()),
+                                    V2IoCommand::PersistRecoveredDecisionFetchBody(task) => task
+                                        .persist(
+                                            body_store
+                                                .as_mut()
+                                                .expect("body store remains live before Retire"),
+                                        )
+                                        .map(|completion| {
+                                            V2IoCompletion::RecoveredDecisionFetchBodyPersisted(
+                                                Box::new(
+                                                    GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1::new(
+                                                        completion,
+                                                        Arc::clone(&output_guard),
+                                                    ),
+                                                ),
+                                            )
+                                        })
+                                        .map_err(|(error, _task)| error.to_string()),
                                     V2IoCommand::Validate(task) => body_store
                                         .as_mut()
                                         .expect("body store remains live before Retire")
@@ -8673,6 +9965,24 @@ impl V2IoHandle {
                                                 Err(error.to_string())
                                             }
                                         }),
+                                    V2IoCommand::RecoveredLifecycleSign(task) => {
+                                        sign_recovered_lifecycle_task(
+                                            body_store
+                                                .as_ref()
+                                                .expect("body store remains live before Retire"),
+                                            &context,
+                                            &key_pair,
+                                            task,
+                                        )
+                                        .map(|result| {
+                                            V2IoCompletion::RecoveredLifecycleSign(Box::new(
+                                                GuardedRecoveredLifecycleSignWorkerResultV1::new(
+                                                    result,
+                                                    Arc::clone(&output_guard),
+                                                ),
+                                            ))
+                                        })
+                                    }
                                     V2IoCommand::Serve {
                                         lifecycle_id,
                                         request,
@@ -8749,6 +10059,38 @@ impl V2IoHandle {
                                                 },
                                             )
                                         }
+                                        V2IoCompletion::RecoveredLifecycleSign(guarded) => {
+                                            recovered_lifecycle_sign_key.map_or_else(
+                                                || {
+                                                    Err("recovered Sign completion lost its command key"
+                                                        .to_owned())
+                                                },
+                                                |key| {
+                                                    command_rx
+                                                        .complete_recovered_lifecycle_sign(
+                                                            key,
+                                                            guarded.result(),
+                                                        )
+                                                        .map(|()| true)
+                                                },
+                                            )
+                                        }
+                                        V2IoCompletion::RecoveredDecisionFetchBodyPersisted(
+                                            guarded,
+                                        ) => recovered_decision_fetch_key.map_or_else(
+                                            || {
+                                                Err("recovered Decision Fetch body completion lost its command key"
+                                                    .to_owned())
+                                            },
+                                            |key| {
+                                                command_rx
+                                                    .complete_recovered_decision_fetch_body(
+                                                        key,
+                                                        guarded.completion(),
+                                                    )
+                                                    .map(|()| true)
+                                            },
+                                        ),
                                         _ => Ok(true),
                                     };
                                     match seal_result {
@@ -8986,6 +10328,14 @@ impl V2IoHandle {
             }
             V2IoCompletionAcknowledgement::LifecycleWorkRetained => {}
             V2IoCompletionAcknowledgement::RecoveredDecisionApplyRetained => {}
+            V2IoCompletionAcknowledgement::RecoveredLifecycleSignRetained => {
+                // No settlement exists, so neither the dedicated command
+                // index nor its completion-channel owner may be removed.
+                return Ok(());
+            }
+            V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained => {
+                return Ok(());
+            }
             V2IoCompletionAcknowledgement::Untracked => {}
         }
         self.admission.acknowledge_completion_at(ownership_position);
@@ -9010,6 +10360,30 @@ impl V2IoHandle {
         self.command_tx
             .queue
             .prepare_recovered_decision_apply_ack(key, output_guard)
+    }
+
+    fn prepare_recovered_lifecycle_sign_completion(
+        &self,
+        guarded: Box<GuardedRecoveredLifecycleSignWorkerResultV1>,
+        ownership_position: usize,
+    ) -> Option<PreparedRecoveredLifecycleSignCompletionV1> {
+        PreparedRecoveredLifecycleSignCompletionV1::new(
+            guarded,
+            Arc::clone(&self.command_tx.queue),
+            ownership_position,
+        )
+    }
+
+    fn prepare_recovered_decision_fetch_body_completion(
+        &self,
+        guarded: Box<GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1>,
+        ownership_position: usize,
+    ) -> Option<PreparedRecoveredDecisionFetchBodyCompletionV1> {
+        PreparedRecoveredDecisionFetchBodyCompletionV1::new(
+            guarded,
+            Arc::clone(&self.command_tx.queue),
+            ownership_position,
+        )
     }
 
     fn acknowledge_completion(&self, completion: &V2IoCompletion) -> Result<(), String> {
@@ -9138,11 +10512,15 @@ fn send_tracked_completion_with_lifecycle_ordinal(
     runtime_lifecycle_ordinal: Option<u128>,
 ) -> Result<(), mpsc::SendError<V2IoCompletion>> {
     let recovered_decision_apply = completion.recovered_decision_apply_key();
+    let recovered_lifecycle_sign = completion.recovered_lifecycle_sign_key();
+    let recovered_decision_fetch = completion.recovered_decision_fetch_key();
     admission.retain_completion(
         Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
         recovered_decision_apply,
+        recovered_lifecycle_sign,
+        recovered_decision_fetch,
     );
     sender.send(completion).inspect_err(|_| {
         admission.abandon_latest_completion();
@@ -9164,11 +10542,15 @@ fn try_send_tracked_completion_with_lifecycle_ordinal(
     runtime_lifecycle_ordinal: Option<u128>,
 ) -> Result<(), mpsc::TrySendError<V2IoCompletion>> {
     let recovered_decision_apply = completion.recovered_decision_apply_key();
+    let recovered_lifecycle_sign = completion.recovered_lifecycle_sign_key();
+    let recovered_decision_fetch = completion.recovered_decision_fetch_key();
     admission.retain_completion(
         Instant::now(),
         completion.requires_runtime_capacity(),
         runtime_lifecycle_ordinal,
         recovered_decision_apply,
+        recovered_lifecycle_sign,
+        recovered_decision_fetch,
     );
     sender.try_send(completion).inspect_err(|_| {
         admission.abandon_latest_completion();
@@ -9261,6 +10643,31 @@ fn sign_consensus_task(
     Signature::try_new(key_pair.private_key(), &preimage)
         .map(|signature| V2IoCompletion::Signature {
             work_id: task.id(),
+            signature: signature.payload().to_vec(),
+            outbound_payload,
+        })
+        .map_err(|error| error.to_string())
+}
+
+fn sign_recovered_lifecycle_task(
+    body_store: &V2BodyStore,
+    context: &wire::HeightContext,
+    key_pair: &KeyPair,
+    task: RecoveredLifecycleSignTaskV1,
+) -> Result<RecoveredLifecycleSignWorkerResultV1, String> {
+    let (preimage, outbound_payload) = match &task.request {
+        super::v2::SignRequest::Proposal(proposal) => (
+            proposal.signature_preimage(),
+            Some(recover_outbound_proposal_payload(
+                body_store, context, proposal,
+            )?),
+        ),
+        super::v2::SignRequest::Vote(vote) => (vote.signature_preimage(), None),
+        super::v2::SignRequest::TimeoutVote(vote) => (vote.signature_preimage(), None),
+    };
+    Signature::try_new(key_pair.private_key(), &preimage)
+        .map(|signature| RecoveredLifecycleSignWorkerResultV1 {
+            task,
             signature: signature.payload().to_vec(),
             outbound_payload,
         })
@@ -15334,6 +16741,138 @@ pub(crate) struct ProductionV2Services {
     clean_teardown: bool,
 }
 
+/// Service-private permit for unpacking one adapter-sealed signed Broadcast.
+///
+/// The constructor is private to this module. The adapter projection accepts
+/// the value only by move, preventing another sibling from extracting or
+/// substituting the signed envelope.
+pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastOutputPermitV1 {
+    _linearity: RecoveredLifecycleSignBroadcastOutputPermitLinearityV1,
+}
+
+struct RecoveredLifecycleSignBroadcastOutputPermitLinearityV1;
+
+impl Drop for RecoveredLifecycleSignBroadcastOutputPermitLinearityV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleSignBroadcastOutputPermitV1 {
+    fn new() -> Self {
+        Self {
+            _linearity: RecoveredLifecycleSignBroadcastOutputPermitLinearityV1,
+        }
+    }
+}
+
+/// Result of reserving exact output for a recovered signed Broadcast.
+pub(in crate::sumeragi) enum RecoveredLifecycleSignBroadcastOutputCaptureV1<'service> {
+    /// The bounded corridor cannot retain this fanout yet; nothing changed.
+    Unavailable,
+    /// The exact corridor mutex and fail-stop operation remain retained.
+    Reserved(RecoveredLifecycleSignBroadcastOutputReservationV1<'service>),
+}
+
+/// Borrow-bound exact-output reservation for one Broadcast-only Sign successor.
+///
+/// Proposal payload fanout and multi-effect reducer successors are rejected by
+/// this first closed transaction. Dropping an armed reservation fail-stops;
+/// pre-publication aborts must consume [`Self::abort_before_publication`].
+#[must_use = "recovered Sign output must commit or use its typed abort"]
+pub(in crate::sumeragi) struct RecoveredLifecycleSignBroadcastOutputReservationV1<'service> {
+    pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
+    operation: Option<ConsensusFailStopOperation<'service>>,
+    fanout: Option<PendingExactFanout>,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredLifecycleSignBroadcastOutputReservationV1<'_> {
+    /// Release an unchanged reservation before LedgerV1 publication.
+    pub(in crate::sumeragi) fn abort_before_publication(mut self) {
+        drop(self.pending.take());
+        self.operation
+            .take()
+            .expect("armed recovered Sign output retains its fail-stop operation")
+            .complete();
+    }
+
+    /// Publish the preflighted fanout in the assertion-only post-fsync tail.
+    pub(in crate::sumeragi) fn commit_after_publication(mut self) {
+        let mut pending = self
+            .pending
+            .take()
+            .expect("recovered Sign output reservation retains its corridor mutex");
+        if let Some(fanout) = self.fanout.take() {
+            assert_eq!(
+                pending.enqueue(fanout),
+                Ok(ExactFanoutOwnership::Owned),
+                "preflighted recovered Sign fanout must enter exact-output ownership"
+            );
+        }
+        drop(pending);
+        self.operation
+            .take()
+            .expect("recovered Sign output commit retains its fail-stop operation")
+            .complete();
+    }
+}
+
+/// Result of reserving exact output for one recovered Decision Fetch request.
+pub(in crate::sumeragi) enum RecoveredDecisionFetchExactOutputCaptureV1<'service> {
+    /// The bounded corridor cannot own this fanout yet; nothing was claimed.
+    Unavailable,
+    /// The same corridor mutex and fail-stop permit remain retained through claim.
+    Reserved(RecoveredDecisionFetchExactOutputReservationV1<'service>),
+}
+
+/// Borrow-bound exact-output reservation retained before coordinator claim.
+///
+/// Preencoding, topology construction, rollover validation, and `can_enqueue`
+/// all precede scheduler planning. Dropping an armed reservation closes output;
+/// recoverable pre-claim failures must consume [`Self::abort_before_claim`].
+#[must_use = "exact recovered Fetch output must commit or use its typed pre-claim abort"]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchExactOutputReservationV1<'service> {
+    pending: Option<std::sync::MutexGuard<'service, PendingExactOutput>>,
+    operation: Option<ConsensusFailStopOperation<'service>>,
+    fanout: Option<PendingExactFanout>,
+    predecessor_debt: u64,
+}
+
+impl RecoveredDecisionFetchExactOutputReservationV1<'_> {
+    /// Exact retained output-prefix debt used by the authenticated scheduler row.
+    pub(in crate::sumeragi) const fn predecessor_debt(&self) -> u64 {
+        self.predecessor_debt
+    }
+
+    /// Release an unchanged pre-claim reservation without fail-stopping output.
+    pub(in crate::sumeragi) fn abort_before_claim(mut self) {
+        drop(self.pending.take());
+        self.operation
+            .take()
+            .expect("armed recovered Fetch output retains its fail-stop operation")
+            .complete();
+    }
+
+    /// Publish the preflighted fanout in the assertion-only post-arming tail.
+    pub(in crate::sumeragi) fn commit(mut self) {
+        let mut pending = self
+            .pending
+            .take()
+            .expect("recovered Fetch output reservation retains its corridor mutex");
+        if let Some(fanout) = self.fanout.take() {
+            assert_eq!(
+                pending.enqueue(fanout),
+                Ok(ExactFanoutOwnership::Owned),
+                "preflighted recovered Fetch fanout must enter exact-output ownership"
+            );
+        }
+        drop(pending);
+        self.operation
+            .take()
+            .expect("recovered Fetch output commit retains its fail-stop operation")
+            .complete();
+    }
+}
+
 fn maximum_orphan_chunk_bytes(layout: wire::DataAvailabilityLayout) -> u64 {
     u64::from(layout.max_chunk_count)
         .saturating_mul(u64::from(layout.chunk_size_bytes))
@@ -15341,6 +16880,184 @@ fn maximum_orphan_chunk_bytes(layout: wire::DataAvailabilityLayout) -> u64 {
 }
 
 impl ProductionV2Services {
+    /// Reserve the exact control fanout for one Broadcast-only recovered Sign.
+    ///
+    /// Proposal payloads and reducer shapes with another successor remain
+    /// outside this bounded transaction. No output is enqueued until the
+    /// returned reservation commits after LedgerV1 fsync.
+    pub(in crate::sumeragi) fn capture_recovered_lifecycle_sign_broadcast_output(
+        &self,
+        authority: super::v2::RecoveredLifecycleSignBroadcastOutputAuthorityV1,
+    ) -> Result<RecoveredLifecycleSignBroadcastOutputCaptureV1<'_>, String> {
+        let (dispatch_key, message, outbound_payload) =
+            authority.consume_for_service(RecoveredLifecycleSignBroadcastOutputPermitV1::new());
+        if !dispatch_key.matches_height_context(&self.context)
+            || outbound_payload.is_some()
+            || !matches!(
+                &message.payload,
+                wire::ConsensusMessageV2Payload::Vote(_)
+                    | wire::ConsensusMessageV2Payload::TimeoutVote(_)
+            )
+            || self.exact_output_handoff_owner.is_sealed()
+        {
+            return Err(
+                "recovered Sign Broadcast is outside the exact single-child service cut".to_owned(),
+            );
+        }
+        message
+            .validate_version()
+            .map_err(|error| error.to_string())?;
+        let encoded = Self::preencode_v2_network_message(message)?;
+        let fanout = PendingExactFanout::claimed(
+            vec![encoded],
+            self.remote_voters(),
+            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+        )?;
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "recovered Sign exact output requires restart".to_owned())?;
+        let pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            return Err("recovered Sign exact output sealed during capture".to_owned());
+        }
+        if let Some(fanout) = fanout.as_ref()
+            && !pending.can_enqueue(fanout)?
+        {
+            drop(pending);
+            operation.complete();
+            return Ok(RecoveredLifecycleSignBroadcastOutputCaptureV1::Unavailable);
+        }
+        Ok(RecoveredLifecycleSignBroadcastOutputCaptureV1::Reserved(
+            RecoveredLifecycleSignBroadcastOutputReservationV1 {
+                pending: Some(pending),
+                operation: Some(operation),
+                fanout,
+            },
+        ))
+    }
+
+    /// Consume one carrier-derived recovered Fetch through this exact service key.
+    pub(in crate::sumeragi) fn authenticate_recovered_decision_fetch_request(
+        &self,
+        authority: RecoveredDecisionFetchRequestAuthorityV1,
+    ) -> Result<RecoveredDecisionFetchRequestOwnerV1, String> {
+        if self.io.is_none() || self.lifecycle_body_store_identity.is_none() {
+            return Err(
+                "recovered Decision Fetch requires the launched body-store worker".to_owned(),
+            );
+        }
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| {
+                "recovered Decision Fetch request authentication requires restart".to_owned()
+            })?;
+        if !authority
+            .identity
+            .key()
+            .matches_height_context(&self.context)
+            || self.local_peer.public_key() != self.key_pair.public_key()
+            || authority.round.context_id != self.context.id()
+            || authority.round.height != self.context.height
+            || authority.tag.height() != self.context.height
+            || authority.sources
+                != self
+                    .context
+                    .roster
+                    .iter()
+                    .map(|entry| entry.validator.clone())
+                    .collect::<Vec<_>>()
+        {
+            return Err(
+                "recovered Decision Fetch changed its fixed production service context".to_owned(),
+            );
+        }
+        let mut request = wire::CertifiedBodyRequest {
+            round: authority.round,
+            subject: authority.subject,
+            certificate: authority.certificate,
+            requester: self.local_peer.clone(),
+            signature: Vec::new(),
+        };
+        request.signature =
+            Signature::try_new(self.key_pair.private_key(), &request.signature_preimage())
+                .map_err(|error| error.to_string())?
+                .payload()
+                .to_vec();
+        let authenticated = authenticate_certified_body_request_with_validator_pops(
+            &self.context,
+            &self.validator_set_pops,
+            request,
+            &self.local_peer,
+        )
+        .map_err(|error| error.to_string())?;
+        let owner = RecoveredDecisionFetchRequestOwnerV1 {
+            key: authority.identity.key(),
+            tag: authority.tag,
+            sources: authority.sources,
+            authenticated,
+            response_claim: None,
+        };
+        operation.complete();
+        Ok(owner)
+    }
+
+    /// Reserve exact output for an already fixed-signature recovered request.
+    pub(in crate::sumeragi) fn capture_recovered_decision_fetch_exact_output(
+        &self,
+        owner: &RecoveredDecisionFetchRequestOwnerV1,
+    ) -> Result<RecoveredDecisionFetchExactOutputCaptureV1<'_>, String> {
+        if !owner.validates_exact_executor_context(&self.context, &self.local_peer)
+            || self.exact_output_handoff_owner.is_sealed()
+        {
+            return Err(
+                "recovered Decision Fetch output belongs to another service cut".to_owned(),
+            );
+        }
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::CertifiedBodyRequest(
+                owner.authenticated.request().clone(),
+            ));
+        let encoded = Self::preencode_v2_network_message(message)?;
+        let peers = owner
+            .sources
+            .iter()
+            .filter(|peer| *peer != &self.local_peer)
+            .cloned()
+            .collect::<Vec<_>>();
+        let fanout = PendingExactFanout::claimed(
+            vec![encoded],
+            peers,
+            ExactOutputRolloverClaim::GlobalV2(self.exact_output_scope()),
+        )?;
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "recovered Decision Fetch exact output requires restart".to_owned())?;
+        let pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            return Err("recovered Decision Fetch output sealed during capture".to_owned());
+        }
+        let predecessor_debt = u64::try_from(pending.fanouts.len())
+            .map_err(|_| "recovered Decision Fetch output debt overflowed".to_owned())?;
+        if let Some(fanout) = fanout.as_ref()
+            && !pending.can_enqueue(fanout)?
+        {
+            drop(pending);
+            operation.complete();
+            return Ok(RecoveredDecisionFetchExactOutputCaptureV1::Unavailable);
+        }
+        Ok(RecoveredDecisionFetchExactOutputCaptureV1::Reserved(
+            RecoveredDecisionFetchExactOutputReservationV1 {
+                pending: Some(pending),
+                operation: Some(operation),
+                fanout,
+                predecessor_debt,
+            },
+        ))
+    }
+
     /// Return whether this service and executor share one canonical output gate.
     pub(in crate::sumeragi) fn matches_lifecycle_executor_output_guard(
         &self,
@@ -15515,6 +17232,34 @@ impl ProductionV2Services {
             .capture_recovered_decision_apply_capacity(operation, key)
     }
 
+    /// Reserve the Consensus lane for one exact lifecycle-owned recovered Sign.
+    ///
+    /// This happens before coordinator claim. The locked reservation accepts
+    /// only a borrow-bound registry projection with the same class-sensitive
+    /// key and releases all capacity automatically on every pre-commit error.
+    pub(in crate::sumeragi) fn capture_recovered_lifecycle_sign_capacity<'a>(
+        &'a self,
+        key: RecoveredLifecycleSignDispatchKeyV1,
+    ) -> Result<
+        RecoveredLifecycleSignCapacityCaptureV1<'a>,
+        RecoveredLifecycleSignCapacityCaptureErrorV1,
+    > {
+        if !key.matches_height_context(&self.context) {
+            return Err(RecoveredLifecycleSignCapacityCaptureErrorV1::ForeignContext);
+        }
+        let io = self
+            .io
+            .as_ref()
+            .ok_or(RecoveredLifecycleSignCapacityCaptureErrorV1::Disconnected)?;
+        let operation = self
+            .output_guard
+            .begin_fail_stop_operation()
+            .ok_or(RecoveredLifecycleSignCapacityCaptureErrorV1::OutputClosed)?;
+        io.command_tx
+            .queue
+            .capture_recovered_lifecycle_sign_capacity(operation, key)
+    }
+
     /// Restore the actor-global lifecycle source before constructing runtime
     /// owners for this height.
     ///
@@ -15630,7 +17375,8 @@ impl ProductionV2Services {
     ///
     /// Identity validation runs before the shared constructor creates the
     /// context chunk directory or starts any worker, so a substituted State,
-    /// Kura, network, or proof roster fails without startup side effects.
+    /// Kura, context network identity, or proof roster fails without startup
+    /// side effects.
     #[allow(clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn start_with_apply_service(
         _permit: super::v2_lifecycle_coordinator::ProductionLifecycleApplyServiceLaunchPermitV1,
@@ -17266,7 +19012,12 @@ impl ProductionV2Services {
 
     fn take_io_completion(&mut self, runtime_capacity_available: bool) -> IoCompletionTake {
         if self.held_io_completion.as_ref().is_some_and(|completion| {
-            matches!(completion, V2IoCompletion::RecoveredDecisionApply(_))
+            matches!(
+                completion,
+                V2IoCompletion::RecoveredDecisionApply(_)
+                    | V2IoCompletion::RecoveredLifecycleSign(_)
+                    | V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)
+            )
         }) {
             return IoCompletionTake::retained_runtime();
         }
@@ -17282,6 +19033,22 @@ impl ProductionV2Services {
         let Some(io) = self.io.as_ref() else {
             return IoCompletionTake::unavailable();
         };
+        if ownership_position != 0
+            && io
+                .completion_ownership_at(ownership_position)
+                .is_some_and(|owned| {
+                    owned.recovered_decision_apply.is_some()
+                        || owned.recovered_lifecycle_sign.is_some()
+                        || owned.recovered_decision_fetch.is_some()
+                })
+        {
+            // There is only one payload parking slot. A lifecycle-owned
+            // completion behind an already-held runtime result must remain in
+            // the physical channel until that result is serviced; receiving it
+            // here would detach the payload from its keyed owner or overwrite
+            // the held result.
+            return IoCompletionTake::retained_runtime();
+        }
         // Once the oldest runtime-producing result has crossed the physical
         // channel boundary, keep exactly that one result unacknowledged. The
         // ownership tracker lets us look past it only when the next published
@@ -17295,10 +19062,15 @@ impl ProductionV2Services {
         let Ok(completion) = io.try_recv_completion_unacknowledged() else {
             return IoCompletionTake::unavailable();
         };
-        if matches!(&completion, V2IoCompletion::RecoveredDecisionApply(_)) {
+        if matches!(
+            &completion,
+            V2IoCompletion::RecoveredDecisionApply(_)
+                | V2IoCompletion::RecoveredLifecycleSign(_)
+                | V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)
+        ) {
             assert!(
                 self.held_io_completion.is_none(),
-                "completion ownership metadata must preserve one recovered Apply head"
+                "completion ownership metadata must preserve one recovered lifecycle head"
             );
             self.held_io_completion = Some(completion);
             return IoCompletionTake::retained_runtime();
@@ -17335,6 +19107,68 @@ impl ProductionV2Services {
             return IoCompletionTake::unavailable();
         };
         if matches!(&completion, V2IoCompletion::RecoveredDecisionApply(_)) {
+            IoCompletionTake::ready(PendingServiceCompletion::Io {
+                completion,
+                ownership_position: 0,
+            })
+        } else {
+            self.held_io_completion = Some(completion);
+            IoCompletionTake::unavailable()
+        }
+    }
+
+    fn take_recovered_lifecycle_sign_completion(&mut self) -> IoCompletionTake {
+        if let Some(completion) = self.held_io_completion.take() {
+            if matches!(&completion, V2IoCompletion::RecoveredLifecycleSign(_)) {
+                return IoCompletionTake::ready(PendingServiceCompletion::Io {
+                    completion,
+                    ownership_position: 0,
+                });
+            }
+            self.held_io_completion = Some(completion);
+            return IoCompletionTake::unavailable();
+        }
+        let Some(io) = self.io.as_ref() else {
+            return IoCompletionTake::unavailable();
+        };
+        let Ok(completion) = io.try_recv_completion_unacknowledged() else {
+            return IoCompletionTake::unavailable();
+        };
+        if matches!(&completion, V2IoCompletion::RecoveredLifecycleSign(_)) {
+            IoCompletionTake::ready(PendingServiceCompletion::Io {
+                completion,
+                ownership_position: 0,
+            })
+        } else {
+            self.held_io_completion = Some(completion);
+            IoCompletionTake::unavailable()
+        }
+    }
+
+    fn take_recovered_decision_fetch_body_completion(&mut self) -> IoCompletionTake {
+        if let Some(completion) = self.held_io_completion.take() {
+            if matches!(
+                &completion,
+                V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)
+            ) {
+                return IoCompletionTake::ready(PendingServiceCompletion::Io {
+                    completion,
+                    ownership_position: 0,
+                });
+            }
+            self.held_io_completion = Some(completion);
+            return IoCompletionTake::unavailable();
+        }
+        let Some(io) = self.io.as_ref() else {
+            return IoCompletionTake::unavailable();
+        };
+        let Ok(completion) = io.try_recv_completion_unacknowledged() else {
+            return IoCompletionTake::unavailable();
+        };
+        if matches!(
+            &completion,
+            V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)
+        ) {
             IoCompletionTake::ready(PendingServiceCompletion::Io {
                 completion,
                 ownership_position: 0,
@@ -17487,6 +19321,12 @@ impl ProductionV2Services {
         let Some(completion) = self.held_io_completion.take() else {
             return;
         };
+        if matches!(&completion, V2IoCompletion::RecoveredLifecycleSign(_)) {
+            // Dropping the armed completion closes output while `self.io`
+            // still retains the dedicated queue/index owner. It must never be
+            // acknowledged or removed by generic teardown.
+            return;
+        }
         if !matches!(&completion, V2IoCompletion::CertifiedResponse { .. })
             && let Some(io) = self.io.as_ref()
         {
@@ -17541,6 +19381,67 @@ impl ProductionV2Services {
             .prepare_recovered_decision_apply_ack(key, Arc::clone(&self.output_guard))?;
         Ok(RecoveredDecisionApplyCompletionDrainV1 {
             completion: Some(PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack }),
+        })
+    }
+
+    /// Drain only the oldest lifecycle-owned recovered Sign completion.
+    ///
+    /// The returned token remains opaque and guarded. A different FIFO head is
+    /// parked for its ordinary owner, and generic drains likewise never
+    /// acknowledge or remove this dedicated completion.
+    pub(in crate::sumeragi) fn drain_recovered_lifecycle_sign_completion(
+        &mut self,
+    ) -> Result<RecoveredLifecycleSignCompletionDrainV1, String> {
+        if self.output_guard.restart_required() {
+            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+        }
+        let take = self.take_recovered_lifecycle_sign_completion();
+        let Some(PendingServiceCompletion::Io {
+            completion: V2IoCompletion::RecoveredLifecycleSign(guarded),
+            ownership_position,
+        }) = take.completion
+        else {
+            return Ok(RecoveredLifecycleSignCompletionDrainV1 { completion: None });
+        };
+        let completion = self
+            .io
+            .as_ref()
+            .and_then(|io| {
+                io.prepare_recovered_lifecycle_sign_completion(guarded, ownership_position)
+            })
+            .ok_or_else(|| "recovered Sign completion lost its exact dedicated owner".to_owned())?;
+        Ok(RecoveredLifecycleSignCompletionDrainV1 {
+            completion: Some(completion),
+        })
+    }
+
+    /// Drain only the oldest lifecycle-owned recovered Fetch body completion.
+    /// Generic completion service retains this family at the physical head.
+    pub(in crate::sumeragi) fn drain_recovered_decision_fetch_body_completion(
+        &mut self,
+    ) -> Result<RecoveredDecisionFetchBodyCompletionDrainV1, String> {
+        if self.output_guard.restart_required() {
+            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+        }
+        let take = self.take_recovered_decision_fetch_body_completion();
+        let Some(PendingServiceCompletion::Io {
+            completion: V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded),
+            ownership_position,
+        }) = take.completion
+        else {
+            return Ok(RecoveredDecisionFetchBodyCompletionDrainV1 { completion: None });
+        };
+        let completion = self
+            .io
+            .as_ref()
+            .and_then(|io| {
+                io.prepare_recovered_decision_fetch_body_completion(guarded, ownership_position)
+            })
+            .ok_or_else(|| {
+                "recovered Decision Fetch body completion lost its exact dedicated owner".to_owned()
+            })?;
+        Ok(RecoveredDecisionFetchBodyCompletionDrainV1 {
+            completion: Some(completion),
         })
     }
 
@@ -17907,6 +19808,24 @@ impl ProductionV2Services {
                         ));
                     }
                     PendingServiceCompletion::Io {
+                        completion: V2IoCompletion::RecoveredLifecycleSign(_),
+                        ..
+                    } => {
+                        return Err(executor.external_service_failed(
+                            "recovered Sign completion crossed the generic executor drain",
+                            self,
+                        ));
+                    }
+                    PendingServiceCompletion::Io {
+                        completion: V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_),
+                        ..
+                    } => {
+                        return Err(executor.external_service_failed(
+                            "recovered Decision Fetch body crossed the generic executor drain",
+                            self,
+                        ));
+                    }
+                    PendingServiceCompletion::Io {
                         completion:
                             V2IoCompletion::CandidateLoadUnavailable {
                                 acquisition_id,
@@ -18007,9 +19926,15 @@ impl ProductionV2Services {
                 Ok(())
             })();
             if let Some((acknowledgement, ownership_position)) = io_acknowledgement {
-                let acknowledge =
-                    !matches!(&acknowledgement, V2IoCompletionAcknowledgement::Serve(_))
-                        || serviced.is_ok();
+                let acknowledge = match &acknowledgement {
+                    V2IoCompletionAcknowledgement::RecoveredLifecycleSignRetained
+                    | V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained => false,
+                    V2IoCompletionAcknowledgement::Serve(_) => serviced.is_ok(),
+                    V2IoCompletionAcknowledgement::Work(_)
+                    | V2IoCompletionAcknowledgement::LifecycleWorkRetained
+                    | V2IoCompletionAcknowledgement::RecoveredDecisionApplyRetained
+                    | V2IoCompletionAcknowledgement::Untracked => true,
+                };
                 if acknowledge && let Some(io) = self.io.as_ref() {
                     let acknowledged =
                         io.acknowledge_completion_at(acknowledgement, ownership_position);
@@ -20850,9 +22775,9 @@ pub(super) mod tests {
         let admission = V2IoAdmission::new(2, 2).expect("construct bounded I/O admission");
         let key = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 1);
         let same_ordinal_foreign = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 2);
-        admission.retain_completion(Instant::now(), false, None, None);
-        admission.retain_completion(Instant::now(), true, Some(7), Some(key));
-        admission.retain_completion(Instant::now(), false, Some(8), None);
+        admission.retain_completion(Instant::now(), false, None, None, None, None);
+        admission.retain_completion(Instant::now(), true, Some(7), Some(key), None, None);
+        admission.retain_completion(Instant::now(), false, Some(8), None, None, None);
 
         assert!(admission.recovered_decision_apply_completion_is_exact(key));
         assert!(
@@ -20880,9 +22805,16 @@ pub(super) mod tests {
             v2_io_command_channel(admission.capacity(), 1, 1, 1, Arc::clone(&admission));
         let key = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 1);
         let same_ordinal_foreign = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 2);
-        admission.retain_completion(Instant::now(), false, None, None);
-        admission.retain_completion(Instant::now(), true, Some(7), Some(key));
-        admission.retain_completion(Instant::now(), true, Some(7), Some(same_ordinal_foreign));
+        admission.retain_completion(Instant::now(), false, None, None, None, None);
+        admission.retain_completion(Instant::now(), true, Some(7), Some(key), None, None);
+        admission.retain_completion(
+            Instant::now(),
+            true,
+            Some(7),
+            Some(same_ordinal_foreign),
+            None,
+            None,
+        );
         command_tx.queue.lock().recovered_decision_applies.insert(
             key,
             V2IoTrackedRecoveredDecisionApplyV1 {
@@ -20961,7 +22893,7 @@ pub(super) mod tests {
                 .try_send(V2IoCommand::Shutdown)
                 .expect("fill the sole physical queue position");
             let key = RecoveredDecisionApplyDispatchKeyV1::for_test(11, 3);
-            admission.retain_completion(Instant::now(), true, Some(11), Some(key));
+            admission.retain_completion(Instant::now(), true, Some(11), Some(key), None, None);
             command_tx.queue.lock().recovered_decision_applies.insert(
                 key,
                 V2IoTrackedRecoveredDecisionApplyV1 {
@@ -21046,7 +22978,7 @@ pub(super) mod tests {
             .expect("reserve an unclaimed Serve placeholder")
             .lifecycle_id;
         let key = RecoveredDecisionApplyDispatchKeyV1::for_test(13, 4);
-        admission.retain_completion(Instant::now(), true, Some(13), Some(key));
+        admission.retain_completion(Instant::now(), true, Some(13), Some(key), None, None);
         command_tx.queue.lock().recovered_decision_applies.insert(
             key,
             V2IoTrackedRecoveredDecisionApplyV1 {
@@ -25534,6 +27466,658 @@ pub(super) mod tests {
         assert_eq!(work_id, expected_work_id);
         assert!(!signature.is_empty());
         assert_eq!(restored, payload);
+    }
+
+    #[test]
+    fn recovered_lifecycle_signing_is_exact_and_class_sensitive_for_all_three_families() {
+        use super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1;
+
+        let phase_key = RecoveredLifecycleSignDispatchKeyV1::for_test(
+            7,
+            9,
+            RecoveredLifecycleSignClassV1::PhaseVote,
+        );
+        let proposal_key = RecoveredLifecycleSignDispatchKeyV1::for_test(
+            7,
+            9,
+            RecoveredLifecycleSignClassV1::ControlProposal,
+        );
+        let timeout_key = RecoveredLifecycleSignDispatchKeyV1::for_test(
+            7,
+            9,
+            RecoveredLifecycleSignClassV1::ControlTimeout,
+        );
+        assert_ne!(phase_key, proposal_key);
+        assert_ne!(phase_key, timeout_key);
+        assert_ne!(proposal_key, timeout_key);
+
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let directory = TempDir::new().expect("temporary recovered Sign body store");
+        let mut body_store = V2BodyStore::open(directory.path(), service.context.clone())
+            .expect("open recovered Sign body store");
+        let (canonical_wire, payload, proposal) =
+            proposal_body_and_payload(&service.context, &keys);
+        body_store
+            .store(payload.manifest().clone(), canonical_wire)
+            .expect("store exact recovered Proposal body");
+        let proposal_tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(1),
+        );
+        let proposal_signer =
+            usize::try_from(proposal.proposer).expect("fixture proposer index is representable");
+        let proposal_result = sign_recovered_lifecycle_task(
+            &body_store,
+            &service.context,
+            &keys[proposal_signer],
+            RecoveredLifecycleSignTaskV1::for_test(
+                11,
+                proposal_tag,
+                super::super::v2::SignRequest::Proposal(proposal.clone()),
+                RecoveredLifecycleSignClassV1::ControlProposal,
+            ),
+        )
+        .expect("sign exact recovered Proposal");
+        assert!(proposal_result.is_exact());
+        assert_eq!(
+            proposal_result
+                .outbound_payload
+                .as_ref()
+                .expect("Proposal restores its exact outbound body"),
+            &payload
+        );
+
+        let mut vote = routing_vote(&service, proposal.round.view, wire::GlobalPhase::Prepare);
+        vote.signature.clear();
+        let vote_request = super::super::v2::SignRequest::Vote(vote);
+        let vote_result = sign_recovered_lifecycle_task(
+            &body_store,
+            &service.context,
+            &keys[usize::try_from(service.local_validator.expect("local voter"))
+                .expect("local voter index")],
+            RecoveredLifecycleSignTaskV1::for_test(
+                11,
+                proposal_tag,
+                vote_request.clone(),
+                RecoveredLifecycleSignClassV1::PhaseVote,
+            ),
+        )
+        .expect("sign exact recovered phase vote");
+        assert!(vote_result.is_exact());
+        assert!(vote_result.outbound_payload.is_none());
+        assert_eq!(
+            vote_result.task.prepared_candidate,
+            Some(PreparedCandidateBody {
+                tag: proposal_tag,
+                subject: match &vote_request {
+                    super::super::v2::SignRequest::Vote(vote) => vote.subject,
+                    _ => unreachable!("fixture retains one Prepare vote"),
+                },
+            }),
+            "opaque PhaseVote task retains its future Prepare-body successor marker"
+        );
+
+        let timeout = wire::TimeoutVote {
+            round: proposal.round,
+            highest_prepare_qc: None,
+            signer: service.local_validator.expect("local timeout voter"),
+            signature: Vec::new(),
+        };
+        let timeout_request = super::super::v2::SignRequest::TimeoutVote(timeout);
+        let timeout_result = sign_recovered_lifecycle_task(
+            &body_store,
+            &service.context,
+            &keys[usize::try_from(service.local_validator.expect("local voter"))
+                .expect("local voter index")],
+            RecoveredLifecycleSignTaskV1::for_test(
+                11,
+                proposal_tag,
+                timeout_request.clone(),
+                RecoveredLifecycleSignClassV1::ControlTimeout,
+            ),
+        )
+        .expect("sign exact recovered timeout vote");
+        assert!(timeout_result.is_exact());
+        assert!(timeout_result.outbound_payload.is_none());
+
+        assert_ne!(proposal_result.dispatch_key(), vote_result.dispatch_key());
+        assert_ne!(vote_result.dispatch_key(), timeout_result.dispatch_key());
+        assert!(
+            RecoveredLifecycleSignDispatchIdentityV1::for_test(
+                11,
+                proposal_tag,
+                &vote_request,
+                RecoveredLifecycleSignClassV1::ControlProposal,
+            )
+            .is_none(),
+            "a phase vote cannot alias the Proposal key class"
+        );
+        assert!(
+            RecoveredLifecycleSignDispatchIdentityV1::for_test(
+                11,
+                proposal_tag,
+                &timeout_request,
+                RecoveredLifecycleSignClassV1::PhaseVote,
+            )
+            .is_none(),
+            "a timeout vote cannot alias the PhaseVote key class"
+        );
+        let changed_tag = EventTag::new(
+            proposal_tag.height(),
+            proposal_tag.view(),
+            Generation::new(proposal_tag.generation().get() + 1),
+        );
+        let identity = RecoveredLifecycleSignDispatchIdentityV1::for_test(
+            12,
+            proposal_tag,
+            &vote_request,
+            RecoveredLifecycleSignClassV1::PhaseVote,
+        )
+        .expect("mint exact vote identity");
+        assert!(
+            RecoveredLifecycleSignTaskV1::from_registry_projection(
+                identity,
+                changed_tag,
+                vote_request,
+            )
+            .is_none(),
+            "carrier-to-task projection pins exact tag and request transitively"
+        );
+
+        let mut historical_commit = routing_vote(&service, 0, wire::GlobalPhase::Commit);
+        historical_commit.signature.clear();
+        let historical_request = super::super::v2::SignRequest::Vote(historical_commit);
+        let later_tag = EventTag::new(
+            service.context.height,
+            3,
+            Generation::new(proposal_tag.generation().get() + 5),
+        );
+        let historical_identity = RecoveredLifecycleSignDispatchIdentityV1::for_test(
+            13,
+            later_tag,
+            &historical_request,
+            RecoveredLifecycleSignClassV1::PhaseVote,
+        )
+        .expect("historical Commit request remains exact under its later retained tag");
+        assert!(
+            RecoveredLifecycleSignTaskV1::from_registry_projection(
+                historical_identity,
+                later_tag,
+                historical_request.clone(),
+            )
+            .is_some(),
+            "PhaseVote exactness must not invent tag-view equality with the intrinsic vote round"
+        );
+        let changed_later_tag = EventTag::new(
+            later_tag.height(),
+            later_tag.view(),
+            Generation::new(later_tag.generation().get() + 1),
+        );
+        let historical_identity = RecoveredLifecycleSignDispatchIdentityV1::for_test(
+            14,
+            later_tag,
+            &historical_request,
+            RecoveredLifecycleSignClassV1::PhaseVote,
+        )
+        .expect("mint the unchanged historical Commit identity");
+        assert!(
+            RecoveredLifecycleSignTaskV1::from_registry_projection(
+                historical_identity,
+                changed_later_tag,
+                historical_request,
+            )
+            .is_none(),
+            "changing the retained tag must still change the complete effect identity"
+        );
+    }
+
+    #[test]
+    fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction() {
+        use super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1;
+
+        let (mut service, keys) = fixture();
+        let directory = TempDir::new().expect("temporary recovered Sign body store");
+        let body_store = V2BodyStore::open(directory.path(), service.context.clone())
+            .expect("open recovered Sign body store");
+        let tag = EventTag::new(service.context.height, 0, Generation::new(1));
+        let mut vote = routing_vote(&service, 0, wire::GlobalPhase::Prepare);
+        vote.signature.clear();
+        let task = RecoveredLifecycleSignTaskV1::for_test(
+            31,
+            tag,
+            super::super::v2::SignRequest::Vote(vote),
+            RecoveredLifecycleSignClassV1::PhaseVote,
+        );
+        let key = task.dispatch_key();
+        let admission = Arc::new(V2IoAdmission::new(2, 2).expect("bounded Sign admission"));
+        let (command_tx, command_rx) = v2_io_command_channel(2, 1, 1, 1, Arc::clone(&admission));
+        let output_guard = ConsensusOutputGuard::isolated();
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .expect("reserve under an open output guard");
+        let RecoveredLifecycleSignCapacityCaptureV1::Reserved(reservation) = command_tx
+            .queue
+            .capture_recovered_lifecycle_sign_capacity(operation, key)
+            .expect("capture one dedicated recovered Sign position")
+        else {
+            panic!("empty Consensus lane must reserve recovered Sign capacity");
+        };
+        reservation.commit_for_test(task);
+        assert_eq!(
+            command_rx
+                .queue
+                .lock()
+                .recovered_lifecycle_signs
+                .get(&key)
+                .map(|tracked| tracked.state),
+            Some(V2IoWorkState::Queued)
+        );
+
+        let task = match command_rx
+            .try_recv()
+            .expect("activate the exact recovered Sign command")
+        {
+            V2IoCommand::RecoveredLifecycleSign(task) => task,
+            _ => panic!("dedicated reservation published another command family"),
+        };
+        assert_eq!(
+            command_rx
+                .queue
+                .lock()
+                .recovered_lifecycle_signs
+                .get(&key)
+                .map(|tracked| tracked.state),
+            Some(V2IoWorkState::Active)
+        );
+        let result = sign_recovered_lifecycle_task(
+            &body_store,
+            &service.context,
+            &keys[usize::try_from(service.local_validator.expect("local voter"))
+                .expect("local voter index")],
+            task,
+        )
+        .expect("sign the exact recovered phase vote");
+        command_rx
+            .complete_recovered_lifecycle_sign(key, &result)
+            .expect("seal the exact worker result under its dedicated key");
+        assert_eq!(
+            command_rx
+                .queue
+                .lock()
+                .recovered_lifecycle_signs
+                .get(&key)
+                .map(|tracked| tracked.state),
+            Some(V2IoWorkState::CompletionPending)
+        );
+
+        let (completion_tx, completion_rx) = mpsc::sync_channel(2);
+        send_tracked_completion_with_lifecycle_ordinal(
+            &completion_tx,
+            admission.as_ref(),
+            V2IoCompletion::RecoveredLifecycleSign(Box::new(
+                GuardedRecoveredLifecycleSignWorkerResultV1::new(result, Arc::clone(&output_guard)),
+            )),
+            Some(key.lifecycle_ordinal()),
+        )
+        .expect("publish tracked recovered Sign completion");
+        send_tracked_completion_with_lifecycle_ordinal(
+            &completion_tx,
+            admission.as_ref(),
+            V2IoCompletion::AuxiliaryNoop,
+            Some(key.lifecycle_ordinal() + 1),
+        )
+        .expect("publish unrelated completion behind recovered Sign");
+        service.output_guard = Arc::clone(&output_guard);
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission: Arc::clone(&admission),
+        });
+
+        let generic = service.take_io_completion(true);
+        assert!(generic.completion.is_none() && generic.retained_runtime);
+        let retained = service
+            .drain_recovered_lifecycle_sign_completion()
+            .expect("extract only the opaque recovered Sign owner")
+            .into_completion()
+            .expect("the parked Sign head belongs to this lifecycle owner");
+        {
+            let owned = admission
+                .completion_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            assert_eq!(owned.owned.len(), 1);
+            assert!(owned.owned[0].recovered_lifecycle_sign.is_none());
+        }
+        assert_eq!(
+            command_rx
+                .queue
+                .lock()
+                .recovered_lifecycle_signs
+                .get(&key)
+                .map(|tracked| tracked.state),
+            Some(V2IoWorkState::CompletionPending),
+            "opaque extraction must retain the dedicated command index"
+        );
+
+        let unrelated = service.take_io_completion(true);
+        let Some(PendingServiceCompletion::Io {
+            completion: V2IoCompletion::AuxiliaryNoop,
+            ownership_position,
+        }) = unrelated.completion
+        else {
+            panic!("the unrelated completion must remain aligned behind extracted Sign");
+        };
+        service
+            .io
+            .as_ref()
+            .expect("test I/O remains installed")
+            .acknowledge_completion_at(V2IoCompletionAcknowledgement::Untracked, ownership_position)
+            .expect("acknowledge only the unrelated completion");
+        assert!(
+            admission
+                .completion_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .owned
+                .is_empty()
+        );
+        assert_eq!(
+            command_rx
+                .queue
+                .lock()
+                .recovered_lifecycle_signs
+                .get(&key)
+                .map(|tracked| tracked.state),
+            Some(V2IoWorkState::CompletionPending)
+        );
+
+        let duplicate_guard = ConsensusOutputGuard::isolated();
+        let duplicate_operation = duplicate_guard
+            .begin_fail_stop_operation()
+            .expect("open duplicate-dispatch probe");
+        assert!(matches!(
+            command_rx
+                .queue
+                .capture_recovered_lifecycle_sign_capacity(duplicate_operation, key),
+            Err(RecoveredLifecycleSignCapacityCaptureErrorV1::AlreadyDispatched)
+        ));
+        assert_eq!(
+            command_rx
+                .queue
+                .lock()
+                .recovered_lifecycle_signs
+                .get(&key)
+                .map(|tracked| tracked.state),
+            Some(V2IoWorkState::CompletionPending),
+            "duplicate dispatch coalesces on the retained exact owner"
+        );
+        assert!(
+            !duplicate_guard.restart_required(),
+            "duplicate preflight releases its uncommitted fail-stop operation"
+        );
+
+        let adapter_authority = retained
+            .project_adapter_completion_authority()
+            .expect("the exact parked result projects one sealed adapter preview authority");
+        drop(adapter_authority);
+        assert!(
+            !output_guard.restart_required(),
+            "dropping only the cloned preview authority cannot acknowledge the parked owner"
+        );
+
+        drop(retained);
+        assert!(output_guard.restart_required());
+    }
+
+    #[test]
+    fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extraction() {
+        let (mut service, keys) = fixture_with_block_payload();
+        let (canonical_wire, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let request = authenticated_serve_request(
+            &service.context,
+            &keys[0],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Commit,
+        );
+        let response = certified_serve_response(
+            &request,
+            proposal.manifest.clone(),
+            canonical_wire,
+            &keys[0],
+        );
+        let authenticated = request
+            .authenticate_response(
+                &service.context,
+                response,
+                &service.context.roster[0].validator,
+            )
+            .expect("authenticate the exact recovered Fetch response fixture");
+        let key = RecoveredDecisionFetchDispatchKeyV1::for_test(37, 0xB1);
+        let target = LifecycleIngressIoTargetSeal::for_recovered_decision_fetch_test(
+            &service.context,
+            key,
+            23,
+        );
+        let task =
+            RecoveredDecisionFetchBodyPersistenceTaskV1::for_test(&target, key, authenticated);
+        let response_hash = task.response_hash();
+
+        let admission = Arc::new(V2IoAdmission::new(2, 2).expect("bounded Fetch admission"));
+        let (command_tx, command_rx) = v2_io_command_channel(2, 1, 1, 1, Arc::clone(&admission));
+        let output_guard = ConsensusOutputGuard::isolated();
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .expect("reserve under an open output guard");
+        let V2IoLifecycleCapacityCapture::Reserved(reservation) = command_tx
+            .queue
+            .capture_lifecycle_capacity(operation, Arc::clone(&output_guard), target)
+            .expect("capture one dedicated recovered Fetch persistence position")
+        else {
+            panic!("empty Consensus lane must reserve recovered Fetch capacity");
+        };
+        assert!(reservation.preflight_recovered_decision_fetch_body_persistence(&task));
+        reservation.commit_recovered_decision_fetch_body_persistence(task);
+        assert_eq!(
+            command_rx
+                .queue
+                .lock()
+                .recovered_decision_fetch_bodies
+                .get(&key)
+                .map(|tracked| (tracked.state, tracked.response_hash)),
+            Some((V2IoWorkState::Queued, response_hash))
+        );
+
+        let task = match command_rx
+            .try_recv()
+            .expect("activate the exact recovered Fetch persistence command")
+        {
+            V2IoCommand::PersistRecoveredDecisionFetchBody(task) => task,
+            _ => panic!("dedicated reservation published another command family"),
+        };
+        assert_eq!(
+            command_rx
+                .queue
+                .lock()
+                .recovered_decision_fetch_bodies
+                .get(&key)
+                .map(|tracked| tracked.state),
+            Some(V2IoWorkState::Active)
+        );
+
+        let directory = TempDir::new().expect("temporary recovered Fetch body store");
+        let mut body_store = V2BodyStore::open(directory.path(), service.context.clone())
+            .expect("open recovered Fetch body store");
+        let completion = task
+            .persist(&mut body_store)
+            .map_err(|(error, _)| error)
+            .expect("persist the exact authenticated recovered Fetch response");
+        command_rx
+            .complete_recovered_decision_fetch_body(key, &completion)
+            .expect("seal the exact durable response under its dedicated key");
+        assert_eq!(
+            command_rx
+                .queue
+                .lock()
+                .recovered_decision_fetch_bodies
+                .get(&key)
+                .map(|tracked| tracked.state),
+            Some(V2IoWorkState::CompletionPending)
+        );
+
+        let ordinary_tag = EventTag::new(service.context.height, 0, Generation::new(2));
+        let mut ordinary_vote = routing_vote(&service, 0, wire::GlobalPhase::Prepare);
+        ordinary_vote.signature.clear();
+        let ordinary_task = ConsensusSignTask::for_test(
+            36,
+            ordinary_tag,
+            super::super::v2::SignRequest::Vote(ordinary_vote),
+        );
+        let ordinary_id = ordinary_task.id();
+        let ordinary_ordinal = ordinary_task.lifecycle_ordinal();
+        command_tx
+            .try_send(V2IoCommand::Sign {
+                task: ordinary_task,
+                restore_outbound_payload: false,
+            })
+            .expect("queue an ordinary runtime-producing predecessor completion");
+        assert!(matches!(
+            command_rx.try_recv(),
+            Ok(V2IoCommand::Sign { task, .. }) if task.id() == ordinary_id
+        ));
+        command_rx.complete_work(ordinary_id);
+
+        let (completion_tx, completion_rx) = mpsc::sync_channel(2);
+        send_tracked_completion_with_lifecycle_ordinal(
+            &completion_tx,
+            admission.as_ref(),
+            V2IoCompletion::Signature {
+                work_id: ordinary_id,
+                signature: vec![0x51],
+                outbound_payload: None,
+            },
+            Some(ordinary_ordinal),
+        )
+        .expect("publish the ordinary predecessor completion");
+        send_tracked_completion_with_lifecycle_ordinal(
+            &completion_tx,
+            admission.as_ref(),
+            V2IoCompletion::RecoveredDecisionFetchBodyPersisted(Box::new(
+                GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1::new(
+                    completion,
+                    Arc::clone(&output_guard),
+                ),
+            )),
+            Some(key.lifecycle_ordinal()),
+        )
+        .expect("publish tracked recovered Fetch completion");
+        service.output_guard = Arc::clone(&output_guard);
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission: Arc::clone(&admission),
+        });
+
+        let generic = service.take_io_completion(false);
+        assert!(generic.completion.is_none() && generic.retained_runtime);
+        let still_blocked = service.take_io_completion(false);
+        assert!(still_blocked.completion.is_none() && still_blocked.retained_runtime);
+        assert_eq!(
+            admission
+                .completion_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .owned
+                .len(),
+            2,
+            "the recovered Fetch payload remains in-channel behind the held runtime result"
+        );
+        let ordinary = service.take_io_completion(true);
+        let Some(PendingServiceCompletion::Io {
+            completion: V2IoCompletion::Signature { work_id, .. },
+            ownership_position,
+        }) = ordinary.completion
+        else {
+            panic!("available runtime capacity must service the held ordinary predecessor");
+        };
+        assert_eq!(work_id, ordinary_id);
+        service
+            .io
+            .as_ref()
+            .expect("test I/O remains installed")
+            .acknowledge_completion_at(
+                V2IoCompletionAcknowledgement::Work(work_id),
+                ownership_position,
+            )
+            .expect("acknowledge the ordinary predecessor only");
+        let retained = service
+            .drain_recovered_decision_fetch_body_completion()
+            .expect("extract only the dedicated recovered Fetch completion")
+            .into_completion()
+            .expect("the parked completion retains its exact queue owner");
+        assert_eq!(
+            command_rx
+                .queue
+                .lock()
+                .recovered_decision_fetch_bodies
+                .get(&key)
+                .map(|tracked| tracked.state),
+            Some(V2IoWorkState::CompletionPending),
+            "opaque extraction must retain the dedicated persistence index"
+        );
+        assert!(
+            admission
+                .completion_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .owned
+                .is_empty(),
+            "dedicated extraction transfers only completion metadata"
+        );
+
+        drop(retained);
+        assert!(output_guard.restart_required());
+    }
+
+    #[test]
+    fn recovered_lifecycle_sign_capacity_unavailable_leaves_no_dedicated_index() {
+        use super::super::v2_lifecycle_coordinator::RecoveredLifecycleSignClassV1;
+
+        let admission = Arc::new(V2IoAdmission::new(1, 1).expect("bounded Sign admission"));
+        let (command_tx, command_rx) = v2_io_command_channel(1, 1, 1, 1, Arc::clone(&admission));
+        command_tx
+            .try_send(V2IoCommand::Shutdown)
+            .expect("fill the sole physical queue position");
+        let key = RecoveredLifecycleSignDispatchKeyV1::for_test(
+            41,
+            5,
+            RecoveredLifecycleSignClassV1::ControlTimeout,
+        );
+        let output_guard = ConsensusOutputGuard::isolated();
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .expect("probe capacity under an open output guard");
+        assert!(matches!(
+            command_tx
+                .queue
+                .capture_recovered_lifecycle_sign_capacity(operation, key),
+            Ok(RecoveredLifecycleSignCapacityCaptureV1::Unavailable)
+        ));
+        assert!(!output_guard.restart_required());
+        assert!(
+            command_rx.queue.lock().recovered_lifecycle_signs.is_empty(),
+            "unavailable capacity cannot publish a dedicated Sign index"
+        );
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
+        assert!(matches!(command_rx.try_recv(), Ok(V2IoCommand::Shutdown)));
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
     }
 
     include!("tests/v2_worker_nonzero_view_restart.rs");

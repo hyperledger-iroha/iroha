@@ -214,6 +214,23 @@ independently complete direct-registry subset. It derives the entire Ready
 census from coordinator indexes, reattests each exact Validate address through
 the concrete registry, and accepts closed validated or rejected completion
 carriers plus the exact body-receipt-bound recovered Decision Apply carrier.
+Recovered PhaseVote and standalone Proposal/Timeout Sign carriers use a
+separate dispatch-only transaction. The owner rejoins its exact launched body
+store and executor/output guard, reauthenticates the one current Ready row, and
+for PhaseVote also rechecks the unchanged terminal Validate parent and typed
+Validate-to-Sign continuation. It then reserves one class-sensitive Consensus
+queue position before claiming the row. Any post-claim projection failure must
+restore the unpublished claim or fail-stop; no durable or service mutation has
+occurred, so restart reconstructs the Ready carrier.
+
+The worker task retains the complete event tag/request and any future Prepare
+body marker; the guarded result additionally retains the exact Proposal body
+payload when required and the signature. None has a parts or payload accessor.
+Generic completion draining parks this family without acknowledgement. The
+owner-only extraction removes the exact completion-position accounting entry
+but keeps the dedicated command index `CompletionPending`, and dropping the
+opaque guard closes output for restart. Settlement is intentionally absent
+until each Signed successor family has a WAL-ahead, restart-closed transaction.
 The Apply attestation exposes only its typed bounded-I/O demand and an opaque
 exact-position dispatch key. It is rejected before row construction or lease
 mutation until the worker capacity cut is present. Validate completion debts
@@ -250,17 +267,23 @@ observation against the borrowed live executor before reserving or planning.
 Runner freshness remains tied to the pending current-turn call boundary.
 
 The body store is an equally strict pending boundary. The unified factory
-removes its production root reopen and accepts only a `RevalidatedV2BodyStore`
-made by consuming an already open instance after semantic marker replay.
+removes its production root reopen and accepts only a freshly opened,
+move-only `QuarantinedV2BodyStore` beside an adapter-bound execution/storage
+seal. Minting that cut rejects markers already promoted, rejected, or retired.
 Authenticated height recovery first mints a move-only storage authority that
 binds the exact live Kura instance, verified context, context-addressed
 lifecycle/body roots, genesis-or-rotating signature policy, and the universal
 genesis account derived from the same authenticated genesis key. The production
-owner factory consumes that authority and accepts none of those components as
-independent inputs. Launch releases the account only after rechecking the exact
-Kura instance. The sealed owner launch then transfers that exact
-non-clone store through the serialized runtime and executor into
-`ProductionV2Services::start`. Staged-genesis verification seals the exact
+owner factory consumes that authority, checks exact State/Kura Arc and network
+identity plus its private authenticated-startup marker, and accepts none of
+those components as independent inputs. It constructs one `V2ApplyService`;
+the quarantine's sole consuming operation filters markers by recovered-
+finality subject then authenticated WAL authority, semantically revalidates,
+and seals them. The owner retains that exact service for live Apply. The sealed
+owner launch then transfers that exact store and service
+through the serialized runtime and executor into
+`ProductionV2Services::start_with_apply_service` under a parent-sealed move-only
+permit. Staged-genesis verification seals the exact
 signed body into a move-only recovery token; only that optional token can
 install the body into the executor before the worker exists. The transition then
 retains only its comparison seal. Construction and every consuming validation
@@ -1230,15 +1253,31 @@ vector all agree. Byte-identical intent records may recur, so reverse scanning
 selects the later exact match; later WAL frames may own queued phase signatures.
 The control token retains a non-decodable frame identity, exact effect,
 canonical V1 replay evidence, and one-shot pending/candidate mint authority.
-The runner-owned body store must already have replayed every durable marker and
-consumed itself into the non-clone `RevalidatedV2BodyStore` cut. That cut is the
-sole production body-store argument; only a sealed test helper may reopen a
-fixture root. WAL projection happens before the cut is unsealed and before
-Certified-Serve or LedgerV1 is opened. Startup mints authority for only that
+The runner-owned body store first crosses a move-only fresh-quarantine cut that
+rejects any marker already promoted, rejected, or retired; that cut and the
+adapter-bound execution/storage seal are the sole production factory inputs.
+Queue/archive/event ownership and the local signer additionally require a
+private runner-minted permit; its production mint remains unwired until the
+atomic runner cutover. The signer public key stays comparison-only in the owner,
+and launch checks the peer key plus any claimed roster position before gate or
+runtime construction.
+After residual-effect, startup-instance, State/Kura/network, root, policy, and
+WAL checks, the quarantine's one consuming transition applies the recovered-
+finality and WAL-authority filters, replays every retained durable marker with
+the exact `V2ApplyService` retained by the owner, and seals the store before the
+factory opens Certified-Serve or LedgerV1. Only sealed test helpers may reopen
+fixture roots. Startup mints authority for only that
 current Sign; the adapter and WAL remain retained so the later
 lifecycle-completion transition can acknowledge it and authenticate the next
-queued signature without prebinding an eager token. That completion transition
-is still a TODO at the runner boundary.
+queued signature without prebinding an eager token. The guarded worker result
+can project only an adapter-private authority which verifies the exact local
+signature and previews `Signed` on cloned reducer/registry state. The preview
+classifies the closed result as the mandatory Broadcast alone, Broadcast plus
+one already-authorized Sign, or Broadcast plus Proposal's Prepare-intent WAL
+request. It cannot mutate the live adapter, append WAL, publish output,
+acknowledge the worker row, or disarm restart closure. The durable
+Sign-to-Broadcast transaction and Proposal's subsequent WAL-ahead repair cut
+remain TODOs at the runner boundary.
 
 The phase-vote path carries the exact LedgerV1 store/frame through repair fsync
 and Sign installation. The control and Decision-Fetch paths each project one
@@ -1299,6 +1338,44 @@ returns the complete owner unchanged; a queue-owner mismatch closes output for
 restart. The serialized runner still
 does not call the owner factory; it must consume the sealed launch and its final
 observer-activation permit before deleting the independent runner constructors.
+
+The live recovered Decision-Fetch path is closed through its first durable
+Store successor. A Ready carrier projects only an
+opaque request authority. Exact-output capacity and a vacant, disjoint
+executor request owner are retained before the Completion-turn claim; the
+post-claim tail installs the carrier key and request/reverse census before the
+exact signed fanout becomes visible. An authenticated response is classified
+as a distinct recovered selector family. Its Ingress-turn transaction
+re-probes the active claimed carrier and exact physical occurrence, claims the
+response, and publishes one dedicated body persistence command. Worker
+completion stays guarded and keyed as `CompletionPending`; it cannot enter the
+ordinary effect-work map or generic completion acknowledgement. If an ordinary
+runtime-producing completion is already parked, a following recovered Fetch
+completion remains in the physical channel until the older owner is serviced.
+Settlement then retains the complete guarded completion while it revalidates
+the claimed carrier and body receipt, reserves request/response retirement,
+freshly recaptures and locks the exact fair-ingress occurrence, previews the
+fixed reducer Store effect, and stages the dedicated registry/coordinator
+successor. These and the output fail-stop check all precede LedgerV1 fsync.
+The durable successor keeps the recovered Decision Fetch payload `None`, marks
+it `Advanced(FetchToStore)`, and gives only the live Store child the exact
+`BodyFrame`. The post-publication tail is assertion-only: it installs the
+coordinator/registry/adapter state, retires the dedicated request indexes,
+removes the prelocked ingress occurrence, removes the worker queue index,
+disarms the completion guard, and completes the output operation. Any
+pre-fsync error reparks the entire completion and all owners; an fsync error
+latches durability failure and requires restart rather than returning a
+recoverable error.
+
+Cold storage-only open has a typed recovered-Store branch. It authenticates the
+exact two-row Fetch/Store ledger chain, reconstructs the Store projection from
+the same fsynced body receipt, includes that live Store in the recovery census,
+and installs a dedicated carrier which retains the original WAL Fetch lineage.
+If a successful validation marker already exists after the Store publication,
+the recovered Apply stager accepts precisely that live Store prefix, advances
+the Store to its typed Validate child, and appends the adjacent Validate/Apply
+tail above the current ledger high-water mark. A second open exact-stutters;
+foreign same-owner history or an exact child-key collision fails closed.
 
 A codec-only `LifecycleReplayAuthorityV1` now defines one closed, bounded
 canonical Norito envelope for every one of the 22 lifecycle stages.

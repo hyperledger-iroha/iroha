@@ -26,7 +26,7 @@ use thiserror::Error;
 
 use super::{
     v2::{RecoveredValidationAuthority, RecoveredWalVoteSign},
-    v2_apply::VerifiedRecoveredFinalitySubject,
+    v2_apply::{V2ApplyError, V2ApplyService, VerifiedRecoveredFinalitySubject},
     v2_effects::{BodyStoreTask, BodyValidationTask, EffectWorkId},
     v2_lifecycle_coordinator::{
         AuthenticatedRecoveredWalDecisionFetchProjection,
@@ -105,6 +105,47 @@ pub(crate) struct DurableCertifiedFetchBodyReceipt {
     request_hash: HashOf<wire::CertifiedBodyRequest>,
     response_hash: HashOf<wire::CertifiedBodyResponse>,
     durable_body: DurableBodyReceipt,
+}
+
+/// Opaque body-frame authority for the recovered Decision Fetch-to-Store cut.
+///
+/// Live completion and cold recovery are the only mints. Both paths bind the
+/// exact canonical manifest to the already-fsynced body receipt before this
+/// value can enter the adapter/registry successor projection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[must_use = "recovered Decision body authority must remain attached to Store settlement"]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchStoreBodyAuthorityV1 {
+    manifest: wire::PayloadManifest,
+    durable: DurableBodyReceipt,
+}
+
+impl RecoveredDecisionFetchStoreBodyAuthorityV1 {
+    /// Bind one live authenticated response to its exact durable completion.
+    pub(in crate::sumeragi) fn from_persisted_certified_response(
+        authenticated: &AuthenticatedCertifiedBodyResponse,
+        receipt: &DurableCertifiedFetchBodyReceipt,
+    ) -> Option<Self> {
+        let response = authenticated.response();
+        (receipt.request_hash() == response.request_hash
+            && receipt.response_hash() == HashOf::new(response)
+            && receipt.durable_body().round() == response.manifest.round
+            && receipt.durable_body().subject() == response.manifest.subject
+            && receipt.durable_body().manifest_hash() == HashOf::new(&response.manifest))
+        .then(|| Self {
+            manifest: response.manifest.clone(),
+            durable: receipt.durable_body().clone(),
+        })
+    }
+
+    /// Borrow the canonical manifest only inside the fixed adapter preview.
+    pub(in crate::sumeragi) const fn manifest(&self) -> &wire::PayloadManifest {
+        &self.manifest
+    }
+
+    /// Borrow the non-forgeable body receipt only inside fixed projections.
+    pub(in crate::sumeragi) const fn durable(&self) -> &DurableBodyReceipt {
+        &self.durable
+    }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -1153,6 +1194,52 @@ pub(crate) struct V2BodyStore {
 #[must_use = "the revalidated body-store cut must enter unified lifecycle startup"]
 pub(crate) struct RevalidatedV2BodyStore(V2BodyStore);
 
+/// Move-only freshly quarantined body-store input for recovered startup.
+///
+/// This cut can be minted only while no validation marker has already been
+/// promoted, rejected, or retired in the open instance. Checksummed disk
+/// markers may remain quarantined for the unified factory's exact semantic
+/// replay, but a caller cannot prevalidate them with another callback and then
+/// bypass that replay.
+#[must_use = "the quarantined body-store cut must enter recovered lifecycle startup"]
+pub(in crate::sumeragi) struct QuarantinedV2BodyStore(V2BodyStore);
+
+impl QuarantinedV2BodyStore {
+    /// Compare the still-owned store with one canonical lifecycle layout.
+    pub(in crate::sumeragi) fn matches_lifecycle_storage_root(
+        &self,
+        root: &Path,
+        context: &wire::HeightContext,
+        signature_policy: &BlockSignaturePolicy,
+    ) -> bool {
+        self.0
+            .matches_lifecycle_storage_root(root, context, signature_policy)
+    }
+
+    /// Filter and replay every quarantined marker with one exact Apply service.
+    ///
+    /// This is the only operation that can consume the recovered-startup
+    /// quarantine. It fixes the authority order internally so no sibling can
+    /// inject a callback, pre-promote a marker, or extract an intermediate
+    /// store before semantic replay is sealed.
+    pub(in crate::sumeragi) fn into_revalidated_lifecycle_startup(
+        mut self,
+        apply_service: &V2ApplyService,
+        context: &wire::HeightContext,
+        validation_authority: RecoveredValidationAuthority,
+    ) -> Result<RevalidatedV2BodyStore, V2ApplyError> {
+        if let Some(subject) = apply_service.recovered_finality_subject(context)? {
+            self.0.retain_recovered_markers_for_subject(subject)?;
+        }
+        self.0
+            .retain_recovered_markers_for_authority(validation_authority)?;
+        self.0.revalidate_recovered_markers(|body| {
+            apply_service.revalidate_recovered_candidate(context, body)
+        })?;
+        self.0.into_revalidated_startup().map_err(Into::into)
+    }
+}
+
 impl RevalidatedV2BodyStore {
     /// Compare the complete immutable context without releasing the store.
     pub(in crate::sumeragi) fn matches_context(&self, context: &wire::HeightContext) -> bool {
@@ -1356,6 +1443,24 @@ impl V2BodyRetirementJob {
 }
 
 impl V2BodyStore {
+    /// Consume a freshly opened store into recovered-startup quarantine.
+    ///
+    /// Pending disk markers are allowed because the unified factory must
+    /// filter and replay them. Any already promoted, rejected, or retired
+    /// marker proves that another validator has touched this open instance and
+    /// therefore makes it ineligible for the production recovery boundary.
+    pub(in crate::sumeragi) fn into_quarantined_recovered_startup(
+        self,
+    ) -> Result<QuarantinedV2BodyStore, V2BodyStoreError> {
+        if !self.validated.is_empty()
+            || !self.rejected.is_empty()
+            || !self.retired_revalidation.is_empty()
+        {
+            return Err(V2BodyStoreError::RecoveredMarkersAlreadyPromoted);
+        }
+        Ok(QuarantinedV2BodyStore(self))
+    }
+
     /// Project a comparison-only identity before moving this store to its worker.
     pub(crate) fn instance_identity(&self) -> V2BodyStoreInstanceIdentity {
         V2BodyStoreInstanceIdentity(Arc::clone(&self.identity))
@@ -1824,6 +1929,51 @@ impl V2BodyStore {
         &self,
     ) -> BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt> {
         self.validated.clone()
+    }
+
+    /// Reconstruct the exact fsynced body authority for a recovered Decision Store.
+    ///
+    /// This cold path requires one unambiguous WAL-matching body frame and
+    /// reopens its canonical envelope before returning. It does not require a
+    /// validation marker: the Store row is the crash cut immediately after
+    /// body persistence and before validation begins.
+    pub(in crate::sumeragi) fn recovered_decision_fetch_store_body(
+        &self,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> Result<RecoveredDecisionFetchStoreBodyAuthorityV1, V2BodyStoreError> {
+        let mut matches = self
+            .entries
+            .iter()
+            .filter(|(_, durable)| projection.matches_durable_body(durable));
+        let Some((key, durable)) = matches.next() else {
+            return Err(V2BodyStoreError::ReceiptMismatch);
+        };
+        if matches.next().is_some() {
+            return Err(V2BodyStoreError::ReceiptMismatch);
+        }
+        let manifest = self
+            .manifests
+            .get(key)
+            .ok_or(V2BodyStoreError::ReceiptMismatch)?;
+        if *key != (durable.round(), durable.subject())
+            || manifest.round != durable.round()
+            || manifest.subject != durable.subject()
+            || HashOf::new(manifest) != durable.manifest_hash()
+        {
+            return Err(V2BodyStoreError::ReceiptMismatch);
+        }
+        let envelope = self.load_envelope(durable)?;
+        if envelope.context_id != self.context.id()
+            || envelope.round != durable.round()
+            || envelope.subject != durable.subject()
+            || envelope.manifest != *manifest
+        {
+            return Err(V2BodyStoreError::ReceiptMismatch);
+        }
+        Ok(RecoveredDecisionFetchStoreBodyAuthorityV1 {
+            manifest: manifest.clone(),
+            durable: durable.clone(),
+        })
     }
 
     /// Detect the exact validated predecessor reserved for Decision Apply publication.
@@ -2948,6 +3098,9 @@ pub(crate) enum V2BodyStoreError {
     /// Recovered success/rejection identity differs from deterministic replay.
     #[error("recovered Sumeragi v2 validation outcome differs from semantic replay")]
     RecoveredValidationOutcomeMismatch,
+    /// The recovered-startup input was already touched by another validator.
+    #[error("recovered Sumeragi v2 validation markers were already promoted before startup")]
+    RecoveredMarkersAlreadyPromoted,
     /// Verified finality capability belongs to a different height context.
     #[error("verified Sumeragi v2 recovery finality belongs to a different height context")]
     RecoveredFinalityContextMismatch,

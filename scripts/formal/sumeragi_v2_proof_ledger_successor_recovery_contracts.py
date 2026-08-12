@@ -1083,7 +1083,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 adapter_path,
                 adapter_source,
                 "canonical Kura-bound lifecycle-owner factory",
-                "pub(crate) fn open_production_lifecycle_owner_v1(",
+                "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
                 "fn open_production_lifecycle_owner_v1_at_authenticated_roots(",
             )
             require_order(
@@ -1091,14 +1091,19 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "canonical Kura-bound lifecycle-owner factory",
                 canonical_owner_factory,
                 (
-                    "storage: RecoveredLifecycleStorageAuthorityV1",
+                    "factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1",
+                    "body_store: super::v2_body_store::QuarantinedV2BodyStore",
+                    "if !self.effects.is_empty()",
+                    "Arc::ptr_eq(&adapter_owner, &self.factory_owner)",
                     "storage.context_id != context.id() || storage.height != context.height",
-                    "body_store.matches_lifecycle_storage_root( &storage.body_store_root, context, &storage.signature_policy, )",
+                    "body_store.matches_lifecycle_storage_root( &storage.body_store_root, &context, &storage.signature_policy, )",
                     "self.adapter.wal.matches_path(&storage.wal_path)",
-                    "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, genesis_account, wal_path, chunk_root, lifecycle_root, .. } = storage",
+                    "let apply_service = super::v2_apply::V2ApplyService::new(",
+                    "body_store.into_revalidated_lifecycle_startup( &apply_service, &context, validation_authority )",
+                    "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, wal_path, chunk_root, lifecycle_root, .. } = storage",
                     "self.open_production_lifecycle_owner_v1_at_authenticated_roots(",
-                    "let kura_binding = RecoveredLifecycleOwnerKuraBindingV1 { kura_identity, genesis_account, wal_path, chunk_root, }",
-                    "owner.with_recovered_kura_binding(kura_binding)",
+                    "let kura_binding = RecoveredLifecycleOwnerKuraBindingV1 { kura_identity, wal_path, chunk_root, local_signer: Some(local_signer.public_key().clone()), }",
+                    "owner.with_recovered_kura_binding_and_apply_service(kura_binding, apply_service)",
                 ),
             )
             reject_tokens(
@@ -1111,6 +1116,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "serve_payload_root: &std::path::Path",
                     "body_root: &std::path::Path",
                     "body_signature_policy:",
+                    "body_store: super::v2_body_store::V2BodyStore",
+                    "body_store: super::v2_body_store::RevalidatedV2BodyStore",
                 ),
             )
             require_tokens(
@@ -1124,8 +1131,16 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "wal_path: PathBuf",
                     "chunk_root: PathBuf",
                     "struct RecoveredLifecycleOwnerKuraBindingV1 {",
-                    "fn genesis_account_for_launch(&self, kura: &Kura) -> Option<AccountId>",
                     "fn storage_paths_for_launch(",
+                    "struct RecoveredLifecycleOwnerFactoryInputsV1",
+                    "adapter_owner: Arc<AuthenticatedRecoveredAdapterFactoryOwnerV1>",
+                    "fn bind_production_lifecycle_owner_factory_inputs_v1(",
+                    "permit: super::v2_runner::RecoveredLifecycleOwnerFactoryDependencyPermitV1",
+                    "storage.kura_identity.matches(kura.as_ref())",
+                    "state.matches_kura_instance(&kura)",
+                    "state.network_id_ref() != &self.adapter.wire_context.network_id",
+                    "let block_cadence = state.sumeragi_block_cadence()",
+                    "let local_signer = permit.into_local_signer()",
                     "fn mint_from_recovered_height(",
                     "permit: super::v2_recovery::RecoveredLifecycleStorageMintPermitV1",
                     "assert!(permit.authorizes(kura, verified, signature_policy, genesis_account))",
@@ -1136,11 +1151,85 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "lifecycle_root: storage_root .join(\"lifecycle-v1\") .join(hex::encode(context.id().0.as_ref()))",
                     "body_store_root: storage_root.join(\"bodies\")",
                     "fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout()",
+                    "fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network()",
+                    "fn recovered_lifecycle_factory_inputs_reject_a_same_context_foreign_startup()",
+                    "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+                    "a caller-promoted marker cannot enter production quarantine",
+                    "pre-promoted marker rejection must precede lifecycle-store creation",
                     "a body store outside the Kura layout must fail closed",
                     "a wrong body signature policy must fail closed",
                 ),
             )
+            reject_tokens(
+                adapter_path,
+                "sealed recovered lifecycle factory inputs",
+                adapter_source,
+                (
+                    "fn genesis_account_for_launch(",
+                    "impl Clone for RecoveredLifecycleOwnerFactoryInputsV1",
+                    "impl Clone for AuthenticatedRecoveredAdapterStartup",
+                ),
+            )
+            require_tokens(
+                adapter_path,
+                "factory-retained local signer identity",
+                canonical_owner_factory,
+                (
+                    "local_signer",
+                    "&local_signer",
+                    "local_signer: Some(local_signer.public_key().clone())",
+                ),
+            )
+            reject_tokens(
+                adapter_path,
+                "factory-retained local signer identity",
+                canonical_owner_factory,
+                ("local_signer: &KeyPair",),
+            )
         if body_store_source:
+            require_tokens(
+                body_store_path,
+                "fresh quarantined recovered body-store cut",
+                body_store_source,
+                (
+                    "struct QuarantinedV2BodyStore(V2BodyStore)",
+                    "fn into_quarantined_recovered_startup(",
+                    "!self.validated.is_empty() || !self.rejected.is_empty() || !self.retired_revalidation.is_empty()",
+                    "V2BodyStoreError::RecoveredMarkersAlreadyPromoted",
+                ),
+            )
+            quarantine = region(
+                body_store_path,
+                body_store_source,
+                "fixed quarantined recovered marker replay",
+                "impl QuarantinedV2BodyStore {",
+                "impl RevalidatedV2BodyStore {",
+            )
+            require_order(
+                body_store_path,
+                "fixed quarantined recovered marker replay",
+                quarantine,
+                (
+                    "fn into_revalidated_lifecycle_startup(",
+                    "apply_service.recovered_finality_subject(context)",
+                    "self.0.retain_recovered_markers_for_subject(subject)",
+                    "self.0.retain_recovered_markers_for_authority(validation_authority)",
+                    "self.0.revalidate_recovered_markers(|body|",
+                    "apply_service.revalidate_recovered_candidate(context, body)",
+                    "self.0.into_revalidated_startup()",
+                ),
+            )
+            reject_tokens(
+                body_store_path,
+                "fixed quarantined recovered marker replay",
+                quarantine,
+                (
+                    "pub(in crate::sumeragi) fn retain_recovered_markers_for_subject(",
+                    "pub(in crate::sumeragi) fn retain_recovered_markers_for_authority(",
+                    "pub(in crate::sumeragi) fn revalidate_recovered_markers<",
+                    "pub(in crate::sumeragi) fn into_revalidated_startup(",
+                ),
+            )
             require_tokens(
                 body_store_path,
                 "revalidated body-store canonical-root oracle",
@@ -1189,7 +1278,61 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
         owner_path, owner_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"
         )
-        if launch_source and kura_source and owner_source:
+        worker_path, worker_source = load(
+            "crates/iroha_core/src/sumeragi/v2_worker.rs"
+        )
+        scheduler_path, scheduler_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs"
+        )
+        registry_path, registry_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"
+        )
+        registry_validate_path, registry_validate_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery.rs"
+        )
+        wal_recovery_path, wal_recovery_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_wal_recovery.rs"
+        )
+        selector_path, selector_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_selector.rs"
+        )
+        body_pipeline_path, body_pipeline_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_body_pipeline_transition.rs"
+        )
+        effects_path, effects_source = load(
+            "crates/iroha_core/src/sumeragi/v2_effects.rs"
+        )
+        transport_path, transport_source = load(
+            "crates/iroha_core/src/sumeragi/v2_transport.rs"
+        )
+        lifecycle_open_path, lifecycle_open_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs"
+        )
+        runner_dependency_path, runner_dependency_source = load(
+            "crates/iroha_core/src/sumeragi/v2_runner.rs"
+        )
+        state_path, state_source = load("crates/iroha_core/src/state.rs")
+        apply_path, apply_source = load(
+            "crates/iroha_core/src/sumeragi/v2_apply.rs"
+        )
+        if (
+            launch_source
+            and kura_source
+            and owner_source
+            and worker_source
+            and scheduler_source
+            and registry_source
+            and registry_validate_source
+            and wal_recovery_source
+            and selector_source
+            and body_pipeline_source
+            and effects_source
+            and transport_source
+            and lifecycle_open_source
+            and runner_dependency_source
+            and state_source
+            and apply_source
+        ):
             lifecycle_launch = region(
                 launch_path,
                 launch_source,
@@ -1203,8 +1346,9 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 lifecycle_launch,
                 (
                     "begin_fail_stop_operation()",
-                    "binding.matches_kura(inputs.kura.as_ref())",
-                    "binding.genesis_account_for_launch(inputs.kura.as_ref())",
+                    "Self::launch_local_identity_matches( &context.roster, &inputs.local_peer, inputs.local_validator, &inputs.key_pair, )",
+                    "binding.matches_launch_identity(inputs.kura.as_ref(), &inputs.key_pair)",
+                    "service.matches_lifecycle_launch(",
                     "binding.storage_paths_for_launch(inputs.kura.as_ref())",
                     "prepare_leader_wire_launch(launch_storage.wal_path())",
                     "ProductionV2Services::restore_lifecycle_ordinal_source(",
@@ -1214,10 +1358,55 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "ProductionLeaderWireIngressBindingV1::bind(",
                     "self.adapter_startup.take()",
                     "self.body_store.take()",
+                    "self.apply_service.take()",
                     "V2EffectExecutor::open_with_body_store(",
                     "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
                     "executor.install_authenticated_genesis_body(authenticated_genesis.signed_block())",
-                    "ProductionV2Services::start(",
+                    "ProductionV2Services::start_with_apply_service(",
+                ),
+            )
+            runner_dependency_permit = region(
+                runner_dependency_path,
+                runner_dependency_source,
+                "runner-sealed recovered lifecycle factory dependency permit",
+                "pub(in crate::sumeragi) struct RecoveredLifecycleOwnerFactoryDependencyPermitV1",
+                "/// Cadence-derived process-local deadline",
+            )
+            require_tokens(
+                runner_dependency_path,
+                "runner-sealed recovered lifecycle factory dependencies",
+                runner_dependency_permit,
+                (
+                    "struct RecoveredLifecycleOwnerFactoryDependencyPermitV1",
+                    "_seal: RecoveredLifecycleOwnerFactoryDependencyPermitSealV1",
+                    "local_signer: KeyPair",
+                    "fn mint_for_recovered_runner(local_signer: KeyPair) -> Self",
+                    "#[cfg(test)] pub(in crate::sumeragi) fn for_test(local_signer: KeyPair) -> Self",
+                    "fn into_local_signer(self) -> KeyPair",
+                    "impl Drop for RecoveredLifecycleOwnerFactoryDependencyPermitSealV1",
+                ),
+            )
+            reject_tokens(
+                runner_dependency_path,
+                "runner-sealed recovered lifecycle factory dependencies",
+                runner_dependency_permit,
+                (
+                    "pub(in crate::sumeragi) fn mint_for_recovered_runner(",
+                    "pub(crate) fn mint_for_recovered_runner(",
+                    "pub fn mint_for_recovered_runner(",
+                    "impl Clone for RecoveredLifecycleOwnerFactoryDependencyPermitV1",
+                    "fn into_parts(",
+                ),
+            )
+            require_tokens(
+                launch_path,
+                "local launch identity preflight",
+                launch_source,
+                (
+                    "fn launch_local_identity_matches(",
+                    "local_peer.public_key() != key_pair.public_key()",
+                    "local_validator.is_none_or(|observed| roster_position == Some(observed))",
+                    "fn launch_local_identity_requires_the_bound_key_and_exact_roster_position()",
                 ),
             )
             require_tokens(
@@ -1266,6 +1455,79 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "lifecycle_ordinals: RuntimeLifecycleOrdinalSource",
                     "durable_bodies:",
                     "recovered_body_receipts:",
+                    "queue: Arc<Queue>",
+                    "provider_ingest_finalized_archive:",
+                    "reputation_finalized_archive:",
+                    "block_cadence: Duration",
+                    "events_sender: EventsSender",
+                ),
+            )
+            require_tokens(
+                worker_path,
+                "sealed replay-service worker transfer",
+                worker_source,
+                (
+                    "fn start_with_apply_service(",
+                    "_permit: super::v2_lifecycle_coordinator::ProductionLifecycleApplyServiceLaunchPermitV1",
+                    "apply_service.matches_lifecycle_launch(&state, &kura, &context, &validator_set_pops)",
+                    "Self::start_inner(",
+                ),
+            )
+            legacy_worker_start = region(
+                worker_path,
+                worker_source,
+                "legacy worker Apply-service construction",
+                "pub(crate) fn start(",
+                "/// Start with the exact application service used for recovered marker replay.",
+            )
+            require_order(
+                worker_path,
+                "legacy worker Apply-service construction",
+                legacy_worker_start,
+                (
+                    "let apply_service = V2ApplyService::new(",
+                    "Self::start_inner(",
+                ),
+            )
+            reject_tokens(
+                worker_path,
+                "legacy worker Apply-service construction",
+                legacy_worker_start,
+                ("Self::start_with_apply_service(",),
+            )
+            require_token_count(
+                worker_path,
+                "sealed replay-service worker transfer",
+                worker_source,
+                "ProductionLifecycleApplyServiceLaunchPermitV1",
+                1,
+            )
+            require_token_count(
+                launch_path,
+                "sealed replay-service permit mint",
+                launch_source,
+                "ProductionLifecycleApplyServiceLaunchPermitV1 {",
+                1,
+            )
+            require_tokens(
+                state_path,
+                "fixed State/Kura identity oracle",
+                state_source,
+                (
+                    "fn matches_kura_instance(&self, kura: &Arc<Kura>) -> bool",
+                    "Arc::ptr_eq(&self.kura, kura)",
+                ),
+            )
+            require_tokens(
+                apply_path,
+                "fixed recovered Apply-service identity oracle",
+                apply_source,
+                (
+                    "fn matches_lifecycle_launch(",
+                    "Arc::ptr_eq(&self.state, state)",
+                    "Arc::ptr_eq(&self.kura, kura)",
+                    "self.network_id == context.network_id",
+                    "self.validator_set_pops == validator_set_pops",
                 ),
             )
             require_tokens(
@@ -1354,9 +1616,806 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 owner_source,
                 (
                     "kura_binding: Option<crate::sumeragi::v2::RecoveredLifecycleOwnerKuraBindingV1>",
-                    "fn with_recovered_kura_binding(",
+                    "apply_service: Option<crate::sumeragi::v2_apply::V2ApplyService>",
+                    "fn with_recovered_kura_binding_and_apply_service(",
                     "assert!(self.kura_binding.is_none())",
+                    "assert!(self.apply_service.is_none())",
                     "self.kura_binding = Some(binding)",
+                    "self.apply_service = Some(apply_service)",
+                    "struct ProductionLifecycleApplyServiceLaunchPermitV1",
+                    "impl Drop for ProductionLifecycleApplyServiceLaunchPermitSealV1",
+                ),
+            )
+            recovered_sign_dispatch = region(
+                scheduler_path,
+                scheduler_source,
+                "lifecycle-owned recovered Sign dispatch",
+                "fn dispatch_recovered_lifecycle_sign_with_runner_debt(",
+                "/// Sign, reserve, claim, and publish the sole recovered Decision Fetch request.",
+            )
+            require_order(
+                scheduler_path,
+                "lifecycle-owned recovered Sign dispatch",
+                recovered_sign_dispatch,
+                (
+                    "let Some(body_store_identity) = self.body_store_identity.as_ref()",
+                    "services.matches_lifecycle_body_store(body_store_identity)",
+                    "services.matches_lifecycle_executor_output_guard(executor)",
+                    "attest_ready_recovered_lifecycle_sign",
+                    "capture_recovered_lifecycle_sign_capacity(dispatch_key)",
+                    "self.coordinator.plan_turn(inputs)",
+                    "reservation.class() == CapacityClass::Consensus",
+                    "prepare_recovered_lifecycle_sign_dispatch",
+                    "reservation.preflight(&prepared)",
+                    "reservation.commit(prepared)",
+                ),
+            )
+            require_token_count(
+                scheduler_path,
+                "recovered Sign post-claim rollback",
+                recovered_sign_dispatch,
+                "self.coordinator.rollback_unpublished_turn(&lease)",
+                1,
+            )
+            require_token_count(
+                scheduler_path,
+                "recovered Sign reserved post-claim rollback",
+                recovered_sign_dispatch,
+                "rollback_unpublished_reserved_turn(&lease",
+                3,
+            )
+            require_token_count(
+                scheduler_path,
+                "recovered Sign reservation release",
+                recovered_sign_dispatch,
+                "reservation.cancel_uncommitted()",
+                6,
+            )
+            reject_tokens(
+                scheduler_path,
+                "sealed recovered Sign dispatch",
+                recovered_sign_dispatch,
+                (
+                    "AdapterEffect",
+                    "PendingRuntimeEffectBinding",
+                    "RuntimeEffectOwnership",
+                    "EffectWorkId",
+                    "into_parts",
+                ),
+            )
+            recovered_phase_sign = region(
+                registry_path,
+                registry_source,
+                "current-parent-bound recovered PhaseVote carrier",
+                "impl DurableRecoveredWalSignWork {",
+                "/// Whether one concrete registry row is still an executable adapter effect",
+            )
+            require_token_count(
+                registry_path,
+                "current-parent-bound recovered PhaseVote carrier",
+                recovered_phase_sign,
+                "self.matches_current_terminal_parent(coordinator)",
+                2,
+            )
+            require_token_count(
+                registry_path,
+                "standalone recovered PhaseVote child",
+                recovered_phase_sign,
+                "metadata.continuation == super::schema::DurableContinuation::None",
+                2,
+            )
+            require_tokens(
+                registry_path,
+                "current terminal Validate parent rejoin",
+                recovered_phase_sign,
+                (
+                    "record.state == super::LifecycleState::Terminal(super::TerminalOutcome::Advanced)",
+                    "metadata.matches_admission(parent)",
+                    "super::schema::DurableContinuation::successor(",
+                    "coordinator.key_index.get(&parent.key)",
+                    "coordinator.owner_index.get(&parent.causal_root)",
+                ),
+            )
+            recovered_sign_identity = region(
+                registry_path,
+                registry_source,
+                "complete recovered Sign effect identity",
+                "impl RecoveredLifecycleSignDispatchIdentityV1 {",
+                "/// Read-only coordinates of one exact Waiting Fetch incumbent.",
+            )
+            require_tokens(
+                registry_path,
+                "complete recovered Sign effect identity",
+                recovered_sign_identity,
+                (
+                    "&AdapterEffect::Sign {",
+                    "request: request.clone()",
+                    "adapter_effect_matches_lifecycle_digest(",
+                ),
+            )
+            reject_tokens(
+                registry_path,
+                "historical recovered Commit identity",
+                recovered_sign_identity,
+                ("tag.view() ==", "vote.round.view"),
+            )
+            recovered_sign_task = region(
+                worker_path,
+                worker_source,
+                "opaque recovered Sign worker task/result",
+                "pub(in crate::sumeragi) struct RecoveredLifecycleSignTaskV1 {",
+                "enum V2IoCommand {",
+            )
+            require_tokens(
+                worker_path,
+                "opaque recovered Sign worker task/result",
+                recovered_sign_task,
+                (
+                    "identity: RecoveredLifecycleSignDispatchIdentityV1",
+                    "prepared_candidate: Option<PreparedCandidateBody>",
+                    "self.task.prepared_candidate == expected_prepared",
+                    "outbound_payload: Option<EncodedV2Payload>",
+                    "authorizes_request(self.task.tag, &self.task.request)",
+                ),
+            )
+            reject_tokens(
+                worker_path,
+                "opaque recovered Sign worker task/result",
+                recovered_sign_task,
+                (
+                    "pub tag:",
+                    "pub request:",
+                    "pub signature:",
+                    "pub outbound_payload:",
+                    "fn into_parts(",
+                    "fn into_result(",
+                    "fn into_task(",
+                    "fn request(",
+                    "fn prepared_candidate(",
+                    "fn result(",
+                    "fn acknowledgement(",
+                    "fn acknowledge(",
+                    "fn signature(",
+                    "fn outbound_payload(",
+                ),
+            )
+            parked_sign_completion = region(
+                worker_path,
+                worker_source,
+                "parked recovered Sign completion",
+                "pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignCompletionV1 {",
+                "/// Result of atomically returning one guarded missing-sidecar Apply",
+            )
+            reject_tokens(
+                worker_path,
+                "parked recovered Sign completion",
+                parked_sign_completion,
+                (
+                    "fn into_parts(",
+                    "fn into_result(",
+                    "fn into_task(",
+                    "fn request(",
+                    "fn prepared_candidate(",
+                    "fn result(",
+                    "fn acknowledgement(",
+                    "fn acknowledge(",
+                    "fn signature(",
+                    "fn outbound_payload(",
+                    "fn settle(",
+                ),
+            )
+            require_tokens(
+                worker_path,
+                "adapter-private recovered Sign completion projection",
+                parked_sign_completion,
+                (
+                    "fn project_adapter_completion_authority(",
+                    "result.is_exact()",
+                    "RecoveredLifecycleSignAdapterCompletionAuthorityV1 {",
+                ),
+            )
+            reject_tokens(
+                worker_path,
+                "unpublished recovered Sign completion acknowledgement",
+                worker_source,
+                ("fn acknowledge_recovered_lifecycle_sign(",),
+            )
+            recovered_sign_preview = region(
+                adapter_path,
+                adapter_source,
+                "drop-inert recovered Sign adapter preview",
+                "pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(",
+                "/// Acknowledge successful application of the exact tagged decision.",
+            )
+            require_order(
+                adapter_path,
+                "drop-inert recovered Sign adapter preview",
+                recovered_sign_preview,
+                (
+                    "authority.consume_for_adapter(RecoveredLifecycleSignAdapterCompletionPermitV1::new())",
+                    "verify_individual_signature(",
+                    "let mut next_reducer = self.reducer.clone()",
+                    "next_reducer.step(event.clone())",
+                    "if converted.first() != Some(&expected_broadcast)",
+                    "Ok(PreparedRecoveredLifecycleSignAdapterCompletionV1 {",
+                ),
+            )
+            require_tokens(
+                adapter_path,
+                "closed recovered Sign adapter successor shapes",
+                recovered_sign_preview,
+                (
+                    "SignRequest::Proposal(_), Some((persist_tag, entry)), None",
+                    "SignRequest::Vote(_) | SignRequest::TimeoutVote(_), None, possible_next_sign",
+                    "next_reducer.pending_persistence_record().is_none()",
+                    "next_reducer.awaiting_signature()",
+                    "RecoveredLifecycleSignCompletionMismatch",
+                ),
+            )
+            reject_tokens(
+                adapter_path,
+                "drop-inert recovered Sign adapter preview",
+                recovered_sign_preview,
+                (
+                    "self.wal.append(",
+                    "self.reducer =",
+                    "self.registry =",
+                    "publish_effect",
+                    "send(",
+                ),
+            )
+            require_tokens(
+                adapter_path,
+                "recovered Sign adapter preview behavior regression",
+                adapter_source,
+                ("fn recovered_timeout_signature_preview_is_exact_and_drop_inert()",),
+            )
+            require_tokens(
+                worker_path,
+                "dedicated recovered Sign queue ownership",
+                worker_source,
+                (
+                    "recovered_lifecycle_signs:",
+                    "BTreeMap<RecoveredLifecycleSignDispatchKeyV1, V2IoTrackedRecoveredLifecycleSignV1>",
+                    "fn transfer_recovered_lifecycle_sign_completion_at(",
+                    "io.prepare_recovered_lifecycle_sign_completion(guarded, ownership_position)",
+                    "fn recovered_lifecycle_signing_is_exact_and_class_sensitive_for_all_three_families()",
+                    "fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction()",
+                    "fn recovered_lifecycle_sign_capacity_unavailable_leaves_no_dedicated_index()",
+                ),
+            )
+            recovered_sign_capacity = region(
+                worker_path,
+                worker_source,
+                "recovered Sign capacity capture release",
+                "fn capture_recovered_lifecycle_sign_capacity<'a>(",
+                "fn begin_decision_serve_reconciliation(",
+            )
+            require_token_count(
+                worker_path,
+                "recovered Sign capacity capture release",
+                recovered_sign_capacity,
+                "operation.complete()",
+                5,
+            )
+            reject_tokens(
+                worker_path,
+                "recovered Sign capacity capture release",
+                recovered_sign_capacity,
+                ("drop(operation)",),
+            )
+            rollback_unpublished = region(
+                owner_path,
+                owner_source,
+                "unpublished recovered Sign claim rollback",
+                "fn rollback_unpublished_turn(&mut self, lease: &TurnLease) -> bool {",
+                "/// Rebuild records after seeding the ordinal high-water mark.",
+            )
+            require_tokens(
+                owner_path,
+                "unpublished recovered Sign claim rollback",
+                rollback_unpublished,
+                (
+                    "lease.output_reservation.is_some()",
+                    "assert!( inserted,",
+                    "self.active_lease = None",
+                ),
+            )
+            reject_tokens(
+                owner_path,
+                "unpublished recovered Sign claim rollback",
+                rollback_unpublished,
+                ("debug_assert!",),
+            )
+            require_tokens(
+                owner_path,
+                "unpublished recovered Sign rollback regression",
+                owner_source,
+                (
+                    "fn unpublished_turn_rollback_restores_ready_and_clears_the_active_lease()",
+                ),
+            )
+            launched_owner_fields = region(
+                launch_path,
+                launch_source,
+                "launched recovered Sign Drop order",
+                "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {",
+                "/// Result of draining one dedicated recovered Apply worker completion.",
+            )
+            require_order(
+                launch_path,
+                "launched recovered Sign Drop order",
+                launched_owner_fields,
+                (
+                    "services: ProductionV2Services",
+                    "recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>",
+                    "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
+                ),
+            )
+            recovered_fetch_dispatch = region(
+                scheduler_path,
+                scheduler_source,
+                "lifecycle-owned recovered Decision Fetch dispatch",
+                "fn dispatch_recovered_decision_fetch_with_runner_debt(",
+                "/// Persist one selected recovered Decision Fetch response",
+            )
+            require_order(
+                scheduler_path,
+                "lifecycle-owned recovered Decision Fetch dispatch",
+                recovered_fetch_dispatch,
+                (
+                    "attest_ready_recovered_decision_fetch",
+                    "take_request_authority()",
+                    "authenticate_recovered_decision_fetch_request(request)",
+                    "capture_recovered_decision_fetch_exact_output(&owner)",
+                    "prepare_recovered_decision_fetch_request_registration(owner)",
+                    "self.coordinator.plan_turn(inputs)",
+                    "prepare_recovered_decision_fetch_dispatch",
+                    "registration.commit(prepared)",
+                    "output.commit()",
+                ),
+            )
+            require_tokens(
+                scheduler_path,
+                "lifecycle-owned recovered Decision Fetch dispatch",
+                recovered_fetch_dispatch,
+                (
+                    "services.matches_lifecycle_body_store(body_store_identity)",
+                    "services.matches_lifecycle_executor_output_guard(executor)",
+                    "ReadyRecoveredDecisionFetchDemandV1::ExactOutputAndExecutor",
+                    "output.abort_before_claim()",
+                    "self.coordinator.rollback_unpublished_turn(&lease)",
+                    "assert_eq!(installed, dispatch_key)",
+                ),
+            )
+            reject_tokens(
+                scheduler_path,
+                "sealed recovered Decision Fetch request dispatch",
+                recovered_fetch_dispatch,
+                (
+                    "EffectWorkId",
+                    "RuntimeEffectOwnership",
+                    "PendingRuntimeEffectBinding",
+                    "into_parts",
+                    "settle",
+                ),
+            )
+            recovered_fetch_phase_a = region(
+                scheduler_path,
+                scheduler_source,
+                "recovered Decision Fetch response persistence Phase A",
+                "fn persist_recovered_decision_fetch_response_after_runner(",
+                "/// Plan, submit, and reblock one exact selected certified-Fetch response.",
+            )
+            require_order(
+                scheduler_path,
+                "recovered Decision Fetch response persistence Phase A",
+                recovered_fetch_phase_a,
+                (
+                    "capture_lifecycle_capacity_rank(selector)",
+                    "reservation.preflight_recovered_decision_fetch_target_absent()",
+                    "executor.prepare_recovered_decision_fetch_body_persistence(prepared)",
+                    "matches_claimed_dispatched_recovered_decision_fetch(",
+                    "reservation.preflight_recovered_decision_fetch_body_persistence(&task)",
+                    "executor.prepare_recovered_decision_fetch_response_claim(&task)",
+                    "claim.commit_with_queue(reservation, task)",
+                    "assert_eq!(self.coordinator.active_lease.as_ref(), Some(&lease))",
+                ),
+            )
+            require_tokens(
+                scheduler_path,
+                "recovered Decision Fetch response persistence Phase A",
+                scheduler_source,
+                (
+                    "runner.target() != LifecycleRunnerRankTarget::Ingress",
+                    "ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignRunnerObservation",
+                ),
+            )
+            require_tokens(
+                effects_path,
+                "recovered Decision Fetch foreign-cursor owner regression",
+                effects_source,
+                (
+                    "fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once()",
+                    "owner.persist_recovered_decision_fetch_response(",
+                    "Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignRunnerObservation)",
+                    "a foreign Ingress cursor cannot change the recovered Fetch lease or registry row",
+                ),
+            )
+            require_tokens(
+                launch_path,
+                "recovered Decision Fetch source-order regression",
+                launch_source,
+                (
+                    "fn recovered_decision_fetch_phase_a_rejects_foreign_ingress_cursor_before_mutation()",
+                ),
+            )
+            recovered_fetch_ready = region(
+                registry_validate_path,
+                registry_validate_source,
+                "closed Ready and claimed recovered Decision Fetch carrier",
+                "pub(super) fn attest_ready_recovered_decision_fetch(",
+                "/// Project a comparison-only seal for this exact registry instance.",
+            )
+            require_tokens(
+                registry_validate_path,
+                "closed Ready and claimed recovered Decision Fetch carrier",
+                recovered_fetch_ready,
+                (
+                    "fetch.dispatch_key.is_some()",
+                    "fetch.matches_current_ready_record(address, digest, coordinator)",
+                    "RecoveredDecisionFetchDispatchIdentityV1::new(",
+                    "project_recovered_decision_fetch_request(identity)",
+                    "fn matches_claimed_dispatched_recovered_decision_fetch(",
+                    "fetch.dispatch_key == Some(key)",
+                    "fetch.matches_claimed_record(address, digest, coordinator, lease)",
+                    "fn prepare_recovered_decision_fetch_dispatch(",
+                ),
+            )
+            recovered_fetch_projection = region(
+                wal_recovery_path,
+                wal_recovery_source,
+                "payload-free recovered Decision Fetch projection",
+                "pub(super) fn project_recovered_decision_fetch_request(",
+                "/// Prove the authenticated recovery cut retains this exact Fetch.",
+            )
+            require_tokens(
+                wal_recovery_path,
+                "payload-free recovered Decision Fetch projection",
+                recovered_fetch_projection,
+                (
+                    "AdapterEffect::FetchBody {",
+                    "manifest: None",
+                    "certificate: Some(certificate)",
+                    "RecoveredDecisionFetchRequestAuthorityV1::from_registry_projection(",
+                ),
+            )
+            reject_tokens(
+                wal_recovery_path,
+                "payload-free recovered Decision Fetch projection",
+                recovered_fetch_projection,
+                ("EffectWorkId", "RuntimeEffectOwnership", "into_parts"),
+            )
+            recovered_fetch_registration = region(
+                effects_path,
+                effects_source,
+                "dedicated recovered Decision Fetch request owner census",
+                "pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_request_registration(",
+                "/// Take ownership of an exact-body store opened during sealed preflight.",
+            )
+            require_tokens(
+                effects_path,
+                "dedicated recovered Decision Fetch request owner census",
+                recovered_fetch_registration,
+                (
+                    "self.validated_certified_request_presence().is_err()",
+                    "self.outstanding_requests.len().checked_add(self.recovered_decision_fetches.len())",
+                    "owner.conflicts_with_ordinary_tracker(&self.outstanding_requests)",
+                    "owner.matches_body_coordinates(pending.task.round, pending.task.subject)",
+                    "PreparedRecoveredDecisionFetchRequestRegistrationV1 { executor: self, owner: Some(owner), }",
+                ),
+            )
+            require_tokens(
+                effects_path,
+                "complete recovered Decision Fetch request census and terminal fence",
+                effects_source,
+                (
+                    "recovered_decision_fetches: BTreeMap<",
+                    "recovered_decision_fetch_by_request: BTreeMap<",
+                    "fn recovered_decision_fetch_request_index_is_exact_and_empty(&self) -> bool",
+                    "self.recovered_decision_fetch_request_index_is_exact_and_empty()",
+                    "fn validated_certified_request_presence(",
+                    "Ok(!pending_hashes.is_empty() || !recovered_hashes.is_empty())",
+                ),
+            )
+            ordinary_fetch_admission = region(
+                effects_path,
+                effects_source,
+                "ordinary and recovered Decision Fetch coordinate fence",
+                "fn begin_fetch<S: V2EffectServices>(",
+                "fn retained_body_manifest_hash(",
+            )
+            require_tokens(
+                effects_path,
+                "ordinary and recovered Decision Fetch coordinate fence",
+                ordinary_fetch_admission,
+                (
+                    "self.recovered_decision_fetches.values()",
+                    "owner.matches_body_coordinates(round, subject)",
+                    "body-fetch coordinates already have a recovered Decision Fetch owner",
+                ),
+            )
+            require_tokens(
+                effects_path,
+                "symmetric recovered Decision Fetch owner census",
+                effects_source,
+                (
+                    "owner.matches_body_coordinates(pending.task.round, pending.task.subject)",
+                    "fn recovered_decision_fetch_fences_later_ordinary_body_coordinates()",
+                    "executor.validated_certified_request_presence()",
+                ),
+            )
+            recovered_fetch_selector = region(
+                selector_path,
+                selector_source,
+                "typed recovered Decision Fetch selector consumption",
+                "pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_body_persistence(",
+                "/// Consume one exact selected family into a bounded body-store command.",
+            )
+            require_order(
+                selector_path,
+                "typed recovered Decision Fetch selector consumption",
+                recovered_fetch_selector,
+                (
+                    "self.revalidate_recovered_decision_fetch_response_candidate(",
+                    "PreparedCertifiedResponseCandidate::Recovered(candidate)",
+                    "let authenticated = candidate.into_authenticated_response()",
+                    "RecoveredDecisionFetchBodyPersistenceTaskV1 {",
+                ),
+            )
+            require_tokens(
+                selector_path,
+                "typed recovered Decision Fetch selector target",
+                selector_source,
+                (
+                    "PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence",
+                    "LifecycleIngressIoTargetKind::RecoveredDecisionFetchBodyPersistence",
+                    "target.matches_recovered_decision_fetch_key(task.dispatch_key())",
+                ),
+            )
+            recovered_fetch_claim = region(
+                effects_path,
+                effects_source,
+                "recovered Decision Fetch response claim publication",
+                "pub(in crate::sumeragi) fn commit_with_queue(",
+                "impl RecoveredDecisionFetchResponseCandidateV1",
+            )
+            require_order(
+                effects_path,
+                "recovered Decision Fetch response claim publication",
+                recovered_fetch_claim,
+                (
+                    "owner.matches_response_claim_preflight(response_hash, preflight)",
+                    "owner.commit_exact_response_claim(response_hash)",
+                    "queue.commit_recovered_decision_fetch_body_persistence(task)",
+                ),
+            )
+            recovered_fetch_mixed_head = region(
+                worker_path,
+                worker_source,
+                "recovered Decision Fetch mixed completion head fence",
+                "fn take_io_completion(&mut self, runtime_capacity_available: bool)",
+                "fn take_recovered_decision_apply_completion(",
+            )
+            require_order(
+                worker_path,
+                "recovered Decision Fetch mixed completion head fence",
+                recovered_fetch_mixed_head,
+                (
+                    "let ownership_position =",
+                    "io.completion_ownership_at(ownership_position)",
+                    "owned.recovered_decision_fetch.is_some()",
+                    "return IoCompletionTake::retained_runtime()",
+                    "io.try_recv_completion_unacknowledged()",
+                ),
+            )
+            require_tokens(
+                worker_path,
+                "dedicated recovered Decision Fetch worker ownership",
+                worker_source,
+                (
+                    "PersistRecoveredDecisionFetchBody(RecoveredDecisionFetchBodyPersistenceTaskV1)",
+                    "recovered_decision_fetch_bodies: BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>",
+                    "V2IoCompletion::RecoveredDecisionFetchBodyPersisted",
+                    "V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained",
+                    "fn drain_recovered_decision_fetch_body_completion(",
+                    "fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extraction()",
+                ),
+            )
+            parked_fetch_completion = region(
+                worker_path,
+                worker_source,
+                "opaque parked recovered Decision Fetch completion",
+                "pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchBodyCompletionV1 {",
+                "impl PreparedRecoveredLifecycleSignCompletionV1",
+            )
+            reject_tokens(
+                worker_path,
+                "opaque parked recovered Decision Fetch completion",
+                parked_fetch_completion,
+                (
+                    "fn into_parts(",
+                    "fn durable_receipt(",
+                    "fn response(",
+                    "fn acknowledge(",
+                    "fn settle(",
+                ),
+            )
+            recovered_fetch_settlement = region(
+                launch_path,
+                launch_source,
+                "restart-closed recovered Decision Fetch-to-Store settlement",
+                "pub(in crate::sumeragi) fn settle_recovered_decision_fetch_store(",
+                "/// Reserve, claim, and queue one recovered Sign",
+            )
+            require_order(
+                launch_path,
+                "restart-closed recovered Decision Fetch-to-Store settlement",
+                recovered_fetch_settlement,
+                (
+                    "prepare_lifecycle_ingress_selector(",
+                    "prepare_recovered_decision_fetch_owner_retirement(",
+                    "into_locked_recovered_decision_fetch_dequeue(",
+                    "prepare_recovered_decision_fetch_store_adapter_authority(",
+                    "prepare_recovered_decision_fetch_store_adapter(",
+                    "prepare_recovered_decision_fetch_store_successor(",
+                    "prepare_recovered_decision_fetch_store_transition(",
+                    "begin_fail_stop_operation()",
+                    "transition.persist_exact_successor().is_err()",
+                    "transition.commit_after_publication()",
+                    "commit_recovered_decision_fetch_owner_retirement(retirement)",
+                    "locked_dequeue.commit()",
+                    "completion.acknowledge_after_publication()",
+                    "operation.complete()",
+                ),
+            )
+            require_tokens(
+                launch_path,
+                "restart-closed recovered Decision Fetch-to-Store settlement",
+                recovered_fetch_settlement,
+                (
+                    "*recovered_decision_fetch_body_completion = Some(completion)",
+                    "owner.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure)",
+                    "ProductionRecoveredDecisionFetchStoreSettlementV1::RestartRequired",
+                    "ProductionRecoveredDecisionFetchStoreSettlementV1::Applied",
+                ),
+            )
+            reject_tokens(
+                launch_path,
+                "dedicated recovered Decision Fetch-to-Store settlement",
+                recovered_fetch_settlement,
+                ("EffectWorkId", "RuntimeEffectOwnership", "into_parts"),
+            )
+            require_tokens(
+                worker_path,
+                "recovered Decision Fetch worker acknowledgement tail",
+                region(
+                    worker_path,
+                    worker_source,
+                    "recovered Decision Fetch worker acknowledgement tail",
+                    "fn acknowledge_recovered_decision_fetch_body(",
+                    "fn prepare_certified_fetch_body_persistence_ack(",
+                ),
+                (
+                    "fn acknowledge_recovered_decision_fetch_body(",
+                    ".recovered_decision_fetch_bodies",
+                    ".remove(&key)",
+                ),
+            )
+            require_tokens(
+                worker_path,
+                "recovered Decision Fetch guarded acknowledgement tail",
+                worker_source,
+                (
+                    "fn acknowledge_after_publication(mut self)",
+                    "self.drop_guard.disarm()",
+                ),
+            )
+            require_tokens(
+                ledger_path,
+                "recovered Decision Store cold restart and marker-prefix closure",
+                ledger_source,
+                (
+                    "fn authenticate_recovered_decision_fetch_store(",
+                    "fn open_recovered_decision_store_startup(",
+                    "fn stage_recovered_decision_apply_projection(",
+                    "successor_records_after_live_store(",
+                    "fn recovered_decision_store_crash_prefix_restarts_once_then_stutters()",
+                    "fn recovered_decision_store_restart_rejects_an_exact_child_key_collision()",
+                ),
+            )
+            require_tokens(
+                body_pipeline_path,
+                "recovered Decision Fetch payload-free parent transition",
+                body_pipeline_source,
+                (
+                    "fn stage_recovered_decision_fetch_store_transition(",
+                    "DurablePayloadReference::None",
+                    "DurableContinuationEdge::FetchToStore",
+                    "BodyStagePayloadRelationV1::RecoveredDecisionFetch",
+                    "fn persist_exact_successor(",
+                    "fn commit_after_publication(self)",
+                ),
+            )
+            require_tokens(
+                adapter_path,
+                "recovered Decision Store cold adapter reconstruction",
+                adapter_source,
+                (
+                    "fn advance_recovered_decision_fetch_store(",
+                    "project_store_adapter_authority(body)",
+                    "project_decision_fetch_store(verified, projection_body, preview.store_effect())",
+                    "preview.commit_after_durable_settlement()",
+                ),
+            )
+            require_tokens(
+                body_store_path,
+                "recovered Decision Store body-frame reconstruction",
+                body_store_source,
+                (
+                    "struct RecoveredDecisionFetchStoreBodyAuthorityV1",
+                    "fn recovered_decision_fetch_store_body(",
+                    "Ok(RecoveredDecisionFetchStoreBodyAuthorityV1 { manifest: manifest.clone(), durable: durable.clone(), })",
+                ),
+            )
+            require_tokens(
+                lifecycle_open_path,
+                "typed recovered Decision Store storage census",
+                lifecycle_open_source,
+                (
+                    "RecoveredWalStartupProjectionV1::DecisionStore",
+                    "assemble_storage_only_with_recovered_decision_store_and_durable_fetch_startup",
+                    "recovered_decision_store_chain_records(",
+                ),
+            )
+            require_tokens(
+                registry_validate_path,
+                "dedicated recovered Decision Store registry install",
+                registry_validate_source,
+                (
+                    "RecoveredWalRegistrySlotV1::DecisionStore",
+                    "fn install_recovered_wal_decision_store(",
+                    "ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore",
+                ),
+            )
+            require_order(
+                launch_path,
+                "launched recovered Decision Fetch Drop order",
+                launched_owner_fields,
+                (
+                    "services: ProductionV2Services",
+                    "recovered_decision_fetch_body_completion: Option<PreparedRecoveredDecisionFetchBodyCompletionV1>",
+                    "recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>",
+                    "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
+                ),
+            )
+            request_scoped_response = region(
+                transport_path,
+                transport_source,
+                "request-scoped certified response authentication",
+                "pub(in crate::sumeragi) fn authenticate_response(",
+                "/// Certified-body response admitted for one outstanding exact request.",
+            )
+            require_tokens(
+                transport_path,
+                "request-scoped certified response authentication",
+                request_scoped_response,
+                (
+                    "authenticate_certified_body_response_for_request(",
+                    "response.validate_against(",
+                    "verify_signature(",
+                    "decode_framed_signed_block(&response.body)",
+                    "AuthenticatedCertifiedBodyResponse { response }",
                 ),
             )
             require_tokens(
@@ -1374,9 +2433,6 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             )
         payload_store_path, payload_store_source = load(
             "crates/iroha_core/src/sumeragi/v2_certified_serve_payload_store.rs"
-        )
-        lifecycle_open_path, lifecycle_open_source = load(
-            "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs"
         )
         coordinator_path, coordinator_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"
@@ -1886,6 +2942,16 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
         "crates/iroha_core/src/sumeragi/v2_effects.rs"
     )
     if effects_source:
+        require_tokens(
+            effects_path,
+            "recovered Sign foreign-cursor owner regression",
+            effects_source,
+            (
+                "owner.dispatch_recovered_lifecycle_sign(",
+                "Err(ProductionRecoveredLifecycleSignDispatchErrorV1::ForeignRunnerObservation)",
+                "a non-Completion runner cursor cannot claim or mutate a recovered Sign owner",
+            ),
+        )
         certified = region(
             effects_path,
             effects_source,

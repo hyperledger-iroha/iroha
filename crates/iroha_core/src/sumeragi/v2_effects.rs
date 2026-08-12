@@ -148,6 +148,7 @@ use super::{
         CertifiedBodyResponseClaimPreflight, OutstandingCertifiedBodyRequests, V2TransportError,
         authenticate_certified_body_request_with_live_adapter, authenticate_payload_chunk,
     },
+    v2_worker::RecoveredDecisionFetchRequestOwnerV1,
 };
 use crate::kura::KuraV2CommitReceipt;
 
@@ -1787,6 +1788,209 @@ impl From<V2TransportError> for EffectTransportError {
     }
 }
 
+/// Closed failure while reserving a dedicated recovered request owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum RecoveredDecisionFetchRequestRegistrationErrorV1 {
+    /// The executor is closed or belongs to another height/service requester.
+    ForeignExecutor,
+    /// Existing ordinary or recovered request indexes are not one exact census.
+    InvalidExistingCensus,
+    /// Another ordinary or recovered owner has the same exact or logical request.
+    ConflictingOwner,
+    /// The one recovered Decision Fetch owner position is already occupied.
+    Occupied,
+}
+
+/// Exclusive vacant registration retained before the coordinator claim.
+///
+/// Dropping the reservation performs no mutation. Its final commit consumes
+/// the registry's claimed-carrier arming token and installs both dedicated
+/// indexes in one assertion-only tail.
+#[must_use = "dropping a recovered request reservation leaves executor indexes unchanged"]
+pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchRequestRegistrationV1<'executor> {
+    executor: &'executor mut V2EffectExecutor<SerializedV2Runtime>,
+    owner: Option<RecoveredDecisionFetchRequestOwnerV1>,
+}
+
+impl PreparedRecoveredDecisionFetchRequestRegistrationV1<'_> {
+    /// Return the reserved exact lifecycle key.
+    pub(in crate::sumeragi) fn dispatch_key(
+        &self,
+    ) -> super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1 {
+        self.owner
+            .as_ref()
+            .expect("prepared recovered request retains its owner")
+            .dispatch_key()
+    }
+
+    /// Arm the closed registry carrier and install the request owner indexes.
+    pub(in crate::sumeragi) fn commit(
+        mut self,
+        prepared_registry: super::v2_lifecycle_coordinator::PreparedRecoveredDecisionFetchDispatchV1<'_>,
+    ) -> super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1 {
+        let owner = self
+            .owner
+            .take()
+            .expect("prepared recovered request retains its exact owner");
+        let key = owner.dispatch_key();
+        assert_eq!(prepared_registry.dispatch_key(), key);
+        let request_hash = owner.request_hash();
+        assert!(!self.executor.certified_work.contains_key(&request_hash));
+        assert!(!self.executor.outstanding_requests.contains(request_hash));
+        assert!(!owner.conflicts_with_ordinary_tracker(&self.executor.outstanding_requests));
+        assert!(!self.executor.recovered_decision_fetches.contains_key(&key));
+        assert!(
+            !self
+                .executor
+                .recovered_decision_fetch_by_request
+                .contains_key(&request_hash)
+        );
+        assert_eq!(prepared_registry.commit_for_executor(), key);
+        let previous_owner = self.executor.recovered_decision_fetches.insert(key, owner);
+        assert!(previous_owner.is_none());
+        let previous_reverse = self
+            .executor
+            .recovered_decision_fetch_by_request
+            .insert(request_hash, key);
+        assert!(previous_reverse.is_none());
+        key
+    }
+}
+
+/// Exact authenticated response candidate owned by one recovered Decision Fetch.
+#[derive(Debug, PartialEq, Eq)]
+#[must_use = "the recovered response candidate still requires dedicated persistence"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi) struct RecoveredDecisionFetchResponseCandidateV1 {
+    context_id: wire::HeightContextId,
+    height: wire::Height,
+    key: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+    request_hash: HashOf<wire::CertifiedBodyRequest>,
+    response_hash: HashOf<wire::CertifiedBodyResponse>,
+    authenticated_responder: PeerId,
+    authenticated_response: AuthenticatedCertifiedBodyResponse,
+    fetch_tag: EventTag,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    canonical_manifest_hash: HashOf<wire::PayloadManifest>,
+    body_payload_hash: Hash,
+    claim_preflight: CertifiedBodyResponseClaimPreflight,
+}
+
+/// Closed reason a revalidated recovered response could not reserve its exact claim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum RecoveredDecisionFetchResponseClaimErrorV1 {
+    /// The dedicated request/reverse indexes no longer form one exact census.
+    InvalidOwnerIndex,
+    /// The request owner or its height context no longer matches the task.
+    ForeignOwner,
+    /// Another physical response acquired the request family first.
+    ConflictingClaim,
+}
+
+/// Exclusive response-family reservation held until the dedicated queue tail.
+#[must_use = "dropping the reservation leaves the recovered response unclaimed"]
+pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchResponseClaimV1<'executor> {
+    executor: &'executor mut V2EffectExecutor<SerializedV2Runtime>,
+    key: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+    response_hash: HashOf<wire::CertifiedBodyResponse>,
+    preflight: CertifiedBodyResponseClaimPreflight,
+}
+
+/// Read-only exact retirement plan for one recovered request/response owner.
+///
+/// It contains only copyable dedicated index identities. The authenticated
+/// request and response remain private in the installed owner until the
+/// post-fsync assertion tail removes both indexes together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "recovered Decision Fetch request owner has not been retired"]
+pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchOwnerRetirementV1 {
+    key: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+    request_hash: HashOf<wire::CertifiedBodyRequest>,
+    response_hash: HashOf<wire::CertifiedBodyResponse>,
+}
+
+impl PreparedRecoveredDecisionFetchResponseClaimV1<'_> {
+    /// Atomically install/coalesce the exact claim and publish its preflighted
+    /// persistence command. The queue commit is assertion-only while its
+    /// mutex and fail-stop operation remain held.
+    pub(in crate::sumeragi) fn commit_with_queue(
+        self,
+        queue: super::v2_worker::LifecycleIoCapacityReservation<'_>,
+        task: super::v2_lifecycle_coordinator::RecoveredDecisionFetchBodyPersistenceTaskV1,
+    ) {
+        let Self {
+            executor,
+            key,
+            response_hash,
+            preflight,
+        } = self;
+        assert_eq!(task.dispatch_key(), key);
+        assert_eq!(task.response_hash(), response_hash);
+        assert_eq!(task.claim_preflight(), preflight);
+        let owner = executor
+            .recovered_decision_fetches
+            .get_mut(&key)
+            .expect("exclusive recovered response reservation retains its request owner");
+        assert!(owner.matches_response_claim_preflight(response_hash, preflight));
+        assert!(owner.commit_exact_response_claim(response_hash));
+        queue.commit_recovered_decision_fetch_body_persistence(task);
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl RecoveredDecisionFetchResponseCandidateV1 {
+    /// Return the dedicated lifecycle owner key.
+    pub(in crate::sumeragi) const fn dispatch_key(
+        &self,
+    ) -> super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1 {
+        self.key
+    }
+
+    /// Hash of the exact signed request family.
+    pub(in crate::sumeragi) const fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
+        self.request_hash
+    }
+
+    /// Hash of the authenticated physical response.
+    pub(in crate::sumeragi) const fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
+        self.response_hash
+    }
+
+    /// Return the recovered Fetch round.
+    pub(in crate::sumeragi) const fn round(&self) -> wire::ConsensusRound {
+        self.round
+    }
+
+    /// Return the recovered Fetch subject.
+    pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
+        self.subject
+    }
+
+    /// Return the exact response-family claim state observed at authentication.
+    pub(in crate::sumeragi) const fn claim_preflight(&self) -> CertifiedBodyResponseClaimPreflight {
+        self.claim_preflight
+    }
+
+    /// Recheck the physical response and authenticated outer responder.
+    pub(in crate::sumeragi) fn matches_authenticated_response(
+        &self,
+        response: &wire::CertifiedBodyResponse,
+        authenticated_responder: &PeerId,
+    ) -> bool {
+        self.response_hash == HashOf::new(response)
+            && self.authenticated_responder == *authenticated_responder
+            && self.authenticated_response.response() == response
+    }
+
+    /// Consume the unique authenticated response into dedicated persistence.
+    pub(in crate::sumeragi) fn into_authenticated_response(
+        self: Box<Self>,
+    ) -> AuthenticatedCertifiedBodyResponse {
+        self.authenticated_response
+    }
+}
+
 /// A certified response which cannot own claimed-response selector priority.
 #[derive(Debug, PartialEq, Eq)]
 #[must_use]
@@ -1940,6 +2144,8 @@ pub(crate) enum CertifiedResponsePriorityProbe {
     DefinitelyNonPriority(CertifiedResponsePriorityNonPriority),
     /// Exact authentication succeeded; transactional admission is still required.
     PreflightRequired(Box<CertifiedResponsePriorityCandidate>),
+    /// A recovered Decision Fetch owns this family outside ordinary indexes.
+    RecoveredPreflightRequired(Box<RecoveredDecisionFetchResponseCandidateV1>),
 }
 
 #[derive(Clone, Debug)]
@@ -3616,6 +3822,17 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     body_pipeline_owners: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), BodyPipelineOwner>,
     certified_work: BTreeMap<HashOf<wire::CertifiedBodyRequest>, EffectWorkId>,
     outstanding_requests: OutstandingCertifiedBodyRequests,
+    /// Lifecycle-owned recovered Decision Fetch requests never enter ordinary
+    /// effect work or tracker indexes.
+    recovered_decision_fetches: BTreeMap<
+        super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+        RecoveredDecisionFetchRequestOwnerV1,
+    >,
+    /// Exact signed-request reverse edge for the dedicated recovered owner.
+    recovered_decision_fetch_by_request: BTreeMap<
+        HashOf<wire::CertifiedBodyRequest>,
+        super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+    >,
     retained_certified_body_response: Option<RetainedCertifiedBodyResponse>,
     ready_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ReadyBody>,
     /// Last reducer incarnation whose executor-side view transition completed.
@@ -3641,6 +3858,68 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
 }
 
 impl V2EffectExecutor<SerializedV2Runtime> {
+    /// Reserve the sole dedicated recovered Decision Fetch owner position.
+    ///
+    /// Exact hash, logical request identity, body coordinates, and both ordinary
+    /// and recovered reverse indexes are checked while the executor is
+    /// exclusively borrowed. No map changes until the returned reservation
+    /// consumes the claimed registry carrier.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_request_registration(
+        &mut self,
+        owner: RecoveredDecisionFetchRequestOwnerV1,
+    ) -> Result<
+        PreparedRecoveredDecisionFetchRequestRegistrationV1<'_>,
+        RecoveredDecisionFetchRequestRegistrationErrorV1,
+    > {
+        if self.output_guard.restart_required()
+            || self.fatal_reason.is_some()
+            || !owner.validates_exact_executor_context(&self.context, &self.requester)
+        {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::ForeignExecutor);
+        }
+        if self.validated_certified_request_presence().is_err() {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::InvalidExistingCensus);
+        }
+        let key = owner.dispatch_key();
+        let request_hash = owner.request_hash();
+        if self
+            .outstanding_requests
+            .len()
+            .checked_add(self.recovered_decision_fetches.len())
+            .is_none_or(|owned| owned >= self.config.max_certified_requests)
+        {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::Occupied);
+        }
+        if !self.recovered_decision_fetches.is_empty()
+            || self
+                .recovered_decision_fetch_by_request
+                .contains_key(&request_hash)
+        {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::Occupied);
+        }
+        if self.certified_work.contains_key(&request_hash)
+            || self.outstanding_requests.contains(request_hash)
+            || owner.conflicts_with_ordinary_tracker(&self.outstanding_requests)
+            || self.pending_fetches.values().any(|pending| {
+                owner.matches_body_coordinates(pending.task.round, pending.task.subject)
+            })
+            || self.recovered_decision_fetches.values().any(|existing| {
+                let projection = owner.candidate_projection();
+                existing.matches_body_coordinates(projection.round, projection.subject)
+            })
+            || self
+                .recovered_decision_fetch_by_request
+                .values()
+                .any(|existing| *existing == key)
+        {
+            return Err(RecoveredDecisionFetchRequestRegistrationErrorV1::ConflictingOwner);
+        }
+        Ok(PreparedRecoveredDecisionFetchRequestRegistrationV1 {
+            executor: self,
+            owner: Some(owner),
+        })
+    }
+
     /// Take ownership of an exact-body store opened during sealed preflight.
     ///
     /// Production uses this entry point after independently inspecting the
@@ -3753,6 +4032,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     ) -> Result<PreparedRecoveredDecisionApplyAdapterCompletionV1<'_>, EffectExecutorError> {
         self.ensure_open()?;
         if self.pending_work() != 0
+            || !self.recovered_decision_fetch_request_index_is_exact_and_empty()
             || self.retained_effect_batch.is_some()
             || self.parked_effect_batch.is_some()
             || self.retained_certified_body_response.is_some()
@@ -3779,6 +4059,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         assert!(
             self.finality_completion.is_none()
                 && self.pending_work() == 0
+                && self.recovered_decision_fetch_request_index_is_exact_and_empty()
                 && dispatch_key.matches_height_context(&self.context)
                 && artifact.height_context == self.context
                 && artifact.subject == receipt.subject()
@@ -4086,6 +4367,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             && self.retained_effect_batch.is_none()
             && self.parked_effect_batch.is_none()
             && self.retained_certified_body_response.is_none()
+            && self.recovered_decision_fetch_request_index_is_exact_and_empty()
             && self.runtime.queued_commands() == 0
             && self.runtime.driver().ready_to_finish()
     }
@@ -4150,6 +4432,48 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(EffectTransportError::FailClosed(
                 "certified request tracker indexes are not an exact bounded cut".to_owned(),
             ));
+        }
+        if self.recovered_decision_fetches.len() != self.recovered_decision_fetch_by_request.len()
+            || self.recovered_decision_fetches.len() > 1
+            || self
+                .outstanding_requests
+                .len()
+                .checked_add(self.recovered_decision_fetches.len())
+                .is_none_or(|owned| owned > self.config.max_certified_requests)
+        {
+            return Err(EffectTransportError::FailClosed(
+                "recovered Decision Fetch indexes are not one exact bounded cut".to_owned(),
+            ));
+        }
+        let mut recovered_hashes = BTreeSet::new();
+        for (key, owner) in &self.recovered_decision_fetches {
+            let request_hash = owner.request_hash();
+            if owner.dispatch_key() != *key
+                || !owner.validates_exact_executor_context(&self.context, &self.requester)
+                || self.recovered_decision_fetch_by_request.get(&request_hash) != Some(key)
+                || !recovered_hashes.insert(request_hash)
+                || self.certified_work.contains_key(&request_hash)
+                || self.outstanding_requests.contains(request_hash)
+                || owner.conflicts_with_ordinary_tracker(&self.outstanding_requests)
+                || self.pending_fetches.values().any(|pending| {
+                    owner.matches_body_coordinates(pending.task.round, pending.task.subject)
+                })
+            {
+                return Err(EffectTransportError::Authentication(
+                    V2TransportError::InconsistentRequestIndex(request_hash),
+                ));
+            }
+        }
+        for (request_hash, key) in &self.recovered_decision_fetch_by_request {
+            if self
+                .recovered_decision_fetches
+                .get(key)
+                .is_none_or(|owner| owner.request_hash() != *request_hash)
+            {
+                return Err(EffectTransportError::Authentication(
+                    V2TransportError::InconsistentRequestIndex(*request_hash),
+                ));
+            }
         }
         let mut pending_hashes = BTreeSet::new();
         for (work_id, pending) in &self.pending_fetches {
@@ -4217,7 +4541,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "certified request indexes have different exact owner counts".to_owned(),
             ));
         }
-        Ok(!pending_hashes.is_empty())
+        Ok(!pending_hashes.is_empty() || !recovered_hashes.is_empty())
     }
 
     /// Freeze the receiver-local physical predecessor cut used by any producer
@@ -4443,6 +4767,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             body_pipeline_owners: BTreeMap::new(),
             certified_work: BTreeMap::new(),
             outstanding_requests,
+            recovered_decision_fetches: BTreeMap::new(),
+            recovered_decision_fetch_by_request: BTreeMap::new(),
             retained_certified_body_response: None,
             ready_bodies: BTreeMap::new(),
             reconciled_tag,
@@ -8209,6 +8535,87 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.validate_lifecycle_ingress_selector_authority()?;
 
         let request_hash = response.request_hash;
+        if let Some(key) = self
+            .recovered_decision_fetch_by_request
+            .get(&request_hash)
+            .copied()
+        {
+            if self.certified_work.contains_key(&request_hash)
+                || self.outstanding_requests.contains(request_hash)
+            {
+                return Err(EffectTransportError::Authentication(
+                    V2TransportError::InconsistentRequestIndex(request_hash),
+                ));
+            }
+            let owner = self.recovered_decision_fetches.get(&key).ok_or(
+                EffectTransportError::Authentication(V2TransportError::InconsistentRequestIndex(
+                    request_hash,
+                )),
+            )?;
+            if owner.request_hash() != request_hash
+                || !owner.validates_exact_executor_context(&self.context, &self.requester)
+            {
+                return Err(EffectTransportError::Authentication(
+                    V2TransportError::InconsistentRequestIndex(request_hash),
+                ));
+            }
+            let authenticated = owner
+                .authenticate_response(&self.context, response.clone(), authenticated_responder)
+                .map_err(EffectTransportError::Authentication)?;
+            let authenticated_response = authenticated.response();
+            let projection = owner.candidate_projection();
+            let ready_body = ReadyBody::derive(
+                &self.context,
+                projection.round,
+                projection.subject,
+                authenticated_response.body.as_slice(),
+            )
+            .map_err(|_| {
+                EffectTransportError::BodyMismatch(
+                    "recovered certified body cannot reproduce its canonical chunk manifest",
+                )
+            })?;
+            if ready_body.manifest != authenticated_response.manifest {
+                return Err(EffectTransportError::BodyMismatch(
+                    "recovered certified response manifest is not canonical for its body",
+                ));
+            }
+            let response_hash = HashOf::new(authenticated_response);
+            let canonical_manifest_hash = HashOf::new(&ready_body.manifest);
+            let body_payload_hash = Hash::new(&authenticated_response.body);
+            let claim_preflight = match projection.response_claim {
+                None => CertifiedBodyResponseClaimPreflight::Vacant,
+                Some(claimed) if claimed == response_hash => {
+                    CertifiedBodyResponseClaimPreflight::ExactRetransmission
+                }
+                Some(claimed) => {
+                    return Ok(CertifiedResponsePriorityProbe::DefinitelyNonPriority(
+                        CertifiedResponsePriorityNonPriority::ConflictingFamilyClaim {
+                            request_hash,
+                            claimed_response_hash: claimed,
+                            incoming_response_hash: response_hash,
+                        },
+                    ));
+                }
+            };
+            return Ok(CertifiedResponsePriorityProbe::RecoveredPreflightRequired(
+                Box::new(RecoveredDecisionFetchResponseCandidateV1 {
+                    context_id: self.context.id(),
+                    height: self.context.height,
+                    key,
+                    request_hash,
+                    response_hash,
+                    authenticated_responder: authenticated_responder.clone(),
+                    authenticated_response: authenticated,
+                    fetch_tag: projection.tag,
+                    round: projection.round,
+                    subject: projection.subject,
+                    canonical_manifest_hash,
+                    body_payload_hash,
+                    claim_preflight,
+                }),
+            ));
+        }
         let Some(work_id) = self.certified_work.get(&request_hash).copied() else {
             let reverse_pending_owner = self.pending_fetches.values().any(|pending| {
                 pending.request_hash == Some(request_hash)
@@ -8332,7 +8739,129 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             CertifiedResponsePriorityProbe::PreflightRequired(actual) => {
                 Ok(actual.as_ref() == expected)
             }
+            CertifiedResponsePriorityProbe::RecoveredPreflightRequired(_) => Ok(false),
         }
+    }
+
+    /// Re-probe one dedicated recovered response candidate and require exact equality.
+    pub(in crate::sumeragi) fn revalidate_recovered_decision_fetch_response_candidate(
+        &self,
+        expected: &RecoveredDecisionFetchResponseCandidateV1,
+        response: &wire::CertifiedBodyResponse,
+        authenticated_responder: &PeerId,
+    ) -> Result<bool, EffectTransportError> {
+        match self.probe_certified_response_priority(response, authenticated_responder)? {
+            CertifiedResponsePriorityProbe::RecoveredPreflightRequired(actual) => {
+                Ok(actual.as_ref() == expected)
+            }
+            CertifiedResponsePriorityProbe::DefinitelyNonPriority(_)
+            | CertifiedResponsePriorityProbe::PreflightRequired(_) => Ok(false),
+        }
+    }
+
+    /// Reserve exclusive mutation of the exact recovered response-family claim.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_response_claim(
+        &mut self,
+        task: &super::v2_lifecycle_coordinator::RecoveredDecisionFetchBodyPersistenceTaskV1,
+    ) -> Result<
+        PreparedRecoveredDecisionFetchResponseClaimV1<'_>,
+        RecoveredDecisionFetchResponseClaimErrorV1,
+    > {
+        let key = task.dispatch_key();
+        let response_hash = task.response_hash();
+        let preflight = task.claim_preflight();
+        if !self.recovered_decision_fetch_request_index_is_exact() {
+            return Err(RecoveredDecisionFetchResponseClaimErrorV1::InvalidOwnerIndex);
+        }
+        let Some(owner) = self.recovered_decision_fetches.get(&key) else {
+            return Err(RecoveredDecisionFetchResponseClaimErrorV1::ForeignOwner);
+        };
+        if !key.matches_height_context(&self.context)
+            || !owner.validates_exact_executor_context(&self.context, &self.requester)
+        {
+            return Err(RecoveredDecisionFetchResponseClaimErrorV1::ForeignOwner);
+        }
+        if !owner.matches_response_claim_preflight(response_hash, preflight) {
+            return Err(RecoveredDecisionFetchResponseClaimErrorV1::ConflictingClaim);
+        }
+        Ok(PreparedRecoveredDecisionFetchResponseClaimV1 {
+            executor: self,
+            key,
+            response_hash,
+            preflight,
+        })
+    }
+
+    /// Preflight exact recovered request-owner retirement without mutation.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_owner_retirement(
+        &self,
+        key: super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+        response_hash: HashOf<wire::CertifiedBodyResponse>,
+    ) -> Result<PreparedRecoveredDecisionFetchOwnerRetirementV1, EffectTransportError> {
+        self.validate_lifecycle_ingress_selector_authority()?;
+        if !self.recovered_decision_fetch_request_index_is_exact() {
+            return Err(EffectTransportError::FailClosed(
+                "recovered Decision Fetch request indexes are not exact".to_owned(),
+            ));
+        }
+        let owner = self.recovered_decision_fetches.get(&key).ok_or_else(|| {
+            EffectTransportError::FailClosed(
+                "recovered Decision Fetch lost its dedicated request owner".to_owned(),
+            )
+        })?;
+        let request_hash = owner.request_hash();
+        if self.recovered_decision_fetch_by_request.get(&request_hash) != Some(&key)
+            || !owner.matches_settlement(key, response_hash)
+        {
+            return Err(EffectTransportError::FailClosed(
+                "recovered Decision Fetch changed its exact claimed response".to_owned(),
+            ));
+        }
+        Ok(PreparedRecoveredDecisionFetchOwnerRetirementV1 {
+            key,
+            request_hash,
+            response_hash,
+        })
+    }
+
+    /// Preview the recovered Store reducer transition through the dedicated runtime seam.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_store_adapter(
+        &mut self,
+        authority: super::v2_lifecycle_coordinator::RecoveredDecisionFetchStoreAdapterAuthorityV1,
+    ) -> Result<super::v2::PreparedRecoveredDecisionFetchStoreAdapterV1<'_>, super::v2::AdapterError>
+    {
+        self.runtime
+            .prepare_recovered_decision_fetch_store(authority)
+    }
+
+    /// Preview one exact lifecycle-owned signature on the serialized adapter.
+    pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(
+        &mut self,
+        authority: super::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1,
+    ) -> Result<
+        super::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'_>,
+        super::v2::AdapterError,
+    > {
+        self.runtime
+            .prepare_recovered_lifecycle_sign_completion(authority)
+    }
+
+    /// Infallibly remove the exact dedicated request indexes after publication.
+    pub(in crate::sumeragi) fn commit_recovered_decision_fetch_owner_retirement(
+        &mut self,
+        prepared: PreparedRecoveredDecisionFetchOwnerRetirementV1,
+    ) {
+        let owner = self
+            .recovered_decision_fetches
+            .remove(&prepared.key)
+            .expect("published recovered Decision Store retains its request owner");
+        assert_eq!(owner.request_hash(), prepared.request_hash);
+        assert!(owner.matches_settlement(prepared.key, prepared.response_hash));
+        let reverse = self
+            .recovered_decision_fetch_by_request
+            .remove(&prepared.request_hash)
+            .expect("published recovered Decision Store retains its request reverse index");
+        assert_eq!(reverse, prepared.key);
     }
 
     /// Prepare retirement of the exact executor and request owners which move
@@ -8873,6 +9402,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             || !valid_receipt
             || !valid_recovery_stage
             || self.finality_completion.is_some()
+            || !self.recovered_decision_fetch_request_index_is_exact_and_empty()
         {
             return Err(self.close(EffectExecutorError::InvalidApplyCompletion, services));
         }
@@ -9724,6 +10254,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
 
+        if self
+            .recovered_decision_fetches
+            .values()
+            .any(|owner| owner.matches_body_coordinates(round, subject))
+        {
+            return Err(EffectExecutorError::Contract(
+                "body-fetch coordinates already have a recovered Decision Fetch owner".to_owned(),
+            ));
+        }
+
         let key = (round, subject);
         let existing_id = self.pending_fetches.iter().find_map(|(id, pending)| {
             (pending.task.round == round && pending.task.subject == subject).then_some(*id)
@@ -10242,7 +10782,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         certificate: wire::QuorumCertificate,
         services: &mut S,
     ) -> Result<CertifiedFetchRequestPlan, EffectExecutorError> {
-        if self.outstanding_requests.len() >= self.config.max_certified_requests {
+        if self
+            .outstanding_requests
+            .len()
+            .checked_add(self.recovered_decision_fetches.len())
+            .is_none_or(|owned| owned >= self.config.max_certified_requests)
+        {
             return Err(EffectExecutorError::CertifiedRequestCapacity {
                 capacity: self.config.max_certified_requests,
             });
@@ -10262,9 +10807,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .authenticate_certified_body_request(&self.context, request.clone(), &self.requester)
             .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
         let request_hash = authenticated.request_hash();
-        if self.certified_work.contains_key(&request_hash) {
+        if self.certified_work.contains_key(&request_hash)
+            || self
+                .recovered_decision_fetch_by_request
+                .contains_key(&request_hash)
+            || self
+                .recovered_decision_fetches
+                .values()
+                .any(|owner| owner.has_same_logical_identity(authenticated.request()))
+        {
             return Err(EffectExecutorError::Contract(
-                "certified body request hash already has a work owner".to_owned(),
+                "certified body request already has an ordinary or recovered owner".to_owned(),
             ));
         }
         let registration = self
@@ -11837,9 +12390,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             Some(_) if !drain_decision_body || self.decision_body_drained => return Ok(()),
             _ => {}
         }
-        if drain_decision_body && !self.pending_applications.is_empty() {
+        if drain_decision_body
+            && (!self.pending_applications.is_empty()
+                || !self.recovered_decision_fetch_request_index_is_exact_and_empty())
+        {
             return Err(EffectExecutorError::Contract(
-                "terminal body cleanup began after application ownership was installed".to_owned(),
+                "terminal body cleanup began while an application or recovered Fetch owner remained"
+                    .to_owned(),
             ));
         }
         let first_install = self.protected_decision.is_none();
@@ -12119,7 +12676,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 )
             })?;
         if drain_decision_body
-            && (!self.certified_work.is_empty() || !self.outstanding_requests.is_empty())
+            && (!self.certified_work.is_empty()
+                || !self.outstanding_requests.is_empty()
+                || !self.recovered_decision_fetch_request_index_is_exact_and_empty())
         {
             return Err(EffectExecutorError::Contract(
                 "terminal cleanup left an unowned certified-body request".to_owned(),
@@ -12901,6 +13460,35 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .unwrap_or(usize::MAX)
     }
 
+    /// Validate the dedicated recovered-Fetch owner/reverse index and require
+    /// it to be empty at a height-finalization boundary. These owners are not
+    /// ordinary `EffectWorkId` capacity and therefore deliberately stay out of
+    /// [`Self::pending_work`].
+    fn recovered_decision_fetch_request_index_is_exact_and_empty(&self) -> bool {
+        self.recovered_decision_fetch_request_index_is_exact()
+            && self.recovered_decision_fetches.is_empty()
+            && self.recovered_decision_fetch_by_request.is_empty()
+    }
+
+    fn recovered_decision_fetch_request_index_is_exact(&self) -> bool {
+        self.recovered_decision_fetches.len() == self.recovered_decision_fetch_by_request.len()
+            && self.recovered_decision_fetches.iter().all(|(key, owner)| {
+                owner.dispatch_key() == *key
+                    && self
+                        .recovered_decision_fetch_by_request
+                        .get(&owner.request_hash())
+                        == Some(key)
+            })
+            && self
+                .recovered_decision_fetch_by_request
+                .iter()
+                .all(|(request_hash, key)| {
+                    self.recovered_decision_fetches
+                        .get(key)
+                        .is_some_and(|owner| owner.request_hash() == *request_hash)
+                })
+    }
+
     fn ensure_open(&self) -> Result<(), EffectExecutorError> {
         if self.output_guard.restart_required() {
             return Err(EffectExecutorError::FailClosed(
@@ -13260,7 +13848,8 @@ mod tests {
         v2_lifecycle_coordinator::{
             CertifiedFetchReadyPublicationError, LifecycleDigest, LifecyclePhase, LifecycleState,
             ProductionIngressCapacityStatus, ProductionIngressSchedulerInputsError,
-            ProductionIngressTurnPreparation, WaitSource,
+            ProductionIngressTurnPreparation, ProductionRecoveredDecisionFetchPersistenceErrorV1,
+            ProductionRecoveredLifecycleSignDispatchErrorV1, WaitSource,
         },
         v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig},
     };
@@ -23361,6 +23950,9 @@ mod tests {
             CertifiedResponsePriorityProbe::DefinitelyNonPriority(reason) => {
                 panic!("exact outstanding response was classified non-priority: {reason:?}")
             }
+            CertifiedResponsePriorityProbe::RecoveredPreflightRequired(_) => {
+                panic!("ordinary outstanding response was classified as recovered")
+            }
         };
         assert_eq!(candidate.context_id(), fixture.context.id());
         assert_eq!(candidate.height(), fixture.context.height);
@@ -23479,6 +24071,141 @@ mod tests {
         assert!(matches!(
             executor.validate_lifecycle_ingress_selector_authority(),
             Err(EffectTransportError::FailClosed(_))
+        ));
+    }
+
+    #[test]
+    fn recovered_decision_fetch_fences_later_ordinary_body_coordinates() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let requester = PeerId::new(fixture.requester_key.public_key().clone());
+        let certificate = fixture.qc(wire::GlobalPhase::Commit);
+        let sources = certified_sources(&fixture, &certificate);
+        let mut request = wire::CertifiedBodyRequest {
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+            certificate: certificate.clone(),
+            requester: requester.clone(),
+            signature: Vec::new(),
+        };
+        request.signature = Signature::new(
+            fixture.requester_key.private_key(),
+            &request.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let authenticated = executor
+            .authenticate_certified_body_request(request, &requester)
+            .expect("authenticate the recovered request fixture");
+        let key = crate::sumeragi::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1::for_height_context_test(
+            &fixture.context,
+            41,
+            0xD1,
+        );
+        let owner = RecoveredDecisionFetchRequestOwnerV1::for_test(
+            key,
+            tag(0),
+            sources.clone(),
+            authenticated,
+        );
+        assert!(owner.validates_exact_executor_context(&fixture.context, &requester));
+        let request_hash = owner.request_hash();
+        assert!(
+            executor
+                .recovered_decision_fetches
+                .insert(key, owner)
+                .is_none()
+        );
+        assert!(
+            executor
+                .recovered_decision_fetch_by_request
+                .insert(request_hash, key)
+                .is_none()
+        );
+        assert_eq!(executor.validated_certified_request_presence(), Ok(true));
+
+        let uncertified_effect = AdapterEffect::FetchBody {
+            tag: tag(0),
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: None,
+        };
+        let uncertified_ownership = executor.runtime.test_effect_ownership(&uncertified_effect);
+        let certified_effect = AdapterEffect::FetchBody {
+            tag: tag(0),
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+            manifest: None,
+            certified_sources: sources.clone(),
+            certificate: Some(certificate.clone()),
+        };
+        let certified_ownership = executor.runtime.test_effect_ownership(&certified_effect);
+        let ownership_before = executor.body_ownership_projection();
+        let service_fetches_before = services.fetch_tasks.clone();
+
+        let uncertified = executor.begin_fetch(
+            tag(0),
+            fixture.manifest.round,
+            fixture.manifest.subject,
+            Some(fixture.manifest.clone()),
+            Vec::new(),
+            None,
+            uncertified_ownership.clone(),
+            &mut services,
+        );
+        assert!(matches!(
+            uncertified,
+            Err(EffectExecutorError::Contract(reason))
+                if reason == "body-fetch coordinates already have a recovered Decision Fetch owner"
+        ));
+        assert_eq!(executor.body_ownership_projection(), ownership_before);
+        assert_eq!(services.fetch_tasks, service_fetches_before);
+        assert_eq!(executor.validated_certified_request_presence(), Ok(true));
+
+        let certified = executor.begin_fetch(
+            tag(0),
+            fixture.manifest.round,
+            fixture.manifest.subject,
+            None,
+            sources,
+            Some(certificate),
+            certified_ownership,
+            &mut services,
+        );
+        assert!(matches!(
+            certified,
+            Err(EffectExecutorError::Contract(reason))
+                if reason == "body-fetch coordinates already have a recovered Decision Fetch owner"
+        ));
+        assert_eq!(executor.body_ownership_projection(), ownership_before);
+        assert_eq!(services.fetch_tasks, service_fetches_before);
+        assert_eq!(executor.validated_certified_request_presence(), Ok(true));
+
+        let collision_id = EffectWorkId::for_test(73);
+        executor.pending_fetches.insert(
+            collision_id,
+            PendingFetch {
+                task: BodyFetchTask {
+                    id: collision_id,
+                    tag: tag(0),
+                    round: fixture.manifest.round,
+                    subject: fixture.manifest.subject,
+                    manifest: Some(fixture.manifest.clone()),
+                    sources: Vec::new(),
+                    certified_request: None,
+                    ownership: uncertified_ownership,
+                },
+                request_hash: None,
+            },
+        );
+        assert!(matches!(
+            executor.validated_certified_request_presence(),
+            Err(EffectTransportError::Authentication(
+                V2TransportError::InconsistentRequestIndex(hash)
+            )) if hash == request_hash
         ));
     }
 
@@ -23712,6 +24439,47 @@ mod tests {
                 owner_directory.path(),
             );
         let (mut production_services, _) = crate::sumeragi::v2_worker::tests::fixture();
+        let foreign_fetch_prepared = fixture
+            .executor
+            .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
+            .expect("the exact response remains selectable for the foreign-cursor probe");
+        let mut foreign_ingress_context = fixture.context.clone();
+        foreign_ingress_context.height = foreign_ingress_context.height.saturating_add(1);
+        let before_foreign_fetch_cursor =
+            owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
+        assert!(matches!(
+            owner.persist_recovered_decision_fetch_response(
+                &production_services,
+                &mut fixture.executor,
+                foreign_fetch_prepared,
+                crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(
+                    &foreign_ingress_context,
+                ),
+            ),
+            Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignRunnerObservation)
+        ));
+        assert_eq!(
+            owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
+            before_foreign_fetch_cursor,
+            "a foreign Ingress cursor cannot change the recovered Fetch lease or registry row",
+        );
+        let before_foreign_sign_cursor =
+            owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
+        assert!(matches!(
+            owner.dispatch_recovered_lifecycle_sign(
+                &production_services,
+                &fixture.executor,
+                crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(
+                    &fixture.context,
+                ),
+            ),
+            Err(ProductionRecoveredLifecycleSignDispatchErrorV1::ForeignRunnerObservation)
+        ));
+        assert_eq!(
+            owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
+            before_foreign_sign_cursor,
+            "a non-Completion runner cursor cannot claim or mutate a recovered Sign owner",
+        );
         let before_unbound =
             owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
         let unbound_result = owner.plan_ingress_turn(

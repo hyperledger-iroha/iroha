@@ -119,6 +119,47 @@ const IDLE_POLL: Duration = Duration::from_millis(10);
 const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
 const PENDING_TIP_RECOVERY_DEADLINE_ROUNDS: u32 = 3;
 
+/// Move-only authority for binding runner-owned lifecycle execution dependencies.
+///
+/// The future runner cutover will mint this private seal immediately before it
+/// moves Queue, archive, and event ownership into recovered startup. Sumeragi
+/// siblings may name the consumed type but cannot manufacture production
+/// authority for caller-selected dependencies.
+#[must_use = "the runner dependency permit must enter recovered lifecycle startup"]
+pub(in crate::sumeragi) struct RecoveredLifecycleOwnerFactoryDependencyPermitV1 {
+    _seal: RecoveredLifecycleOwnerFactoryDependencyPermitSealV1,
+    local_signer: KeyPair,
+}
+
+struct RecoveredLifecycleOwnerFactoryDependencyPermitSealV1;
+
+impl Drop for RecoveredLifecycleOwnerFactoryDependencyPermitSealV1 {
+    fn drop(&mut self) {}
+}
+
+impl RecoveredLifecycleOwnerFactoryDependencyPermitV1 {
+    // TODO: Mint this private permit at the atomic runner/owner cutover which
+    // moves the runner's exact Queue, archives, and EventsSender into startup.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn mint_for_recovered_runner(local_signer: KeyPair) -> Self {
+        Self {
+            _seal: RecoveredLifecycleOwnerFactoryDependencyPermitSealV1,
+            local_signer,
+        }
+    }
+
+    #[cfg(test)]
+    /// Mint the same sealed dependency permit for production-shaped unit tests.
+    pub(in crate::sumeragi) fn for_test(local_signer: KeyPair) -> Self {
+        Self::mint_for_recovered_runner(local_signer)
+    }
+
+    /// Consume the runner seal into its factory-owned local signer.
+    pub(in crate::sumeragi) fn into_local_signer(self) -> KeyPair {
+        self.local_signer
+    }
+}
+
 /// Cadence-derived process-local deadline for closed-ingress interrupted-tip recovery.
 #[derive(Clone, Copy, Debug)]
 struct PendingTipRecoveryDeadline {

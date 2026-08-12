@@ -147,14 +147,15 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         &authenticated,
         storage_authority,
         Arc::clone(&kura),
+        &local_signer,
     );
+    let body_store = quarantined_lifecycle_body_store_for_test(body_store);
     let owner = authenticated
         .open_production_lifecycle_owner_v1(
             &lifecycle_owner_config(),
             4,
             factory_inputs,
             body_store,
-            &local_signer,
         )
         .unwrap_or_else(|error| panic!("open Kura-bound lifecycle owner: {error}"));
     let lifecycle_root = storage_root
@@ -187,13 +188,14 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         &mismatched,
         mismatched_storage,
         Arc::clone(&mismatched_kura),
+        &local_signer,
     );
+    let mismatched_body = quarantined_lifecycle_body_store_for_test(mismatched_body);
     let error = match mismatched.open_production_lifecycle_owner_v1(
         &lifecycle_owner_config(),
         4,
         mismatched_inputs,
         mismatched_body,
-        &local_signer,
     ) {
         Ok(_owner) => panic!("an adapter opened on a foreign WAL must fail closed"),
         Err(error) => error,
@@ -232,14 +234,15 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         &foreign,
         foreign_storage_authority,
         Arc::clone(&foreign_kura),
+        &local_signer,
     );
+    let foreign_body = quarantined_lifecycle_body_store_for_test(foreign_body);
     let foreign_lifecycle_parent = foreign_kura.sumeragi_v2_storage_root().join("lifecycle-v1");
     let error = match foreign.open_production_lifecycle_owner_v1(
         &lifecycle_owner_config(),
         4,
         foreign_inputs,
         foreign_body,
-        &local_signer,
     ) {
         Ok(_owner) => panic!("a body store outside the Kura layout must fail closed"),
         Err(error) => error,
@@ -277,13 +280,14 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
         &wrong_policy,
         wrong_storage_authority,
         Arc::clone(&wrong_kura),
+        &local_signer,
     );
+    let wrong_body = quarantined_lifecycle_body_store_for_test(wrong_body);
     let error = match wrong_policy.open_production_lifecycle_owner_v1(
         &lifecycle_owner_config(),
         4,
         wrong_inputs,
         wrong_body,
-        &local_signer,
     ) {
         Ok(_owner) => panic!("a wrong body signature policy must fail closed"),
         Err(error) => error,
@@ -333,6 +337,7 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
             storage(),
             exact_state,
             Arc::clone(&kura),
+            &signer,
         )
         .is_ok(),
         "the exact State/Kura/network tuple must mint the move-only factory input"
@@ -348,6 +353,7 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
         storage(),
         Arc::clone(&foreign_state),
         Arc::clone(&foreign_kura),
+        &signer,
     ) {
         Ok(_inputs) => panic!("a foreign Kura cannot consume the storage seal"),
         Err(error) => error,
@@ -361,6 +367,7 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
         storage(),
         foreign_state,
         Arc::clone(&kura),
+        &signer,
     ) {
         Ok(_inputs) => panic!("a State backed by another Kura cannot enter the seal"),
         Err(error) => error,
@@ -378,6 +385,7 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
         storage(),
         wrong_network_state,
         Arc::clone(&kura),
+        &signer,
     ) {
         Ok(_inputs) => panic!("a foreign State network cannot enter the seal"),
         Err(error) => error,
@@ -390,6 +398,278 @@ fn recovered_lifecycle_factory_inputs_bind_exact_state_kura_and_network() {
         !storage_root.join("lifecycle-v1").exists(),
         "input binding must not open lifecycle storage"
     );
+}
+
+#[test]
+fn recovered_lifecycle_factory_inputs_reject_a_same_context_foreign_startup() {
+    let kura = Kura::blank_kura_for_testing();
+    let storage_root = kura.sumeragi_v2_storage_root();
+    let wal_path = storage_root
+        .join("wal")
+        .join(format!("{:020}.wal", context().height));
+    let first = open_recovered_startup_at_test_path(&wal_path)
+        .expect("open first exact startup")
+        .authenticate_final_wal_startup_authority()
+        .unwrap_or_else(|(error, _startup)| panic!("authenticate first startup: {error}"));
+    let second = open_recovered_startup_at_test_path(&wal_path)
+        .expect("open second same-context startup")
+        .authenticate_final_wal_startup_authority()
+        .unwrap_or_else(|(error, _startup)| panic!("authenticate second startup: {error}"));
+    let recovered_context = first.adapter.wire_context.clone();
+    let signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+        .expect("deterministic exact-startup splice signer");
+    let policy = super::super::v2_body_store::BlockSignaturePolicy::GenesisAuthority(
+        signer.public_key().clone(),
+    );
+    let storage = RecoveredLifecycleStorageAuthorityV1::for_test(
+        kura.as_ref(),
+        &verified_genesis(recovered_context.clone()),
+        policy.clone(),
+        AccountId::new(signer.public_key().clone()),
+    );
+    let factory_inputs =
+        lifecycle_factory_inputs_for_test(&first, storage, Arc::clone(&kura), &signer);
+    let body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
+        storage_root.join("bodies"),
+        recovered_context,
+        policy,
+    )
+    .expect("open exact-startup splice body store");
+    let body_store = quarantined_lifecycle_body_store_for_test(body_store);
+    let error = match second.open_production_lifecycle_owner_v1(
+        &lifecycle_owner_config(),
+        4,
+        factory_inputs,
+        body_store,
+    ) {
+        Ok(_owner) => panic!("a same-context foreign startup cannot consume the factory seal"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.to_string(),
+        "recovered lifecycle execution dependencies changed identity"
+    );
+    assert!(
+        !storage_root.join("lifecycle-v1").exists(),
+        "exact-startup rejection must precede lifecycle store creation"
+    );
+}
+
+#[cfg(feature = "bls")]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies() {
+    for (marker, persist_matching_outcome) in [(0xB1_u8, true), (0xB2_u8, false)] {
+        let kura = Kura::blank_kura_for_testing();
+        let storage_root = kura.sumeragi_v2_storage_root();
+        let (mut recovered_context, keys, proofs) = authenticated_context();
+        let state = lifecycle_factory_state_for_test(
+            Arc::clone(&kura),
+            recovered_context.network_id,
+        );
+        recovered_context.nexus_amx_context_hash =
+            super::super::v2_recovery::committed_nexus_amx_context_hash(state.as_ref());
+        recovered_context.execution_policy_hash =
+            super::super::v2_recovery::committed_execution_policy_hash(state.as_ref())
+                .expect("derive marker-replay execution policy");
+        recovered_context
+            .validate()
+            .expect("marker-replay context remains valid");
+        let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+        let queue = Arc::new(crate::queue::Queue::from_config(
+            iroha_config::parameters::actual::Queue::default(),
+            events_sender.clone(),
+        ));
+        let genesis_account = AccountId::new(keys[0].public_key().clone());
+        let semantic_probe = super::super::v2_apply::V2ApplyService::new(
+            Arc::clone(&state),
+            Arc::clone(&queue),
+            Arc::clone(&kura),
+            None,
+            None,
+            state.sumeragi_block_cadence(),
+            genesis_account.clone(),
+            events_sender.clone(),
+            proofs.clone(),
+        );
+        let round = wire::ConsensusRound {
+            context_id: recovered_context.id(),
+            height: recovered_context.height,
+            view: 0,
+        };
+        let leader = recovered_context.leader(round.view);
+        let leader_index = usize::try_from(leader).expect("fixture leader index fits usize");
+        let header = BlockHeader::new(
+            NonZeroU64::new(round.height).expect("marker-replay height is non-zero"),
+            None,
+            None,
+            None,
+            10_000 + u64::from(marker),
+            round.view,
+        );
+        let signature = SignatureOf::try_from_hash(keys[leader_index].private_key(), header.hash())
+            .expect("sign production marker-replay body");
+        let block = SignedBlock::presigned(
+            BlockSignature::new(u64::from(leader), signature),
+            header,
+            Vec::new(),
+        );
+        let canonical_wire = block
+            .encode_wire()
+            .expect("encode production marker-replay body");
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: block.hash(),
+            payload_hash: Hash::new(&canonical_wire),
+        };
+        let chunks = wire::encode_payload_chunks(recovered_context.da_layout, &canonical_wire)
+            .expect("encode production marker-replay chunks");
+        let manifest = wire::PayloadManifest::derive(
+            &recovered_context,
+            round,
+            subject,
+            u64::try_from(canonical_wire.len()).expect("marker-replay body length fits u64"),
+            &chunks,
+        )
+        .expect("derive production marker-replay manifest");
+        let semantic_commitment = semantic_probe
+            .revalidate_recovered_candidate(&recovered_context, &block)
+            .expect("derive exact production marker-replay outcome");
+        let signature_policy =
+            super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader;
+        let mut body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
+            storage_root.join("bodies"),
+            recovered_context.clone(),
+            signature_policy.clone(),
+        )
+        .expect("open production marker-replay body store");
+        let durable = body_store
+            .store(manifest, canonical_wire)
+            .expect("persist production marker-replay body");
+        if persist_matching_outcome {
+            body_store
+                .execute_durable_validation(
+                    durable.clone(),
+                    durable.manifest_hash(),
+                    |_| Ok::<_, String>(semantic_commitment),
+                )
+                .expect("persist matching semantic marker");
+        } else {
+            body_store
+                .execute_durable_validation(
+                    durable.clone(),
+                    durable.manifest_hash(),
+                    |_| {
+                        Err::<wire::ExecutionCommitment, _>(
+                            "deliberately mismatched recovered rejection".to_owned(),
+                        )
+                    },
+                )
+                .expect("persist mismatched semantic marker");
+        }
+        let prepromoted_error = match body_store.into_quarantined_recovered_startup() {
+            Ok(_body_store) => {
+                panic!("a caller-promoted marker cannot enter production quarantine")
+            }
+            Err(error) => error,
+        };
+        assert_eq!(
+            prepromoted_error.to_string(),
+            "recovered Sumeragi v2 validation markers were already promoted before startup"
+        );
+        assert!(
+            !storage_root.join("lifecycle-v1").exists(),
+            "pre-promoted marker rejection must precede lifecycle-store creation"
+        );
+
+        let mut decision = wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment: semantic_commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        };
+        authenticate_qc(&mut decision, &keys);
+        let wal_path = storage_root
+            .join("wal")
+            .join(format!("{:020}.wal", recovered_context.height));
+        let authenticated = write_and_reopen_authenticated_wal_startup_at_path(
+            wal_path,
+            &recovered_context,
+            &proofs,
+            0,
+            [marker; 32],
+            vec![WalRecordV2::Decision(decision)],
+        )
+        .authenticate_final_wal_startup_authority()
+        .unwrap_or_else(|(error, _startup)| {
+            panic!("authenticate production marker-replay startup: {error}")
+        });
+        let verified = VerifiedHeightContext::genesis(recovered_context.clone(), proofs.clone())
+            .expect("verify production marker-replay context");
+        let storage = RecoveredLifecycleStorageAuthorityV1::for_test(
+            kura.as_ref(),
+            &verified,
+            signature_policy.clone(),
+            genesis_account,
+        );
+        let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+            .expect("deterministic production marker-replay Serve signer");
+        let factory_inputs = authenticated
+            .bind_production_lifecycle_owner_factory_inputs_v1(
+                super::super::v2_runner::RecoveredLifecycleOwnerFactoryDependencyPermitV1::for_test(
+                    local_signer.clone(),
+                ),
+                storage,
+                state,
+                queue,
+                Arc::clone(&kura),
+                None,
+                None,
+                events_sender,
+            )
+            .unwrap_or_else(|error| panic!("bind production marker-replay inputs: {error}"));
+        let recovered_body_store = quarantined_lifecycle_body_store_for_test(
+            super::super::v2_body_store::V2BodyStore::open_with_policy(
+                storage_root.join("bodies"),
+                recovered_context.clone(),
+                signature_policy,
+            )
+            .expect("reopen quarantined production marker-replay store"),
+        );
+        let lifecycle_root = storage_root
+            .join("lifecycle-v1")
+            .join(hex::encode(recovered_context.id().0.as_ref()));
+        let result = authenticated.open_production_lifecycle_owner_v1(
+            &lifecycle_owner_config(),
+            4,
+            factory_inputs,
+            recovered_body_store,
+        );
+        if persist_matching_outcome {
+            let owner = result.unwrap_or_else(|error| {
+                panic!("matching recovered marker must enter production owner: {error}")
+            });
+            assert!(lifecycle_root.join("lifecycle-ledger-v1.norito").exists());
+            drop(owner);
+        } else {
+            let error = match result {
+                Ok(_owner) => panic!("a changed semantic marker outcome must fail closed"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("validation outcome differs from semantic replay")
+            );
+            assert!(
+                !lifecycle_root.exists(),
+                "semantic marker mismatch must precede lifecycle-store creation"
+            );
+        }
+    }
 }
 
 fn expect_recovered_open_error<'registry>(

@@ -10,7 +10,9 @@ use super::{
         LiveValidateSignRegistryPublicationError, PreparedCertifiedFetchStoreSuccessor,
         PreparedDurableStoreValidateSuccessor, PreparedInvalidBodyReportReplayPreAdmission,
         PreparedLiveValidateSignRegistryPublication, PreparedReadyDurableValidateAdapterPreview,
-        PreparedReadyDurableValidatePersistedSignPreAdmission, SealedBodySuccessorProjectionError,
+        PreparedReadyDurableValidatePersistedSignPreAdmission,
+        PreparedRecoveredDecisionFetchStoreSuccessor,
+        PreparedRecoveredLifecycleSignBroadcastSuccessor, SealedBodySuccessorProjectionError,
         SealedValidateTerminalProjectionError,
     },
 };
@@ -48,6 +50,26 @@ impl DurableContinuationEdge {
                 LifecyclePhase::Validate,
                 LifecycleStageKind::ValidateBody,
             ),
+            Self::SignProposalToBroadcast => (
+                LifecycleWorkClass::SignProposal,
+                LifecyclePhase::Proposal,
+                LifecycleStageKind::SignProposal,
+            ),
+            Self::SignPrepareToBroadcast => (
+                LifecycleWorkClass::SignVote,
+                LifecyclePhase::Prepare,
+                LifecycleStageKind::SignPrepareVote,
+            ),
+            Self::SignCommitToBroadcast => (
+                LifecycleWorkClass::SignVote,
+                LifecyclePhase::Commit,
+                LifecycleStageKind::SignCommitVote,
+            ),
+            Self::SignTimeoutToBroadcast => (
+                LifecycleWorkClass::SignTimeout,
+                LifecyclePhase::Timeout,
+                LifecycleStageKind::SignTimeoutVote,
+            ),
         }
     }
 
@@ -83,6 +105,26 @@ impl DurableContinuationEdge {
                 LifecyclePhase::Commit,
                 LifecycleStageKind::SignCommitVote,
             ),
+            Self::SignProposalToBroadcast => (
+                LifecycleWorkClass::Broadcast,
+                LifecyclePhase::BroadcastProposal,
+                LifecycleStageKind::BroadcastProposal,
+            ),
+            Self::SignPrepareToBroadcast => (
+                LifecycleWorkClass::Broadcast,
+                LifecyclePhase::BroadcastPrepareVote,
+                LifecycleStageKind::BroadcastPrepareVote,
+            ),
+            Self::SignCommitToBroadcast => (
+                LifecycleWorkClass::Broadcast,
+                LifecyclePhase::BroadcastCommitVote,
+                LifecycleStageKind::BroadcastCommitVote,
+            ),
+            Self::SignTimeoutToBroadcast => (
+                LifecycleWorkClass::Broadcast,
+                LifecyclePhase::BroadcastTimeoutVote,
+                LifecycleStageKind::BroadcastTimeoutVote,
+            ),
         }
     }
 
@@ -107,6 +149,12 @@ impl DurableContinuationEdge {
                         .execution_commitment()
                         .is_none_or(|commitment| child.execution_commitment() == Some(commitment))
             }
+            Self::SignProposalToBroadcast
+            | Self::SignPrepareToBroadcast
+            | Self::SignCommitToBroadcast
+            | Self::SignTimeoutToBroadcast => {
+                child.execution_commitment() == parent.execution_commitment()
+            }
         }
     }
 }
@@ -125,8 +173,21 @@ pub(super) fn durable_continuation_successor_is_exact(
     child_key: super::LifecycleKey,
     child_stage: super::LifecycleStage,
 ) -> bool {
-    parent_key.proposal_round().is_some()
-        && parent_key.subject().is_some()
+    let required_lineage_is_present = match edge {
+        DurableContinuationEdge::SignTimeoutToBroadcast => true,
+        DurableContinuationEdge::FetchToStore
+        | DurableContinuationEdge::StoreToValidate
+        | DurableContinuationEdge::ValidateToApply
+        | DurableContinuationEdge::ValidateToInvalidBodyReport
+        | DurableContinuationEdge::ValidateToSignPrepare
+        | DurableContinuationEdge::ValidateToSignCommit
+        | DurableContinuationEdge::SignProposalToBroadcast
+        | DurableContinuationEdge::SignPrepareToBroadcast
+        | DurableContinuationEdge::SignCommitToBroadcast => {
+            parent_key.proposal_round().is_some() && parent_key.subject().is_some()
+        }
+    };
+    required_lineage_is_present
         && parent_stage.predecessor_scope() == PredecessorScope::Independent
         && child_stage.predecessor_scope() == PredecessorScope::Independent
         && {
@@ -169,6 +230,12 @@ pub(super) fn durable_continuation_payload_is_exact(
         | DurableContinuationEdge::ValidateToSignCommit => {
             matches!(parent, DurablePayloadReference::BodyFrame(_))
                 && child == DurablePayloadReference::None
+        }
+        DurableContinuationEdge::SignProposalToBroadcast
+        | DurableContinuationEdge::SignPrepareToBroadcast
+        | DurableContinuationEdge::SignCommitToBroadcast
+        | DurableContinuationEdge::SignTimeoutToBroadcast => {
+            parent == DurablePayloadReference::None && child == DurablePayloadReference::None
         }
     }
 }
@@ -606,12 +673,95 @@ fn stage_validate_no_successor_transition(
 /// the lease overlay, then terminalizes the parent, so the staged cut converts
 /// reserved occupancy into durable occupancy without changing its generation.
 #[allow(clippy::too_many_lines)]
+#[derive(Clone, Copy)]
+enum BodyStagePayloadRelationV1 {
+    OrdinaryBodyFrame,
+    RecoveredDecisionFetch,
+    RecoveredLifecycleSign,
+}
+
 fn stage_body_stage_transition(
     coordinator: &LifecycleCoordinator,
     lease: &TurnLease,
     candidate: CandidateAdmission,
     parent_payload: DurablePayloadReference,
     edge: DurableContinuationEdge,
+) -> Result<StagedBodyStageTransition, BodyStageTransitionError> {
+    stage_body_stage_transition_with_payload_relation(
+        coordinator,
+        lease,
+        candidate,
+        parent_payload,
+        edge,
+        BodyStagePayloadRelationV1::OrdinaryBodyFrame,
+    )
+}
+
+fn stage_recovered_decision_fetch_store_transition(
+    coordinator: &LifecycleCoordinator,
+    lease: &TurnLease,
+    candidate: CandidateAdmission,
+) -> Result<StagedBodyStageTransition, BodyStageTransitionError> {
+    stage_body_stage_transition_with_payload_relation(
+        coordinator,
+        lease,
+        candidate,
+        DurablePayloadReference::None,
+        DurableContinuationEdge::FetchToStore,
+        BodyStagePayloadRelationV1::RecoveredDecisionFetch,
+    )
+}
+
+fn stage_recovered_lifecycle_sign_broadcast_transition(
+    coordinator: &LifecycleCoordinator,
+    lease: &TurnLease,
+    candidate: CandidateAdmission,
+) -> Result<StagedBodyStageTransition, BodyStageTransitionError> {
+    let edge = match (
+        lease.work_class(),
+        lease.key().phase(),
+        lease.stage().kind(),
+    ) {
+        (
+            LifecycleWorkClass::SignProposal,
+            LifecyclePhase::Proposal,
+            LifecycleStageKind::SignProposal,
+        ) => DurableContinuationEdge::SignProposalToBroadcast,
+        (
+            LifecycleWorkClass::SignVote,
+            LifecyclePhase::Prepare,
+            LifecycleStageKind::SignPrepareVote,
+        ) => DurableContinuationEdge::SignPrepareToBroadcast,
+        (
+            LifecycleWorkClass::SignVote,
+            LifecyclePhase::Commit,
+            LifecycleStageKind::SignCommitVote,
+        ) => DurableContinuationEdge::SignCommitToBroadcast,
+        (
+            LifecycleWorkClass::SignTimeout,
+            LifecyclePhase::Timeout,
+            LifecycleStageKind::SignTimeoutVote,
+        ) => DurableContinuationEdge::SignTimeoutToBroadcast,
+        _ => return Err(BodyStageTransitionError::WrongParentShape),
+    };
+    stage_body_stage_transition_with_payload_relation(
+        coordinator,
+        lease,
+        candidate,
+        DurablePayloadReference::None,
+        edge,
+        BodyStagePayloadRelationV1::RecoveredLifecycleSign,
+    )
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn stage_body_stage_transition_with_payload_relation(
+    coordinator: &LifecycleCoordinator,
+    lease: &TurnLease,
+    candidate: CandidateAdmission,
+    parent_payload: DurablePayloadReference,
+    edge: DurableContinuationEdge,
+    payload_relation: BodyStagePayloadRelationV1,
 ) -> Result<StagedBodyStageTransition, BodyStageTransitionError> {
     let (parent_work_class, parent_phase, parent_stage) = edge.parent();
     let (child_work_class, child_phase, child_stage) = edge.child();
@@ -721,7 +871,39 @@ fn stage_body_stage_transition(
     {
         return Err(BodyStageTransitionError::InvalidBodyFrameReference);
     }
-    if !durable_continuation_payload_is_exact(edge, parent_payload, child_payload) {
+    let payload_is_exact = match payload_relation {
+        BodyStagePayloadRelationV1::OrdinaryBodyFrame => {
+            durable_continuation_payload_is_exact(edge, parent_payload, child_payload)
+        }
+        BodyStagePayloadRelationV1::RecoveredDecisionFetch => {
+            edge == DurableContinuationEdge::FetchToStore
+                && parent_payload == DurablePayloadReference::None
+                && super::replay_authority::recovered_decision_body_continuation_is_exact(
+                    edge,
+                    &parent_metadata.replay_authority,
+                    parent_payload,
+                    &candidate.replay_authority,
+                    child_payload,
+                ) == Some(true)
+        }
+        BodyStagePayloadRelationV1::RecoveredLifecycleSign => {
+            matches!(
+                edge,
+                DurableContinuationEdge::SignProposalToBroadcast
+                    | DurableContinuationEdge::SignPrepareToBroadcast
+                    | DurableContinuationEdge::SignCommitToBroadcast
+                    | DurableContinuationEdge::SignTimeoutToBroadcast
+            ) && parent_payload == DurablePayloadReference::None
+                && super::replay_authority::signed_broadcast_continuation_is_exact(
+                    edge,
+                    &parent_metadata.replay_authority,
+                    parent_payload,
+                    &candidate.replay_authority,
+                    child_payload,
+                ) == Some(true)
+        }
+    };
+    if !payload_is_exact {
         return Err(BodyStageTransitionError::InvalidBodyFrameReference);
     }
     if candidate.causal_root != lease.owner().causal_root() {
@@ -953,6 +1135,108 @@ pub(super) struct PreparedSealedBodyStageTransition<'coordinator, 'registry> {
     child_digest: super::LifecycleDigest,
 }
 
+/// Fully staged recovered WAL Fetch-to-Store publication.
+///
+/// The Fetch parent remains payload-free; only the Store child owns the exact
+/// BodyFrame. Registry and adapter borrows are retained beside the cloned
+/// coordinator until one LedgerV1 fsync succeeds.
+#[must_use = "recovered Decision Fetch-to-Store transition has not been published"]
+pub(super) struct PreparedRecoveredDecisionFetchStoreTransition<'coordinator, 'registry, 'adapter> {
+    coordinator: &'coordinator mut LifecycleCoordinator,
+    successor: PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>,
+    staged: LifecycleCoordinator,
+    parent_ordinal: u128,
+    child_ordinal: u128,
+    child_slot: PhysicalSlotId,
+    child_digest: super::LifecycleDigest,
+}
+
+impl PreparedRecoveredDecisionFetchStoreTransition<'_, '_, '_> {
+    /// Fsync the exact staged LedgerV1 successor while all volatile owners remain borrowed.
+    pub(super) fn persist_exact_successor(
+        &self,
+    ) -> Result<(), super::ledger::LifecycleLedgerError> {
+        self.coordinator
+            .persist_exact_staged_successor(&self.staged)
+    }
+
+    /// Publish the already-fsynced coordinator, registry, and adapter tail.
+    pub(super) fn commit_after_publication(self) {
+        let Self {
+            coordinator,
+            successor,
+            staged,
+            parent_ordinal,
+            child_ordinal,
+            child_slot,
+            child_digest,
+        } = self;
+        assert!(staged.records.get(&parent_ordinal).is_some_and(|record| {
+            record.state == LifecycleState::Terminal(TerminalOutcome::Advanced)
+        }));
+        assert!(staged.records.get(&child_ordinal).is_some_and(|record| {
+            record.state == LifecycleState::Ready
+                && record.physical_slots.get(&child_slot) == Some(&child_digest)
+        }));
+        let adapter = successor.commit_after_publication();
+        *coordinator = staged;
+        adapter.commit_after_durable_settlement();
+    }
+}
+
+/// Fully staged recovered Sign-to-Broadcast publication.
+///
+/// The original Sign, adapter preview, and signed Broadcast projection remain
+/// borrowed beside a cloned coordinator until the exact LedgerV1 successor is
+/// fsynced. Dropping this value is a pure pre-publication abort.
+#[must_use = "recovered Sign-to-Broadcast transition has not been published"]
+pub(super) struct PreparedRecoveredLifecycleSignBroadcastTransition<
+    'coordinator,
+    'registry,
+    'adapter,
+> {
+    coordinator: &'coordinator mut LifecycleCoordinator,
+    successor: PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter>,
+    staged: LifecycleCoordinator,
+    parent_ordinal: u128,
+    child_ordinal: u128,
+    child_slot: PhysicalSlotId,
+    child_digest: super::LifecycleDigest,
+}
+
+impl PreparedRecoveredLifecycleSignBroadcastTransition<'_, '_, '_> {
+    /// Fsync the exact staged LedgerV1 successor while all volatile owners remain borrowed.
+    pub(super) fn persist_exact_successor(
+        &self,
+    ) -> Result<(), super::ledger::LifecycleLedgerError> {
+        self.coordinator
+            .persist_exact_staged_successor(&self.staged)
+    }
+
+    /// Publish the already-fsynced coordinator, registry, and adapter tail.
+    pub(super) fn commit_after_publication(self) {
+        let Self {
+            coordinator,
+            successor,
+            staged,
+            parent_ordinal,
+            child_ordinal,
+            child_slot,
+            child_digest,
+        } = self;
+        assert!(staged.records.get(&parent_ordinal).is_some_and(|record| {
+            record.state == LifecycleState::Terminal(TerminalOutcome::Advanced)
+        }));
+        assert!(staged.records.get(&child_ordinal).is_some_and(|record| {
+            record.state == LifecycleState::Ready
+                && record.physical_slots.get(&child_slot) == Some(&child_digest)
+        }));
+        let adapter = successor.commit_after_publication();
+        *coordinator = staged;
+        adapter.commit_after_durable_broadcast();
+    }
+}
+
 fn map_sealed_successor_projection_error(
     error: SealedBodySuccessorProjectionError,
 ) -> BodyStageTransitionError {
@@ -1091,6 +1375,71 @@ pub(super) struct SealedValidateReportTransitionError<'registry, 'adapter> {
 }
 
 impl LifecycleCoordinator {
+    /// Stage the recovered payload-free Fetch and body-backed Store successor.
+    pub(super) fn prepare_recovered_decision_fetch_store_transition<
+        'coordinator,
+        'registry,
+        'adapter,
+    >(
+        &'coordinator mut self,
+        lease: &TurnLease,
+        verified: &VerifiedHeightContext,
+        successor: PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>,
+    ) -> Result<
+        PreparedRecoveredDecisionFetchStoreTransition<'coordinator, 'registry, 'adapter>,
+        BodyStageTransitionError,
+    > {
+        if self.ledger_store.is_none() {
+            return Err(BodyStageTransitionError::InvalidStagedRecords);
+        }
+        let candidate = successor
+            .project_for_body_transition(lease, verified)
+            .map_err(map_sealed_successor_projection_error)?;
+        let transition = stage_recovered_decision_fetch_store_transition(self, lease, candidate)?;
+        Ok(PreparedRecoveredDecisionFetchStoreTransition {
+            coordinator: self,
+            successor,
+            staged: transition.staged,
+            parent_ordinal: transition.parent_ordinal,
+            child_ordinal: transition.child_ordinal,
+            child_slot: transition.child_slot,
+            child_digest: transition.child_digest,
+        })
+    }
+
+    /// Stage one recovered Sign and its adapter-authenticated Broadcast child.
+    pub(super) fn prepare_recovered_lifecycle_sign_broadcast_transition<
+        'coordinator,
+        'registry,
+        'adapter,
+    >(
+        &'coordinator mut self,
+        lease: &TurnLease,
+        verified: &VerifiedHeightContext,
+        successor: PreparedRecoveredLifecycleSignBroadcastSuccessor<'registry, 'adapter>,
+    ) -> Result<
+        PreparedRecoveredLifecycleSignBroadcastTransition<'coordinator, 'registry, 'adapter>,
+        BodyStageTransitionError,
+    > {
+        if self.ledger_store.is_none() {
+            return Err(BodyStageTransitionError::InvalidStagedRecords);
+        }
+        let candidate = successor
+            .project_for_transition(lease, verified)
+            .map_err(map_sealed_successor_projection_error)?;
+        let transition =
+            stage_recovered_lifecycle_sign_broadcast_transition(self, lease, candidate)?;
+        Ok(PreparedRecoveredLifecycleSignBroadcastTransition {
+            coordinator: self,
+            successor,
+            staged: transition.staged,
+            parent_ordinal: transition.parent_ordinal,
+            child_ordinal: transition.child_ordinal,
+            child_slot: transition.child_slot,
+            child_digest: transition.child_digest,
+        })
+    }
+
     /// Stage the sole live post-WAL Validate-to-Sign transaction.
     ///
     /// A first-release node must have an attached LedgerV1 store. The child is
@@ -1452,7 +1801,7 @@ mod static_tests {
     }
 
     #[test]
-    fn durable_successor_relation_covers_all_six_exact_continuation_edges() {
+    fn durable_successor_relation_covers_all_ten_exact_continuation_edges() {
         let commitment = LifecycleDigest::new([3; 32]);
         let exact = [
             (
@@ -1513,6 +1862,52 @@ mod static_tests {
                 LifecycleWorkClass::SignVote,
                 key(LifecyclePhase::Commit, true, true, Some(commitment)),
                 LifecycleStageKind::SignCommitVote,
+            ),
+            (
+                DurableContinuationEdge::SignProposalToBroadcast,
+                LifecycleWorkClass::SignProposal,
+                key(LifecyclePhase::Proposal, true, true, None),
+                LifecycleStageKind::SignProposal,
+                LifecycleWorkClass::Broadcast,
+                key(LifecyclePhase::BroadcastProposal, true, true, None),
+                LifecycleStageKind::BroadcastProposal,
+            ),
+            (
+                DurableContinuationEdge::SignPrepareToBroadcast,
+                LifecycleWorkClass::SignVote,
+                key(LifecyclePhase::Prepare, true, true, Some(commitment)),
+                LifecycleStageKind::SignPrepareVote,
+                LifecycleWorkClass::Broadcast,
+                key(
+                    LifecyclePhase::BroadcastPrepareVote,
+                    true,
+                    true,
+                    Some(commitment),
+                ),
+                LifecycleStageKind::BroadcastPrepareVote,
+            ),
+            (
+                DurableContinuationEdge::SignCommitToBroadcast,
+                LifecycleWorkClass::SignVote,
+                key(LifecyclePhase::Commit, true, true, Some(commitment)),
+                LifecycleStageKind::SignCommitVote,
+                LifecycleWorkClass::Broadcast,
+                key(
+                    LifecyclePhase::BroadcastCommitVote,
+                    true,
+                    true,
+                    Some(commitment),
+                ),
+                LifecycleStageKind::BroadcastCommitVote,
+            ),
+            (
+                DurableContinuationEdge::SignTimeoutToBroadcast,
+                LifecycleWorkClass::SignTimeout,
+                key(LifecyclePhase::Timeout, false, false, None),
+                LifecycleStageKind::SignTimeoutVote,
+                LifecycleWorkClass::Broadcast,
+                key(LifecyclePhase::BroadcastTimeoutVote, false, false, None),
+                LifecycleStageKind::BroadcastTimeoutVote,
             ),
         ];
         for (edge, parent_class, parent_key, parent_kind, child_class, child_key, child_kind) in
@@ -1584,6 +1979,26 @@ mod static_tests {
                 Some(LifecycleDigest::new([4; 32])),
             ),
             stage(LifecycleStageKind::StoreBody, PredecessorScope::Independent,),
+        ));
+        assert!(!durable_continuation_successor_is_exact(
+            DurableContinuationEdge::SignTimeoutToBroadcast,
+            LifecycleWorkClass::SignTimeout,
+            key(LifecyclePhase::Timeout, false, false, None),
+            stage(
+                LifecycleStageKind::SignTimeoutVote,
+                PredecessorScope::Independent,
+            ),
+            LifecycleWorkClass::Broadcast,
+            key(
+                LifecyclePhase::BroadcastTimeoutVote,
+                true,
+                true,
+                Some(commitment),
+            ),
+            stage(
+                LifecycleStageKind::BroadcastTimeoutVote,
+                PredecessorScope::Independent,
+            ),
         ));
     }
 
@@ -1660,6 +2075,23 @@ mod static_tests {
             DurablePayloadReference::None,
             DurablePayloadReference::None,
         ));
+        for edge in [
+            DurableContinuationEdge::SignProposalToBroadcast,
+            DurableContinuationEdge::SignPrepareToBroadcast,
+            DurableContinuationEdge::SignCommitToBroadcast,
+            DurableContinuationEdge::SignTimeoutToBroadcast,
+        ] {
+            assert!(durable_continuation_payload_is_exact(
+                edge,
+                DurablePayloadReference::None,
+                DurablePayloadReference::None,
+            ));
+            assert!(!durable_continuation_payload_is_exact(
+                edge,
+                frame,
+                DurablePayloadReference::None,
+            ));
+        }
     }
 
     #[test]

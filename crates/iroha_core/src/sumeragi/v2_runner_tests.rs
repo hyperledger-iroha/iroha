@@ -43,6 +43,14 @@ include!("tests/v2_runner_upstream_recovery.rs");
 include!("tests/v2_runner_lifecycle_startup_order.rs");
 
 #[test]
+fn recovered_lifecycle_factory_dependency_permit_retains_the_exact_local_signer() {
+    let local_signer = KeyPair::random();
+    let expected = local_signer.public_key().clone();
+    let permit = RecoveredLifecycleOwnerFactoryDependencyPermitV1::for_test(local_signer);
+    assert_eq!(permit.into_local_signer().public_key(), &expected);
+}
+
+#[test]
 fn outer_ingress_cursor_preserves_sequence_and_attests_runner_reach() {
     let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
         b"outer-ingress-cursor-context",

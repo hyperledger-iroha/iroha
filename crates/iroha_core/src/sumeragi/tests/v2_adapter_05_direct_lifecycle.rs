@@ -2246,7 +2246,7 @@
             "repair: DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>",
             "installed: InstalledRecoveredWalSignRegistryCut<'registry>",
             "pub(crate) fn authenticate_final_wal_startup_authority(",
-            "pub(crate) fn open_production_lifecycle_owner_v1(",
+            "pub(in crate::sumeragi) fn open_production_lifecycle_owner_v1(",
             "if !self.effects.is_empty()",
             "enum RecoveredWalStartupAuthorityV1",
             "PhaseVote(RecoveredWalVoteSign)",

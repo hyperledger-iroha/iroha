@@ -23,7 +23,7 @@ use super::{
     schema::{CausalRoot, DurableContinuation, DurableContinuationEdge},
     wal_recovery::{
         AuthenticatedRecoveredWalControlProjection,
-        AuthenticatedRecoveredWalDecisionFetchProjection,
+        AuthenticatedRecoveredWalDecisionFetchProjection, RecoveredDecisionFetchStoreProjectionV1,
     },
     work_registry::{
         AuthenticatedRecoveredWalSignProjection, CertifiedServeRegistryBatchPublicationError,
@@ -37,7 +37,15 @@ enum RecoveredWalStartupProjectionV1<'authority> {
     None,
     PhaseVote(&'authority AuthenticatedRecoveredWalSignProjection),
     ControlSign(&'authority AuthenticatedRecoveredWalControlProjection),
+    ControlBroadcast(
+        &'authority AuthenticatedRecoveredWalControlProjection,
+        &'authority super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
+    ),
     DecisionFetch(&'authority AuthenticatedRecoveredWalDecisionFetchProjection),
+    DecisionStore(
+        &'authority AuthenticatedRecoveredWalDecisionFetchProjection,
+        &'authority RecoveredDecisionFetchStoreProjectionV1,
+    ),
     DecisionApply(&'authority crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1),
 }
 use crate::sumeragi::{
@@ -420,6 +428,27 @@ impl AuthenticatedLifecycleRecoveryCut {
         Ok((recovery, fetches))
     }
 
+    /// Assemble an exact Advanced control Sign with its sole live Broadcast.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn assemble_storage_only_with_recovered_control_broadcast_and_durable_fetch_startup(
+        ledger: LifecycleLedgerV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        body_store: &mut V2BodyStore,
+        control: &AuthenticatedRecoveredWalControlProjection,
+        broadcast: &super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
+        mut fetches: PreparedDurableCertifiedFetchStartupV1,
+    ) -> Result<(Self, PreparedDurableCertifiedFetchStartupV1), LifecycleRecoveryAssemblyError>
+    {
+        let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
+            ledger,
+            serve_payloads,
+            body_store,
+            RecoveredWalStartupProjectionV1::ControlBroadcast(control, broadcast),
+            Some(&mut fetches),
+        )?;
+        Ok((recovery, fetches))
+    }
+
     /// Assemble the standalone Decision Fetch with every durable body-backed Fetch.
     ///
     /// The exclusive startup enum prevents coexistence with a phase vote or
@@ -439,6 +468,27 @@ impl AuthenticatedLifecycleRecoveryCut {
             serve_payloads,
             body_store,
             RecoveredWalStartupProjectionV1::DecisionFetch(projection),
+            Some(&mut fetches),
+        )?;
+        Ok((recovery, fetches))
+    }
+
+    /// Assemble an advanced recovered WAL Fetch with its sole live Store child.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn assemble_storage_only_with_recovered_decision_store_and_durable_fetch_startup(
+        ledger: LifecycleLedgerV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        body_store: &mut V2BodyStore,
+        fetch: &AuthenticatedRecoveredWalDecisionFetchProjection,
+        store: &RecoveredDecisionFetchStoreProjectionV1,
+        mut fetches: PreparedDurableCertifiedFetchStartupV1,
+    ) -> Result<(Self, PreparedDurableCertifiedFetchStartupV1), LifecycleRecoveryAssemblyError>
+    {
+        let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
+            ledger,
+            serve_payloads,
+            body_store,
+            RecoveredWalStartupProjectionV1::DecisionStore(fetch, store),
             Some(&mut fetches),
         )?;
         Ok((recovery, fetches))
@@ -623,6 +673,16 @@ impl AuthenticatedLifecycleRecoveryCut {
             && projection.owns_spliced_candidate(&self.candidates)
     }
 
+    /// Revalidate the exact live Broadcast retained beneath its control WAL parent.
+    pub(super) fn owns_recovered_control_broadcast(
+        &self,
+        control: &AuthenticatedRecoveredWalControlProjection,
+        broadcast: &super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
+    ) -> bool {
+        control.belongs_to_context(self.context)
+            && broadcast.owns_spliced_candidate(&self.candidates)
+    }
+
     /// Revalidate the exact standalone Decision Fetch retained by recovery.
     pub(super) fn owns_recovered_wal_decision_fetch(
         &self,
@@ -630,6 +690,17 @@ impl AuthenticatedLifecycleRecoveryCut {
     ) -> bool {
         projection.belongs_to_context(self.context)
             && projection.owns_spliced_candidate(&self.candidates)
+    }
+
+    /// Revalidate the exact recovered Store child retained by cold recovery.
+    pub(super) fn owns_recovered_decision_store(
+        &self,
+        fetch: &AuthenticatedRecoveredWalDecisionFetchProjection,
+        store: &RecoveredDecisionFetchStoreProjectionV1,
+    ) -> bool {
+        fetch.belongs_to_context(self.context)
+            && store.context() == self.context
+            && store.owns_spliced_candidate(&self.candidates)
     }
 
     /// Seed the opaque installed projection's exact Validate parent.
@@ -2519,8 +2590,17 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
         RecoveredWalStartupProjectionV1::ControlSign(projection) => {
             projection.belongs_to_context(ledger.context())
         }
+        RecoveredWalStartupProjectionV1::ControlBroadcast(control, broadcast) => {
+            control.belongs_to_context(ledger.context())
+                && broadcast
+                    .candidate()
+                    .replay_authority_is_exact(ledger.context())
+        }
         RecoveredWalStartupProjectionV1::DecisionFetch(projection) => {
             projection.belongs_to_context(ledger.context())
+        }
+        RecoveredWalStartupProjectionV1::DecisionStore(fetch, store) => {
+            fetch.belongs_to_context(ledger.context()) && store.context() == ledger.context()
         }
         RecoveredWalStartupProjectionV1::DecisionApply(projection) => {
             projection.fetch().belongs_to_context(ledger.context())
@@ -2574,10 +2654,33 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
                     {
                         projection.splice_candidate_from_record(record, &mut candidates)
                     }
+                    RecoveredWalStartupProjectionV1::ControlBroadcast(_control, broadcast)
+                        if work_class == LifecycleWorkClass::Broadcast =>
+                    {
+                        broadcast.splice_candidate_from_record(
+                            record,
+                            record.owner(),
+                            &mut candidates,
+                        )
+                    }
                     RecoveredWalStartupProjectionV1::DecisionFetch(projection)
                         if projection.names_record(record) =>
                     {
                         projection.splice_candidate_from_record(record, &mut candidates)
+                    }
+                    RecoveredWalStartupProjectionV1::DecisionStore(fetch, store)
+                        if work_class == LifecycleWorkClass::Store =>
+                    {
+                        recovered_decision_store_chain_records(ledger, fetch, store).is_some_and(
+                            |[parent, child]| {
+                                child.ordinal() == record.ordinal()
+                                    && store.splice_candidate_from_record(
+                                        record,
+                                        parent.owner(),
+                                        &mut candidates,
+                                    )
+                            },
+                        )
                     }
                     RecoveredWalStartupProjectionV1::DecisionApply(projection)
                         if work_class == LifecycleWorkClass::Apply =>
@@ -2591,7 +2694,9 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
                     }
                     RecoveredWalStartupProjectionV1::PhaseVote(_)
                     | RecoveredWalStartupProjectionV1::ControlSign(_)
+                    | RecoveredWalStartupProjectionV1::ControlBroadcast(_, _)
                     | RecoveredWalStartupProjectionV1::DecisionFetch(_)
+                    | RecoveredWalStartupProjectionV1::DecisionStore(_, _)
                     | RecoveredWalStartupProjectionV1::DecisionApply(_) => false,
                 };
                 if admitted_recovered_wal {
@@ -2640,10 +2745,44 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
                 ));
             }
         }
+        RecoveredWalStartupProjectionV1::ControlBroadcast(control, broadcast) => {
+            let exact_chain = ledger.records().iter().any(|parent| {
+                let Some((_, child_ordinal)) = parent
+                    .continuation()
+                    .and_then(DurableContinuation::successor_parts)
+                else {
+                    return false;
+                };
+                control.exactly_matches_advanced_record(parent, child_ordinal)
+                    && ledger
+                        .records()
+                        .binary_search_by_key(&child_ordinal, |record| record.ordinal())
+                        .ok()
+                        .and_then(|index| ledger.records().get(index))
+                        .is_some_and(|child| {
+                            child.owner() == parent.owner()
+                                && broadcast.exactly_matches_record(child, parent.owner())
+                        })
+            });
+            if !exact_chain || !broadcast.owns_spliced_candidate(&candidates) {
+                return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+                    "repaired frame has no exact live recovered control Broadcast",
+                ));
+            }
+        }
         RecoveredWalStartupProjectionV1::DecisionFetch(projection) => {
             if !projection.owns_spliced_candidate(&candidates) {
                 return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
                     "repaired frame has no exact live installed Decision Fetch",
+                ));
+            }
+        }
+        RecoveredWalStartupProjectionV1::DecisionStore(fetch, store) => {
+            if !store.owns_spliced_candidate(&candidates)
+                || recovered_decision_store_chain_records(ledger, fetch, store).is_none()
+            {
+                return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+                    "repaired frame has no exact live recovered Decision Store",
                 ));
             }
         }
@@ -2673,6 +2812,24 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
     Ok((candidates, claims))
 }
 
+fn recovered_decision_store_chain_records<'ledger>(
+    ledger: &'ledger LifecycleLedgerV1,
+    fetch: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    store: &RecoveredDecisionFetchStoreProjectionV1,
+) -> Option<[&'ledger LifecycleLedgerRecordV1; 2]> {
+    let (fetch_ordinal, store_ordinal) = ledger
+        .authenticate_recovered_decision_fetch_store(fetch, store)
+        .ok()?;
+    let record_at = |ordinal| {
+        ledger
+            .records()
+            .binary_search_by_key(&ordinal, LifecycleLedgerRecordV1::ordinal)
+            .ok()
+            .and_then(|index| ledger.records().get(index))
+    };
+    Some([record_at(fetch_ordinal)?, record_at(store_ordinal)?])
+}
+
 fn recovered_decision_apply_chain_records<'ledger>(
     ledger: &'ledger LifecycleLedgerV1,
     projection: &crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
@@ -2691,8 +2848,6 @@ fn recovered_decision_apply_chain_records<'ledger>(
     else {
         return None;
     };
-    let validate_ordinal = store_ordinal.checked_add(1)?;
-    let apply_ordinal = validate_ordinal.checked_add(1)?;
     let record_at = |ordinal| {
         ledger
             .records()
@@ -2701,7 +2856,19 @@ fn recovered_decision_apply_chain_records<'ledger>(
             .and_then(|index| ledger.records().get(index))
     };
     let store = record_at(store_ordinal)?;
+    let (DurableContinuationEdge::StoreToValidate, validate_ordinal) = store
+        .continuation()
+        .and_then(DurableContinuation::successor_parts)?
+    else {
+        return None;
+    };
     let validate = record_at(validate_ordinal)?;
+    let (DurableContinuationEdge::ValidateToApply, apply_ordinal) = validate
+        .continuation()
+        .and_then(DurableContinuation::successor_parts)?
+    else {
+        return None;
+    };
     let apply = record_at(apply_ordinal)?;
     let owner = fetch.owner();
     (ledger

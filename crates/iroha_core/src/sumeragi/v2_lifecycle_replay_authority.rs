@@ -908,6 +908,54 @@ impl RecoveredDecisionApplyReplayLineageV1 {
             ) == Some(true)
     }
 
+    /// Project only the first body-backed Store successor of the recovered Fetch.
+    ///
+    /// This does not require or fabricate a validation result. The full replay
+    /// family remains sealed solely so later cold recovery can prove that the
+    /// Store row still descends from the original payload-free WAL Decision.
+    pub(super) fn project_recovered_fetch_store_candidate(
+        &self,
+        verified: &VerifiedHeightContext,
+        receipt: &DurableBodyReceipt,
+        store_effect: &AdapterEffect,
+        store_pending: &PendingRuntimeEffectBinding,
+    ) -> Option<CandidateAdmission> {
+        let context = super::projection::lifecycle_context(verified.context());
+        if receipt.context_id() != verified.context().id() || !self.is_stage_closed(context) {
+            return None;
+        }
+        let payload =
+            DurablePayloadReference::BodyFrame(durable_body_frame_reference(context, receipt)?);
+        let authority = self
+            .body
+            .authority_for(context, LifecycleStageKind::StoreBody)?;
+        let candidate = candidate_from_authorized_projection(
+            context,
+            super::projection::authority_free_admission_projection(
+                context,
+                verified,
+                store_effect,
+                store_pending,
+            )
+            .ok()?,
+            payload,
+            authority,
+        )?;
+        (candidate.work_class == LifecycleWorkClass::Store
+            && candidate.stage.kind() == LifecycleStageKind::StoreBody
+            && candidate.initial_state == InitialLifecycleState::Ready
+            && candidate.payload == payload
+            && candidate.replay_authority_is_exact(context)
+            && recovered_decision_body_continuation_is_exact(
+                super::schema::DurableContinuationEdge::FetchToStore,
+                &self.fetch,
+                DurablePayloadReference::None,
+                &candidate.replay_authority,
+                candidate.payload,
+            ) == Some(true))
+        .then_some(candidate)
+    }
+
     /// Consume the inert replay family into the sole fixed reducer-derived
     /// Store/Validate/Apply logical lineage.
     ///
@@ -1002,6 +1050,22 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
             && record.durable_payload() == Some(candidate.payload)
             && record.continuation() == Some(continuation)
             && record.replay_matches_candidate(candidate)
+    }
+
+    /// Construct one exact logical lineage for ledger-local restart tests.
+    #[cfg(test)]
+    pub(super) fn from_candidates_for_test(
+        fetch: LifecycleReplayAuthorityV1,
+        store: CandidateAdmission,
+        validate: CandidateAdmission,
+        apply: CandidateAdmission,
+    ) -> Self {
+        Self {
+            fetch,
+            store,
+            validate,
+            apply,
+        }
     }
 
     /// Recheck the complete fixed body lineage without releasing a candidate.
@@ -1147,6 +1211,88 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         Some([store, validate, apply])
     }
 
+    /// Advance one already durable live Store and append its exact Validate/Apply tail.
+    ///
+    /// The Store ordinal can precede unrelated durable rows: its typed
+    /// continuation, rather than physical adjacency, binds the newly appended
+    /// Validate child. Validate and Apply are still adjacent because this
+    /// restart repair publishes both in one LedgerV1 frame.
+    pub(super) fn successor_records_after_live_store(
+        &self,
+        owner: OwnerId,
+        store: &LifecycleLedgerRecordV1,
+        validate_ordinal: u128,
+        apply_ordinal: u128,
+    ) -> Option<[LifecycleLedgerRecordV1; 3]> {
+        if !self.exactly_matches_live_store_record(owner, store)
+            || store.ordinal() >= validate_ordinal
+            || validate_ordinal.checked_add(1) != Some(apply_ordinal)
+        {
+            return None;
+        }
+        let store = LifecycleLedgerRecordV1::new(
+            self.store.key,
+            owner,
+            store.ordinal(),
+            self.store.work_class,
+            self.store.stage,
+            Some(TerminalOutcome::Advanced),
+            self.store.reconstruction_source,
+            self.store.payload,
+            self.store.replay_authority.clone(),
+            super::schema::DurableContinuation::successor(
+                super::schema::DurableContinuationEdge::StoreToValidate,
+                validate_ordinal,
+            ),
+        )
+        .ok()?;
+        let validate = LifecycleLedgerRecordV1::new(
+            self.validate.key,
+            owner,
+            validate_ordinal,
+            self.validate.work_class,
+            self.validate.stage,
+            Some(TerminalOutcome::Advanced),
+            self.validate.reconstruction_source,
+            self.validate.payload,
+            self.validate.replay_authority.clone(),
+            super::schema::DurableContinuation::successor(
+                super::schema::DurableContinuationEdge::ValidateToApply,
+                apply_ordinal,
+            ),
+        )
+        .ok()?;
+        let apply = LifecycleLedgerRecordV1::new(
+            self.apply.key,
+            owner,
+            apply_ordinal,
+            self.apply.work_class,
+            self.apply.stage,
+            None,
+            self.apply.reconstruction_source,
+            self.apply.payload,
+            self.apply.replay_authority.clone(),
+            super::schema::DurableContinuation::None,
+        )
+        .ok()?;
+        Some([store, validate, apply])
+    }
+
+    /// Compare the exact crash-cut Store before its validation successor exists.
+    pub(super) fn exactly_matches_live_store_record(
+        &self,
+        owner: OwnerId,
+        store: &LifecycleLedgerRecordV1,
+    ) -> bool {
+        Self::candidate_matches_record(
+            &self.store,
+            store,
+            owner,
+            None,
+            super::schema::DurableContinuation::None,
+        )
+    }
+
     /// Compare all three successor rows, including the final live Apply.
     pub(super) fn exactly_matches_successor_records(
         &self,
@@ -1155,7 +1301,7 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         validate: &LifecycleLedgerRecordV1,
         apply: &LifecycleLedgerRecordV1,
     ) -> bool {
-        store.ordinal().checked_add(1) == Some(validate.ordinal())
+        store.ordinal() < validate.ordinal()
             && validate.ordinal().checked_add(1) == Some(apply.ordinal())
             && Self::candidate_matches_record(
                 &self.store,
@@ -1200,7 +1346,7 @@ impl RecoveredDecisionApplyCandidateLineageV1 {
         validate: &LifecycleLedgerRecordV1,
         apply: &LifecycleLedgerRecordV1,
     ) -> bool {
-        store.ordinal().checked_add(1) == Some(validate.ordinal())
+        store.ordinal() < validate.ordinal()
             && validate.ordinal().checked_add(1) == Some(apply.ordinal())
             && Self::candidate_matches_record(
                 &self.store,
@@ -1926,6 +2072,52 @@ pub(super) struct SignedBroadcastReplayEvidenceV1 {
     pending: DirectSignedPendingBindingV1,
 }
 
+/// Opaque decoded signed-Broadcast child awaiting its recovered WAL parent.
+///
+/// Ledger bytes alone are not execution authority: this projection can be
+/// unpacked only with the WAL module's private one-shot permit, after which the
+/// parent binding and verified roster must reconstruct the exact candidate.
+pub(super) struct DurableRecoveredSignedBroadcastChildV1 {
+    effect: AdapterEffect,
+}
+
+impl DurableRecoveredSignedBroadcastChildV1 {
+    /// Release the canonical signed effect only to its recovered-WAL parent.
+    pub(super) fn consume_for_recovered_wal(
+        self,
+        _permit: super::wal_recovery::RecoveredLifecycleSignBroadcastProjectionPermitV1,
+    ) -> AdapterEffect {
+        self.effect
+    }
+}
+
+/// Authenticate the durable envelope shape without granting execution authority.
+pub(super) fn project_durable_recovered_signed_broadcast_child(
+    context: LifecycleContext,
+    key: LifecycleKey,
+    work_class: LifecycleWorkClass,
+    stage: LifecycleStage,
+    terminal: Option<TerminalOutcome>,
+    reconstruction_source: LifecycleDigest,
+    owner: OwnerId,
+    payload: DurablePayloadReference,
+    continuation: super::schema::DurableContinuation,
+    authority: &LifecycleReplayAuthorityV1,
+) -> Option<DurableRecoveredSignedBroadcastChildV1> {
+    let LifecycleReplaySourceV1::ConsensusBroadcast(message) = &authority.source else {
+        return None;
+    };
+    let effect = AdapterEffect::Broadcast(message.clone());
+    (work_class == LifecycleWorkClass::Broadcast
+        && terminal.is_none()
+        && reconstruction_source == owner.causal_root().digest()
+        && payload == DurablePayloadReference::None
+        && continuation == super::schema::DurableContinuation::None
+        && authority.structurally_matches_record(context, key, work_class, stage, payload)
+        && exact_signed_broadcast_authority(&effect).as_ref() == Some(authority))
+    .then_some(DurableRecoveredSignedBroadcastChildV1 { effect })
+}
+
 impl SignedBroadcastReplayEvidenceV1 {
     /// Seal one exact runtime-bound signed broadcast into canonical evidence.
     pub(super) fn from_exact_effect(
@@ -1952,6 +2144,148 @@ impl SignedBroadcastReplayEvidenceV1 {
             && exact_signed_broadcast_authority(effect)
                 .is_some_and(|expected| expected == self.authority)
     }
+}
+
+/// Project the exact signed Broadcast child of one pending Sign owner.
+///
+/// The pending binding remains non-decodable process authority. The returned
+/// admission carries the complete signed consensus envelope as durable replay
+/// source, while its inherited causal root has already been checked by the
+/// fixed `Sign -> Broadcast` binding projection.
+pub(super) fn exact_signed_broadcast_successor_candidate(
+    verified: &VerifiedHeightContext,
+    broadcast_effect: &AdapterEffect,
+    broadcast_pending: &PendingRuntimeEffectBinding,
+) -> Option<CandidateAdmission> {
+    let evidence =
+        SignedBroadcastReplayEvidenceV1::from_exact_effect(broadcast_effect, broadcast_pending)?;
+    let authority = evidence.authority.clone();
+    let AdapterEffect::Broadcast(message) = broadcast_effect else {
+        return None;
+    };
+    let round = match &message.payload {
+        wire::ConsensusMessageV2Payload::Proposal(proposal) => proposal.round,
+        wire::ConsensusMessageV2Payload::Vote(vote) => vote.round,
+        wire::ConsensusMessageV2Payload::TimeoutVote(vote) => vote.round,
+        wire::ConsensusMessageV2Payload::QuorumCertificate(_)
+        | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+        | wire::ConsensusMessageV2Payload::PayloadManifest(_)
+        | wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+        | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateResponse(_)
+        | wire::ConsensusMessageV2Payload::VrfCommit(_)
+        | wire::ConsensusMessageV2Payload::VrfReveal(_) => return None,
+    };
+    let context = replay_context(round);
+    let projected = super::projection::authority_free_admission_projection(
+        context,
+        verified,
+        broadcast_effect,
+        broadcast_pending,
+    )
+    .ok()?;
+    candidate_from_authorized_projection(
+        context,
+        projected,
+        DurablePayloadReference::None,
+        authority,
+    )
+}
+
+/// Rejoin one durable WAL Sign source to its exact signed Broadcast envelope.
+///
+/// LedgerV1 invokes this for the four Sign-to-Broadcast continuation codes.
+/// The parent must retain an unsigned WAL action, and the child must be the
+/// byte-exact same message with only a nonempty signature filled. This is an
+/// inert persistence check; cold production open additionally verifies the
+/// signature cryptographically against the recovered height roster.
+pub(super) fn signed_broadcast_continuation_is_exact(
+    edge: super::schema::DurableContinuationEdge,
+    parent: &LifecycleReplayAuthorityV1,
+    parent_payload: DurablePayloadReference,
+    child: &LifecycleReplayAuthorityV1,
+    child_payload: DurablePayloadReference,
+) -> Option<bool> {
+    use super::schema::DurableContinuationEdge;
+
+    if !matches!(
+        edge,
+        DurableContinuationEdge::SignProposalToBroadcast
+            | DurableContinuationEdge::SignPrepareToBroadcast
+            | DurableContinuationEdge::SignCommitToBroadcast
+            | DurableContinuationEdge::SignTimeoutToBroadcast
+    ) {
+        return None;
+    }
+    let LifecycleReplaySourceV1::Wal(parent_source) = &parent.source else {
+        return Some(false);
+    };
+    let LifecycleReplaySourceV1::ConsensusBroadcast(message) = &child.source else {
+        return Some(false);
+    };
+    if parent_payload != DurablePayloadReference::None
+        || child_payload != DurablePayloadReference::None
+        || !parent.payload.is_none()
+        || !child.payload.is_none()
+        || exact_signed_broadcast_authority(&AdapterEffect::Broadcast(message.clone())).as_ref()
+            != Some(child)
+    {
+        return Some(false);
+    }
+    let exact = match (edge, &parent_source.action, &message.payload) {
+        (
+            DurableContinuationEdge::SignProposalToBroadcast,
+            WalReplayActionV1::SignProposal(unsigned),
+            wire::ConsensusMessageV2Payload::Proposal(signed),
+        ) => {
+            let mut expected = unsigned.clone();
+            let signature_is_new = expected.signature.is_empty() && !signed.signature.is_empty();
+            expected.signature.clone_from(&signed.signature);
+            signature_is_new && expected == *signed
+        }
+        (
+            DurableContinuationEdge::SignPrepareToBroadcast,
+            WalReplayActionV1::SignVote(unsigned),
+            wire::ConsensusMessageV2Payload::Vote(signed),
+        ) if unsigned.phase == wire::GlobalPhase::Prepare => {
+            let mut expected = unsigned.clone();
+            let signature_is_new = expected.signature.is_empty() && !signed.signature.is_empty();
+            expected.signature.clone_from(&signed.signature);
+            signature_is_new && expected == *signed
+        }
+        (
+            DurableContinuationEdge::SignCommitToBroadcast,
+            WalReplayActionV1::SignVote(unsigned),
+            wire::ConsensusMessageV2Payload::Vote(signed),
+        ) if unsigned.phase == wire::GlobalPhase::Commit => {
+            let mut expected = unsigned.clone();
+            let signature_is_new = expected.signature.is_empty() && !signed.signature.is_empty();
+            expected.signature.clone_from(&signed.signature);
+            signature_is_new && expected == *signed
+        }
+        (
+            DurableContinuationEdge::SignTimeoutToBroadcast,
+            WalReplayActionV1::SignTimeoutVote(unsigned),
+            wire::ConsensusMessageV2Payload::TimeoutVote(signed),
+        ) => {
+            let mut expected = unsigned.clone();
+            let signature_is_new = expected.signature.is_empty() && !signed.signature.is_empty();
+            expected.signature.clone_from(&signed.signature);
+            signature_is_new && expected == *signed
+        }
+        (
+            DurableContinuationEdge::SignProposalToBroadcast
+            | DurableContinuationEdge::SignPrepareToBroadcast
+            | DurableContinuationEdge::SignCommitToBroadcast
+            | DurableContinuationEdge::SignTimeoutToBroadcast,
+            _,
+            _,
+        ) => false,
+        _ => unreachable!("non-Sign continuation returned above"),
+    };
+    Some(exact)
 }
 
 /// Canonical inert replay evidence for one exact authenticated equivocation report.
@@ -6039,7 +6373,11 @@ pub(super) fn recovered_decision_body_continuation_is_exact(
         }
         super::schema::DurableContinuationEdge::ValidateToInvalidBodyReport
         | super::schema::DurableContinuationEdge::ValidateToSignPrepare
-        | super::schema::DurableContinuationEdge::ValidateToSignCommit => false,
+        | super::schema::DurableContinuationEdge::ValidateToSignCommit
+        | super::schema::DurableContinuationEdge::SignProposalToBroadcast
+        | super::schema::DurableContinuationEdge::SignPrepareToBroadcast
+        | super::schema::DurableContinuationEdge::SignCommitToBroadcast
+        | super::schema::DurableContinuationEdge::SignTimeoutToBroadcast => false,
     })
 }
 

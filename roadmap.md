@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-12
+Last updated: 2026-08-13
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -88,20 +88,41 @@ to:
   repeated intents select the later match, and terminal frames may instead own
   queued Prepare/Commit signatures. A historical Commit remains eligible under
   the current later-view tag only with its exact active-lock `LockAndCommit`
-  PrepareQC lineage. The runner's already-open body store must first consume
-  semantic marker replay into the sole move-only startup cut; the production
-  factory has no root-reopen alternative. Authenticated height recovery now
+  PrepareQC lineage. A sealed dispatch-only prerequisite now covers all three
+  recovered Sign classes. It rejoins PhaseVote to the current terminal Validate
+  parent, reserves a class-sensitive worker position before claiming, and parks
+  one guarded opaque completion. That owner can preview only the exact
+  cryptographically checked `Signed` reducer successor on cloned state; it
+  cannot append Proposal's Prepare-intent WAL, publish Broadcast, mutate the
+  live adapter, acknowledge the queue row, or disarm its restart guard. Finish
+  the restart-closed Signed successor transaction
+  (`Broadcast`, Prepare-body retention, or the next durable Sign as applicable)
+  before wiring this completion into the runner; do not terminalize the carrier
+  at the existing dispatch boundary. The runner's freshly opened body store must first enter a
+  move-only quarantine that rejects any already promoted, rejected, or retired
+  marker, then enter the sole production factory with an adapter-bound
+  execution/storage seal. The quarantine's only consuming transition fixes
+  finality filtering, WAL-authority filtering, semantic marker replay, and
+  sealing with the same `V2ApplyService` the owner retains for launch. It has
+  no root-reopen or raw validation-callback alternative. A private runner-only
+  permit now seals the prerequisite dependency/local-signer handoff, but its
+  production mint remains intentionally unwired until the atomic runner
+  cutover; launch will reject a different peer key or incorrect claimed
+  validator position before gate/runtime creation. Authenticated height recovery now
   mints one move-only storage authority binding the verified context, exact
   Kura instance, context-addressed ledger/body roots, and authenticated
   genesis-or-rotating signature policy. The same recovery boundary also
   retains the universal genesis account derived from its authenticated genesis
-  key; launch releases that account only after rechecking the exact Kura
-  instance. The same seal now retains the lexically Kura-derived safety-WAL and
+  key; the factory moves that account into its single replay/live service only
+  after exact State/Kura Arc, network, storage, and startup-instance checks.
+  The same seal now retains the Kura-derived safety-WAL and
   chunk paths; the factory binds the adapter's held WAL before store side effects, and launch
   internally restores one ordinal source, folds producer and leader-wire
   high-watermarks, opens the gate from the owner-held body store, binds it to
   the still-closed ingress, and retains RAII unbinding ownership. Raw paths,
-  ordinals, and receipts are no longer launch inputs. The authenticated adapter
+  ordinals, receipts, Queue/archives/cadence/events, and genesis authority are
+  no longer launch inputs. Launch consumes the retained Apply service through
+  a parent-sealed move-only worker permit. The authenticated adapter
   startup retains its validation frontier internally and provides in production
   only one consuming WAL-bound leader-wire launch authority, so neither the
   adapter nor replay batch can be extracted.
@@ -162,7 +183,23 @@ to:
   quarantined markers cannot cross the revalidated-store seal. A matching
   promoted success detaches into an opaque same-store/full-context cut;
   promoted or quarantined deterministic rejection cannot be treated as refetch
-  or Apply authority. Decision Apply now consumes the sealed Decision-Fetch
+  or Apply authority. The recovered Fetch carrier now also has a sealed
+  request driver: it reserves exact-output and executor request ownership
+  before claiming the Completion turn, installs a disjoint request/reverse
+  census, and emits the exact signed fanout. Its typed response selector
+  re-probes the active Ingress cursor and claimed carrier before publishing a
+  dedicated body-store command; the guarded durable completion remains parked
+  and indexed outside the generic drain. Its restart-closed Fetch-to-Store
+  transaction now prelocks the exact ingress occurrence and preflights every
+  request, carrier, adapter, registry, storage, and output owner before fsyncing
+  the payload-free Fetch `Advanced` plus body-frame Store successor. The
+  post-fsync tail is assertion-only and retires the request, ingress, and
+  worker index before disarming the output guard. Cold open reconstructs the
+  dedicated live Store carrier; a durable validation marker can advance that
+  exact two-row crash prefix into the existing Apply lineage, while exact
+  collision and stutter tests close both restart cases. Production runner
+  cutover remains a separate activation task. Decision Apply now consumes
+  the sealed Decision-Fetch
   authority and exact semantically revalidated BodyFrame cut, drives the fixed
   reducer body sequence, publishes or exact-stutters the complete four-row
   LedgerV1 successor, installs the final live Apply carrier, and reconstructs

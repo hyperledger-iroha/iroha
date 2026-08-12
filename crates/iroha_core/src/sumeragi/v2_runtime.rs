@@ -1763,6 +1763,23 @@ fn runtime_effect_identity_hash(effect_kind: u8, semantic_identity: &[u8]) -> ir
     iroha_crypto::Hash::new(projection)
 }
 
+/// Compare one complete adapter effect with a closed lifecycle digest.
+///
+/// This fixed oracle lets a dedicated lifecycle executor reauthenticate an
+/// exact carrier-derived effect without releasing either the runtime's hash or
+/// a generic effect-identity constructor.
+pub(in crate::sumeragi) fn adapter_effect_matches_lifecycle_digest(
+    effect: &AdapterEffect,
+    digest: &[u8; 32],
+) -> bool {
+    runtime_effect_identity_hash(
+        production_adapter_effect_kind(effect),
+        &production_adapter_effect_semantic_identity(effect),
+    )
+    .as_ref()
+        == digest
+}
+
 #[cfg(test)]
 /// Hash one adapter effect through the production semantic-identity projection.
 pub(in crate::sumeragi) fn adapter_effect_identity_for_test(
@@ -2998,6 +3015,25 @@ impl RecoveredWalVoteSuccessor {
     pub(in crate::sumeragi) const fn installed_child_effect(&self) -> &AdapterEffect {
         &self.effect
     }
+
+    /// Derive the mandatory signed Broadcast binding without releasing the
+    /// recovered vote's pending owner or WAL identity.
+    pub(in crate::sumeragi) fn project_signed_broadcast_successor(
+        &self,
+        broadcast: &AdapterEffect,
+    ) -> Option<PendingRuntimeEffectBinding> {
+        self.pending
+            .project_signed_broadcast_successor(&self.effect, broadcast)
+    }
+
+    /// Recheck one retained signed-Broadcast binding without releasing the vote owner.
+    pub(in crate::sumeragi) fn signed_broadcast_successor_is_exact(
+        &self,
+        broadcast: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        self.project_signed_broadcast_successor(broadcast).as_ref() == Some(pending)
+    }
 }
 
 fn pending_runtime_effect_binding_projection_hash(
@@ -3371,6 +3407,87 @@ impl PendingRuntimeEffectBinding {
     /// complete concrete effect.
     pub(crate) fn exactly_binds_adapter_effect(&self, effect: &AdapterEffect) -> bool {
         self.validate_exact(effect)
+    }
+
+    /// Project the mandatory signed Broadcast successor of one exact Sign.
+    ///
+    /// The signed wire payload must be byte-for-byte the predecessor request
+    /// with only its signature field filled. Broadcast owns no independent
+    /// candidate statement, but it retains the immutable causal lifecycle key
+    /// so its replay row cannot be substituted by an unrelated signed message.
+    pub(in crate::sumeragi) fn project_signed_broadcast_successor(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+    ) -> Option<Self> {
+        let AdapterEffect::Sign { request, .. } = predecessor else {
+            return None;
+        };
+        let AdapterEffect::Broadcast(message) = successor else {
+            return None;
+        };
+        if !self.validate_exact(predecessor) || message.validate_version().is_err() {
+            return None;
+        }
+        let signed_request_matches = match (request, &message.payload) {
+            (
+                super::v2::SignRequest::Proposal(unsigned),
+                wire::ConsensusMessageV2Payload::Proposal(signed),
+            ) => {
+                let mut projected = signed.clone();
+                let signature_is_present = !projected.signature.is_empty();
+                projected.signature.clear();
+                signature_is_present && &projected == unsigned
+            }
+            (
+                super::v2::SignRequest::Vote(unsigned),
+                wire::ConsensusMessageV2Payload::Vote(signed),
+            ) => {
+                let mut projected = signed.clone();
+                let signature_is_present = !projected.signature.is_empty();
+                projected.signature.clear();
+                signature_is_present && &projected == unsigned
+            }
+            (
+                super::v2::SignRequest::TimeoutVote(unsigned),
+                wire::ConsensusMessageV2Payload::TimeoutVote(signed),
+            ) => {
+                let mut projected = signed.clone();
+                let signature_is_present = !projected.signature.is_empty();
+                projected.signature.clear();
+                signature_is_present && &projected == unsigned
+            }
+            _ => false,
+        };
+        if !signed_request_matches {
+            return None;
+        }
+
+        let effect_kind = production_adapter_effect_kind(successor);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(successor),
+        );
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &self.causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            RUNTIME_CANDIDATE_KIND_NONE,
+            None,
+            None,
+        );
+        let successor_binding = Self {
+            causal_lifecycle_key: self.causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind: RUNTIME_CANDIDATE_KIND_NONE,
+            candidate_statement: None,
+            candidate_semantic_identity: None,
+            projection_hash,
+        };
+        successor_binding
+            .validate_exact(successor)
+            .then_some(successor_binding)
     }
 
     /// Project the exact `StoreBody` successor of one certified Fetch without
@@ -16977,6 +17094,41 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
 }
 
 impl SerializedV2Runtime<SumeragiV2Adapter> {
+    /// Freeze the serialized shell around one lifecycle-owned signature.
+    pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(
+        &mut self,
+        authority: super::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1,
+    ) -> Result<super::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'_>, AdapterError>
+    {
+        if self.fail_closed
+            || self.ingress.len() != 0
+            || self.pending_effect_ownership.is_some()
+            || self.last_scheduler_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err(AdapterError::RecoveredLifecycleSignCompletionMismatch);
+        }
+        self.driver
+            .prepare_recovered_lifecycle_sign_completion(authority)
+    }
+
+    /// Freeze the serialized shell around one recovered Decision Store preview.
+    pub(in crate::sumeragi) fn prepare_recovered_decision_fetch_store(
+        &mut self,
+        authority: super::v2_lifecycle_coordinator::RecoveredDecisionFetchStoreAdapterAuthorityV1,
+    ) -> Result<super::v2::PreparedRecoveredDecisionFetchStoreAdapterV1<'_>, AdapterError> {
+        if self.fail_closed
+            || self.ingress.len() != 0
+            || self.pending_effect_ownership.is_some()
+            || self.last_scheduler_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err(AdapterError::RecoveredDecisionFetchStoreMismatch);
+        }
+        self.driver
+            .prepare_recovered_decision_fetch_store(authority)
+    }
+
     /// Freeze the serialized shell around one registry-owned Apply completion.
     pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(
         &mut self,
@@ -21384,6 +21536,83 @@ mod tests {
         assert_ne!(
             report_binding.exact_effect_identity(),
             prepare_validate.exact_effect_identity()
+        );
+    }
+
+    #[test]
+    fn pending_sign_projects_only_its_exact_signed_broadcast_successor() {
+        let (context, keys) = authenticated_runtime_context();
+        let prepare = signed_runtime_quorum_certificate_for_phase(
+            &context,
+            &keys,
+            0x6D,
+            wire::GlobalPhase::Prepare,
+        );
+        let tag = EventTag::new(context.height, prepare.round.view, Generation::new(4));
+        let (validate, validate_pending) = pending_validate_binding_for_test(
+            tag,
+            prepare.proposal_round,
+            prepare.subject,
+            None,
+            76,
+        );
+        let unsigned_vote = wire::Vote {
+            round: prepare.round,
+            proposal_round: prepare.proposal_round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: prepare.subject,
+            execution_commitment: prepare.execution_commitment,
+            signer: prepare.signers[0],
+            signature: Vec::new(),
+        };
+        let sign = AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(unsigned_vote.clone()),
+        };
+        let sign_pending = validate_pending
+            .project_validate_sign_prepare_successor(&validate, &sign)
+            .expect("Validate projects its exact unsigned Prepare vote");
+
+        let mut signed_vote = unsigned_vote.clone();
+        signed_vote.signature = vec![0xD6; 96];
+        let broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(signed_vote.clone()),
+        ));
+        let broadcast_pending = sign_pending
+            .project_signed_broadcast_successor(&sign, &broadcast)
+            .expect("the signed copy of the exact request projects one Broadcast owner");
+        assert!(broadcast_pending.exactly_binds_adapter_effect(&broadcast));
+        assert_eq!(
+            broadcast_pending.causal_lifecycle_key(),
+            sign_pending.causal_lifecycle_key()
+        );
+        assert_eq!(broadcast_pending.candidate_statement(), None);
+        assert_ne!(
+            broadcast_pending.exact_effect_identity(),
+            sign_pending.exact_effect_identity()
+        );
+
+        signed_vote.signature.clear();
+        let unsigned_broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(signed_vote.clone()),
+        ));
+        assert!(
+            sign_pending
+                .project_signed_broadcast_successor(&sign, &unsigned_broadcast)
+                .is_none(),
+            "an unsigned envelope is not a completed Sign successor"
+        );
+
+        signed_vote.signature = vec![0xD6; 96];
+        signed_vote.subject.payload_hash = Hash::new(b"foreign signed subject");
+        let foreign_broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(signed_vote),
+        ));
+        assert!(
+            sign_pending
+                .project_signed_broadcast_successor(&sign, &foreign_broadcast)
+                .is_none(),
+            "a signature cannot authorize changed consensus coordinates"
         );
     }
 

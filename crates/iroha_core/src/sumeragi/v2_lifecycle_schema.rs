@@ -1143,6 +1143,14 @@ pub(super) enum DurableContinuationEdge {
     ValidateToSignPrepare,
     /// WAL-persisted validation publishes one Commit-vote signing successor.
     ValidateToSignCommit,
+    /// A signed local Proposal publishes its exact signed Broadcast successor.
+    SignProposalToBroadcast,
+    /// A signed Prepare vote publishes its exact signed Broadcast successor.
+    SignPrepareToBroadcast,
+    /// A signed Commit vote publishes its exact signed Broadcast successor.
+    SignCommitToBroadcast,
+    /// A signed timeout vote publishes its exact signed Broadcast successor.
+    SignTimeoutToBroadcast,
 }
 
 /// Typed durable continuation retained beside one lifecycle tombstone.
@@ -1218,9 +1226,38 @@ impl DurableContinuation {
                 },
             ) => successor > ordinal && successor <= high_water,
             (
+                LifecycleWorkClass::SignProposal,
+                Some(TerminalOutcome::Advanced),
+                Self::AdvancedSuccessor {
+                    edge: DurableContinuationEdge::SignProposalToBroadcast,
+                    ordinal: successor,
+                },
+            )
+            | (
+                LifecycleWorkClass::SignVote,
+                Some(TerminalOutcome::Advanced),
+                Self::AdvancedSuccessor {
+                    edge:
+                        DurableContinuationEdge::SignPrepareToBroadcast
+                        | DurableContinuationEdge::SignCommitToBroadcast,
+                    ordinal: successor,
+                },
+            )
+            | (
+                LifecycleWorkClass::SignTimeout,
+                Some(TerminalOutcome::Advanced),
+                Self::AdvancedSuccessor {
+                    edge: DurableContinuationEdge::SignTimeoutToBroadcast,
+                    ordinal: successor,
+                },
+            ) => successor > ordinal && successor <= high_water,
+            (
                 LifecycleWorkClass::Fetch
                 | LifecycleWorkClass::Store
-                | LifecycleWorkClass::Validate,
+                | LifecycleWorkClass::Validate
+                | LifecycleWorkClass::SignProposal
+                | LifecycleWorkClass::SignVote
+                | LifecycleWorkClass::SignTimeout,
                 Some(TerminalOutcome::Advanced),
                 Self::None,
             ) => false,
@@ -1644,6 +1681,7 @@ pub(crate) struct SchedulerReadyInputs {
     owner: OwnerId,
     key: LifecycleKey,
     validate_attestation: Option<AttestedReadyValidateDemand>,
+    output_capacity_class: Option<CapacityClass>,
     mode: u64,
     capacity: u64,
     selector: u64,
@@ -1657,9 +1695,10 @@ impl SchedulerReadyInputs {
     /// the six authenticated runtime debts into a production scheduler row.
     ///
     /// Validate work requires its registry-derived completion attestation;
-    /// recovered Decision Apply requires its closed worker-dispatch
-    /// attestation. Every other work class forbids either authority. Missing,
-    /// foreign, or mixed authority returns `None`.
+    /// recovered Decision Apply and Sign require their closed worker-dispatch
+    /// attestations. A recovered Sign also seals the one Consensus slot its
+    /// successful signature must use for Broadcast before the row is claimed.
+    /// Missing, foreign, or mixed authority returns `None`.
     pub(super) fn from_authenticated(
         _factory: &AuthenticatedSchedulerInputsFactory,
         record: &LifecycleRecord,
@@ -1667,13 +1706,27 @@ impl SchedulerReadyInputs {
         recovered_apply_attestation: Option<
             super::work_registry::ReadyRecoveredDecisionApplyAttestation,
         >,
+        recovered_sign_attestation: Option<
+            super::work_registry::ReadyRecoveredLifecycleSignAttestationV1,
+        >,
+        recovered_fetch_attestation: Option<
+            super::work_registry::ReadyRecoveredDecisionFetchAttestationV1,
+        >,
         live_debts: [u64; 6],
     ) -> Option<Self> {
         let [mode, capacity, selector, lane, source, runner] = live_debts;
+        let output_capacity_class = validate_attestation
+            .and_then(AttestedReadyValidateDemand::capacity_class)
+            .or_else(|| {
+                recovered_sign_attestation
+                    .as_ref()
+                    .map(|_| CapacityClass::Consensus)
+            });
         let row = Self {
             owner: record.owner,
             key: record.key,
             validate_attestation,
+            output_capacity_class,
             mode,
             capacity,
             selector,
@@ -1682,14 +1735,43 @@ impl SchedulerReadyInputs {
             runner,
         };
         let carrier_matches = match record.work_class {
-            LifecycleWorkClass::Validate => recovered_apply_attestation.is_none(),
+            LifecycleWorkClass::Validate => {
+                recovered_apply_attestation.is_none()
+                    && recovered_sign_attestation.is_none()
+                    && recovered_fetch_attestation.is_none()
+            }
             LifecycleWorkClass::Apply => {
                 validate_attestation.is_none()
+                    && recovered_sign_attestation.is_none()
+                    && recovered_fetch_attestation.is_none()
                     && recovered_apply_attestation
                         .as_ref()
                         .is_some_and(|attestation| attestation.matches_ready_record(record))
             }
-            _ => validate_attestation.is_none() && recovered_apply_attestation.is_none(),
+            LifecycleWorkClass::SignVote
+            | LifecycleWorkClass::SignProposal
+            | LifecycleWorkClass::SignTimeout => {
+                validate_attestation.is_none()
+                    && recovered_apply_attestation.is_none()
+                    && recovered_fetch_attestation.is_none()
+                    && recovered_sign_attestation
+                        .as_ref()
+                        .is_some_and(|attestation| attestation.matches_ready_record(record))
+            }
+            LifecycleWorkClass::Fetch => {
+                validate_attestation.is_none()
+                    && recovered_apply_attestation.is_none()
+                    && recovered_sign_attestation.is_none()
+                    && recovered_fetch_attestation
+                        .as_ref()
+                        .is_some_and(|attestation| attestation.matches_ready_record(record))
+            }
+            _ => {
+                validate_attestation.is_none()
+                    && recovered_apply_attestation.is_none()
+                    && recovered_sign_attestation.is_none()
+                    && recovered_fetch_attestation.is_none()
+            }
         };
         (carrier_matches && row.identity_matches(record.ordinal, record)).then_some(row)
     }
@@ -1707,6 +1789,9 @@ impl SchedulerReadyInputs {
             key: record.key,
             validate_attestation: rejected_validate
                 .and_then(|rejected| AttestedReadyValidateDemand::for_test(record, rejected)),
+            output_capacity_class: rejected_validate
+                .filter(|rejected| *rejected)
+                .map(|_| CapacityClass::Consensus),
             mode,
             capacity,
             selector,
@@ -1749,10 +1834,7 @@ impl SchedulerReadyInputs {
 
     /// Return the sealed extra capacity class needed before this row is claimed.
     pub(super) const fn output_capacity_class(&self) -> Option<CapacityClass> {
-        match self.validate_attestation {
-            Some(attestation) => attestation.capacity_class(),
-            None => None,
-        }
+        self.output_capacity_class
     }
 
     /// Return the six live debts in their mandated rank order.
